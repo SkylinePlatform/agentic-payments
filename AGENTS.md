@@ -189,25 +189,30 @@ The nesting that makes the import path longer also breaks the language server.
 import as `cannot find package … in GOROOT or GOPATH`, along with a cascade of
 errors from the wrong standard library.
 
-Write an untracked `go.work` at the root — `.gitignore` already covers it:
+Run `make workspace`. It writes an untracked `go.work` at the root listing both
+modules — `.gitignore` already covers the file — and declines to overwrite one
+that is already there, so a local `replace` directive survives.
 
-```
-go 1.26.0
+**The file must not be committed.** A workspace unifies the build lists of the
+modules it names, and `contracts/tools` pins the code generator outside
+`backend/go.mod` on purpose. With a workspace active, `backend/` compiles
+happily against the eleven modules the generator drags in — none of which it
+declares and none of which CI provides. Committing `go.work` would therefore
+hand every contributor a local build that is more permissive than the one that
+has to pass, which is precisely the drift the separate module exists to
+prevent.
 
-use (
-	./backend
-	./contracts/tools
-)
-```
+`make` sets `GOWORK=off` regardless, so whether a workspace file exists never
+changes what `make check` builds. CI compiles `backend/` standalone, and that
+has to stay the thing the local gate checks. The workspace is for the editor,
+and for nothing else.
 
 The auto-download in the paragraph above does **not** apply here: `gopls` runs
 the `go` binary it finds on `PATH` and does not switch toolchains, so that
 binary must itself be 1.26.0 or newer, otherwise the workspace fails to load
-with `go.work requires go >= 1.26.0`.
-
-`make` sets `GOWORK=off` regardless, so whether a workspace file exists never
-changes what `make check` builds. CI compiles `backend/` standalone, and that
-has to stay the thing the local gate checks.
+with `go.work requires go >= 1.26.0`. `make workspace` takes the `go` directive
+from the toolchain actually installed, so a generated workspace can never
+demand a newer Go than its owner has — which a committed one could.
 
 ### Generated code is not hand-edited
 
@@ -279,6 +284,7 @@ make build            # build every binary under backend/cmd
 make test             # unit tests, with -race
 make lint             # golangci-lint including the depguard architecture rules
 make fmt              # apply formatters
+make workspace        # write the untracked go.work an editor at the root needs
 make vectors          # conformance suite against golden vectors
 make generate         # regenerate Go and TS types from contracts/  ⟵ needs Node
 make generate-ts      # the TypeScript half on its own              ⟵ needs Node
