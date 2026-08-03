@@ -42,3 +42,6 @@ frontend/src/protocol/generated/
 # code and stops being true the moment the work lands, so it stays on disk and
 # out of git.
 docs/superpowers/plans/
+
+# Subagent-driven-development scratch: ledgers, task briefs, review packages.
+.superpowers/
