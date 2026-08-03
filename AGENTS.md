@@ -63,6 +63,13 @@ Primary sources, in order of authority:
 3. https://developer.visa.com/capabilities/trusted-agent-protocol
 4. IETF RFC 9421 (HTTP Message Signatures)
 
+The warnings above are the short form, kept here because an agent must read
+them before writing code. The full treatment — the mandate model, the five
+roles, both flows, the binding and the disclosure rules — is in
+[docs/protocols/ap2.md](docs/protocols/ap2.md) and
+[docs/protocols/tap.md](docs/protocols/tap.md). One source of truth, two levels
+of detail.
+
 ---
 
 ## What this project is
