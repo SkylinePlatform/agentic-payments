@@ -191,7 +191,7 @@ func parseECJWK(p params, j jwk) (keyMaterial, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s key: %w", ErrMalformedJWK, p.crv, err)
 	}
-	return newECKey(p, pub, nil)
+	return newECKey(p, pub)
 }
 
 func parseOKPJWK(p params, j jwk) (keyMaterial, error) {
@@ -202,5 +202,5 @@ func parseOKPJWK(p params, j jwk) (keyMaterial, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newOKPKey(p, ed25519.PublicKey(x), nil)
+	return newOKPKey(p, ed25519.PublicKey(x))
 }
