@@ -65,8 +65,15 @@ $(FRONTEND)/node_modules: $(FRONTEND)/package.json $(FRONTEND)/package-lock.json
 # run, or a tracked file the generators quietly rewrite. This checks all three.
 SHA_GENERATED = find $(GENERATED_GO) $(GENERATED_TS) -type f | sort | xargs sha256sum
 
+# The tracked-file check compares the working tree against how it looked before
+# generation, not against clean. The question this target asks is whether
+# generation touched anything tracked — not whether the developer happens to
+# have uncommitted work. Requiring a clean tree answers a different question and
+# makes the target unrunnable exactly when someone is editing a schema and wants
+# to check it, which is the one moment it earns its keep.
 .PHONY: generate-verify
 generate-verify: ## Regenerate twice and prove the result is reproducible and self-contained
+	@git status --porcelain > .generate-verify.tree-before
 	@$(MAKE) --no-print-directory generate
 	@$(SHA_GENERATED) > .generate-verify.first
 	@$(MAKE) --no-print-directory generate
@@ -77,11 +84,13 @@ generate-verify: ## Regenerate twice and prove the result is reproducible and se
 		exit 1; \
 	fi
 	@rm -f .generate-verify.first .generate-verify.second
-	@if [ -n "$$(git status --porcelain)" ]; then \
-		git status --porcelain >&2; \
+	@git status --porcelain > .generate-verify.tree-after
+	@if ! diff -u .generate-verify.tree-before .generate-verify.tree-after >&2; then \
+		rm -f .generate-verify.tree-before .generate-verify.tree-after; \
 		echo "generate-verify: generation modified a tracked file, or generated output escaped .gitignore" >&2; \
 		exit 1; \
 	fi
+	@rm -f .generate-verify.tree-before .generate-verify.tree-after
 	@echo "generate-verify: reproducible, and no tracked file was touched"
 
 .PHONY: schemas
