@@ -68,8 +68,9 @@ the two will drift the first time someone edits one without the other.
 - `contracts/evidence/receipt.json`'s `error` field is currently typed as a
   bare `string`. This decision is what motivates giving it a real
   enumeration, or a `$ref` to a dedicated errors schema, under `contracts/`.
-  This ADR fixes where that enumeration belongs; adding the enumeration
-  itself is Task 12's transport issue to do, not this document's.
+  This ADR settles where that enumeration belongs, not what it contains —
+  enumerating the codes themselves is separate work against `contracts/`,
+  outside the scope of this decision.
 - Every HTTP-facing role — agent, merchant, credprovider, mpp, surface,
   registry, proxy — has to render the same code into a Problem Details body
   and, wherever the rejected operation is a mandate verification, into the
