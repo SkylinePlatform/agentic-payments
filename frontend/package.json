@@ -1,0 +1,17 @@
+{
+  "name": "@agentic-payments/frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "React + Vite + TypeScript UI. Not scaffolded yet — see #20. Today this package exists only to run the TypeScript half of the contracts codegen.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "generate": "node scripts/generate-protocol-types.mjs"
+  },
+  "devDependencies": {
+    "json-schema-to-typescript": "^15.0.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

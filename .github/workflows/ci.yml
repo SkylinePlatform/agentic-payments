@@ -13,6 +13,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  contracts:
+    name: Contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Generated code is not committed, so a stale copy is not something a
+      # diff against the repository can find. Generation itself is what is
+      # checked: that the schemas still generate, that a second run produces
+      # byte-identical output, and that neither generator touched a tracked
+      # file or wrote somewhere .gitignore does not cover.
+      - name: Generation is reproducible and self-contained
+        run: make generate-verify
+
+      - name: Generated Go compiles
+        working-directory: backend
+        run: go build ./...
+
   test:
     name: Build and test
     runs-on: ubuntu-latest
@@ -26,6 +55,18 @@ jobs:
           # dependency lock file it is pointed at is absent.
           cache: false
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # backend/internal/core/generated/ is gitignored, so a fresh checkout
+      # does not have it. Anything that imports a canonical type needs this
+      # step to have run first.
+      - name: Generate
+        run: make generate
+
       - name: Build
         working-directory: backend
         run: go build ./...
@@ -33,6 +74,10 @@ jobs:
       - name: Test
         working-directory: backend
         run: go test -race ./...
+
+      - name: Test contracts tooling
+        working-directory: contracts/tools
+        run: go test ./...
 
   lint:
     name: Lint
@@ -44,6 +89,15 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Generate
+        run: make generate
 
       # Includes the depguard rules that keep core/ free of adapters/ and the
       # two protocol adapters free of each other. A failure here is an

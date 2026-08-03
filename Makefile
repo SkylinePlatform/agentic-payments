@@ -9,7 +9,7 @@ include contracts/codegen.mk
 .PHONY: help
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
-		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
+		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-17s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: build
 build: ## Build every binary under backend/cmd
@@ -18,6 +18,7 @@ build: ## Build every binary under backend/cmd
 .PHONY: test
 test: ## Unit tests
 	cd $(BACKEND) && $(GO) test -race ./...
+	$(GO) -C $(CONTRACT_TOOLS) test ./...
 
 .PHONY: vectors
 vectors: ## Conformance suite against the golden vectors
@@ -35,8 +36,11 @@ fmt: ## Apply formatters
 tidy: ## go mod tidy
 	cd $(BACKEND) && $(GO) mod tidy
 
+# generate comes first on purpose. contracts/ is the source of truth for the
+# canonical model, so linting and testing a tree whose generated half was built
+# from an older schema checks the wrong thing.
 .PHONY: check
-check: lint test ## What CI runs
+check: generate lint test ## What CI runs
 
 .PHONY: clean
 clean: ## Remove build output and generated types
