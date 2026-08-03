@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Receipt",
+  "description": "A verifier's signed answer to a closed mandate. Mandatory in both directions: a rejection MUST also produce a receipt carrying the error, because a silent failure leaves nothing to reason about in a dispute and is a protocol violation.",
+  "type": "object",
+  "properties": {
+    "issuer": {
+      "type": "string",
+      "description": "Identifier of the verifier that issued this receipt — the merchant for a Checkout Mandate, the Credential Provider or Merchant Payment Processor for a Payment Mandate."
+    },
+    "mandate_type": {
+      "type": "string",
+      "enum": ["checkout", "payment"],
+      "description": "Which kind of closed mandate this receipt answers. AP2 distinguishes a Checkout Receipt from a Payment Receipt by which mandate the reference points at; naming it here is what lets a receipt be routed and audited without first resolving the reference."
+    },
+    "reference": {
+      "type": "string",
+      "description": "base64url digest of the closed mandate this receipt answers, computed the way the securing format computes its own presentation digest (AP2: the same algorithm as sd_hash). This is what ties a receipt to exactly one mandate."
+    },
+    "result": {
+      "type": "string",
+      "enum": ["success", "error"],
+      "description": "Outcome of verification."
+    },
+    "error": {
+      "type": "string",
+      "description": "Stable, machine-readable error code. Present when result is 'error', absent otherwise. Never free text — a dispute is assembled from these."
+    },
+    "error_description": {
+      "type": "string",
+      "description": "Human-readable elaboration of error. For operators, not for machines: nothing may branch on it."
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp at which the verifier issued this receipt."
+    }
+  },
+  "required": ["issuer", "mandate_type", "reference", "result"],
+  "additionalProperties": false
+}

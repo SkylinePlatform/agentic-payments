@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Merchant",
+  "description": "A party that sells. Appears as the payee of a Payment Mandate and inside the constraints that limit which merchants an agent may transact with.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable identifier for this merchant, unique within the trust domain that issued it."
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable name. This is what a user sees on the Trusted Surface, so it is a protocol field rather than presentation sugar."
+    },
+    "website": {
+      "type": "string",
+      "format": "uri",
+      "description": "Merchant website."
+    }
+  },
+  "required": ["id", "name"],
+  "additionalProperties": false
+}

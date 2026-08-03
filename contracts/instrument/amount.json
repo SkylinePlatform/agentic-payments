@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Amount",
+  "description": "A monetary amount. Held in minor units as an integer, never as a decimal: floating-point money is how rounding disputes are manufactured.",
+  "type": "object",
+  "properties": {
+    "amount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Value in the minor unit of the currency, per ISO 4217. 1299 with currency 'EUR' is 12.99 EUR. Currencies with no minor unit, such as JPY, use the whole unit. Never negative: a mandate authorises a payment, and money moving the other way is a refund, which is a different object with a different authorisation. Zero is allowed — a zero-amount authorisation is how an instrument is verified without charging it."
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$",
+      "description": "ISO 4217 alphabetic currency code."
+    }
+  },
+  "required": ["amount", "currency"],
+  "additionalProperties": false
+}
