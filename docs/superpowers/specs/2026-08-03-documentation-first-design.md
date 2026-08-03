@@ -104,7 +104,7 @@ levels of detail.
 
 ## Diagrams
 
-Fifteen diagrams, each with exactly one home: the document that explains it.
+Eighteen diagrams, each with exactly one home: the document that explains it.
 
 **`architecture/README.md`** — the three-layer model (identity / authorization
 / instrument); the module dependency graph with the depguard rules; the agentic
@@ -120,7 +120,8 @@ what the Credential Provider sees.
 registry key resolution; signature base construction.
 
 **`business/`** — fragmentation as it stands today; the flight scenario at
-business level; where Skyline sits.
+business level; a sequence for each of the three described use cases (Human
+Present retail, subscription, B2B procurement); where Skyline sits.
 
 Deferred: a demo topology diagram, because the topology itself is deferred.
 
@@ -280,7 +281,7 @@ remain.
 
 - Every document in the set exists, and each states the rule about what it does
   not contain.
-- All sixteen diagrams render on GitHub in the document that owns them, and
+- All eighteen diagrams render on GitHub in the document that owns them, and
   `make diagrams` exports them reproducibly.
 - The three ADRs each record context, decision, consequences and what was
   rejected, in enough detail that the implementation issues derived from them
