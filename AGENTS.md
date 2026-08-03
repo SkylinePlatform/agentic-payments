@@ -196,10 +196,15 @@ would mean core knows AP2, and no `depguard` rule catches that: the rules forbid
 core from *importing* adapters, not from being AP2-shaped. `contracts/README.md`
 records where the line falls and why.
 
-`make generate` needs Go and Node. The Go generator is pinned in
-`contracts/tools/go.mod`, deliberately not in `backend/go.mod` — a code
-generator is not a dependency of the thing it generates, and keeping it out is
-what lets `core/` compile against the standard library alone.
+`make generate` needs Go **and Node** — the TypeScript half runs through npm.
+Nothing else does: `make check`, the gate every task has to pass, regenerates
+only the Go half and is pure Go. The TypeScript half is generated in CI, so
+Go-only work needs no Node toolchain and cross-language drift is still caught.
+
+The Go generator is pinned in `contracts/tools/go.mod`, deliberately not in
+`backend/go.mod` — a code generator is not a dependency of the thing it
+generates, and keeping it out is what lets `core/` compile against the standard
+library alone.
 
 ---
 
@@ -240,19 +245,34 @@ and known traps. Read the issue before starting.
 Run everything from the repository root:
 
 ```bash
-make check            # generate + lint + test — this is what CI runs
+make check            # generate Go types, then lint + test — the gate before any task is done
 make build            # build every binary under backend/cmd
 make test             # unit tests, with -race
 make lint             # golangci-lint including the depguard architecture rules
 make fmt              # apply formatters
 make vectors          # conformance suite against golden vectors
-make generate         # regenerate Go and TS types from contracts/
+make generate         # regenerate Go and TS types from contracts/  ⟵ needs Node
+make generate-ts      # the TypeScript half on its own              ⟵ needs Node
 make generate-verify  # prove generation is reproducible and touches nothing tracked
 ```
 
+**`make check` needs only Go.** Node is required by `make generate` and
+`make generate-ts`, and by nothing else. `check` regenerates the *Go* half of
+the canonical model before linting — testing a tree whose generated half came
+from an older schema checks the wrong thing — but it stops there, so work that
+never touches the frontend never needs npm.
+
+**`make check` is no longer the whole of CI.** It is the local gate; CI runs
+three jobs, and the *Contracts* job additionally runs `make generate-verify`,
+which regenerates both languages twice and fails if generation is not
+reproducible or if it touched a tracked file. That is where the TypeScript half
+and any cross-language drift are caught. `make check` passing locally is
+necessary, not sufficient — which is why the bar below counts green jobs on the
+PR separately.
+
 **Before reporting a task finished, `make check` must pass and you must have
-seen it pass.** Two green jobs on the PR is the same bar. Do not describe work
-as done on the strength of having written it.
+seen it pass.** Green jobs on the PR are the same bar. Do not describe work as
+done on the strength of having written it.
 
 ---
 

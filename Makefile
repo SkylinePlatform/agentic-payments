@@ -36,11 +36,20 @@ fmt: ## Apply formatters
 tidy: ## go mod tidy
 	cd $(BACKEND) && $(GO) mod tidy
 
-# generate comes first on purpose. contracts/ is the source of truth for the
+# Generation comes first on purpose. contracts/ is the source of truth for the
 # canonical model, so linting and testing a tree whose generated half was built
 # from an older schema checks the wrong thing.
+#
+# The Go half only. AGENTS.md makes this target the gate before any task may be
+# reported finished, and generate-ts needs npm — which would put a Node
+# toolchain in the way of work that never touches the frontend. Both targets
+# here are pure Go; generate-disclosure is a `go run` that happens to emit a
+# .ts file, which takes no Node to produce. The TypeScript half runs in the
+# Contracts CI job, which does full `generate` and `generate-verify` on every
+# pull request, so cross-language drift is still caught — just not on the path
+# of a Go-only contributor.
 .PHONY: check
-check: generate lint test ## What CI runs
+check: generate-go generate-disclosure lint test ## Lint and test against freshly generated Go types
 
 .PHONY: clean
 clean: ## Remove build output and generated types
