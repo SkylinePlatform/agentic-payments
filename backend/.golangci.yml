@@ -69,6 +69,36 @@ linters:
             - pkg: github.com/SkylinePlatform/agentic-payments/backend/internal
               desc: pkg/ implements public standards and must remain extractable
 
+        # Private keys live in exactly one package. Everything else holds an
+        # authz.Signer or an authz.Verifier, which cannot yield key material,
+        # and a KeyRef, which is a kid and an algorithm name.
+        #
+        # This rule is what turns that from a convention into a property: a
+        # package that cannot import crypto/ecdsa or crypto/ed25519 cannot name
+        # the types a private key would have to arrive in. crypto/rand is
+        # deliberately absent from the list — it is the approved randomness
+        # source and nonces are needed all over.
+        #
+        # pkg/ is not exempt. Standalone implementations of public standards
+        # take signer and verifier interfaces from their caller; if one ever
+        # genuinely needs to parse a key, that is a reviewed exemption, not a
+        # quiet import.
+        key-material-containment:
+          files:
+            - $all
+            - "!**/internal/platform/crypto/**"
+          deny:
+            - pkg: crypto/ecdsa
+              desc: key material stays in internal/platform/crypto; hold an authz.Signer
+            - pkg: crypto/ed25519
+              desc: key material stays in internal/platform/crypto; hold an authz.Signer
+            - pkg: crypto/rsa
+              desc: key material stays in internal/platform/crypto; hold an authz.Signer
+            - pkg: crypto/ecdh
+              desc: key material stays in internal/platform/crypto; hold an authz.Signer
+            - pkg: crypto/x509
+              desc: key material stays in internal/platform/crypto; hold an authz.Signer
+
         # Randomness in this codebase reaches nonces, key material and
         # signatures. There is no benign math/rand call here.
         no-weak-randomness:
