@@ -2,6 +2,13 @@ GO             ?= go
 GOLANGCI_LINT  ?= golangci-lint
 BACKEND        := backend
 
+# A developer may keep an untracked go.work at the repository root so that an
+# editor opened here — rather than on backend/ — resolves both modules. CI has
+# no such file and builds backend/ standalone, so make turns the workspace off:
+# whether the two modules' build lists get unified must not depend on whether
+# the person running `make check` happens to use an IDE.
+export GOWORK := off
+
 .DEFAULT_GOAL := help
 
 include contracts/codegen.mk

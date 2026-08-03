@@ -181,6 +181,34 @@ Go commands must run from `backend/`, or through `make` from the repository
 root, which does the `cd` for you. Go 1.26.0 or newer; older toolchains
 auto-download it.
 
+### An editor opened at the repository root needs a `go.work`
+
+The nesting that makes the import path longer also breaks the language server.
+`gopls` anchors on the directory the editor opened; the repository root has no
+`go.mod`, so it falls back to a GOPATH view and reports every intra-module
+import as `cannot find package … in GOROOT or GOPATH`, along with a cascade of
+errors from the wrong standard library.
+
+Write an untracked `go.work` at the root — `.gitignore` already covers it:
+
+```
+go 1.26.0
+
+use (
+	./backend
+	./contracts/tools
+)
+```
+
+The auto-download in the paragraph above does **not** apply here: `gopls` runs
+the `go` binary it finds on `PATH` and does not switch toolchains, so that
+binary must itself be 1.26.0 or newer, otherwise the workspace fails to load
+with `go.work requires go >= 1.26.0`.
+
+`make` sets `GOWORK=off` regardless, so whether a workspace file exists never
+changes what `make check` builds. CI compiles `backend/` standalone, and that
+has to stay the thing the local gate checks.
+
 ### Generated code is not hand-edited
 
 `contracts/` is the single source of truth for the canonical model. Go and
