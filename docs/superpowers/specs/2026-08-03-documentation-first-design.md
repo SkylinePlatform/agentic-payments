@@ -63,11 +63,20 @@ Each document answers exactly one question and carries an explicit rule about
 what it must not contain. Without that rule the set drifts into duplication and
 no one can tell which file is authoritative.
 
+The rule for `docs/business/` began as "no technical detail" and was narrowed
+while writing `use-cases.md`, which surfaced the flaw. The scenario's beat
+table earns its keep through the column saying what each beat *proves*, and
+several of those proofs are only sayable in protocol terms — that the agent
+never sees a PAN, that `checkout_hash` is recomputed rather than trusted.
+Stripped of those, the table degrades to a list of steps. Naming a mechanism
+while pointing at what it demonstrates is not the failure the rule guards
+against; explaining it there, in a document an investor reads, is.
+
 | Directory | Answers | Must not contain |
 |---|---|---|
 | `docs/protocols/` | What the specification says | our implementation decisions |
 | `docs/architecture/` | How we build it | re-explanations of the protocol; link to `protocols/` |
-| `docs/business/` | Why it matters, and to whom | technical detail |
+| `docs/business/` | Why it matters, and to whom | *explanations* of technical mechanisms — naming one is allowed where it says what a demo beat proves, with a link |
 
 ```
 docs/architecture/
