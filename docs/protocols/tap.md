@@ -9,8 +9,12 @@ model's own boundary is recorded in `../../contracts/README.md`.
 
 State this first, because it is the most common misreading. **TAP is not a
 Visa-rails protocol.** Verification happens at the *merchant edge*: Visa's own
-reference architecture places a verifying proxy — a CDN layer — in front of the
-merchant, rather than anywhere inside a payment network. Visa operates the
+reference architecture places a verifying proxy — a CDN layer — in front of
+the merchant, rather than anywhere inside a payment network. That claim is
+this project's own reading of TAP's architecture, held on `AGENTS.md`'s
+authority — the publicly published developer page cited below describes
+TAP's roles and the traffic-blocking problem it solves, but does not itself
+spell out this CDN-proxy topology in those terms. Visa operates the
 production trusted-agent directory, but a directory is not a settlement rail,
 and being listed in TAP's identity layer says nothing about which rails a
 payment later travels over.
@@ -19,18 +23,20 @@ The problem this solves is concrete: merchants' existing bot-mitigation layers
 have historically treated automated traffic as hostile and blocked it, which
 also blocks the legitimate commerce agents this project exists to support. TAP
 gives a merchant's edge a way to tell the two apart before the request ever
-reaches the storefront. Issue #30 records the same reasoning independently of
-this document: TAP verification happens at the merchant edge, not inside
-Visa's rails, precisely because that is where the specification's own
-reference architecture places it.
+reaches the storefront. Issue #30 states the same architectural claim in this
+project's own issue tracker — it is the same in-repo understanding written
+down twice, not a second, independent source corroborating the first; both
+ultimately trace to `AGENTS.md`.
 
-This is why AGENTS.md states the correction as a standing warning rather than a
-one-off footnote, and why the tracking issue for this document (#33) records it
-as a correction to carry forward from earlier drafts of the project's own
-article series, which had described TAP as integrated with Visa's payment
-infrastructure. It is not: the specification is open for any merchant, proxy
-operator or registry to implement, and the working group behind it spans
-multiple processors, not one.
+This is why `AGENTS.md` states the correction as a standing warning rather
+than a one-off footnote, and why the tracking issue for this document (#33)
+records it as a correction to carry forward from earlier drafts of the
+project's own article series, which had described TAP as integrated with
+Visa's payment infrastructure. It is not: the specification is open for any
+merchant, proxy operator or registry to implement, and the working group
+behind it spans multiple processors, not one — again this project's reading
+via `AGENTS.md` and issue #33, rather than a sentence confirmed on the public
+developer page.
 
 TAP answers a different question from the protocol in the sibling document.
 `../architecture/README.md`'s three-layer model puts them on separate axes for
@@ -40,10 +46,23 @@ what limits?"* — is AP2's. Neither is an alternative to the other; a complete
 transaction in this project uses both, with TAP's verified identity travelling
 alongside, not instead of, an AP2 mandate.
 
-Primary sources, in the order of authority `AGENTS.md` gives them:
+Primary sources, in the order of authority `AGENTS.md` gives them. Each entry
+below is noted against what it actually states, so that a claim held on
+`AGENTS.md`'s authority is never mistaken for one this list independently
+confirms:
 
-1. <https://developer.visa.com/capabilities/trusted-agent-protocol>
-2. IETF RFC 9421 (HTTP Message Signatures)
+1. <https://developer.visa.com/capabilities/trusted-agent-protocol> — states
+   TAP's roles (agent, merchant, bot-mitigation proxy, Visa) and the
+   traffic-blocking problem the protocol solves: merchants have historically
+   classified agent traffic as bots and blocked it, and TAP lets them tell
+   the two apart. It does **not** state the CDN-proxy-at-the-merchant-edge
+   topology, Visa's specific operational role running the production
+   directory, or the multi-processor working-group point made above; all
+   three rest on `AGENTS.md` as this project's own reading, not on this page.
+2. IETF RFC 9421 (HTTP Message Signatures) — states the signature-base
+   mechanics used directly in "Signature base construction" below; fetched
+   and checked against its own text for this document, not recalled from
+   memory.
 
 ## The handshake
 
@@ -106,11 +125,13 @@ The trap sits in the cache branch, not the lookup branch: a cached public key
 must still be revocable. Caching a `keyid`'s public key indefinitely, or
 without re-checking revocation, turns a directory that can withdraw trust into
 one that cannot — the whole point of a registry, rather than a bare
-self-signed key, is that trust can be taken back. The specification also
-contemplates a future federated directory model, so that Visa's operational
-role in running the production registry does not become a permanent,
-unremovable control point; a single hard-coded registry endpoint is a
-narrower reading of the protocol than the protocol itself takes.
+self-signed key, is that trust can be taken back. Issue #26 records that the
+specification also contemplates a future federated directory model, so that
+Visa's operational role in running the production registry does not become a
+permanent, unremovable control point — this project's reading via that issue,
+again not a sentence confirmed on the public developer page above; a single
+hard-coded registry endpoint would be a narrower reading of the protocol than
+the protocol itself takes.
 
 ## Signature base construction
 
