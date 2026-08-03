@@ -117,8 +117,10 @@ These are enforced, not advisory.
    the published specification and RFC 9421. Reading their sample to understand
    the protocol is fine; reproducing its code is not. See CONTRIBUTING.md.
 
-4. **No test may depend on a live LLM or an external network call.** CI uses
-   `ScriptedInterpreter`.
+4. **No test may depend on a live LLM or an external network call.** Tests use
+   `ScriptedInterpreter`, which maps fixed prompts to fixed constraint sets. It
+   does not exist yet — it arrives with #16. Until then the rule still binds:
+   nothing reaches for a live model in the meantime.
 
 5. **Time goes through the injected clock.** Never call `time.Now()` directly, or
    signature expiry becomes untestable. Enforced by `forbidigo`;
@@ -140,7 +142,8 @@ backend/                ⬅ the Go module root. go.mod lives here, not at the to
   cmd/                  agent, merchant, credprovider, mpp, surface, registry, proxy
   internal/
     core/               domain. imports nothing from this project
-      authz/            mandates, constraint registry, ports
+      authz/            mandates, ports
+        constraint/     types, schemas, evaluators — ours, never in adapters/ap2
       identity/         agent identity, ports
       instrument/       payment instrument ports
       evidence/         receipts, dispute, ports
@@ -184,6 +187,10 @@ and `frontend/src/protocol/generated/`, neither of which is committed. Change
 the schema and regenerate; editing generated output is how the two languages
 drift apart.
 
+`make generate` is not wired up yet — both halves exit with a pointer to #2.
+That is the expected failure today, not a broken checkout. Nothing imports a
+generated type until #2 lands.
+
 ---
 
 ## Conventions
@@ -216,7 +223,9 @@ and known traps. Read the issue before starting.
 - State machines are explicit, not implicit through `if` chains.
 - Constraints are typed and evaluated by the **verifier**, never the agent.
 - Table-driven tests for constraint evaluation.
-- Golden test vectors for all mandate construction and verification.
+- Golden test vectors for all mandate construction and verification. `make
+  vectors` runs `-run 'TestGolden'` over `internal/adapters/...` — a golden test
+  named or placed outside that is not in the conformance suite.
 
 Run everything from the repository root:
 
@@ -227,7 +236,7 @@ make test      # unit tests, with -race
 make lint      # golangci-lint including the depguard architecture rules
 make fmt       # apply formatters
 make vectors   # conformance suite against golden vectors
-make generate  # regenerate Go and TS types from contracts/
+make generate  # regenerate Go and TS types from contracts/ — pending #2
 ```
 
 **Before reporting a task finished, `make check` must pass and you must have
