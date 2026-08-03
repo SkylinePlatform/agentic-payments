@@ -285,6 +285,13 @@ enrolled), Merchant, Merchant Payment Processor, agent registry, settlement.
 Not mocked: SD-JWT, signing and verification, constraint evaluation, mandate
 binding, receipts, dispute evidence.
 
+The canonical model is deliberately narrower than AP2 on the instrument axis.
+Amounts are ISO 4217 fiat in integer minor units, so stablecoin and other
+digital-token rails — which AP2 represents perfectly well, and which shipped
+with it — are not modelled here. That is a scope decision, not an oversight;
+`contracts/instrument/amount.json` records what it excludes and what widening it
+would cost.
+
 Mastercard Agent Pay is **not implementable here** — Agentic Tokens are issued by
 issuing banks via MDES and there is no self-serve developer path. Do not create
 an `adapters/agentpay/` package. Note also that the "Mastercard Agent Toolkit" is
