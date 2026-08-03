@@ -1,0 +1,54 @@
+agentic-payments
+Copyright 2026 Ethernal Tech / Skyline Platform
+
+This product includes software developed at Ethernal Tech.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+-------------------------------------------------------------------------------
+THIRD-PARTY PROTOCOLS AND SPECIFICATIONS
+-------------------------------------------------------------------------------
+
+Agent Payments Protocol (AP2)
+  Specification and reference code: Copyright 2025-2026 Google LLC
+  Licensed under the Apache License, Version 2.0
+  https://github.com/google-agentic-commerce/AP2
+  Where this repository incorporates or derives from AP2 material, that material
+  remains under its original license and attribution is retained in the relevant
+  source files.
+
+Visa Trusted Agent Protocol (TAP)
+  https://github.com/visa/trusted-agent-protocol
+  Visa's published sample implementation is NOT open-source software. It is made
+  available under the Visa Developer Center Terms of Use and the Trusted Agent
+  Protocol Product Terms.
+
+  IMPORTANT: No code from Visa's sample implementation is copied, vendored, or
+  derived in this repository. The TAP support in this project is an independent
+  implementation written from the published protocol specification and from
+  IETF RFC 9421 (HTTP Message Signatures), which is a public standard.
+
+  Contributors MUST NOT copy source code from the Visa sample repository into
+  this project. See CONTRIBUTING.md.
+
+Mastercard Agent Pay / Agentic Tokens
+  Referenced for interoperability research only. No Mastercard code or
+  credentials are included in this repository.
+
+-------------------------------------------------------------------------------
+TRADEMARKS
+-------------------------------------------------------------------------------
+
+"Visa" and "Visa Trusted Agent Protocol" are trademarks of Visa Inc.
+"Mastercard", "Agent Pay" and "Agentic Tokens" are trademarks of Mastercard
+International Incorporated.
+"Google" and "AP2" are trademarks of Google LLC.
+
+This project is an independent implementation and is NOT affiliated with,
+endorsed by, or sponsored by Visa Inc., Mastercard International Incorporated,
+or Google LLC. All trademarks are referenced nominatively to identify the
+protocols implemented.

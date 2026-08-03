@@ -1,0 +1,107 @@
+# golangci-lint v2 configuration.
+#
+# The dependency rules below are the architecture. They are not style
+# preferences — every one of them protects a property the README claims.
+
+version: "2"
+
+run:
+  timeout: 5m
+
+issues:
+  # Report every violation, not just the first one on a line. A depguard hit
+  # sharing a line with some other finding is still an architecture breach.
+  uniq-by-line: false
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - depguard
+    - errorlint
+    - forbidigo
+    - misspell
+    - revive
+
+  settings:
+    depguard:
+      rules:
+        # core/ declares ports and imports nothing else in this module.
+        # If the core knows AP2 exists, adding a protocol becomes surgery.
+        core-isolation:
+          files:
+            - "**/internal/core/**"
+          deny:
+            - pkg: github.com/SkylinePlatform/agentic-payments/backend/internal/adapters
+              desc: core must not know which protocols exist
+            - pkg: github.com/SkylinePlatform/agentic-payments/backend/internal/platform
+              desc: core defines ports; platform implements them
+            - pkg: github.com/SkylinePlatform/agentic-payments/backend/internal/roles
+              desc: core must not know about role implementations
+            - pkg: github.com/SkylinePlatform/agentic-payments/backend/internal/agent
+              desc: core must not depend on the agent
+            - pkg: github.com/SkylinePlatform/agentic-payments/backend/pkg
+              desc: core is protocol-neutral; httpsig and sd-jwt are wire concerns
+
+        # The two protocol adapters must not grow into each other. Duplication
+        # between them is accepted on purpose until a third protocol shows the
+        # real seam — see CONTRIBUTING.md.
+        adapter-isolation-ap2:
+          files:
+            - "**/internal/adapters/ap2/**"
+          deny:
+            - pkg: github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/tap
+              desc: protocol adapters must not depend on each other
+
+        adapter-isolation-tap:
+          files:
+            - "**/internal/adapters/tap/**"
+          deny:
+            - pkg: github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2
+              desc: protocol adapters must not depend on each other
+
+        # pkg/ holds standalone implementations of public standards. They must
+        # stay liftable out of this repository unchanged.
+        pkg-purity:
+          files:
+            - "**/pkg/**"
+          deny:
+            - pkg: github.com/SkylinePlatform/agentic-payments/backend/internal
+              desc: pkg/ implements public standards and must remain extractable
+
+        # Randomness in this codebase reaches nonces, key material and
+        # signatures. There is no benign math/rand call here.
+        no-weak-randomness:
+          files:
+            - $all
+          deny:
+            - pkg: math/rand
+              desc: use crypto/rand — randomness here reaches nonces and keys
+            - pkg: math/rand/v2
+              desc: use crypto/rand — randomness here reaches nonces and keys
+
+    forbidigo:
+      forbid:
+        - pattern: ^time\.Now$
+          msg: time goes through the injected clock, or signature expiry becomes untestable
+
+    revive:
+      rules:
+        - name: package-comments
+          disabled: true
+
+  exclusions:
+    rules:
+      # The clock implementation is the one place allowed to read the wall clock.
+      - path: internal/platform/clock/
+        linters:
+          - forbidigo
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/SkylinePlatform/agentic-payments/backend
