@@ -183,3 +183,59 @@ func TestGoAndTypeScriptAgree(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateRejectsAnnotationsThatWouldPassInSilence(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema string
+		// wantErr is a substring of the expected error. Empty means the schema
+		// must be accepted.
+		wantErr string
+	}{
+		{
+			name:   "correct annotation is accepted",
+			schema: `{"properties": {"checkout": {"x-disclosable": true}}}`,
+		},
+		{
+			name:   "false is a legitimate value, not a mistake",
+			schema: `{"properties": {"checkout": {"x-disclosable": false}}}`,
+		},
+		{
+			name:    "misspelled annotation is rejected rather than walked past",
+			schema:  `{"properties": {"checkout": {"x-disclosible": true}}}`,
+			wantErr: "unknown annotation",
+		},
+		{
+			name:    "string instead of boolean is rejected",
+			schema:  `{"properties": {"checkout": {"x-disclosable": "true"}}}`,
+			wantErr: "must be a JSON boolean",
+		},
+		{
+			name:    "mistake buried where collect never walks is still caught",
+			schema:  `{"$defs": {"inner": {"properties": {"x": {"x-disclosable-item": true}}}}}`,
+			wantErr: "unknown annotation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var node any
+			if err := json.Unmarshal([]byte(tt.schema), &node); err != nil {
+				t.Fatalf("test schema is not valid JSON: %v", err)
+			}
+
+			err := validate(node, "example.json")
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Fatalf("validate() = %v, want no error", err)
+			case tt.wantErr != "" && err == nil:
+				t.Fatalf("validate() = nil, want an error containing %q", tt.wantErr)
+			case tt.wantErr != "" && !strings.Contains(err.Error(), tt.wantErr):
+				t.Fatalf("validate() = %v, want an error containing %q", err, tt.wantErr)
+			}
+			if tt.wantErr != "" && err != nil && !strings.Contains(err.Error(), "example.json") {
+				t.Errorf("error does not name the offending file: %v", err)
+			}
+		})
+	}
+}

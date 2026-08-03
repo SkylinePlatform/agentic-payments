@@ -33,6 +33,7 @@ import (
 	"go/format"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -41,6 +42,20 @@ const (
 	annotationField = "x-disclosable"
 	annotationItems = "x-disclosable-items"
 )
+
+// knownAnnotations is the closed set of "x-" keywords a contract may carry.
+//
+// Closed on purpose. JSON Schema ignores unrecognised keywords by design, so a
+// misspelled x-disclosible, or an x-disclosable carrying the string "true"
+// instead of the boolean, would be walked past without a word — and the field
+// it was meant to mark would then be disclosed to every verifier, forever.
+// That is the same silent failure this tool exists to prevent, one level up:
+// nothing breaks, the tests pass, and the privacy property is quietly gone.
+// An annotation this tool does not recognise is therefore an error.
+var knownAnnotations = map[string]bool{
+	annotationField: true,
+	annotationItems: true,
+}
 
 // typeDisclosure is one canonical type and the paths within it that may be
 // withheld.
@@ -110,17 +125,58 @@ func extractAll(paths []string) ([]typeDisclosure, error) {
 			return nil, fmt.Errorf("%s: schema has no title; the generators derive type names from it", path)
 		}
 
+		if err := validate(schema, path); err != nil {
+			return nil, err
+		}
+
 		var found []string
 		collect(schema, "", &found)
 		if len(found) == 0 {
 			continue
 		}
 		sort.Strings(found)
+		// x-disclosable on an items subschema and x-disclosable-items on its
+		// parent express the same thing and would otherwise both be recorded.
+		found = slices.Compact(found)
 		out = append(out, typeDisclosure{Type: title, Paths: found})
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Type < out[j].Type })
 	return out, nil
+}
+
+// validate rejects annotation mistakes that would otherwise pass in silence.
+//
+// The walk is exhaustive rather than mirroring collect: an annotation sitting
+// somewhere collect never visits is just as ineffective as a misspelled one,
+// and just as quiet about it. Every "x-" keyword anywhere in the document must
+// be one this tool acts on, and must carry a boolean.
+func validate(node any, file string) error {
+	switch n := node.(type) {
+	case map[string]any:
+		for key, value := range n {
+			if strings.HasPrefix(key, "x-") {
+				if !knownAnnotations[key] {
+					return fmt.Errorf("%s: unknown annotation %q; this tool acts on %s and %s only, and would ignore that key without complaining",
+						file, key, annotationField, annotationItems)
+				}
+				if _, ok := value.(bool); !ok {
+					return fmt.Errorf("%s: annotation %q must be a JSON boolean, got %T; a non-boolean is ignored, which silently discloses the field",
+						file, key, value)
+				}
+			}
+			if err := validate(value, file); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, item := range n {
+			if err := validate(item, file); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // collect walks a schema node, recording the path of every annotated property.
