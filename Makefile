@@ -2,6 +2,13 @@ GO             ?= go
 GOLANGCI_LINT  ?= golangci-lint
 BACKEND        := backend
 
+# A developer may keep an untracked go.work at the repository root so that an
+# editor opened here — rather than on backend/ — resolves both modules. CI has
+# no such file and builds backend/ standalone, so make turns the workspace off:
+# whether the two modules' build lists get unified must not depend on whether
+# the person running `make check` happens to use an IDE.
+export GOWORK := off
+
 .DEFAULT_GOAL := help
 
 include contracts/codegen.mk
@@ -35,6 +42,32 @@ fmt: ## Apply formatters
 .PHONY: tidy
 tidy: ## go mod tidy
 	cd $(BACKEND) && $(GO) mod tidy
+
+# go.mod sits in backend/, so an editor opened at the repository root finds no
+# module, falls back to a GOPATH view, and reports every intra-module import as
+# unresolvable. A go.work listing both modules fixes that, and it stays
+# untracked: a committed one would unify the two modules' build lists, and
+# contracts/tools pins the code generator outside backend/go.mod on purpose —
+# with a workspace active, backend/ compiles against eleven modules it does not
+# declare and CI does not provide. That is the drift the separate module
+# exists to prevent, so the file must not be checked in.
+#
+# What that costs is a contributor typing the file out of AGENTS.md, and this
+# target is here to remove that cost without giving the property back.
+#
+# go work init rather than writing the contents by hand: it takes the go
+# directive from the toolchain actually installed, so a generated workspace can
+# never demand a newer Go than its owner has — the failure mode a committed
+# go.work would hand anyone on an older toolchain. It also refuses to overwrite,
+# so a replace directive added locally for debugging survives.
+.PHONY: workspace
+workspace: ## Write the untracked go.work an editor opened at the root needs
+	@if [ -e go.work ]; then \
+		echo "go.work already exists — leaving it alone"; \
+	else \
+		$(GO) work init ./$(BACKEND) ./$(CONTRACT_TOOLS) && \
+		echo "wrote go.work — untracked on purpose, see AGENTS.md"; \
+	fi
 
 # Generation comes first on purpose. contracts/ is the source of truth for the
 # canonical model, so linting and testing a tree whose generated half was built

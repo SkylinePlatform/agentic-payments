@@ -4,6 +4,13 @@ bin/
 *.out
 vendor/
 
+# Editor-local: go.mod sits in backend/, so an editor opened at the repository
+# root has no module to anchor on and gopls falls back to a GOPATH view. A
+# go.work listing both modules fixes that. It stays untracked because CI builds
+# backend/ standalone on purpose — see the GOWORK note in the Makefile.
+go.work
+go.work.sum
+
 # Node
 node_modules/
 dist/
