@@ -6,18 +6,27 @@
 ## Fragmentation predates AI
 
 Card rails, bank transfer, wallets and stablecoins each solve payment with
-incompatible identity, authorisation and settlement models. A card network
-verifies a cardholder through the issuer; a bank transfer verifies an account
-holder through the bank; a wallet verifies whatever the wallet provider
-decided at enrolment; a stablecoin settles against a cryptographic key and
-verifies nothing about the person holding it. Each rail also authorises a
-payment differently, and each settles it on a different timescale, through a
-different set of intermediaries, with a different process for what happens
-when something goes wrong.
+incompatible identity, authorisation and instrument models. A card network
+verifies a cardholder through the issuer, a bank transfer verifies an account
+holder through the bank, a wallet verifies whatever the wallet provider
+decided at enrolment, and a stablecoin verifies nothing about the person
+holding it, only the key controlling it — four different answers to who is
+paying. Each rail also authorises a payment differently: a single yes/no from
+the issuer, the bank's own confirmation at the point of transfer, rules the
+wallet provider set at enrolment, a signature from the key itself. And each
+rail is its own instrument, not an interchangeable stand-in for the others —
+a card number, a bank account number, a wallet balance and a private key do
+not compose, so accepting one does not get a merchant halfway to accepting
+the next.
+
+These rails also settle on different timescales, through different
+intermediaries, with different processes for what happens when something
+goes wrong. That difference is real, but it is a consequence of the three
+models above, not a fourth one to track alongside them.
 
 This is not a new problem, and it is not caused by AI. A merchant that wants
 to accept cards, bank transfer and a wallet integrates three identity models,
-three authorisation models and three settlement models — not one payment
+three authorisation models and three instrument models — not one payment
 system, three times over. That has been the cost of accepting more than one
 rail for as long as there has been more than one rail. Agents inherit this
 cost before they add anything of their own.
@@ -48,7 +57,7 @@ with the same authority as the first purchase.
 
 ## Three gaps, three protocols
 
-Identity, authority and instrument are not three symptoms of one problem —
+Identity, authorisation and instrument are not three symptoms of one problem —
 they are three separate problems, and none of them shares a fix with the
 others. Verifying that a request came from a known agent is a question about
 signing. Bounding what a user approved is a question about delegation and
