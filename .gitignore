@@ -1,0 +1,28 @@
+# Go
+bin/
+*.test
+*.out
+vendor/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.local
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!testdata/**/*.pem
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Generated from contracts/ — see contracts/codegen.mk
+backend/internal/core/generated/
+frontend/src/protocol/generated/

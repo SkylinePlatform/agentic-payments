@@ -1,0 +1,31 @@
+name: Task
+description: A unit of implementation work
+labels: ["task"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should exist when this is done?
+    validations:
+      required: true
+  - type: input
+    id: spec
+    attributes:
+      label: Spec reference
+      description: Which part of the protocol specification does this implement?
+      placeholder: "AP2 §Mandates / Checkout Mandate"
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of done
+      value: |
+        - [ ]
+        - [ ] Tests
+        - [ ] Golden vectors if applicable
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes and open questions

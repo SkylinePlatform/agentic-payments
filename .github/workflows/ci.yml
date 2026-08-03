@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          # Re-enable once backend/go.sum exists; setup-go fails when the
+          # dependency lock file it is pointed at is absent.
+          cache: false
+
+      - name: Build
+        working-directory: backend
+        run: go build ./...
+
+      - name: Test
+        working-directory: backend
+        run: go test -race ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: false
+
+      # Includes the depguard rules that keep core/ free of adapters/ and the
+      # two protocol adapters free of each other. A failure here is an
+      # architecture violation, not a style nit.
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.11.3
+          working-directory: backend
