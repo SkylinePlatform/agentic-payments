@@ -93,7 +93,7 @@ These are enforced, not advisory.
    defines ports; everything else implements them. If core knows which protocols
    exist, the ability to add one without surgery is gone.
 
-   Four more dependency rules follow from the same reasoning, and all five are
+   Five more dependency rules follow from the same reasoning, and all six are
    enforced by `depguard` in CI rather than by review:
 
    | Rule | Effect |
@@ -101,6 +101,7 @@ These are enforced, not advisory.
    | `core-isolation` | `internal/core/**` imports nothing else in the module |
    | `adapter-isolation-ap2` / `-tap` | `adapters/ap2` and `adapters/tap` cannot import each other |
    | `pkg-purity` | `pkg/**` cannot import `internal/**` |
+   | `key-material-containment` | `crypto/ecdsa`, `crypto/ed25519`, `crypto/rsa`, `crypto/ecdh` and `crypto/x509` are importable only from `internal/platform/crypto` — nowhere else can name the type a private key would arrive in |
    | `no-weak-randomness` | `math/rand` and `math/rand/v2` are banned everywhere — randomness here reaches nonces and keys |
 
    A lint failure in this repository is an architecture violation, not a style

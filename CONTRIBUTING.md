@@ -73,13 +73,16 @@ Scopes follow package names: `authz`, `identity`, `instrument`, `evidence`,
 This is a proof of concept, but the structure is meant to survive promotion to a
 product.
 
-- Five dependency rules are enforced by `depguard` in CI rather than by review:
+- Six dependency rules are enforced by `depguard` in CI rather than by review:
   `core/` imports nothing else in the module (not `adapters/`, `platform/`,
   `roles/`, `agent/`, `pkg/`); `adapters/ap2` and `adapters/tap` must not import
-  each other; `pkg/` must not import `internal/`; and `math/rand` is banned
-  everywhere, because randomness here reaches nonces and keys. A lint failure in
-  this repository is an architecture violation, not a style nit — do not silence
-  one with `//nolint`. Rules live in
+  each other; `pkg/` must not import `internal/`; the standard-library packages
+  that carry private keys (`crypto/ecdsa`, `crypto/ed25519`, `crypto/rsa`,
+  `crypto/ecdh`, `crypto/x509`) are importable only from
+  `internal/platform/crypto`, so nowhere else can name the type a private key
+  would arrive in; and `math/rand` is banned everywhere, because randomness here
+  reaches nonces and keys. A lint failure in this repository is an architecture
+  violation, not a style nit — do not silence one with `//nolint`. Rules live in
   [backend/.golangci.yml](backend/.golangci.yml); the reasoning is in
   [AGENTS.md](AGENTS.md).
 - No LLM call in any signing or verification path. Ever.
