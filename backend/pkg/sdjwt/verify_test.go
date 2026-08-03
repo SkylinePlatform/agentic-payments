@@ -167,6 +167,27 @@ func TestVerifyRejects(t *testing.T) {
 			wantErr: sdjwt.ErrMalformedSDJWT,
 		},
 		{
+			// §4.1 rule 7 reserves "..." for an array element's digest.
+			// Anywhere else it is not a claim name, and passing it through
+			// would put a reserved name into the payload an application reads.
+			name: "an ellipsis key used as an object property",
+			build: func(t *testing.T) (map[string]any, []sdjwt.Disclosure) {
+				return map[string]any{"address": map[string]any{"...": "not-a-digest-position"}}, nil
+			},
+			wantErr: sdjwt.ErrMalformedSDJWT,
+		},
+		{
+			// The same key inside an array, but alongside another — so not the
+			// single-key object §4.2.4.2 defines, and not a digest.
+			name: "an ellipsis key sharing its object with another",
+			build: func(t *testing.T) (map[string]any, []sdjwt.Disclosure) {
+				return map[string]any{
+					"constraints": []any{map[string]any{"...": "digest", "smuggled": "value"}},
+				}, nil
+			},
+			wantErr: sdjwt.ErrMalformedSDJWT,
+		},
+		{
 			// §7.1 step 2.d.
 			name: "an _sd_alg this package will not compute",
 			build: func(t *testing.T) (map[string]any, []sdjwt.Disclosure) {
@@ -231,6 +252,8 @@ func TestVerifyPolicy(t *testing.T) {
 			Issuer:            key,
 			HolderKey:         func(json.RawMessage) (sdjwt.Verifier, error) { return holder, nil },
 			RequireKeyBinding: true,
+			Audience:          "https://verifier.example",
+			Nonce:             "n-1",
 			Clock:             at(1750000000),
 		})
 		if !errors.Is(err, sdjwt.ErrKeyBindingRequired) {
@@ -245,10 +268,53 @@ func TestVerifyPolicy(t *testing.T) {
 		_, err := sdjwt.Verify(sd, sdjwt.Options{
 			Issuer:            key,
 			RequireKeyBinding: true,
+			Audience:          "https://verifier.example",
+			Nonce:             "n-1",
 			Clock:             at(1750000000),
 		})
-		if !errors.Is(err, sdjwt.ErrKeyBindingRequired) {
-			t.Errorf("Verify: got %v, want %v", err, sdjwt.ErrKeyBindingRequired)
+		if !errors.Is(err, sdjwt.ErrInvalidOptions) {
+			t.Errorf("Verify: got %v, want %v", err, sdjwt.ErrInvalidOptions)
+		}
+	})
+
+	// A Verifier that asks for Key Binding and does not say what it expects
+	// would otherwise compare "" against "" and pass. The proof would be
+	// cryptographically valid and prove nothing about which transaction or
+	// which Verifier it was made for, so the call is refused instead.
+	t.Run("key binding checked without a nonce or audience to check against", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tc := range []struct {
+			name     string
+			nonce    string
+			audience string
+		}{
+			{"neither", "", ""},
+			{"no nonce", "", "https://verifier.example"},
+			{"no audience", "n-1", ""},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				sd := mustIssue(t, key, claims, nil)
+				bound, err := sd.AttachKeyBinding(t.Context(), holder, sdjwt.KeyBinding{
+					Nonce: "n-1", Audience: "https://verifier.example", IssuedAt: at(1750000000).Now(),
+				})
+				if err != nil {
+					t.Fatalf("AttachKeyBinding: %v", err)
+				}
+				_, err = sdjwt.Verify(bound, sdjwt.Options{
+					Issuer:            key,
+					HolderKey:         func(json.RawMessage) (sdjwt.Verifier, error) { return holder, nil },
+					RequireKeyBinding: true,
+					Audience:          tc.audience,
+					Nonce:             tc.nonce,
+					Clock:             at(1750000000),
+				})
+				if !errors.Is(err, sdjwt.ErrInvalidOptions) {
+					t.Errorf("Verify: got %v, want %v", err, sdjwt.ErrInvalidOptions)
+				}
+			})
 		}
 	})
 
@@ -276,8 +342,8 @@ func TestVerifyPolicy(t *testing.T) {
 		t.Parallel()
 
 		sd := mustIssue(t, key, claims, nil)
-		if _, err := sdjwt.Verify(sd, sdjwt.Options{Clock: at(1750000000)}); !errors.Is(err, sdjwt.ErrUnsupportedAlgorithm) {
-			t.Errorf("Verify: got %v, want %v", err, sdjwt.ErrUnsupportedAlgorithm)
+		if _, err := sdjwt.Verify(sd, sdjwt.Options{Clock: at(1750000000)}); !errors.Is(err, sdjwt.ErrInvalidOptions) {
+			t.Errorf("Verify: got %v, want %v", err, sdjwt.ErrInvalidOptions)
 		}
 	})
 
@@ -285,8 +351,8 @@ func TestVerifyPolicy(t *testing.T) {
 		t.Parallel()
 
 		sd := mustIssue(t, key, claims, nil)
-		if _, err := sdjwt.Verify(sd, sdjwt.Options{Issuer: key}); err == nil {
-			t.Error("Verify with no clock succeeded; expiry would go unchecked")
+		if _, err := sdjwt.Verify(sd, sdjwt.Options{Issuer: key}); !errors.Is(err, sdjwt.ErrInvalidOptions) {
+			t.Errorf("Verify with no clock: got %v, want %v", err, sdjwt.ErrInvalidOptions)
 		}
 	})
 

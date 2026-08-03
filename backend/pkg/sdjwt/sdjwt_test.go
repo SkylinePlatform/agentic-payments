@@ -249,6 +249,51 @@ func TestPresentRejectsUnreachableDisclosure(t *testing.T) {
 	if _, err := issued.Present(named("minor_units")); !errors.Is(err, sdjwt.ErrDisclosureUnreachable) {
 		t.Errorf("Present: got %v, want %v", err, sdjwt.ErrDisclosureUnreachable)
 	}
+
+	// Disclosing nothing is a decision a Holder can state; a nil predicate is
+	// a variable that never got assigned, and must not be read as the former.
+	if _, err := issued.Present(nil); err == nil {
+		t.Error("Present(nil) succeeded; a missing predicate should not mean disclose nothing")
+	}
+}
+
+// TestPresentAgreesWithVerify is the property that makes the Holder-side
+// reachability check worth having: anything Present accepts must survive
+// verification. A looser reading of where a digest may appear would let a
+// Holder assemble a presentation that passes its own check and is then
+// rejected by every Verifier that receives it.
+func TestPresentAgreesWithVerify(t *testing.T) {
+	t.Parallel()
+
+	key := newHMACKey("issuer-secret", "issuer-1")
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	if err != nil {
+		t.Fatalf("NewBlinder: %v", err)
+	}
+	payload, disclosures := mustBlind(t, blinder, mandateClaims(), blindPaths...)
+	issued := mustIssue(t, key, payload, disclosures)
+
+	// Every subset of the disclosures, so the two checks are compared over the
+	// whole selection space rather than on a few hand-picked cases.
+	all := issued.Disclosures()
+	for mask := 0; mask < 1<<len(all); mask++ {
+		selected := map[string]struct{}{}
+		for i, d := range all {
+			if mask&(1<<i) != 0 {
+				selected[d.String()] = struct{}{}
+			}
+		}
+		presented, presentErr := issued.Present(func(d sdjwt.Disclosure) bool {
+			_, ok := selected[d.String()]
+			return ok
+		})
+		if presentErr != nil {
+			continue // Present refused; nothing to verify.
+		}
+		if _, err := sdjwt.Verify(presented, sdjwt.Options{Issuer: key, Clock: at(1750000000)}); err != nil {
+			t.Fatalf("Present accepted a selection Verify rejected (mask %b): %v", mask, err)
+		}
+	}
 }
 
 // TestNestedStructures exercises the shapes a mandate actually has: an array
@@ -330,6 +375,86 @@ func TestAttachKeyBindingRequiresItsClaims(t *testing.T) {
 
 			if _, err := issued.AttachKeyBinding(t.Context(), holder, tc.kb); !errors.Is(err, sdjwt.ErrKeyBindingInvalid) {
 				t.Errorf("AttachKeyBinding: got %v, want %v", err, sdjwt.ErrKeyBindingInvalid)
+			}
+		})
+	}
+}
+
+// TestRecursiveArrayDisclosure covers the shape RFC 9901 §4.2.6 uses for its
+// nationalities example: the elements of an array are made disclosable, and
+// then the array itself is. The digests for the elements then live inside
+// another Disclosure's value rather than in the signed payload, which is the
+// one place a digest is reachable only transitively.
+func TestRecursiveArrayDisclosure(t *testing.T) {
+	t.Parallel()
+
+	key := newHMACKey("issuer-secret", "issuer-1")
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	if err != nil {
+		t.Fatalf("NewBlinder: %v", err)
+	}
+	claims := map[string]any{
+		"sub":         "agent-42",
+		"constraints": []any{"max_amount", "eu_only"},
+	}
+	// Deepest first: the elements are hidden, then the array carrying their
+	// digests is hidden in turn.
+	payload, disclosures := mustBlind(t, blinder, claims, "constraints[]", "constraints")
+	issued := mustIssue(t, key, payload, disclosures)
+
+	// The signed payload must mention constraints only as a digest.
+	if _, leaked := payload["constraints"]; leaked {
+		t.Error("constraints survived in the signed payload")
+	}
+
+	for _, tc := range []struct {
+		name    string
+		keep    func(sdjwt.Disclosure) bool
+		want    string
+		wantErr error
+	}{
+		{
+			name: "the array and one element",
+			keep: func(d sdjwt.Disclosure) bool {
+				if name, named := d.Name(); named {
+					return name == "constraints"
+				}
+				return d.Value() == "eu_only"
+			},
+			want: `{"sub": "agent-42", "constraints": ["eu_only"]}`,
+		},
+		{
+			name: "the array with none of its elements",
+			keep: named("constraints"),
+			want: `{"sub": "agent-42", "constraints": []}`,
+		},
+		{
+			// Without the array Disclosure there is no digest anywhere that
+			// places the element, so Present refuses.
+			name:    "an element without the array it lives in",
+			keep:    func(d sdjwt.Disclosure) bool { return d.Value() == "eu_only" },
+			wantErr: sdjwt.ErrDisclosureUnreachable,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			presented, err := issued.Present(tc.keep)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("Present: got %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Present: %v", err)
+			}
+			got, err := sdjwt.Verify(presented, sdjwt.Options{Issuer: key, Clock: at(1750000000)})
+			if err != nil {
+				t.Fatalf("Verify: %v", err)
+			}
+			if got, want := canonicalJSON(t, got), canonicalJSONText(t, tc.want); got != want {
+				t.Errorf("processed payload:\n got %s\nwant %s", got, want)
 			}
 		})
 	}

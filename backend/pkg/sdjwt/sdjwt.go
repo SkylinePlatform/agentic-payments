@@ -170,6 +170,13 @@ func Issue(ctx context.Context, signer Signer, payload map[string]any, disclosur
 // reject, because it has no place to put the value. Failing here, on the
 // Holder's own credential, is a better place to learn that.
 func (s *SDJWT) Present(keep func(Disclosure) bool) (*SDJWT, error) {
+	if keep == nil {
+		// Rejected rather than read as "keep nothing". Disclosing nothing is a
+		// decision a Holder can state — func(Disclosure) bool { return false }
+		// — and a nil predicate is far more likely to be a variable that never
+		// got assigned.
+		return nil, fmt.Errorf("sdjwt: Present needs a predicate")
+	}
 	jwt, err := parseJWT(s.issuerJWT)
 	if err != nil {
 		return nil, err
@@ -249,18 +256,22 @@ func checkReachable(kept []Disclosure, claims map[string]any, alg HashAlg) error
 }
 
 // collectDigests walks a decoded JSON value and records every digest it
-// carries: the strings of an _sd array, and the value behind a lone "..." key.
+// carries: the strings of an _sd array, and the value behind a lone "..." key
+// standing in for an array element.
 //
-// It is deliberately permissive — it reports what looks like a digest and
-// judges nothing. Verify is where a malformed _sd array becomes a rejection;
-// here the question is only which digests a Holder could satisfy.
+// The two positions are the only ones RFC 9901 puts a digest in, and this
+// mirrors what the verification walk accepts rather than looking for "..."
+// anywhere. A looser reading here would let Present assemble a presentation
+// that satisfies its own reachability check and is then rejected by every
+// Verifier that receives it — the Holder-side check is worth having only if it
+// agrees with the Verifier.
+//
+// It stays tolerant of malformed input, though: it reports the digests it can
+// see and judges nothing. Verify is where a broken _sd array becomes a
+// rejection; here the question is only which digests a Holder could satisfy.
 func collectDigests(node any, into map[string]struct{}) {
 	switch n := node.(type) {
 	case map[string]any:
-		if digest, ok := arrayElementDigest(n); ok {
-			into[digest] = struct{}{}
-			return
-		}
 		for key, value := range n {
 			if key == sdClaim {
 				if digests, ok := value.([]any); ok {
@@ -276,6 +287,13 @@ func collectDigests(node any, into map[string]struct{}) {
 		}
 	case []any:
 		for _, element := range n {
+			// Only here, as an element, does {"...": digest} mean a digest.
+			if obj, isObject := element.(map[string]any); isObject {
+				if digest, isDigest := arrayElementDigest(obj); isDigest {
+					into[digest] = struct{}{}
+					continue
+				}
+			}
 			collectDigests(element, into)
 		}
 	}

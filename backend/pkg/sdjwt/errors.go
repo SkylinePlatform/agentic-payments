@@ -77,6 +77,19 @@ var (
 	// silently skipped path discloses a claim the caller believed was hidden.
 	ErrNoSuchClaim = errors.New("sdjwt: no such claim")
 
+	// ErrInvalidOptions means Verify was handed a policy it cannot apply: no
+	// issuer verifier, no clock, or Key Binding to be checked without the
+	// nonce and audience to check it against.
+	//
+	// These are configuration errors, not protocol failures, and they are
+	// refused rather than worked around. The nonce and audience case is the
+	// one that matters: without them the comparisons in a Key Binding JWT
+	// become "" == "", so a Verifier that asked for Key Binding and forgot to
+	// say what it expected would accept a proof made for anyone, for any
+	// transaction — replay protection silently absent while the call still
+	// returns a valid-looking payload.
+	ErrInvalidOptions = errors.New("sdjwt: invalid verification options")
+
 	// ErrExpired means the processed payload carries an exp that has passed,
 	// and ErrNotYetValid an nbf that has not arrived. RFC 9901 §7.1 step 6.
 	//

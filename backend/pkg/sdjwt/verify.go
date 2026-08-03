@@ -27,6 +27,11 @@ type Options struct {
 	// not rely on Key Binding has nothing to conclude from a proof it did not
 	// ask for, and pretending otherwise would make the policy depend on what
 	// the Holder chose to send.
+	//
+	// Setting it without RequireKeyBinding is the opportunistic middle
+	// ground — Key Binding is not demanded, but a proof that does arrive is
+	// checked rather than waved through. Nonce and Audience are then required
+	// too, since there would otherwise be nothing to check it against.
 	HolderKey func(cnf json.RawMessage) (Verifier, error)
 
 	// RequireKeyBinding makes a Key Binding JWT mandatory.
@@ -37,11 +42,19 @@ type Options struct {
 	RequireKeyBinding bool
 
 	// Audience is the value the KB-JWT's aud claim must carry: this Verifier's
-	// identifier. Checked only when Key Binding is verified.
+	// identifier.
+	//
+	// Required whenever Key Binding is checked, and empty is not a way to skip
+	// the check — Verify fails with ErrInvalidOptions instead. See Nonce.
 	Audience string
 
 	// Nonce is the value the KB-JWT's nonce claim must carry, as issued to the
-	// Holder for this transaction. Checked only when Key Binding is verified.
+	// Holder for this transaction.
+	//
+	// Required whenever Key Binding is checked. Leaving it empty would make
+	// the comparison "" == "", so a proof made for another Verifier or another
+	// transaction would pass; Verify refuses with ErrInvalidOptions rather
+	// than verifying something that proves nothing.
 	Nonce string
 
 	// MaxKeyBindingAge is how far the KB-JWT's iat may sit from now, in either
@@ -79,16 +92,29 @@ type Options struct {
 // matching digest is an error, because it is data the Issuer never signed.
 func Verify(sd *SDJWT, opts Options) (map[string]any, error) {
 	if opts.Issuer == nil {
-		return nil, fmt.Errorf("%w: no issuer verifier", ErrUnsupportedAlgorithm)
+		return nil, fmt.Errorf("%w: no issuer verifier", ErrInvalidOptions)
 	}
 	if opts.Clock == nil {
-		return nil, fmt.Errorf("sdjwt: Options.Clock is required")
+		return nil, fmt.Errorf("%w: no clock", ErrInvalidOptions)
 	}
+
+	// Whether the Key Binding JWT will be checked at all. Policy is one reason;
+	// the other is a proof arriving where the caller supplied a resolver for
+	// the holder's key, which is the opportunistic case Options.HolderKey
+	// documents.
+	checkingKeyBinding := opts.RequireKeyBinding || (sd.HasKeyBinding() && opts.HolderKey != nil)
+	if checkingKeyBinding && (opts.Nonce == "" || opts.Audience == "") {
+		// Refused rather than skipped. The comparisons in verifyKeyBinding are
+		// against these fields, so an empty one matches an empty claim and the
+		// check passes while proving nothing.
+		return nil, fmt.Errorf("%w: checking key binding needs both a nonce and an audience", ErrInvalidOptions)
+	}
+
 	// §7.3 steps 1 and 2: policy decides, and it decides before anything about
 	// the presentation is looked at.
 	if opts.RequireKeyBinding {
 		if opts.HolderKey == nil {
-			return nil, fmt.Errorf("%w: key binding required but no HolderKey resolver", ErrKeyBindingRequired)
+			return nil, fmt.Errorf("%w: key binding required but no HolderKey resolver", ErrInvalidOptions)
 		}
 		if !sd.HasKeyBinding() {
 			return nil, ErrKeyBindingRequired
@@ -223,6 +249,15 @@ func (p *processor) processObject(obj map[string]any) (any, error) {
 	for _, key := range slices.Sorted(maps.Keys(obj)) {
 		if key == sdClaim {
 			continue
+		}
+		// §4.1 rule 7 reserves "..." for conveying an array element's digest,
+		// and processArray consumes every well-formed one before recursing —
+		// so a "..." reaching here is in a position the spec gives it no
+		// meaning in, or is malformed. Either way it is not a claim name, and
+		// copying it through would put a reserved name into the payload an
+		// application then reads.
+		if key == arrayDigestKey {
+			return nil, fmt.Errorf("%w: %q outside an array-element digest", ErrMalformedSDJWT, arrayDigestKey)
 		}
 		value, err := p.process(obj[key])
 		if err != nil {
