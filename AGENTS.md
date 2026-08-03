@@ -273,8 +273,12 @@ and known traps. Read the issue before starting.
 - Constraints are typed and evaluated by the **verifier**, never the agent.
 - Table-driven tests for constraint evaluation.
 - Golden test vectors for all mandate construction and verification. `make
-  vectors` runs `-run 'TestGolden'` over `internal/adapters/...` — a golden test
-  named or placed outside that is not in the conformance suite.
+  vectors` runs `-run 'TestGolden'` over `internal/adapters/...` and `pkg/...`
+  — a golden test named or placed outside those is not in the conformance
+  suite. `pkg/` is in scope because that is where implementations of public
+  standards live, and those are the ones whose vectors somebody else published:
+  RFC 9901 prints its own disclosures, digests and processed payloads, and
+  those are conformance evidence in a way our own fixtures are not.
 
 Run everything from the repository root:
 

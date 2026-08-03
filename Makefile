@@ -27,9 +27,15 @@ test: ## Unit tests
 	cd $(BACKEND) && $(GO) test -race ./...
 	$(GO) -C $(CONTRACT_TOOLS) test ./...
 
+# pkg/ is in scope alongside adapters/ because that is where implementations of
+# public standards live, and those are the ones with vectors published by
+# somebody other than us. RFC 9901 prints its own Disclosures, digests, sd_hash
+# and Processed SD-JWT Payload; a suite that called itself the conformance
+# suite and skipped them would be checking only the half of the system whose
+# vectors we wrote ourselves.
 .PHONY: vectors
 vectors: ## Conformance suite against the golden vectors
-	cd $(BACKEND) && $(GO) test ./internal/adapters/... -run 'TestGolden' -v
+	cd $(BACKEND) && $(GO) test ./internal/adapters/... ./pkg/... -run 'TestGolden' -v
 
 .PHONY: lint
 lint: ## golangci-lint, including the depguard architecture rules

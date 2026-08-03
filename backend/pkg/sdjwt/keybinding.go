@@ -1,0 +1,195 @@
+package sdjwt
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+)
+
+// kbType is the required "typ" of a Key Binding JWT (RFC 9901 §4.3).
+//
+// It is fixed, not configurable. Explicit typing is what stops a JWT the
+// Holder signed for some other purpose from being replayed as a proof of
+// possession, and a profile that could change it would give that back.
+const kbType = "kb+jwt"
+
+// Clock is this package's source of the current time.
+//
+// It is an interface, and a required one, because every question Key Binding
+// asks is a question about a moment: is this proof recent, has this credential
+// expired. A package that read the wall clock directly would make both
+// untestable, and expiry that is never exercised is expiry that does not work.
+type Clock interface {
+	// Now returns the current time.
+	Now() time.Time
+}
+
+// KeyBinding is what a Holder puts in a Key Binding JWT beyond the binding
+// itself. RFC 9901 §4.3 makes all three REQUIRED, along with sd_hash, which
+// AttachKeyBinding computes.
+type KeyBinding struct {
+	// Nonce ties the proof to one transaction. The Verifier issues it; how is
+	// out of scope for RFC 9901 and is the surrounding protocol's business.
+	Nonce string
+	// Audience identifies the intended Verifier, and goes in the aud claim. A
+	// proof made for one Verifier must not be presentable to another.
+	Audience string
+	// IssuedAt is the time the proof is made, and goes in the iat claim.
+	IssuedAt time.Time
+}
+
+// keyBindingClaims is the KB-JWT payload.
+type keyBindingClaims struct {
+	Nonce    string `json:"nonce"`
+	Audience string `json:"aud"`
+	IssuedAt int64  `json:"iat"`
+	SDHash   string `json:"sd_hash"`
+}
+
+// SDHash returns the value of the sd_hash claim for this SD-JWT
+// (RFC 9901 §4.3.1): the digest over the Issuer-signed JWT and the Disclosures
+// actually being presented, each followed by a tilde.
+//
+// It takes no algorithm argument on purpose. The spec requires the same hash
+// as the Disclosures use, so the answer is already in the payload's _sd_alg
+// and there is nothing for a caller to choose — or to get wrong.
+//
+// The hash covers the selection, which is what makes Key Binding bind. Adding
+// or removing a Disclosure after the fact changes sd_hash, so a KB-JWT cannot
+// be lifted from one presentation onto another.
+func (s *SDJWT) SDHash() (string, error) {
+	alg, err := s.hashAlg()
+	if err != nil {
+		return "", err
+	}
+	return alg.digest(s.sdPart())
+}
+
+// hashAlg reads _sd_alg out of the Issuer-signed JWT without verifying its
+// signature.
+//
+// Reading an unverified payload is safe here because the value is only ever
+// used to decide which digest function to compute, and the digests it is
+// compared against are themselves inside the signed payload. An attacker who
+// changes _sd_alg makes every digest fail to match, which is a rejection, not
+// a forgery. Verify still checks the signature before any of this matters.
+func (s *SDJWT) hashAlg() (HashAlg, error) {
+	jwt, err := parseJWT(s.issuerJWT)
+	if err != nil {
+		return "", err
+	}
+	claims, err := jwt.claims()
+	if err != nil {
+		return "", err
+	}
+	return hashAlgOf(claims)
+}
+
+// AttachKeyBinding signs a Key Binding JWT over this presentation and returns
+// the resulting SD-JWT+KB.
+//
+// signer holds the Holder's key — the one the Issuer named in the cnf claim.
+// It is a different key from the one that signed the Issuer-signed JWT, and
+// passing the wrong one produces a presentation that verifies structurally and
+// fails at the Verifier.
+//
+// Select the Disclosures first, with Present. sd_hash covers whatever is
+// attached at this moment, so binding before selecting binds the wrong thing.
+func (s *SDJWT) AttachKeyBinding(ctx context.Context, signer Signer, kb KeyBinding) (*SDJWT, error) {
+	if s.HasKeyBinding() {
+		return nil, fmt.Errorf("%w: already bound", ErrUnexpectedKeyBinding)
+	}
+	switch {
+	case kb.Nonce == "":
+		return nil, fmt.Errorf("%w: nonce is required", ErrKeyBindingInvalid)
+	case kb.Audience == "":
+		return nil, fmt.Errorf("%w: audience is required", ErrKeyBindingInvalid)
+	case kb.IssuedAt.IsZero():
+		return nil, fmt.Errorf("%w: issued-at is required", ErrKeyBindingInvalid)
+	}
+
+	sdHash, err := s.SDHash()
+	if err != nil {
+		return nil, err
+	}
+
+	encoded, err := signJWT(ctx, signer, kbType, keyBindingClaims{
+		Nonce:    kb.Nonce,
+		Audience: kb.Audience,
+		IssuedAt: kb.IssuedAt.Unix(),
+		SDHash:   sdHash,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	bound := &SDJWT{
+		issuerJWT:   s.issuerJWT,
+		disclosures: make([]Disclosure, len(s.disclosures)),
+		keyBinding:  encoded,
+	}
+	copy(bound.disclosures, s.disclosures)
+	return bound, nil
+}
+
+// verifyKeyBinding runs the checks of RFC 9901 §7.3 step 5 against the
+// attached KB-JWT.
+func (s *SDJWT) verifyKeyBinding(holder Verifier, opts Options) error {
+	jwt, err := parseJWT(s.keyBinding)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrKeyBindingInvalid, err)
+	}
+	if jwt.header.Typ != kbType {
+		return fmt.Errorf("%w: typ is %q, want %q", ErrKeyBindingInvalid, jwt.header.Typ, kbType)
+	}
+	if err := jwt.verifyWith(holder); err != nil {
+		return err
+	}
+
+	// Decoded into the struct directly rather than through a map: iat lands in
+	// an int64 field, which json.Unmarshal fills exactly, and none of these
+	// four claims is ever re-encoded, so nothing here needs the json.Number
+	// treatment the payload gets.
+	var claims keyBindingClaims
+	if err := json.Unmarshal(jwt.payload, &claims); err != nil {
+		return fmt.Errorf("%w: payload: %w", ErrKeyBindingInvalid, err)
+	}
+
+	// The nonce and the audience are compared to what the Verifier asked for,
+	// not merely checked for presence. A KB-JWT that proves possession of the
+	// right key but was made for a different Verifier, or for a different
+	// transaction with the same Verifier, is a replay.
+	if claims.Nonce != opts.Nonce {
+		return fmt.Errorf("%w: nonce does not match", ErrKeyBindingInvalid)
+	}
+	if claims.Audience != opts.Audience {
+		return fmt.Errorf("%w: audience is %q, want %q",
+			ErrKeyBindingInvalid, claims.Audience, opts.Audience)
+	}
+
+	// sd_hash is computed over what actually arrived, so a Disclosure added or
+	// dropped between signing and presentation is caught here.
+	sdHash, err := s.SDHash()
+	if err != nil {
+		return err
+	}
+	if claims.SDHash != sdHash {
+		return fmt.Errorf("%w: sd_hash does not cover the presented disclosures", ErrKeyBindingInvalid)
+	}
+
+	if opts.MaxKeyBindingAge > 0 {
+		issuedAt := time.Unix(claims.IssuedAt, 0)
+		skew := opts.Clock.Now().Sub(issuedAt)
+		if skew < 0 {
+			skew = -skew
+		}
+		// The window is symmetric: a proof from the future is as suspect as a
+		// stale one, and clock skew moves in both directions.
+		if skew > opts.MaxKeyBindingAge {
+			return fmt.Errorf("%w: issued at %s, outside the %s window",
+				ErrKeyBindingInvalid, issuedAt.UTC().Format(time.RFC3339), opts.MaxKeyBindingAge)
+		}
+	}
+	return nil
+}
