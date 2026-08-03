@@ -30,10 +30,13 @@ Adapters populate the axes; `core` never learns which protocol filled one.
 ## Module dependencies
 
 The three-layer model above only holds if the code cannot route around it.
-Six `depguard` rules in `backend/.golangci.yml` turn each boundary into a
-compiler-checked property instead of a convention someone can forget mid-refactor.
-A failure against any of them is an architecture violation, not a style nit,
-and the fix is never a suppressing comment — the rule is the design.
+Six `depguard` rules in `backend/.golangci.yml` are enforced by
+`golangci-lint` — via `make lint` locally, and again in CI — not by the Go
+compiler: `go build ./...` succeeds on code that violates every one of them,
+and `golangci-lint run` is the only thing that catches it. AGENTS.md's own
+framing is that a failure against any of these rules is an architecture
+violation, not a style nit, and the fix is never a suppressing comment — the
+rule is the design.
 
 ```mermaid
 flowchart RL
@@ -115,13 +118,21 @@ Mocked, and why:
 - **Credential Provider** — no public sandbox lets a non-PSP enrol a real
   card, so no real card is ever enrolled. This is an ecosystem constraint,
   not a shortcut taken for convenience.
-- **Merchant** — a real merchant integration is not the thing under test.
-- **Merchant Payment Processor** — same reasoning as the merchant.
+- **Merchant** — AGENTS.md's Scope section names the Merchant as mocked but
+  states no reason for it. Inferred here, not sourced: standing up a real
+  storefront and payment integration is not what the protocol semantics need
+  exercised, so a mock keeps the proof of concept aimed at mandates and
+  signatures rather than at commerce infrastructure.
+- **Merchant Payment Processor** — the same gap in AGENTS.md, and the same
+  kind of inference: a real processor integration is not under test either,
+  and mocking it completes the pairing with the Merchant above.
 - **Agent registry** — TAP's production directory requires a commercial
   relationship with Visa; the reference implementation's local registry is
   used instead, which is also why the milestone needs no Visa account.
-- **Settlement** — no real money moves, so there is nothing to settle
-  against.
+- **Settlement** — AGENTS.md states, elsewhere in the same section, that
+  nothing here moves real money. Read against settlement's place on this
+  list, that appears to be the reason, though the Scope section never states
+  it as one — so treat this one as inferred too.
 
 Not mocked: SD-JWT, signing and verification, constraint evaluation, mandate
 binding, receipts, dispute evidence. These are exactly the protocol
