@@ -137,6 +137,7 @@ These are enforced, not advisory.
 ```
 contracts/              JSON Schema — single source of truth → Go + TS types
   authz/ identity/ instrument/ evidence/
+  tools/                the generators, in their own Go module
   codegen.mk
 backend/                ⬅ the Go module root. go.mod lives here, not at the top
   cmd/                  agent, merchant, credprovider, mpp, surface, registry, proxy
@@ -187,9 +188,18 @@ and `frontend/src/protocol/generated/`, neither of which is committed. Change
 the schema and regenerate; editing generated output is how the two languages
 drift apart.
 
-`make generate` is not wired up yet — both halves exit with a pointer to #2.
-That is the expected failure today, not a broken checkout. Nothing imports a
-generated type until #2 lands.
+The schemas define **our** model, not AP2's wire format. AP2's published
+schemas are the seed — we do not invent field names where AP2 has good ones —
+but anything that is an AP2 encoding detail rather than a domain fact belongs in
+`internal/adapters/ap2/`. Generating AP2-shaped types into `core/generated/`
+would mean core knows AP2, and no `depguard` rule catches that: the rules forbid
+core from *importing* adapters, not from being AP2-shaped. `contracts/README.md`
+records where the line falls and why.
+
+`make generate` needs Go and Node. The Go generator is pinned in
+`contracts/tools/go.mod`, deliberately not in `backend/go.mod` — a code
+generator is not a dependency of the thing it generates, and keeping it out is
+what lets `core/` compile against the standard library alone.
 
 ---
 
@@ -230,13 +240,14 @@ and known traps. Read the issue before starting.
 Run everything from the repository root:
 
 ```bash
-make check     # lint + test — this is what CI runs
-make build     # build every binary under backend/cmd
-make test      # unit tests, with -race
-make lint      # golangci-lint including the depguard architecture rules
-make fmt       # apply formatters
-make vectors   # conformance suite against golden vectors
-make generate  # regenerate Go and TS types from contracts/ — pending #2
+make check            # generate + lint + test — this is what CI runs
+make build            # build every binary under backend/cmd
+make test             # unit tests, with -race
+make lint             # golangci-lint including the depguard architecture rules
+make fmt              # apply formatters
+make vectors          # conformance suite against golden vectors
+make generate         # regenerate Go and TS types from contracts/
+make generate-verify  # prove generation is reproducible and touches nothing tracked
 ```
 
 **Before reporting a task finished, `make check` must pass and you must have
