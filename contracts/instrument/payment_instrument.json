@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PaymentInstrument",
+  "description": "The instrument axis: what actually pays. The canonical model names an instrument, it never carries it — no pan, no token, no credential. Resolving this reference to something spendable is the Credential Provider's job, and in this project the Credential Provider is mocked and no real instrument is ever enrolled.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Identifier for the instrument, meaningful to the Credential Provider that holds it. Opaque everywhere else."
+    },
+    "type": {
+      "type": "string",
+      "description": "Instrument category, e.g. 'CARD' or 'BANK_ACCOUNT'. Deliberately an open string: the set of instrument categories is not ours to close, and an unknown category must be transportable rather than unrepresentable."
+    },
+    "description": {
+      "type": "string",
+      "description": "User-facing description, e.g. 'Visa ending 4242'. Shown on the Trusted Surface so the user can tell which instrument they are approving."
+    }
+  },
+  "required": ["id", "type"],
+  "additionalProperties": false
+}

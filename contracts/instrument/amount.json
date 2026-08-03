@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Amount",
+  "description": "A monetary amount. Held in minor units as an integer, never as a decimal: floating-point money is how rounding disputes are manufactured.",
+  "$comment": "Fiat only, deliberately. AP2 is payment-method agnostic and stablecoin extensions shipped with it — USDC and similar rails are first-class Payment Mandate funding instruments — so the protocol is wider here than we are. Three things in this schema exclude them: the currency pattern is three characters and 'USDC' is four; ISO 4217 does not register digital tokens at all, ISO 24165 (DTI) is the separate register for those; and 'minor units as an integer' does not describe a 6- or 18-decimal asset, where an int64 counting 18-decimal units overflows above roughly 9.2 whole units. That is acceptable because this is a proof of concept on card rails that moves no real money, and a token rail would prove nothing the fiat path does not. The cost of changing our mind is the reason to record it here rather than discover it later: contracts/ is what both languages generate from, so widening the currency identifier or the amount representation reaches every consumer of Amount in Go and TypeScript at once, and any golden vector that encodes one. The instrument axis itself is already open — PaymentInstrument.type is an unclosed string on purpose — so it is only the amount that would have to move.",
+  "type": "object",
+  "properties": {
+    "amount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Value in the minor unit of the currency, per ISO 4217. 1299 with currency 'EUR' is 12.99 EUR. Currencies with no minor unit, such as JPY, use the whole unit. Never negative: a mandate authorises a payment, and money moving the other way is a refund, which is a different object with a different authorisation. Zero is allowed — a zero-amount authorisation is how an instrument is verified without charging it."
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[A-Z]{3}$",
+      "description": "ISO 4217 alphabetic currency code."
+    }
+  },
+  "required": ["amount", "currency"],
+  "additionalProperties": false
+}

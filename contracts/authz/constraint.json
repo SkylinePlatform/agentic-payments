@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Constraint",
+  "description": "One limit the user placed on what the agent may do. Constraints are carried by an open mandate and evaluated by the verifier against the closed mandate the agent presents — never by the agent, which is what makes the design safe against a model that proposes anything it likes. The vocabulary is ours; AP2 merely transports it. The type registry, the per-type parameter schemas and the evaluators are defined in internal/core/authz/constraint (#11).",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "description": "Identifier of the constraint type, e.g. 'price.max' or 'temporal.window'. Deliberately not an enum: an unknown constraint type must be representable so that the verifier can reject it explicitly and say so in a receipt. Closing the set here would turn that into a parse failure instead, which cannot be receipted and cannot be told apart from a malformed message."
+    },
+    "params": {
+      "type": "object",
+      "description": "Parameters for this constraint type, interpreted by the evaluator registered for it. Open by construction — the registry, not this schema, decides what is valid for a given type.",
+      "additionalProperties": true
+    }
+  },
+  "required": ["type"],
+  "additionalProperties": false
+}

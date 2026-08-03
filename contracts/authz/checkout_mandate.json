@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CheckoutMandate",
+  "description": "A closed Checkout Mandate: proof that the agent is authorised to purchase one specific checkout, the one it assembled. Provided by the Shopping Agent and verified by the merchant. Closed means bound to a transaction — in Human Present mode the user signs it, in Human Not Present mode the agent signs it with its own key and the verifier checks it against the constraints of the open mandate that endorsed that key.",
+  "type": "object",
+  "properties": {
+    "checkout_hash": {
+      "type": "string",
+      "description": "base64url digest of the merchant-signed checkout this mandate authorises. The binding between agent authorisation and merchant offer, and the same value the Payment Mandate carries — which is what cryptographically links the two mandates. A verifier recomputes it from the checkout; it never trusts the claim."
+    },
+    "checkout": {
+      "type": "string",
+      "x-disclosable": true,
+      "description": "The merchant-signed checkout document that checkout_hash is the digest of, serialised as the protocol binding defines (AP2: the merchant-signed Checkout JWT, which must use a non-deterministic signature scheme so that checkout_hash is not vulnerable to a rainbow table). Withholdable: a verifier that already holds the checkout does not need to be sent it again.",
+      "$comment": "Kept opaque on purpose. The contents of a checkout are the merchant's model, not ours, and nothing in this project needs to read inside it — mandate verification only needs the digest to match."
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp at which this mandate was issued."
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp after which this mandate must not be accepted. Should be the smallest value that lets the agent finish the task it was given."
+    }
+  },
+  "required": ["checkout_hash"],
+  "additionalProperties": false
+}

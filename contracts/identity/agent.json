@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Agent",
+  "description": "The identity axis: who this agent is, and which keys speak for it. Answers the merchant's first question — should I be talking to this thing at all — independently of what the user authorised it to do.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable identifier for the agent. What a registry is keyed by, and what a mandate's agent key is expected to belong to."
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable name of the agent, as shown to a user on the Trusted Surface."
+    },
+    "operator": {
+      "type": "string",
+      "description": "The organisation that operates this agent and is accountable for it. Distinct from the agent itself: one operator may run many agents."
+    },
+    "keys": {
+      "type": "array",
+      "description": "Public keys that speak for this agent. A list rather than a single key so that rotation does not require a new identity.",
+      "items": {
+        "$ref": "public_key.json"
+      }
+    }
+  },
+  "required": ["id"],
+  "additionalProperties": false
+}

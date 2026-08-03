@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PublicKey",
+  "description": "A public key in JWK form (RFC 7517). Used wherever the canonical model has to name a key rather than hold one: the agent key an open mandate is bound to, and the keys an agent publishes to a registry. Private key material never appears in the canonical model — keys sit behind the Signer port.",
+  "type": "object",
+  "properties": {
+    "kty": {
+      "type": "string",
+      "description": "Key type (RFC 7517 §4.1). 'EC' for the ECDSA keys AP2 requires on the Checkout JWT, 'OKP' for the Ed25519 keys TAP uses."
+    },
+    "kid": {
+      "type": "string",
+      "description": "Key identifier, used to select this key from a set (RFC 7517 §4.5)."
+    },
+    "alg": {
+      "type": "string",
+      "description": "Algorithm this key is intended for, e.g. 'ES256' or 'EdDSA' (RFC 7517 §4.4)."
+    },
+    "crv": {
+      "type": "string",
+      "description": "Curve, for 'EC' and 'OKP' keys, e.g. 'P-256' or 'Ed25519'."
+    },
+    "x": {
+      "type": "string",
+      "description": "base64url X coordinate ('EC') or public key ('OKP')."
+    },
+    "y": {
+      "type": "string",
+      "description": "base64url Y coordinate, 'EC' keys only."
+    },
+    "n": {
+      "type": "string",
+      "description": "base64url modulus, 'RSA' keys only."
+    },
+    "e": {
+      "type": "string",
+      "description": "base64url exponent, 'RSA' keys only."
+    }
+  },
+  "required": ["kty"],
+  "additionalProperties": false
+}

@@ -138,6 +138,7 @@ These are enforced, not advisory.
 ```
 contracts/              JSON Schema — single source of truth → Go + TS types
   authz/ identity/ instrument/ evidence/
+  tools/                the generators, in their own Go module
   codegen.mk
 backend/                ⬅ the Go module root. go.mod lives here, not at the top
   cmd/                  agent, merchant, credprovider, mpp, surface, registry, proxy
@@ -188,9 +189,23 @@ and `frontend/src/protocol/generated/`, neither of which is committed. Change
 the schema and regenerate; editing generated output is how the two languages
 drift apart.
 
-`make generate` is not wired up yet — both halves exit with a pointer to #2.
-That is the expected failure today, not a broken checkout. Nothing imports a
-generated type until #2 lands.
+The schemas define **our** model, not AP2's wire format. AP2's published
+schemas are the seed — we do not invent field names where AP2 has good ones —
+but anything that is an AP2 encoding detail rather than a domain fact belongs in
+`internal/adapters/ap2/`. Generating AP2-shaped types into `core/generated/`
+would mean core knows AP2, and no `depguard` rule catches that: the rules forbid
+core from *importing* adapters, not from being AP2-shaped. `contracts/README.md`
+records where the line falls and why.
+
+`make generate` needs Go **and Node** — the TypeScript half runs through npm.
+Nothing else does: `make check`, the gate every task has to pass, regenerates
+only the Go half and is pure Go. The TypeScript half is generated in CI, so
+Go-only work needs no Node toolchain and cross-language drift is still caught.
+
+The Go generator is pinned in `contracts/tools/go.mod`, deliberately not in
+`backend/go.mod` — a code generator is not a dependency of the thing it
+generates, and keeping it out is what lets `core/` compile against the standard
+library alone.
 
 ---
 
@@ -231,18 +246,34 @@ and known traps. Read the issue before starting.
 Run everything from the repository root:
 
 ```bash
-make check     # lint + test — this is what CI runs
-make build     # build every binary under backend/cmd
-make test      # unit tests, with -race
-make lint      # golangci-lint including the depguard architecture rules
-make fmt       # apply formatters
-make vectors   # conformance suite against golden vectors
-make generate  # regenerate Go and TS types from contracts/ — pending #2
+make check            # generate Go types, then lint + test — the gate before any task is done
+make build            # build every binary under backend/cmd
+make test             # unit tests, with -race
+make lint             # golangci-lint including the depguard architecture rules
+make fmt              # apply formatters
+make vectors          # conformance suite against golden vectors
+make generate         # regenerate Go and TS types from contracts/  ⟵ needs Node
+make generate-ts      # the TypeScript half on its own              ⟵ needs Node
+make generate-verify  # prove generation is reproducible and touches nothing tracked
 ```
 
+**`make check` needs only Go.** Node is required by `make generate` and
+`make generate-ts`, and by nothing else. `check` regenerates the *Go* half of
+the canonical model before linting — testing a tree whose generated half came
+from an older schema checks the wrong thing — but it stops there, so work that
+never touches the frontend never needs npm.
+
+**`make check` is no longer the whole of CI.** It is the local gate; CI runs
+three jobs, and the *Contracts* job additionally runs `make generate-verify`,
+which regenerates both languages twice and fails if generation is not
+reproducible or if it touched a tracked file. That is where the TypeScript half
+and any cross-language drift are caught. `make check` passing locally is
+necessary, not sufficient — which is why the bar below counts green jobs on the
+PR separately.
+
 **Before reporting a task finished, `make check` must pass and you must have
-seen it pass.** Two green jobs on the PR is the same bar. Do not describe work
-as done on the strength of having written it.
+seen it pass.** Green jobs on the PR are the same bar. Do not describe work as
+done on the strength of having written it.
 
 ---
 
@@ -254,6 +285,13 @@ enrolled), Merchant, Merchant Payment Processor, agent registry, settlement.
 
 Not mocked: SD-JWT, signing and verification, constraint evaluation, mandate
 binding, receipts, dispute evidence.
+
+The canonical model is deliberately narrower than AP2 on the instrument axis.
+Amounts are ISO 4217 fiat in integer minor units, so stablecoin and other
+digital-token rails — which AP2 represents perfectly well, and which shipped
+with it — are not modelled here. That is a scope decision, not an oversight;
+`contracts/instrument/amount.json` records what it excludes and what widening it
+would cost.
 
 Mastercard Agent Pay is **not implementable here** — Agentic Tokens are issued by
 issuing banks via MDES and there is no self-serve developer path. Do not create

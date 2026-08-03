@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenPaymentMandate",
+  "description": "An open Payment Mandate: signed by the user, carrying the limits within which an agent may later authorise a payment, and bound to that agent's key. It may also fix parts of the payment outright — a user who says 'pay this merchant, from this card, up to 50 EUR' has pinned the payee and instrument and constrained only the amount. A pinned field is not a constraint the verifier evaluates; it is a value the closed mandate must reproduce unchanged.",
+  "type": "object",
+  "$comment": "agent_key is the public key of the agent this mandate authorises; AP2 carries it as the RFC 7800 'cnf' claim. payee, payment_amount, payment_instrument and execution_date are pinned values rather than constraints: present means the user fixed that field and the closed mandate must reproduce it unchanged. A user who wants a ceiling rather than an exact figure states a constraint instead of pinning the amount.",
+  "properties": {
+    "agent_key": {
+      "$ref": "../identity/public_key.json"
+    },
+    "constraints": {
+      "type": "array",
+      "description": "The limits the user approved. Evaluated by the verifier against the closed Payment Mandate the agent presents.",
+      "x-disclosable-items": true,
+      "items": {
+        "$ref": "constraint.json"
+      }
+    },
+    "payee": {
+      "$ref": "../identity/merchant.json"
+    },
+    "payment_amount": {
+      "$ref": "../instrument/amount.json"
+    },
+    "payment_instrument": {
+      "$ref": "../instrument/payment_instrument.json"
+    },
+    "execution_date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Execution date pinned at authorisation time, ISO 8601 calendar date."
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp at which this mandate was issued."
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp after which this mandate must not be accepted. Should be the smallest value that lets the agent finish the task it was given."
+    }
+  },
+  "required": ["agent_key", "constraints"],
+  "additionalProperties": false
+}

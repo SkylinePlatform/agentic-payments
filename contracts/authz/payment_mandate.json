@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PaymentMandate",
+  "description": "A closed Payment Mandate: proof that the agent is authorised to pay for one specific checkout. Verified by the Credential Provider, the Network and the Merchant Payment Processor — a different audience from the Checkout Mandate, which is why the two are separate objects rather than one.",
+  "type": "object",
+  "properties": {
+    "checkout_hash": {
+      "type": "string",
+      "description": "base64url digest of the merchant-signed checkout being paid for. Identical to the Checkout Mandate's checkout_hash; that equality is the binding between authorisation to buy and authorisation to pay, and a Payment Mandate bound to a different checkout must be rejected. AP2 calls this claim 'transaction_id' while defining it as the hash of the checkout — one domain fact, so one name here."
+    },
+    "payee": {
+      "$ref": "../identity/merchant.json"
+    },
+    "payment_amount": {
+      "$ref": "../instrument/amount.json"
+    },
+    "payment_instrument": {
+      "$ref": "../instrument/payment_instrument.json"
+    },
+    "execution_date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Date on which the payment is to be executed, ISO 8601 calendar date. Absent means immediately.",
+      "$comment": "A calendar date, not an instant: 'the 3rd' is a different thing from 'the 3rd at 00:00:00Z' once a payer and a payee sit in different time zones. Expressed as a pattern rather than format: date so that the generated Go type stays on the standard library."
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp at which this mandate was issued."
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp after which this mandate must not be accepted."
+    }
+  },
+  "required": ["checkout_hash", "payee", "payment_amount", "payment_instrument"],
+  "additionalProperties": false
+}

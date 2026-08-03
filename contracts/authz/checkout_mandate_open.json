@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenCheckoutMandate",
+  "description": "An open Checkout Mandate: signed by the user, carrying the limits within which an agent may later assemble and purchase a checkout. Not yet bound to any transaction, which is exactly why it must be bound to an agent — agent_key is what stops a stolen open mandate being usable by a different agent. Open mandates are not the obsolete v0.1 'Intent Mandate'; they are a different mechanism, and a verifier is always handed a closed mandate, never this.",
+  "type": "object",
+  "$comment": "agent_key is the public key of the agent this mandate authorises: a closed mandate signed by any other key must be rejected. AP2 carries it as the RFC 7800 'cnf' claim; that claim name is an encoding detail and lives in the adapter.",
+  "properties": {
+    "agent_key": {
+      "$ref": "../identity/public_key.json"
+    },
+    "constraints": {
+      "type": "array",
+      "description": "The limits the user approved. Evaluated by the verifier against the closed mandate the agent presents.",
+      "x-disclosable-items": true,
+      "items": {
+        "$ref": "constraint.json"
+      }
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp at which this mandate was issued."
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 timestamp after which this mandate must not be accepted. Should be the smallest value that lets the agent finish the task it was given — an open mandate is a standing authorisation, so its lifetime is its blast radius."
+    }
+  },
+  "required": ["agent_key", "constraints"],
+  "additionalProperties": false
+}

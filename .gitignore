@@ -26,3 +26,6 @@ dist/
 # Generated from contracts/ — see contracts/codegen.mk
 backend/internal/core/generated/
 frontend/src/protocol/generated/
+
+# Scratch files from `make generate-verify`
+.generate-verify.*
