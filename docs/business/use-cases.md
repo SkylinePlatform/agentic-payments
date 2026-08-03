@@ -34,12 +34,12 @@ Beats 5, 8 and 10 are the ones that carry the article series; the rest is
 context that gets the story from one end to the other. Beat 5 proves that the
 **verifier** rejects, not the agent — an agent that could wave through its own
 mistake would make every other guarantee here decorative. Beat 8 makes
-selective disclosure visible: the merchant and the Credential Provider each
-see a different slice of the same transaction, and neither sees the whole of
-it, which is the most concrete evidence that the system works as designed
-rather than on trust. Beat 10 shows both protocol layers holding on **one**
-transaction — identity and authorisation enforced together, not as two
-separate demos that never touch the same booking.
+selective disclosure visible: the merchant and the party that holds the
+payment instrument each see a different slice of the same transaction, and
+neither sees the whole of it, which is the most concrete evidence that the
+system works as designed rather than on trust. Beat 10 shows both protocol
+layers holding on **one** transaction — identity and authorisation enforced
+together, not as two separate demos that never touch the same booking.
 
 The mock merchant needs inventory whose price moves over time —
 **$240 → $210 → $189** — because beats 4, 5 and 6 have nothing to show against
