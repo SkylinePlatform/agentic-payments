@@ -100,7 +100,7 @@ These are enforced, not advisory.
    defines ports; everything else implements them. If core knows which protocols
    exist, the ability to add one without surgery is gone.
 
-   Five more dependency rules follow from the same reasoning, and all six are
+   Six more dependency rules follow from the same reasoning, and all seven are
    enforced by `depguard` in CI rather than by review:
 
    | Rule | Effect |
@@ -110,6 +110,7 @@ These are enforced, not advisory.
    | `pkg-purity` | `pkg/**` cannot import `internal/**` |
    | `key-material-containment` | `crypto/ecdsa`, `crypto/ed25519`, `crypto/rsa`, `crypto/ecdh` and `crypto/x509` are importable only from `internal/platform/crypto` — nowhere else can name the type a private key would arrive in |
    | `no-weak-randomness` | `math/rand` and `math/rand/v2` are banned everywhere — randomness here reaches nonces and keys |
+   | `collector-containment` | `internal/collector/**` is importable only from `cmd/collector` — the event log is observability, never evidence, so a dispute path must not be able to reach it even by accident |
 
    A lint failure in this repository is an architecture violation, not a style
    nit. Do not add a `//nolint` to get past one; the rule is the design.
@@ -149,7 +150,10 @@ contracts/              JSON Schema — single source of truth → Go + TS types
   codegen.mk
 backend/                ⬅ the Go module root. go.mod lives here, not at the top
   cmd/                  agent, merchant, credprovider, mpp, surface, registry, proxy
+                        collector — an eighth binary, and NOT an AP2 role
   internal/
+    collector/          event log and SSE fan-out. demo infrastructure, never
+                        evidence; only cmd/collector may import it
     core/               domain. imports nothing from this project
       authz/            mandates, ports
         constraint/     types, schemas, evaluators — ours, never in adapters/ap2

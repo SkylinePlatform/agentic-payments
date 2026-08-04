@@ -1,7 +1,14 @@
 // Package transport holds the HTTP conventions every role shares, so that a
-// service is not left to invent them. Today that is idempotency; ADR 0001
-// records why the transport is HTTP at all, and ADR 0002 why a retry has to be
-// answered rather than re-executed.
+// service is not left to invent them. Today that is idempotency and correlation
+// IDs: ADR 0001 records why the transport is HTTP at all, ADR 0002 why a retry
+// has to be answered rather than re-executed, and ADR 0003 why one identifier
+// follows a transaction across every hop.
+//
+// The two headers look alike and answer opposite questions, which is why they
+// are two. Idempotency-Key is scoped to one operation and a second operation
+// reusing it is a conflict; X-Correlation-ID is scoped to a whole transaction
+// and has to stay constant across every operation in it. Most requests here
+// carry both.
 package transport
 
 import (
