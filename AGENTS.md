@@ -151,9 +151,11 @@ contracts/              JSON Schema — single source of truth → Go + TS types
 backend/                ⬅ the Go module root. go.mod lives here, not at the top
   cmd/                  agent, merchant, credprovider, mpp, surface, registry, proxy
                         collector — an eighth binary, and NOT an AP2 role
+                        demo — brings the whole stack up; `make demo`
   internal/
     collector/          event log and SSE fan-out. demo infrastructure, never
                         evidence; only cmd/collector may import it
+    demo/               the demo runner. topology lives in deploy/demo.json
     core/               domain. imports nothing from this project
       authz/            mandates, ports
         constraint/     types, schemas, evaluators — ours, never in adapters/ap2
@@ -171,7 +173,7 @@ backend/                ⬅ the Go module root. go.mod lives here, not at the to
 frontend/               React + Vite + TypeScript
 docs/                   architecture, business, protocols, diagrams, specs, plans
 specs/                  empty; relationship to docs/specs/ unresolved — issue #49
-deploy/
+deploy/                demo.json — the topology `make demo` starts
 ```
 
 Two directories both promise specifications. `docs/specs/` is real and
@@ -326,12 +328,15 @@ make generate         # regenerate Go and TS types from contracts/  ⟵ needs No
 make generate-ts      # the TypeScript half on its own              ⟵ needs Node
 make generate-verify  # prove generation is reproducible and touches nothing tracked ⟵ needs Node
 make diagrams         # export inline mermaid from docs/ to SVG     ⟵ needs Node
+make demo             # bring the whole stack up, one Ctrl-C stops it ⟵ needs Node
+make frontend         # the frontend dev server on its own           ⟵ needs Node
+make frontend-check   # type-check and build the frontend            ⟵ needs Node
 ```
 
 **`make check` needs only Go.** Node is required by `make generate`,
-`make generate-ts` and `make diagrams` — the last of which pulls a headless
-Chromium, which is exactly why it was kept out of `check`. `check` regenerates
-the *Go* half of the canonical model before linting — testing a tree whose
+`make generate-ts`, `make diagrams`, `make demo` and the two frontend targets —
+`diagrams` pulls a headless Chromium, which is exactly why it was kept out of
+`check`. `check` regenerates the *Go* half of the canonical model before linting — testing a tree whose
 generated half came from an older schema checks the wrong thing — but it stops
 there, so work that touches neither the frontend nor a diagram never needs npm.
 

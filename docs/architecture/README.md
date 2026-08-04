@@ -210,7 +210,7 @@ backend/                ⬅ the Go module root. go.mod lives here, not at the to
 frontend/               React + Vite + TypeScript
 docs/                   architecture, business, protocols, diagrams
 specs/                  written specifications driving implementation
-deploy/
+deploy/                demo.json — the topology `make demo` starts
 ```
 
 That split has a cost for an editor opened at the repository root: `gopls`

@@ -1,0 +1,102 @@
+{
+  "$comment": [
+    "The demo topology: what `make demo` starts, in what order, and how it knows each one is up.",
+    "",
+    "Order matters. The collector comes first because every role emits into it, and a role that",
+    "starts before it is listening loses the events that explain its own startup. The frontend",
+    "comes last because it proxies to the collector and there is nothing to look at until the",
+    "roles are running.",
+    "",
+    "`implemented: false` marks a binary that is still a stub. The runner starts it anyway and",
+    "expects it to exit — which is how a stale flag becomes visible rather than silently wrong.",
+    "Flip it in the pull request that implements the role."
+  ],
+  "processes": [
+    {
+      "name": "collector",
+      "kind": "infrastructure",
+      "summary": "gathers protocol events and streams them to the frontend over SSE",
+      "note": "Demo infrastructure. Not an AP2 role and not a TAP identity party — see ADR 0003.",
+      "implemented": true,
+      "dir": "backend",
+      "command": "bin/collector",
+      "args": ["-addr", "127.0.0.1:8085"],
+      "health": "http://127.0.0.1:8085/healthz"
+    },
+    {
+      "name": "registry",
+      "kind": "role",
+      "summary": "local agent registry — resolves an agent's key reference",
+      "issue": "26",
+      "implemented": false,
+      "dir": "backend",
+      "command": "bin/registry"
+    },
+    {
+      "name": "credprovider",
+      "kind": "role",
+      "summary": "Credential Provider — issues a payment credential scoped to one checkout",
+      "issue": "10",
+      "implemented": false,
+      "dir": "backend",
+      "command": "bin/credprovider"
+    },
+    {
+      "name": "merchant",
+      "kind": "role",
+      "summary": "Merchant — prices the route and verifies the Checkout Mandate",
+      "issue": "10",
+      "implemented": false,
+      "dir": "backend",
+      "command": "bin/merchant"
+    },
+    {
+      "name": "mpp",
+      "kind": "role",
+      "summary": "Merchant Payment Processor — verifies the Payment Mandate",
+      "issue": "10",
+      "implemented": false,
+      "dir": "backend",
+      "command": "bin/mpp"
+    },
+    {
+      "name": "proxy",
+      "kind": "role",
+      "summary": "verifying proxy at the merchant edge — checks RFC 9421 signatures",
+      "issue": "30",
+      "implemented": false,
+      "dir": "backend",
+      "command": "bin/proxy"
+    },
+    {
+      "name": "surface",
+      "kind": "role",
+      "summary": "Trusted Surface — shows the interpretation and takes the user's signature",
+      "issue": "22",
+      "implemented": false,
+      "dir": "backend",
+      "command": "bin/surface"
+    },
+    {
+      "name": "agent",
+      "kind": "role",
+      "summary": "Shopping Agent — watches the price and assembles mandates",
+      "issue": "10",
+      "implemented": false,
+      "dir": "backend",
+      "command": "bin/agent"
+    },
+    {
+      "name": "frontend",
+      "kind": "ui",
+      "summary": "three lanes, the Mandate Inspector and the Trusted Surface consent screen",
+      "issue": "20",
+      "implemented": true,
+      "dir": "frontend",
+      "command": "npm",
+      "args": ["run", "dev"],
+      "health": "http://127.0.0.1:5173/",
+      "url": "http://127.0.0.1:5173"
+    }
+  ]
+}
