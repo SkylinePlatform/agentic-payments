@@ -9,71 +9,32 @@ Accepted, 2026-08-03.
 AGENTS.md's Code standards section states the requirement plainly: "Every
 state-changing operation takes an idempotency key." That is not a suggestion
 scoped to one role — it applies to every state-changing operation in the
-repository, HTTP-facing or not.
+repository, HTTP-facing or not — and only one package honours it today.
 
-The pattern already has one implementation, and this ADR does not invent a
-second one: it generalises the first. `backend/internal/platform/crypto/store.go`
-implements `Store.Generate` and `Store.Rotate`, and both take an
-`idempotencyKey string` argument. Each computes a `fingerprint` from its own
-arguments before touching state — `Generate` builds it as
-`fmt.Sprintf("generate|%s|%s", slot, alg)`, `Rotate` as
-`fmt.Sprintf("rotate|%s", slot)` — and hands `idempotencyKey` and `fingerprint`
-to a shared `replay` method. `replay` holds `s.mu` and consults a
-`map[string]idempotencyRecord` keyed by the idempotency key, where
-`idempotencyRecord` is a small struct holding the `fingerprint` the first call
-was made with and the `result` it produced (an `authz.KeyRef`). Three outcomes
-fall out of that one lookup:
+That package is `internal/platform/crypto`, and this ADR does not invent a
+second pattern: it generalises that one. In `store.go`, `Store.Generate` and
+`Store.Rotate` each take a caller-supplied idempotency key, compute a
+fingerprint over their own arguments, and consult a shared `replay` method
+before touching state — a key seen before with the same fingerprint returns
+the recorded result rather than re-executing, and a key seen before with a
+different one is a conflict rather than either outcome.
 
-- An empty `idempotencyKey` fails immediately with `ErrIdempotencyKeyRequired`
-  — a state-changing call without a key is refused outright, never silently
-  deduplicated on content alone.
-- No record for the key: the call proceeds, and on success the store writes
-  `idempotencyRecord{fingerprint: fingerprint, result: ref}` under that key.
-- A record already exists. If its `fingerprint` matches, `replay` returns the
-  stored `result` and the caller never re-executes the operation. If it does
-  not match, `replay` returns `ErrIdempotencyConflict` — the store's own
-  comment on that sentinel gives the reason: "Returning the first result
-  would be wrong and performing the second operation would defeat the point,
-  so it is an error."
+The shape is right; its scope is not. The record map lives on `crypto.Store`
+itself, so nothing outside that package can reuse the logic without copying
+it, and it never evicts — one entry per distinct key, for the lifetime of the
+process. Both are fine for a store that only ever handles key generation and
+rotation, and both stop being fine once every state-changing HTTP endpoint on
+every role needs the same protection. `internal/platform/store` already exists
+as the placeholder for that generalisation — a package comment and no code —
+and this ADR fills in the design that comment promises.
 
-Two things about that implementation matter for what follows. First, it is
-scoped to one package: the `idem` map lives on `crypto.Store` itself, and nothing
-outside `internal/platform/crypto` can reuse the fingerprint-and-replay logic
-without copying it. Second, it never evicts — `idem` grows by one entry per
-distinct idempotency key for the lifetime of the process, with no expiry and
-no bound. Both are fine for a store that only ever handles key generation and
-rotation calls, and both stop being fine once every state-changing HTTP
-endpoint across every role needs the same protection.
-
-`internal/platform/store` already exists as a placeholder for that
-generalisation. Its entire contents today are a package comment: "Package
-store implements the persistence ports, including the idempotency records
-that every state-changing operation is keyed by." This ADR is what fills in
-the design that comment promises, ahead of the code that will implement it.
-
-Generalising is not the only thing this ADR has to settle, because the
-repository is about to grow a second mechanism that looks superficially
-identical. Issue #27, "Nonce store and replay protection," scopes a nonce
-store with "Time-bounded single-use nonce tracking" and "Configurable window,
-bounded memory, eviction" — the done-when items are "Replayed signature
-rejected within the window" and "Clock injected, so window behaviour is
-testable without sleeping." The issue argues for putting it in `platform/`
-because replay protection is needed by both AP2 and TAP, and, in the issue's
-own words, that sharing is "mechanism, not policy" whose sameness "is provable
-rather than assumed" — in contrast to mandate semantics, which stay
-duplicated between `adapters/ap2` and `adapters/tap` until a third protocol
-proves the seam (AGENTS.md, hard rule 6). `internal/core/authz/clock.go`
-already names both windows in the same breath: its `Clock` interface doc
-lists "mandate expiry, key retirement, nonce windows" as the deadlines this
-codebase evaluates against an injected clock rather than the wall clock —
-idempotency retention is a fourth deadline of the same shape, not yet named
-there.
-
-A record keyed by a caller-supplied key, holding a fingerprint of the request
-and a recorded outcome, checked before the state change runs — that is what
-both an idempotency store and a nonce store look like from the outside. The
-temptation is to build one table and let both features read it. The decision
-below is why that temptation is wrong.
+Generalising is not the only thing to settle, because a second mechanism that
+looks superficially identical is coming: issue #27 scopes a nonce store for
+replay protection — time-bounded, single-use, with a configurable window and
+eviction. A record keyed by a caller-supplied value, holding a fingerprint of
+the request and a recorded outcome, checked before the state change runs,
+describes both from the outside. The temptation is one table serving both, and
+the decision below is why that is wrong.
 
 ## Decision
 

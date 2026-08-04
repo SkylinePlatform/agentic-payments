@@ -28,6 +28,22 @@ Primary sources, in the order of authority `AGENTS.md` gives them:
 1. <https://ap2-protocol.org/ap2/specification/>
 2. <https://github.com/google-agentic-commerce/AP2> (Apache 2.0)
 
+## Contents
+
+- [Two mandate types](#two-mandate-types)
+- [Open and closed](#open-and-closed)
+  - [The `vct` trap](#the-vct-trap)
+- [The five roles](#the-five-roles)
+- [Human Present](#human-present)
+- [Human Not Present](#human-not-present)
+  - [The rejection-receipt rule](#the-rejection-receipt-rule)
+- [Binding: `checkout_hash`](#binding-checkout_hash)
+- [Constraints](#constraints)
+  - [The known open problem](#the-known-open-problem)
+- [Selective disclosure](#selective-disclosure)
+- [Receipts](#receipts)
+- [Traps, collected](#traps-collected)
+
 ## Two mandate types
 
 | Mandate | Proves | Provided by | Verified by |

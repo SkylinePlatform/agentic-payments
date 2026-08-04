@@ -1,9 +1,9 @@
 # Problem Statement
 
 **This document answers:** why fragmentation matters, and to whom.
-**It does not contain:** *explanations* of technical mechanisms — naming one is
-allowed where it says what a demo beat proves, with a link to
-`../architecture/README.md`.
+**It does not contain:** the fix — which protocol closes which gap, and where
+each one is verified, belongs to `../architecture/README.md`. Naming a
+mechanism here is allowed only where naming it is what makes a gap concrete.
 
 ## Fragmentation predates AI
 
@@ -19,12 +19,9 @@ wallet provider set at enrolment, a signature from the key itself. And each
 rail is its own instrument, not an interchangeable stand-in for the others —
 a card number, a bank account number, a wallet balance and a private key do
 not compose, so accepting one does not get a merchant halfway to accepting
-the next.
-
-These rails also settle on different timescales, through different
-intermediaries, with different processes for what happens when something
-goes wrong. That difference is real, but it is a consequence of the three
-models above, not a fourth one to track alongside them.
+the next — a split that carries downstream into settlement, where each rail
+has its own timescale, its own intermediaries and its own process for what
+happens when something goes wrong.
 
 This is not a new problem, and it is not caused by AI. A merchant that wants
 to accept cards, bank transfer and a wallet integrates three identity models,

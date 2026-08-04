@@ -2,9 +2,10 @@
 
 **This document answers:** what the system does — one scenario built end to
 end, three more described.
-**It does not contain:** *explanations* of technical mechanisms — naming one is
-allowed where it says what a demo beat proves, with a link to
-`../architecture/README.md` or `../protocols/`.
+**It does not contain:** how any beat works underneath, or what the finished
+system may be claimed to establish — `../protocols/` covers the first,
+`what-this-proves.md` the second. A beat here says what it demonstrates; a
+mechanism is named only where the name is what makes the demonstration legible.
 
 ## The built scenario
 
