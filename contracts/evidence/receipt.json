@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Receipt",
-  "description": "A verifier's signed answer to a closed mandate. Mandatory in both directions: a rejection MUST also produce a receipt carrying the error, because a silent failure leaves nothing to reason about in a dispute and is a protocol violation.",
+  "description": "A verifier's signed answer to a closed mandate. Mandatory in both directions: a rejection MUST also produce a receipt carrying the error, because a silent failure leaves nothing to reason about in a dispute and is a protocol violation. The error field is present exactly when result is 'error', and carries the same enumeration an RFC 9457 Problem Details response puts in its code extension — so a rejection reads identically whether it is read off the wire or out of the evidence afterwards.",
   "type": "object",
   "properties": {
     "issuer": {
@@ -23,8 +23,7 @@
       "description": "Outcome of verification."
     },
     "error": {
-      "type": "string",
-      "description": "Stable, machine-readable error code. Present when result is 'error', absent otherwise. Never free text — a dispute is assembled from these."
+      "$ref": "error_code.json"
     },
     "error_description": {
       "type": "string",
