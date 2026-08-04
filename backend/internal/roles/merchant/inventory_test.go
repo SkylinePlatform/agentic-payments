@@ -2,6 +2,7 @@ package merchant_test
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -279,6 +280,49 @@ func TestRejectsNonsense(t *testing.T) {
 	}); !errors.Is(err, merchant.ErrEmptySchedule) {
 		t.Errorf("a zero-value schedule was accepted: %v", err)
 	}
+}
+
+// TestCurrencyMustBeAnISO4217Code covers a check that used to count characters
+// while claiming to enforce the code format. contracts/instrument/amount.json
+// says `^[A-Z]{3}$`, and an Amount that fails its own schema on the way out is
+// worse than one refused here.
+func TestCurrencyMustBeAnISO4217Code(t *testing.T) {
+	t.Parallel()
+
+	for _, currency := range []string{"usd", "Usd", "u$d", "US", "USDC", "US1", "   "} {
+		if _, err := merchant.NewSchedule(base, time.Minute,
+			generated.Amount{Amount: 100, Currency: currency}); err == nil {
+			t.Errorf("currency %q was accepted", currency)
+		}
+	}
+	if _, err := merchant.NewSchedule(base, time.Minute,
+		generated.Amount{Amount: 100, Currency: "EUR"}); err != nil {
+		t.Errorf("a valid currency was refused: %v", err)
+	}
+}
+
+// TestConcurrentQuotes earns the claim in Inventory's doc comment. Every role
+// that prices anything will read this from several requests at once, and a
+// comment saying it is safe is not the same as knowing it.
+func TestConcurrentQuotes(t *testing.T) {
+	t.Parallel()
+	inv, c := demoInventory(t)
+
+	var wg sync.WaitGroup
+	for i := range 50 {
+		wg.Go(func() {
+			if _, err := inv.Quote(merchant.DemoRoute); err != nil {
+				t.Errorf("Quote: %v", err)
+			}
+			_ = inv.Routes()
+			// One goroutine moves time under the others, which is what a live
+			// demonstration does.
+			if i == 25 {
+				c.Advance(merchant.DefaultStep)
+			}
+		})
+	}
+	wg.Wait()
 }
 
 func TestScheduleReportsItsLength(t *testing.T) {

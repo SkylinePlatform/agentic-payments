@@ -3,7 +3,8 @@ package merchant
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
@@ -39,11 +40,23 @@ func (r Route) Valid() bool {
 	return validIATA(r.Origin) && validIATA(r.Destination)
 }
 
-func validIATA(code string) bool {
-	if len(code) != 3 {
+func validIATA(code string) bool { return threeUpperLetters(code) }
+
+// validISO4217 checks the shape of a currency code against the rule
+// contracts/instrument/amount.json states, `^[A-Z]{3}$`. It is not a register
+// lookup: the schema does not do one either, and a mock merchant quoting a
+// currency that does not exist is not a failure mode worth code.
+func validISO4217(code string) bool { return threeUpperLetters(code) }
+
+// threeUpperLetters is the shape both codes happen to share. They are checked
+// through separate names because they are separate rules that agree today —
+// IATA airport codes and ISO 4217 currency codes have no reason to stay the
+// same shape, and merging them would make the next divergence a puzzle.
+func threeUpperLetters(s string) bool {
+	if len(s) != 3 {
 		return false
 	}
-	for _, c := range []byte(code) {
+	for _, c := range []byte(s) {
 		if c < 'A' || c > 'Z' {
 			return false
 		}
@@ -100,7 +113,11 @@ func NewSchedule(start time.Time, step time.Duration, prices ...generated.Amount
 		if p.Amount < 0 {
 			return nil, fmt.Errorf("merchant: price %d is negative", i)
 		}
-		if len(p.Currency) != 3 {
+		// The same rule contracts/instrument/amount.json states — three upper
+		// case letters — rather than a length check wearing its name. Counting
+		// characters would accept "usd" and "u$d", and an Amount that fails its
+		// own schema on the way out is worse than one refused here.
+		if !validISO4217(p.Currency) {
 			return nil, fmt.Errorf("merchant: price %d has currency %q, want an ISO 4217 code", i, p.Currency)
 		}
 	}
@@ -204,6 +221,6 @@ func (i *Inventory) Routes() []Route {
 	for r := range i.routes {
 		out = append(out, r)
 	}
-	sort.Slice(out, func(a, b int) bool { return out[a].String() < out[b].String() })
+	slices.SortFunc(out, func(a, b Route) int { return strings.Compare(a.String(), b.String()) })
 	return out
 }
