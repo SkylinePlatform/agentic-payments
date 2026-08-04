@@ -335,13 +335,24 @@ the *Go* half of the canonical model before linting — testing a tree whose
 generated half came from an older schema checks the wrong thing — but it stops
 there, so work that touches neither the frontend nor a diagram never needs npm.
 
-**`make check` is no longer the whole of CI.** It is the local gate; CI runs
-three jobs, and the *Contracts* job additionally runs `make generate-verify`,
-which regenerates both languages twice and fails if generation is not
-reproducible or if it touched a tracked file. That is where the TypeScript half
-and any cross-language drift are caught. `make check` passing locally is
-necessary, not sufficient — which is why the bar below counts green jobs on the
-PR separately.
+**`make check` is no longer the whole of CI.** It is the local gate; the
+*Build and test*, *Lint* and *Contracts* jobs in `.github/workflows/ci.yml`
+cover the rest, and the *Contracts* job additionally runs
+`make generate-verify`, which regenerates both languages twice and fails if
+generation is not reproducible or if it touched a tracked file. That is where
+the TypeScript half and any cross-language drift are caught. `make check`
+passing locally is necessary, not sufficient — which is why the bar below
+counts green jobs on the PR separately.
+
+A fourth workflow, `.github/workflows/docs.yml`, builds `docs/` into the site
+published at <https://skylineplatform.github.io/agentic-payments> and deploys
+it on every merge to `main` that touches documentation. It runs on pull
+requests too, without deploying, so a dead link or a nav entry pointing at
+nothing fails on the change that introduced it. The build is `mkdocs build
+--strict`, which means **a warning is a failure**: a relative link to a
+directory, or to a file outside `docs/`, will stop it. Nothing about it is
+part of `make check` — the site needs Python, the local gate still needs only
+Go, and no documentation change requires running it before pushing.
 
 **Before reporting a task finished, `make check` must pass and you must have
 seen it pass.** Green jobs on the PR are the same bar. Do not describe work as

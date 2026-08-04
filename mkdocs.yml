@@ -1,0 +1,110 @@
+# Documentation site, published to https://skylineplatform.github.io/agentic-payments
+#
+# The repository's homepage URL has pointed at that address since the first
+# commit and nothing was ever served there. This is what serves it.
+#
+# It builds only in CI — see .github/workflows/docs.yml. Nothing here is part
+# of `make check`, which needs Go alone, and nothing here is needed to work on
+# the code. The site is a rendering of docs/, not a second source of truth: the
+# markdown in this repository stays readable on GitHub exactly as it is, and
+# anything that would only make sense once rendered does not belong in it.
+
+site_name: Agentic Payments
+site_description: >-
+  An implementation of Google AP2 and Visa TAP behind one protocol-neutral
+  authorization model.
+site_url: https://skylineplatform.github.io/agentic-payments/
+repo_url: https://github.com/SkylinePlatform/agentic-payments
+repo_name: SkylinePlatform/agentic-payments
+edit_uri: edit/main/docs/
+copyright: Apache-2.0
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  # Mermaid renders natively here, which is the point. The diagrams live inline
+  # in the documents that explain them, and `make diagrams` exports the same
+  # blocks to SVG for use outside the browser — two renderings of one source,
+  # rather than a picture that can drift from the prose beside it.
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+
+# Every document's job, in the reading order docs/README.md sets out. The nav
+# is explicit rather than inferred so that adding a file is a decision about
+# where a reader meets it, not an accident of alphabetical order.
+nav:
+  - Home: README.md
+  - Why this exists:
+      - Problem statement: business/problem-statement.md
+      - Use cases: business/use-cases.md
+      - What this proves: business/what-this-proves.md
+  - The protocols:
+      - Google AP2: protocols/ap2.md
+      - Visa TAP: protocols/tap.md
+  - How it is built:
+      - Architecture: architecture/README.md
+      - ADR 0001 — Transport and errors: architecture/adr/0001-transport-and-errors.md
+      - ADR 0002 — Idempotency: architecture/adr/0002-idempotency.md
+      - ADR 0003 — Correlation IDs and the event log: architecture/adr/0003-correlation-and-event-log.md
+  - Reference:
+      - Diagram index: diagrams/INDEX.md
+      - Rules for agents: AGENTS.md
+
+# docs/plans/ is gitignored and never reaches a checkout; docs/specs/ is
+# committed but records decisions for contributors rather than readers, so it
+# is reachable by URL and absent from the navigation.
+not_in_nav: |
+  specs/**
+
+validation:
+  omitted_files: info
+  absolute_links: info
+  unrecognized_links: warn
+  anchors: warn
