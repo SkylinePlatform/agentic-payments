@@ -1,0 +1,85 @@
+# Publishes docs/ to https://skylineplatform.github.io/agentic-payments
+#
+# The repository's homepage has pointed there from the start and served a 404.
+# This workflow is what makes the address true, and it redeploys on every merge
+# to main that touches the documentation, so the published set cannot drift
+# behind the repository the way a hand-run publish always eventually does.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - mkdocs.yml
+      - AGENTS.md
+      - .github/workflows/docs.yml
+  # Pull requests build but do not deploy: a broken nav entry or a dead link
+  # should fail on the change that introduced it, not after it has merged.
+  pull_request:
+    paths:
+      - docs/**
+      - mkdocs.yml
+      - AGENTS.md
+      - .github/workflows/docs.yml
+  # So the site can be republished without an empty commit — after enabling
+  # Pages for the first time, for instance.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install MkDocs
+        run: pip install --disable-pip-version-check mkdocs-material==9.5.44
+
+      # AGENTS.md is the rules the code is held to, and docs/README.md points a
+      # reader at it. It lives at the repository root because that is where the
+      # tools that read it look, so it is copied in rather than moved, and the
+      # one link that walks out of docs/ is rewritten to the copy. The
+      # repository's own copy is untouched and the link keeps working on GitHub.
+      - name: Bring AGENTS.md into the site
+        run: |
+          cp AGENTS.md docs/AGENTS.md
+          # AGENTS.md sits at the repository root and links to docs/ from
+          # there. One directory down, those paths are one level too deep.
+          sed -i 's|](docs/|](|g' docs/AGENTS.md
+          # And the one link in docs/ that walks out to the root now has a
+          # copy to point at.
+          sed -i 's|](\.\./AGENTS\.md)|](AGENTS.md)|g' docs/README.md
+
+      - name: Build
+        run: mkdocs build --strict
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    # Only main deploys. The build above still runs on a pull request, which is
+    # where a broken link is cheap to fix.
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

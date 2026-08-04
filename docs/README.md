@@ -19,7 +19,7 @@ stated the way the document states it at the top of itself.
 4. [`protocols/tap.md`](protocols/tap.md) — the same for Visa TAP.
 5. [`architecture/README.md`](architecture/README.md) — answers how we build
    the system; does not re-explain either protocol.
-6. [`architecture/adr/`](architecture/adr/) — one decision per file, each
+6. `architecture/adr/` — one decision per file, each
    recording what was chosen, what follows from it and what was rejected:
    [transport and errors](architecture/adr/0001-transport-and-errors.md),
    [idempotency](architecture/adr/0002-idempotency.md),

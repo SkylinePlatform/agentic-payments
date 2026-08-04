@@ -3,6 +3,11 @@
 **A Go implementation of AP2 and Visa TAP behind a single, protocol-neutral authorization model.**
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-skylineplatform.github.io-indigo.svg)](https://skylineplatform.github.io/agentic-payments/)
+
+📖 **[Read the documentation](https://skylineplatform.github.io/agentic-payments/)** — the
+problem, the two protocols, the architecture and the decisions behind it, with
+the diagrams rendered. Published from [`docs/`](docs/) on every merge.
 
 Agentic payment protocols are arriving fast, and they do not overlap the way the
 marketing suggests. They solve different problems at different layers. This

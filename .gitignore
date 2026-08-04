@@ -50,5 +50,10 @@ frontend/src/protocol/generated/
 # out of git.
 docs/plans/
 
+# The rendered documentation site. `mkdocs build` regenerates it from docs/,
+# and CI publishes it to GitHub Pages — committing the output would put a
+# second, staler copy of every document in the repository.
+site/
+
 # Subagent-driven-development scratch: ledgers, task briefs, review packages.
 .superpowers/
