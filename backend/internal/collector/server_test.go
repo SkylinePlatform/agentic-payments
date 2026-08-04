@@ -13,6 +13,15 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 )
 
+// mustPublish is Publish with its error asserted away, for the tests whose
+// subject is something else.
+func mustPublish(t *testing.T, h *collector.Hub, e obs.Event) {
+	t.Helper()
+	if _, err := h.Publish(e); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+}
+
 func post(t *testing.T, h http.Handler, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, collector.EventsPath, strings.NewReader(body))
@@ -135,7 +144,7 @@ func TestStreamResumesFromLastEventID(t *testing.T) {
 	srv := newServer(t, hub)
 
 	for _, d := range []string{"1", "2", "3"} {
-		hub.Publish(event(d))
+		mustPublish(t, hub, event(d))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -256,7 +265,7 @@ func TestStreamDeliversOverARealSocket(t *testing.T) {
 	srv := newServer(t, hub)
 
 	// One event before the stream opens, so replay is exercised too.
-	hub.Publish(event("before the viewer arrived"))
+	mustPublish(t, hub, event("before the viewer arrived"))
 
 	body, _ := streamOf(t, srv)
 
@@ -311,7 +320,7 @@ func TestStreamEndsWhenTheHubCloses(t *testing.T) {
 	hub := collector.NewHub()
 	srv := newServer(t, hub)
 
-	hub.Publish(event("only"))
+	mustPublish(t, hub, event("only"))
 	body, _ := streamOf(t, srv)
 	readFrame(t, body) // the replayed one
 
@@ -334,7 +343,7 @@ func TestClientDisconnectUnsubscribes(t *testing.T) {
 	srv := newServer(t, hub)
 
 	body, cancel := streamOf(t, srv)
-	hub.Publish(event("one"))
+	mustPublish(t, hub, event("one"))
 	readFrame(t, body)
 
 	if _, subs, _ := hub.Stats(); subs != 1 {
@@ -350,7 +359,7 @@ func TestClientDisconnectUnsubscribes(t *testing.T) {
 		if _, subs, _ := hub.Stats(); subs == 0 {
 			return
 		}
-		hub.Publish(event("after the client left"))
+		mustPublish(t, hub, event("after the client left"))
 	}
 	t.Fatal("the subscriber outlived its client")
 }

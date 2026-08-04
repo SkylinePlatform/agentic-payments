@@ -24,10 +24,17 @@
 package collector
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 )
+
+// ErrClosed means the hub is shutting down and took nothing. It is separate
+// from a validation failure because the two are different answers to the
+// caller: one says the event is wrong, the other says the collector is going
+// away and there is nothing wrong with the event at all.
+var ErrClosed = errors.New("collector: hub is closed")
 
 // Defaults. History is what a viewer joining mid-demonstration sees; the
 // subscriber buffer is how far behind one browser tab may fall before it is
@@ -115,20 +122,33 @@ func NewHub(opts ...HubOption) *Hub {
 	return h
 }
 
-// Publish records an event and delivers it to every current subscriber.
+// Publish records an event and delivers it to every current subscriber. It
+// returns the record's sequence number.
 //
 // It never blocks on a subscriber. A subscriber whose buffer is full is
-// disconnected instead — see Decision below — so one stalled browser tab cannot
-// stall ingest for everybody, and cannot back pressure into the roles that are
-// emitting.
+// disconnected instead, so one stalled browser tab cannot stall ingest for
+// everybody, and cannot back-pressure into the roles that are emitting.
 //
-// It returns the record's sequence number.
-func (h *Hub) Publish(e obs.Event) uint64 {
+// # It validates, rather than trusting its caller to have done so
+//
+// The SSE writer puts Kind verbatim into an event line and the record into a
+// data line, where a newline ends the frame — so an event that never passed
+// obs.Event.Validate could forge the next frame in the stream the frontend
+// reads. Ingest does validate, which makes this check redundant today and
+// exactly one refactor away from being the only thing standing there: a second
+// publish path, a replay-from-file, a test helper reaching for the hub
+// directly. An invariant the writer depends on belongs at the boundary that
+// stores it, not at whichever door happens to be in front of it.
+func (h *Hub) Publish(e obs.Event) (uint64, error) {
+	if err := e.Validate(); err != nil {
+		return 0, err
+	}
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	if h.closed {
-		return 0
+		return 0, ErrClosed
 	}
 
 	h.nextSeq++
@@ -155,7 +175,7 @@ func (h *Hub) Publish(e obs.Event) uint64 {
 			h.dropped++
 		}
 	}
-	return h.nextSeq
+	return h.nextSeq, nil
 }
 
 // Subscribe returns the history a new stream should replay and the subscription

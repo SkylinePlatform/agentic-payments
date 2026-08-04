@@ -1,6 +1,7 @@
 package collector_test
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,17 @@ import (
 )
 
 var base = time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+
+// publish is Publish with its error asserted away, for the tests whose subject
+// is something else.
+func publish(t *testing.T, h *collector.Hub, e obs.Event) uint64 {
+	t.Helper()
+	seq, err := h.Publish(e)
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	return seq
+}
 
 func event(detail string) obs.Event {
 	return obs.Event{
@@ -34,7 +46,7 @@ func TestPublishReachesASubscriber(t *testing.T) {
 		t.Errorf("a new hub replayed %d records, want 0", len(history))
 	}
 
-	h.Publish(event("first"))
+	publish(t, h, event("first"))
 	rec := <-sub.C
 	if rec.Event.Detail != "first" {
 		t.Errorf("detail = %q, want %q", rec.Event.Detail, "first")
@@ -54,7 +66,7 @@ func TestSequenceNumbersAreMonotonic(t *testing.T) {
 	defer sub.Unsubscribe()
 
 	for i := range 5 {
-		if got := h.Publish(event("e")); got != uint64(i+1) {
+		if got := publish(t, h, event("e")); got != uint64(i+1) {
 			t.Errorf("Publish returned %d, want %d", got, i+1)
 		}
 	}
@@ -73,8 +85,8 @@ func TestHistoryReplaysToALateSubscriber(t *testing.T) {
 	h := collector.NewHub()
 	defer h.Close()
 
-	h.Publish(event("before"))
-	h.Publish(event("also before"))
+	publish(t, h, event("before"))
+	publish(t, h, event("also before"))
 
 	history, sub := h.Subscribe(0)
 	defer sub.Unsubscribe()
@@ -86,7 +98,7 @@ func TestHistoryReplaysToALateSubscriber(t *testing.T) {
 		t.Errorf("replay out of order: %q then %q", history[0].Event.Detail, history[1].Event.Detail)
 	}
 
-	h.Publish(event("after"))
+	publish(t, h, event("after"))
 	if rec := <-sub.C; rec.Event.Detail != "after" {
 		t.Errorf("live event = %q, want %q", rec.Event.Detail, "after")
 	}
@@ -99,7 +111,7 @@ func TestHistoryIsBounded(t *testing.T) {
 	defer h.Close()
 
 	for _, d := range []string{"1", "2", "3", "4", "5"} {
-		h.Publish(event(d))
+		publish(t, h, event(d))
 	}
 
 	history, sub := h.Subscribe(0)
@@ -137,7 +149,7 @@ func TestNoGapAndNoDuplicateAcrossSubscribe(t *testing.T) {
 	for range publishers {
 		wg.Go(func() {
 			for range each {
-				h.Publish(event("concurrent"))
+				publish(t, h, event("concurrent"))
 			}
 		})
 	}
@@ -178,6 +190,55 @@ func TestNoGapAndNoDuplicateAcrossSubscribe(t *testing.T) {
 	}
 }
 
+// TestPublishRefusesAnEventThatCouldForgeAFrame puts the check at the boundary
+// that stores the event rather than at whichever door happens to be in front of
+// it. The SSE writer puts Kind into an event line and the record into a data
+// line, where a newline ends the frame — so an unvalidated event is a way to
+// write the next frame in the stream the frontend reads.
+//
+// Ingest validates too, which makes this redundant today and one refactor away
+// from being the only thing standing there.
+func TestPublishRefusesAnEventThatCouldForgeAFrame(t *testing.T) {
+	t.Parallel()
+
+	h := collector.NewHub()
+	defer h.Close()
+
+	for _, tc := range []struct {
+		name  string
+		event obs.Event
+	}{
+		{"kind carrying a newline", obs.Event{
+			Kind: obs.Kind("mandate_verified\ndata: forged"), Role: "agent", At: base,
+		}},
+		{"correlation ID carrying a newline", obs.Event{
+			Kind: obs.KindMandateVerified, Role: "agent", At: base,
+			CorrelationID: "abc\ndata: forged",
+		}},
+		{"kind outside the closed set", obs.Event{
+			Kind: obs.Kind("mandate_teleported"), Role: "agent", At: base,
+		}},
+		{"no role", obs.Event{Kind: obs.KindMandateVerified, At: base}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			seq, err := h.Publish(tc.event)
+			if !errors.Is(err, obs.ErrInvalidEvent) {
+				t.Errorf("Publish = %v, want it to wrap ErrInvalidEvent", err)
+			}
+			if seq != 0 {
+				t.Errorf("seq = %d, want 0 — a refused event consumed a sequence number", seq)
+			}
+		})
+	}
+
+	// And nothing reached the log.
+	if published, _, _ := h.Stats(); published != 0 {
+		t.Errorf("hub published %d events, want 0", published)
+	}
+}
+
 // TestSubscribeAfterResumesRatherThanRepeats covers the reconnect. EventSource
 // reconnects on its own after any dropped stream, and without honouring where
 // the client got to it would be handed the whole history again and show every
@@ -189,7 +250,7 @@ func TestSubscribeAfterResumesRatherThanRepeats(t *testing.T) {
 	defer h.Close()
 
 	for _, d := range []string{"1", "2", "3", "4"} {
-		h.Publish(event(d))
+		publish(t, h, event(d))
 	}
 
 	// A client that saw up to seq 2 asks for the rest.
@@ -209,7 +270,7 @@ func TestSubscribeAfterResumesRatherThanRepeats(t *testing.T) {
 	if len(caughtUp) != 0 {
 		t.Errorf("a caught-up client was replayed %d records, want 0", len(caughtUp))
 	}
-	h.Publish(event("5"))
+	publish(t, h, event("5"))
 	if rec := <-sub2.C; rec.Seq != 5 {
 		t.Errorf("live seq = %d, want 5", rec.Seq)
 	}
@@ -240,7 +301,7 @@ func TestSlowSubscriberIsDroppedNotTolerated(t *testing.T) {
 	// Three events with a buffer of two. The slow subscriber never reads.
 	for _, d := range []string{"1", "2", "3"} {
 		// The subscriber that keeps up drains as it goes.
-		h.Publish(event(d))
+		publish(t, h, event(d))
 		<-keeping.C
 	}
 
@@ -257,7 +318,7 @@ func TestSlowSubscriberIsDroppedNotTolerated(t *testing.T) {
 	}
 
 	// And the hub kept serving the one that kept up.
-	h.Publish(event("4"))
+	publish(t, h, event("4"))
 	if rec := <-keeping.C; rec.Event.Detail != "4" {
 		t.Errorf("the healthy subscriber got %q, want %q", rec.Event.Detail, "4")
 	}
@@ -275,7 +336,7 @@ func TestCloseEndsEverySubscription(t *testing.T) {
 	_, a := h.Subscribe(0)
 	_, b := h.Subscribe(0)
 
-	h.Publish(event("before close"))
+	publish(t, h, event("before close"))
 	<-a.C
 	<-b.C
 
@@ -289,9 +350,10 @@ func TestCloseEndsEverySubscription(t *testing.T) {
 	// Idempotent, because a defer plus an explicit call is the normal shape.
 	h.Close()
 
-	// Publishing after close is a no-op rather than a panic on a closed channel.
-	if got := h.Publish(event("after close")); got != 0 {
-		t.Errorf("Publish after Close returned %d, want 0", got)
+	// Publishing after close says so, rather than panicking on a closed channel
+	// or silently accepting an event nobody will ever see.
+	if _, err := h.Publish(event("after close")); !errors.Is(err, collector.ErrClosed) {
+		t.Errorf("Publish after Close = %v, want ErrClosed", err)
 	}
 }
 
@@ -302,7 +364,7 @@ func TestSubscribeAfterCloseIsNotAHang(t *testing.T) {
 	t.Parallel()
 
 	h := collector.NewHub()
-	h.Publish(event("only"))
+	publish(t, h, event("only"))
 	h.Close()
 
 	history, sub := h.Subscribe(0)
@@ -329,7 +391,7 @@ func TestUnsubscribeIsIdempotent(t *testing.T) {
 		t.Error("the channel was still open after Unsubscribe")
 	}
 	// The hub stops trying to feed it.
-	h.Publish(event("after"))
+	publish(t, h, event("after"))
 	if _, subs, _ := h.Stats(); subs != 0 {
 		t.Errorf("hub still holds %d subscribers", subs)
 	}
@@ -352,7 +414,7 @@ func TestConcurrentSubscribeAndPublish(t *testing.T) {
 			}
 			sub.Unsubscribe()
 		})
-		wg.Go(func() { h.Publish(event("racing")) })
+		wg.Go(func() { _, _ = h.Publish(event("racing")) })
 	}
 	h.Close()
 	wg.Wait()

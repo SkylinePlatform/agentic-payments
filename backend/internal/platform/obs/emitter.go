@@ -23,11 +23,17 @@ const (
 
 // Stats is what an operator can learn about emission. It is a snapshot.
 type Stats struct {
-	// Emitted is how many events were accepted into the buffer.
+	// Emitted is how many events were accepted into the buffer. An event
+	// counted here can still be evicted later, so Emitted is what was taken
+	// in, not what got out.
 	Emitted int
-	// Dropped is how many were discarded because the buffer was full. A
-	// non-zero value here means the collector could not keep up or was not
-	// running.
+	// Dropped covers both ways an event is discarded without reaching the
+	// sink: evicted from a full buffer, or refused because the emitter is
+	// already closed. They are one counter because the caller's question is
+	// the same either way — how many events are missing from the view — and
+	// splitting them would invite branching on a distinction nothing acts on.
+	// A non-zero value means the collector could not keep up, was not running,
+	// or had already been shut down.
 	Dropped int
 	// Rejected is how many failed Validate and were never buffered. Unlike
 	// Dropped, this one is a bug in the emitting code rather than an

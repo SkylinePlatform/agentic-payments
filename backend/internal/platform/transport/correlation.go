@@ -33,6 +33,12 @@ type CorrelationOption func(*Correlation)
 
 // WithEntropy sets where minted IDs come from. The default is crypto/rand; a
 // test passes a fixed reader to assert on an exact ID.
+//
+// r must be safe for concurrent use. The middleware reads from it on any
+// request that arrives without a usable header, and those run in parallel —
+// crypto/rand.Reader is documented as safe, and a bytes.Reader shared across
+// requests is not. A test that hands one to a handler it then drives from
+// several goroutines is writing a data race, not a fixture.
 func WithEntropy(r io.Reader) CorrelationOption {
 	return func(c *Correlation) { c.entropy = r }
 }

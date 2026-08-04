@@ -68,12 +68,13 @@ func Ingest(h *Hub) http.HandlerFunc {
 		}
 
 		for _, e := range batch {
-			if h.Publish(e) == 0 {
-				// The hub is shutting down and took nothing. Answering 202
-				// would tell the sender its events are on a screen somewhere
-				// when they are not — and while that costs only a screenshot,
-				// a component whose whole job is showing what happened should
-				// not be the one lying about it.
+			if _, err := h.Publish(e); err != nil {
+				// Only ErrClosed can reach here — every event in the batch
+				// passed Validate above — and answering 202 would tell the
+				// sender its events are on a screen somewhere when the hub took
+				// none of them. That costs only a screenshot, but a component
+				// whose whole job is showing what happened should not be the
+				// one misreporting it.
 				http.Error(w, "collector: shutting down", http.StatusServiceUnavailable)
 				return
 			}
