@@ -1,26 +1,27 @@
 import { Route, Routes } from "react-router-dom";
 
 import { Shell } from "./layout/Shell";
-import { MandateInspector } from "./routes/MandateInspector";
 import { NotFound } from "./routes/NotFound";
-import { ThreeLanes } from "./routes/ThreeLanes";
-import { TrustedSurface } from "./routes/TrustedSurface";
+import { SURFACES } from "./surfaces";
 
 /**
- * App is the route table and nothing else.
+ * App turns the surface list into a route table, inside the shell.
  *
- * Three surfaces, each owned by its own issue, each rendered inside the shell.
- * Keeping the table here — rather than letting each surface register itself —
- * means one file answers "what can this app show", which is the question
- * somebody arriving at the codebase asks first.
+ * The list itself lives in surfaces.tsx, which is also what the nav reads, so
+ * that "what can this app show" has exactly one answer rather than two that can
+ * disagree.
  */
 export function App() {
   return (
     <Routes>
       <Route element={<Shell />}>
-        <Route index element={<ThreeLanes />} />
-        <Route path="inspector" element={<MandateInspector />} />
-        <Route path="consent" element={<TrustedSurface />} />
+        {SURFACES.map((surface) =>
+          surface.path === "" ? (
+            <Route key="index" index element={surface.element} />
+          ) : (
+            <Route key={surface.path} path={surface.path} element={surface.element} />
+          ),
+        )}
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

@@ -1,14 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 
-/**
- * The surfaces the app holds. Each one is owned by its own issue; this file
- * knows only where they sit and what they are called.
- */
-export const SURFACES = [
-  { path: "/", label: "Three lanes", end: true },
-  { path: "/inspector", label: "Mandate Inspector", end: false },
-  { path: "/consent", label: "Trusted Surface", end: false },
-] as const;
+import { hrefOf, SURFACES } from "../surfaces";
 
 /**
  * Shell is the frame every surface renders inside: a header naming the project
@@ -16,6 +8,9 @@ export const SURFACES = [
  *
  * It deliberately holds no state and fetches nothing. A shell that had opinions
  * about data would be one each surface had to work around.
+ *
+ * The nav is built from the same list App builds its routes from, so a link
+ * here cannot point at a route that does not exist.
  */
 export function Shell() {
   return (
@@ -26,16 +21,18 @@ export function Shell() {
           <span className="shell__subtitle">AP2 + Visa TAP · proof of concept</span>
         </div>
         <nav className="shell__nav">
-          {SURFACES.map((s) => (
+          {SURFACES.map((surface) => (
             <NavLink
-              key={s.path}
-              to={s.path}
-              end={s.end}
+              key={surface.path}
+              to={hrefOf(surface)}
+              // Without this the index route stays highlighted everywhere,
+              // because "/" is a prefix of every other path.
+              end={surface.path === ""}
               className={({ isActive }) =>
                 isActive ? "shell__link shell__link--active" : "shell__link"
               }
             >
-              {s.label}
+              {surface.label}
             </NavLink>
           ))}
         </nav>
