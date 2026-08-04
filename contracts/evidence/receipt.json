@@ -36,5 +36,8 @@
     }
   },
   "required": ["issuer", "mandate_type", "reference", "result"],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "if": { "properties": { "result": { "const": "error" } }, "required": ["result"] },
+  "then": { "required": ["error"] },
+  "else": { "not": { "required": ["error"] } }
 }

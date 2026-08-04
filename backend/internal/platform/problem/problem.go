@@ -54,15 +54,30 @@ type Problem struct {
 // it — that is what Code is for, and `contracts/evidence/receipt.json` says the
 // same thing about the receipt's error_description field for the same reason.
 //
-// An unknown code does not fall back to a generic 500. It panics, because the
-// only way to reach it is to hand this function a value that is not in the
-// generated enumeration, which a caller cannot do by accident: the argument is
-// typed. A code added to contracts/ without a rendering here is caught by
-// TestEveryCodeRenders before it can ship.
+// New is total: every input produces a response. It has to be, because
+// generated.ErrorCode is a string type and Go permits the conversion
+// generated.ErrorCode("anything") — the argument being typed narrows what a
+// caller is likely to pass, not what they can. An earlier version panicked on
+// an unmapped code on the reasoning that the type made it unreachable. That
+// reasoning was wrong, and the failure it chose was the wrong one anyway:
+// net/http answers a panicking handler by dropping the connection, so a
+// verifier whose whole job is to explain a rejection would have explained
+// nothing at all.
+//
+// An unmapped code therefore renders as a 500 that names it, which is loud in
+// a log, visible to the caller, and impossible to mistake for the rejection
+// that was intended. Reaching it means the rendering table and contracts/ have
+// drifted, which TestEveryCodeRenders exists to prevent.
 func New(code generated.ErrorCode, detail string) Problem {
 	r, ok := renderings[code]
 	if !ok {
-		panic(fmt.Sprintf("problem: no rendering for error code %q — add one in renderings", code))
+		return Problem{
+			Type:   typePrefix + string(code),
+			Title:  "Error code has no rendering",
+			Status: http.StatusInternalServerError,
+			Detail: fmt.Sprintf("%q is not in the rendering table; the table and contracts/ have drifted", code),
+			Code:   code,
+		}
 	}
 	return Problem{
 		Type:   typePrefix + string(code),
@@ -121,12 +136,16 @@ var renderings = map[generated.ErrorCode]rendering{
 	generated.ErrorCodeIdempotencyConflict:   {http.StatusConflict, "Idempotency key reused for a different request"},
 
 	// Securing format.
-	generated.ErrorCodeMandateMalformed:     {http.StatusBadRequest, "Mandate malformed"},
-	generated.ErrorCodeDisclosureUnmatched:  {http.StatusBadRequest, "Disclosure not committed to by the issuer"},
-	generated.ErrorCodeSignatureInvalid:     {http.StatusUnauthorized, "Signature invalid"},
-	generated.ErrorCodeAlgorithmUnsupported: {http.StatusUnauthorized, "Signature algorithm unsupported"},
-	generated.ErrorCodeKeyBindingRequired:   {http.StatusUnauthorized, "Key binding required"},
-	generated.ErrorCodeKeyBindingInvalid:    {http.StatusUnauthorized, "Key binding invalid"},
+	generated.ErrorCodeMandateMalformed:    {http.StatusBadRequest, "Mandate malformed"},
+	generated.ErrorCodeDisclosureUnmatched: {http.StatusBadRequest, "Disclosure not committed to by the issuer"},
+	// Not 403: a verifier that does not implement the version cannot form a
+	// view on whether the mandate authorises anything, so refusing to
+	// authorise is the wrong answer. It cannot process the request at all.
+	generated.ErrorCodeMandateVersionUnsupported: {http.StatusBadRequest, "Mandate version unsupported"},
+	generated.ErrorCodeSignatureInvalid:          {http.StatusUnauthorized, "Signature invalid"},
+	generated.ErrorCodeAlgorithmUnsupported:      {http.StatusUnauthorized, "Signature algorithm unsupported"},
+	generated.ErrorCodeKeyBindingRequired:        {http.StatusUnauthorized, "Key binding required"},
+	generated.ErrorCodeKeyBindingInvalid:         {http.StatusUnauthorized, "Key binding invalid"},
 
 	// Key resolution.
 	generated.ErrorCodeKeyUnknown: {http.StatusUnauthorized, "Signing key unknown"},
@@ -139,18 +158,17 @@ var renderings = map[generated.ErrorCode]rendering{
 	generated.ErrorCodeSignatureScopeMismatch: {http.StatusUnauthorized, "Signature not bound to this domain or operation"},
 
 	// Authorisation.
-	generated.ErrorCodeMandateExpired:            {http.StatusForbidden, "Mandate expired"},
-	generated.ErrorCodeMandateNotYetValid:        {http.StatusForbidden, "Mandate not yet valid"},
-	generated.ErrorCodeMandateVersionUnsupported: {http.StatusForbidden, "Mandate version unsupported"},
-	generated.ErrorCodeDisclosureInsufficient:    {http.StatusForbidden, "Required disclosure withheld"},
-	generated.ErrorCodeCheckoutHashMismatch:      {http.StatusForbidden, "Checkout hash does not match"},
-	generated.ErrorCodePaymentBindingMismatch:    {http.StatusForbidden, "Payment mandate bound to a different checkout"},
-	generated.ErrorCodeConstraintViolated:        {http.StatusForbidden, "Constraint violated"},
-	generated.ErrorCodeConstraintTypeUnknown:     {http.StatusForbidden, "Constraint type unknown"},
-	generated.ErrorCodeAgentKeyMismatch:          {http.StatusForbidden, "Closed mandate signed by an unendorsed key"},
-	generated.ErrorCodeOpenMandateRequired:       {http.StatusForbidden, "Open mandate required"},
-	generated.ErrorCodeOpenMandateOutstanding:    {http.StatusForbidden, "Previous open mandate still outstanding"},
-	generated.ErrorCodeCredentialScopeMismatch:   {http.StatusForbidden, "Payment credential not scoped to this checkout"},
+	generated.ErrorCodeMandateExpired:          {http.StatusForbidden, "Mandate expired"},
+	generated.ErrorCodeMandateNotYetValid:      {http.StatusForbidden, "Mandate not yet valid"},
+	generated.ErrorCodeDisclosureInsufficient:  {http.StatusForbidden, "Required disclosure withheld"},
+	generated.ErrorCodeCheckoutHashMismatch:    {http.StatusForbidden, "Checkout hash does not match"},
+	generated.ErrorCodePaymentBindingMismatch:  {http.StatusForbidden, "Payment mandate bound to a different checkout"},
+	generated.ErrorCodeConstraintViolated:      {http.StatusForbidden, "Constraint violated"},
+	generated.ErrorCodeConstraintTypeUnknown:   {http.StatusForbidden, "Constraint type unknown"},
+	generated.ErrorCodeAgentKeyMismatch:        {http.StatusForbidden, "Closed mandate signed by an unendorsed key"},
+	generated.ErrorCodeOpenMandateRequired:     {http.StatusForbidden, "Open mandate required"},
+	generated.ErrorCodeOpenMandateOutstanding:  {http.StatusForbidden, "Previous open mandate still outstanding"},
+	generated.ErrorCodeCredentialScopeMismatch: {http.StatusForbidden, "Payment credential not scoped to this checkout"},
 
 	// Service.
 	generated.ErrorCodeVerifierUnavailable: {http.StatusServiceUnavailable, "Verifier unavailable"},

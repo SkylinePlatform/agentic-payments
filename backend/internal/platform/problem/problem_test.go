@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
@@ -40,9 +41,11 @@ func declaredCodes(t *testing.T) []generated.ErrorCode {
 	return schema.Enum
 }
 
-// TestEveryCodeRenders is the test this package exists for. A code added to
-// contracts/ and not given a rendering would otherwise be discovered by a
-// panic, in whichever role first tried to reject a request with it.
+// TestEveryCodeRenders is the test this package exists for. New is total, so a
+// code added to contracts/ without a rendering does not fail loudly on its own
+// — it quietly becomes a 500 in whichever role first tried to reject a request
+// with it, which reads as the verifier breaking rather than as a taxonomy gap.
+// This test is what turns that into a build failure instead.
 func TestEveryCodeRenders(t *testing.T) {
 	t.Parallel()
 
@@ -50,13 +53,13 @@ func TestEveryCodeRenders(t *testing.T) {
 		t.Run(string(code), func(t *testing.T) {
 			t.Parallel()
 
-			defer func() {
-				if r := recover(); r != nil {
-					t.Fatalf("no rendering: %v", r)
-				}
-			}()
 			p := problem.New(code, "")
 
+			// The fallback rendering is a 500 with this title. A contract code
+			// reaching it means the table has drifted from the schema.
+			if p.Title == "Error code has no rendering" {
+				t.Fatalf("%q is declared in contracts/ but has no entry in the rendering table", code)
+			}
 			if p.Code != code {
 				t.Errorf("Code = %q, want %q", p.Code, code)
 			}
@@ -177,5 +180,51 @@ func TestSameCodeOnBothSurfaces(t *testing.T) {
 	// list of its own. The runtime assertion below is the cheaper half.
 	if *receipt.Error != p.Code {
 		t.Fatalf("receipt carries %q, problem carries %q", *receipt.Error, p.Code)
+	}
+
+	// The receipt has to be a coherent one for that to mean anything: the
+	// contract says error is present exactly when result is error, so a
+	// receipt carrying a code while reporting success would prove nothing
+	// about the surfaces agreeing.
+	if receipt.Result != generated.ReceiptResultError {
+		t.Errorf("result = %q, want %q for a receipt carrying an error code",
+			receipt.Result, generated.ReceiptResultError)
+	}
+	if receipt.Issuer == "" || receipt.Reference == "" {
+		t.Error("a receipt without an issuer or a reference is not routable to the mandate it answers")
+	}
+}
+
+// TestUnmappedCodeStillAnswers covers the case the rendering table cannot
+// produce but the type system permits: generated.ErrorCode is a string type,
+// so generated.ErrorCode("anything") compiles.
+//
+// The behaviour under test is that a verifier still answers. An earlier
+// version panicked here, which net/http turns into a dropped connection — a
+// component whose only job is to explain a rejection explaining nothing at
+// all, and the hardest possible failure to diagnose from the client side.
+func TestUnmappedCodeStillAnswers(t *testing.T) {
+	t.Parallel()
+
+	unmapped := generated.ErrorCode("not_a_contract_code")
+	p := problem.New(unmapped, "")
+
+	if p.Status != http.StatusInternalServerError {
+		t.Errorf("Status = %d, want %d — an unrenderable code is the verifier's fault, not the caller's",
+			p.Status, http.StatusInternalServerError)
+	}
+	if p.Code != unmapped {
+		t.Errorf("Code = %q, want the unmapped value %q preserved so it is diagnosable", p.Code, unmapped)
+	}
+	if !strings.Contains(p.Detail, string(unmapped)) {
+		t.Errorf("Detail does not name the offending code: %q", p.Detail)
+	}
+
+	rec := httptest.NewRecorder()
+	if err := p.Write(rec); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("wrote status %d, want %d", rec.Code, http.StatusInternalServerError)
 	}
 }
