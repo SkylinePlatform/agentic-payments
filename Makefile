@@ -83,7 +83,7 @@ MERMAID_CLI ?= @mermaid-js/mermaid-cli@11.4.2
 .PHONY: diagrams
 diagrams: ## Export inline mermaid from docs/ to SVG for the article series
 	@mkdir -p docs/diagrams
-	@for doc in $$(find docs -name '*.md' -not -path 'docs/diagrams/*' -not -path 'docs/superpowers/*'); do \
+	@for doc in $$(find docs -name '*.md' -not -path 'docs/diagrams/*' -not -path 'docs/specs/*' -not -path 'docs/plans/*'); do \
 		grep -q '```mermaid' $$doc || continue; \
 		name=$$(basename $$doc .md); \
 		echo "diagrams: $$doc"; \

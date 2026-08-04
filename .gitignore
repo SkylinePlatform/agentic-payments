@@ -48,7 +48,7 @@ frontend/src/protocol/generated/
 # decisions the code has to honour. A plan is scaffolding for producing the
 # code and stops being true the moment the work lands, so it stays on disk and
 # out of git.
-docs/superpowers/plans/
+docs/plans/
 
 # Subagent-driven-development scratch: ledgers, task briefs, review packages.
 .superpowers/
