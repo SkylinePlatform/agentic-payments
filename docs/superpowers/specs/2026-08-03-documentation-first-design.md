@@ -156,8 +156,14 @@ drifted from the document it came from.
 ## ADR 0001 — Transport and error taxonomy
 
 **HTTP is not a choice.** RFC 9421 signs HTTP messages — method, path, headers.
-TAP without HTTP has nothing to sign. That rules out gRPC and everything else;
-the decision is made by the protocol and only needs recording.
+TAP without HTTP has nothing to sign.
+
+**Correction (found during implementation):** the reasoning originally
+recorded here — that signing rules out gRPC and everything else — is wrong.
+gRPC runs over HTTP/2, and RFC 9421's derived components all have values in a
+gRPC call. The decision is re-based on TAP's merchant-edge verification point
+instead; see `docs/architecture/adr/0001-transport-and-errors.md` for the
+reasoning that stands. The decision itself — HTTP and JSON — never changed.
 
 JSON over HTTP. Errors as RFC 9457 Problem Details (`application/problem+json`).
 

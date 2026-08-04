@@ -238,12 +238,15 @@ core from *importing* adapters, not from being AP2-shaped. `contracts/README.md`
 records where the line falls and why.
 
 `make generate` needs Go **and Node** — the TypeScript half runs through npm.
-So do `make generate-ts`, which is that half on its own, and `make diagrams`,
-which drives a headless Chromium through `@mermaid-js/mermaid-cli`. Nothing on
-the path to a green build does: `make check`, the gate every task has to pass,
-regenerates only the Go half and is pure Go. The TypeScript half is generated in
-CI, so Go-only work needs no Node toolchain and cross-language drift is still
-caught.
+So do `make generate-ts`, which is that half on its own; `make generate-verify`,
+which runs `generate` twice to prove it is reproducible; and `make diagrams`,
+which drives a headless Chromium through `@mermaid-js/mermaid-cli`. `make
+check`, the local gate every task has to pass, needs only Go: it regenerates
+just the Go half and stops there. CI does use Node — all three jobs in
+`.github/workflows/ci.yml` install it, and run `make generate` or `make
+generate-verify` — which is how the TypeScript half and cross-language drift
+are still caught. So Go-only work needs no Node toolchain locally, without the
+build ever going green unchecked.
 
 The Go generator is pinned in `contracts/tools/go.mod`, deliberately not in
 `backend/go.mod` — a code generator is not a dependency of the thing it
@@ -302,7 +305,7 @@ make workspace        # write the untracked go.work an editor at the root needs
 make vectors          # conformance suite against golden vectors
 make generate         # regenerate Go and TS types from contracts/  ⟵ needs Node
 make generate-ts      # the TypeScript half on its own              ⟵ needs Node
-make generate-verify  # prove generation is reproducible and touches nothing tracked
+make generate-verify  # prove generation is reproducible and touches nothing tracked ⟵ needs Node
 make diagrams         # export inline mermaid from docs/ to SVG     ⟵ needs Node
 ```
 

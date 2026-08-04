@@ -102,14 +102,14 @@ belongs to the framework rather than to the message. Awkward is not a
 rejection.
 
 The constraint that decides it sits one layer out, in where verification
-happens. `docs/protocols/tap.md` and issue #30 both place TAP's verification
-point at the merchant edge — the bot-mitigation proxy or CDN already in front
-of the storefront, which is the component TAP exists to stop blocking
-legitimate agents. Those products terminate and inspect ordinary HTTP
-requests and apply per-route policy to them; they do not parse gRPC frames.
-Choosing gRPC would mean either abandoning the deployment topology TAP's
-reference architecture assumes, or writing the verifying proxy from scratch
-instead of configuring one that already exists.
+happens. `docs/protocols/tap.md` places TAP's verification point at the
+merchant edge — the bot-mitigation proxy or CDN already in front of the
+storefront, which is the component TAP exists to stop blocking legitimate
+agents. Those products terminate and inspect ordinary HTTP requests and apply
+per-route policy to them; they do not parse gRPC frames. Choosing gRPC would
+mean either abandoning the deployment topology this project reads into TAP's
+reference architecture, on `AGENTS.md`'s authority, or writing the verifying
+proxy from scratch instead of configuring one that already exists.
 
 gRPC's usual advantages are real and were weighed against that. Typed
 contracts this repository already has, from `contracts/`, generated into Go
