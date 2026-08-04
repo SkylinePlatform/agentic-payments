@@ -57,6 +57,16 @@ tidy: ## go mod tidy
 # a fresh checkout has no canonical types, and the app imports them. That is
 # the same shape as the Go half, where `check` regenerates before it lints.
 
+# The whole stack, one command. Needs Node, because the frontend is part of it.
+#
+# The binaries are built first rather than `go run` per process: nine `go run`s
+# would recompile nine times and the demo would start in its own good time.
+# deploy/demo.json is the topology; adding a process is an entry there.
+.PHONY: demo
+demo: generate-go generate-disclosure generate-ts ## Bring up every role, the collector and the frontend (needs Node)
+	cd $(BACKEND) && $(GO) build -o bin/ ./cmd/...
+	$(BACKEND)/bin/demo -manifest deploy/demo.json -root .
+
 .PHONY: frontend
 frontend: generate-ts ## Run the frontend dev server (needs Node)
 	cd $(FRONTEND) && npm run dev
