@@ -63,6 +63,13 @@ Primary sources, in order of authority:
 3. https://developer.visa.com/capabilities/trusted-agent-protocol
 4. IETF RFC 9421 (HTTP Message Signatures)
 
+The warnings above are the short form, kept here because an agent must read
+them before writing code. The full treatment — the mandate model, the five
+roles, both flows, the binding and the disclosure rules — is in
+[docs/protocols/ap2.md](docs/protocols/ap2.md) and
+[docs/protocols/tap.md](docs/protocols/tap.md). One source of truth, two levels
+of detail.
+
 ---
 
 ## What this project is
@@ -231,9 +238,15 @@ core from *importing* adapters, not from being AP2-shaped. `contracts/README.md`
 records where the line falls and why.
 
 `make generate` needs Go **and Node** — the TypeScript half runs through npm.
-Nothing else does: `make check`, the gate every task has to pass, regenerates
-only the Go half and is pure Go. The TypeScript half is generated in CI, so
-Go-only work needs no Node toolchain and cross-language drift is still caught.
+So do `make generate-ts`, which is that half on its own; `make generate-verify`,
+which runs `generate` twice to prove it is reproducible; and `make diagrams`,
+which drives a headless Chromium through `@mermaid-js/mermaid-cli`. `make
+check`, the local gate every task has to pass, needs only Go: it regenerates
+just the Go half and stops there. CI does use Node — all three jobs in
+`.github/workflows/ci.yml` install it, and run `make generate` or `make
+generate-verify` — which is how the TypeScript half and cross-language drift
+are still caught. So Go-only work needs no Node toolchain locally, without the
+build ever going green unchecked.
 
 The Go generator is pinned in `contracts/tools/go.mod`, deliberately not in
 `backend/go.mod` — a code generator is not a dependency of the thing it
@@ -292,14 +305,16 @@ make workspace        # write the untracked go.work an editor at the root needs
 make vectors          # conformance suite against golden vectors
 make generate         # regenerate Go and TS types from contracts/  ⟵ needs Node
 make generate-ts      # the TypeScript half on its own              ⟵ needs Node
-make generate-verify  # prove generation is reproducible and touches nothing tracked
+make generate-verify  # prove generation is reproducible and touches nothing tracked ⟵ needs Node
+make diagrams         # export inline mermaid from docs/ to SVG     ⟵ needs Node
 ```
 
-**`make check` needs only Go.** Node is required by `make generate` and
-`make generate-ts`, and by nothing else. `check` regenerates the *Go* half of
-the canonical model before linting — testing a tree whose generated half came
-from an older schema checks the wrong thing — but it stops there, so work that
-never touches the frontend never needs npm.
+**`make check` needs only Go.** Node is required by `make generate`,
+`make generate-ts` and `make diagrams` — the last of which pulls a headless
+Chromium, which is exactly why it was kept out of `check`. `check` regenerates
+the *Go* half of the canonical model before linting — testing a tree whose
+generated half came from an older schema checks the wrong thing — but it stops
+there, so work that touches neither the frontend nor a diagram never needs npm.
 
 **`make check` is no longer the whole of CI.** It is the local gate; CI runs
 three jobs, and the *Contracts* job additionally runs `make generate-verify`,

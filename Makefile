@@ -75,6 +75,22 @@ workspace: ## Write the untracked go.work an editor opened at the root needs
 		echo "wrote go.work — untracked on purpose, see AGENTS.md"; \
 	fi
 
+# mermaid-cli pulls a headless Chromium, which is why this is not wired into
+# `check`: AGENTS.md promises that the gate needs only Go. Diagrams are
+# exported on demand, by whoever needs a picture for an article.
+MERMAID_CLI ?= @mermaid-js/mermaid-cli@11.4.2
+
+.PHONY: diagrams
+diagrams: ## Export inline mermaid from docs/ to SVG for the article series
+	@mkdir -p docs/diagrams
+	@for doc in $$(find docs -name '*.md' -not -path 'docs/diagrams/*' -not -path 'docs/superpowers/*'); do \
+		grep -q '```mermaid' $$doc || continue; \
+		name=$$(basename $$doc .md); \
+		echo "diagrams: $$doc"; \
+		npx -y $(MERMAID_CLI) -i $$doc -o docs/diagrams/$$name.md --outputFormat svg >/dev/null; \
+	done
+	@echo "diagrams: exported to docs/diagrams/"
+
 # Generation comes first on purpose. contracts/ is the source of truth for the
 # canonical model, so linting and testing a tree whose generated half was built
 # from an older schema checks the wrong thing.

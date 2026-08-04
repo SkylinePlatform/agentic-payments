@@ -17,6 +17,13 @@ dist/
 .vite/
 *.local
 
+# Exported diagrams. `make diagrams` regenerates them; committing them would
+# add a class of file that can silently go stale against the document it came
+# from.
+docs/diagrams/*.svg
+docs/diagrams/*.md
+!docs/diagrams/INDEX.md
+
 # Env & secrets
 .env
 .env.*
@@ -36,3 +43,12 @@ frontend/src/protocol/generated/
 
 # Scratch files from `make generate-verify`
 .generate-verify.*
+
+# Claude implementation plans. The spec is a repository artefact — it records
+# decisions the code has to honour. A plan is scaffolding for producing the
+# code and stops being true the moment the work lands, so it stays on disk and
+# out of git.
+docs/superpowers/plans/
+
+# Subagent-driven-development scratch: ledgers, task briefs, review packages.
+.superpowers/
