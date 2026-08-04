@@ -141,6 +141,35 @@ mock the point of the exercise.
 
 Nothing here is PCI-compliant. Nothing moves real money.
 
+## The collector is not a role
+
+`cmd/collector` is an eighth binary, and it is neither one of AP2's five roles
+— Shopping Agent, Credential Provider, Merchant, Merchant Payment Processor,
+Trusted Surface — nor a TAP identity party. It exists so the three-lane
+frontend has something to show, and the screenshots from that view are what
+carry the article series.
+
+The distinction needs stating because everything about it invites the opposite
+conclusion. It runs on the same HTTP transport as every participant, it speaks
+to all seven role binaries, and it is the one component in the system that sees
+every transaction end to end. That is exactly the shape of a protocol
+participant, and it is none of one.
+
+What follows from that is the rule worth remembering: **the event log is
+observability, never evidence.** Dispute resolution reads closed mandates and
+receipts and recomputes digests against them; not one of its steps reads
+anything the collector holds. An event is data a role's process wrote over a
+wire, editable by anyone with access to the store or the path it travelled. A
+receipt is a signed statement whose reference is checked independently. A
+dispute settled from the event log would be a dispute settled by reading the
+loser's own log.
+
+This is enforced rather than documented: the `collector-containment` depguard
+rule stops any package except `cmd/collector` from importing
+`internal/collector`, so a dispute path cannot reach a log entry even by
+accident. ADR 0003 has the full reasoning, including why deriving evidence from
+the log was rejected as a security error rather than a convenience trade-off.
+
 ## Module layout
 
 `go.mod` sits in `backend/`, not at the repository root. A module whose
@@ -160,7 +189,10 @@ contracts/              JSON Schema — single source of truth → Go + TS types
   codegen.mk
 backend/                ⬅ the Go module root. go.mod lives here, not at the top
   cmd/                  agent, merchant, credprovider, mpp, surface, registry, proxy
+                        collector — an eighth binary, and NOT an AP2 role
   internal/
+    collector/          event log and SSE fan-out. demo infrastructure, never
+                        evidence; only cmd/collector may import it
     core/               domain. imports nothing from this project
       authz/            mandates, ports
         constraint/     types, schemas, evaluators — ours, never in adapters/ap2

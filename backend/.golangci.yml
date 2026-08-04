@@ -99,6 +99,26 @@ linters:
             - pkg: crypto/x509
               desc: key material stays in internal/platform/crypto; hold an authz.Signer
 
+        # The event log is observability and never evidence. ADR 0003 Decision
+        # 4 says a dispute-handling path must have no reason to import or query
+        # anything the collector holds, and issue #18's five verification steps
+        # read only signed mandates and receipts.
+        #
+        # This is what turns that sentence into a property. A package that
+        # cannot import internal/collector cannot reach for a log entry when a
+        # receipt is missing — which is the tempting shortcut, and the one that
+        # would quietly weaken the requirement that a rejection must produce a
+        # receipt. cmd/collector is the only importer, because it is the process
+        # the store exists for.
+        collector-containment:
+          files:
+            - $all
+            - "!**/cmd/collector/**"
+            - "!**/internal/collector/**"
+          deny:
+            - pkg: github.com/SkylinePlatform/agentic-payments/backend/internal/collector
+              desc: the event log is observability, never evidence — dispute paths read signed artefacts
+
         # Randomness in this codebase reaches nonces, key material and
         # signatures. There is no benign math/rand call here.
         no-weak-randomness:
@@ -114,6 +134,12 @@ linters:
       forbid:
         - pattern: ^time\.Now$
           msg: time goes through the injected clock, or signature expiry becomes untestable
+        # Nothing in the tree sleeps today. This keeps it that way: a test that
+        # sleeps is slow when it passes and flaky when it does not, and every
+        # deadline here is either driven by the fake clock or observable on a
+        # channel. Enforcing it costs nothing now and everything later.
+        - pattern: ^time\.Sleep$
+          msg: advance the fake clock or wait on a channel; a sleeping test is a flaky test
 
     revive:
       rules:
