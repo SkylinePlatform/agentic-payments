@@ -161,6 +161,11 @@ func (h *Hub) Publish(e obs.Event) uint64 {
 // Subscribe returns the history a new stream should replay and the subscription
 // that carries everything after it.
 //
+// after is the sequence number the caller has already seen; 0 asks for
+// everything still held. A reconnecting client passes what it got to, and gets
+// back only what it missed — which is what stops an automatic reconnect from
+// replaying the whole transaction as duplicates.
+//
 // # The race this closes
 //
 // Snapshotting history and registering the subscriber happen under one lock,
@@ -171,12 +176,16 @@ func (h *Hub) Publish(e obs.Event) uint64 {
 // hundred demonstrations and is never reproducible on demand.
 //
 // The returned slice is the caller's own copy.
-func (h *Hub) Subscribe() ([]Record, *Subscriber) {
+func (h *Hub) Subscribe(after uint64) ([]Record, *Subscriber) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	history := make([]Record, len(h.history))
-	copy(history, h.history)
+	history := make([]Record, 0, len(h.history))
+	for _, rec := range h.history {
+		if rec.Seq > after {
+			history = append(history, rec)
+		}
+	}
 
 	sub := &Subscriber{c: make(chan Record, h.subCap), hub: h}
 	sub.C = sub.c

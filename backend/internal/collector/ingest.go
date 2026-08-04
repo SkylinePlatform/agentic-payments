@@ -2,6 +2,7 @@ package collector
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,6 +40,16 @@ func Ingest(h *Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxIngestBody))
 		if err != nil {
+			// A batch over the cap is not malformed — it parses fine and is
+			// simply larger than this endpoint reads. Saying 400 would send its
+			// author looking for a syntax error that is not there, which is the
+			// same distinction the idempotency middleware draws.
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				http.Error(w, fmt.Sprintf("collector: batch is larger than the %d bytes this endpoint reads", tooLarge.Limit),
+					http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, "collector: could not read the batch", http.StatusBadRequest)
 			return
 		}
@@ -57,7 +68,15 @@ func Ingest(h *Hub) http.HandlerFunc {
 		}
 
 		for _, e := range batch {
-			h.Publish(e)
+			if h.Publish(e) == 0 {
+				// The hub is shutting down and took nothing. Answering 202
+				// would tell the sender its events are on a screen somewhere
+				// when they are not — and while that costs only a screenshot,
+				// a component whose whole job is showing what happened should
+				// not be the one lying about it.
+				http.Error(w, "collector: shutting down", http.StatusServiceUnavailable)
+				return
+			}
 		}
 		w.WriteHeader(http.StatusAccepted)
 	}

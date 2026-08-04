@@ -88,6 +88,10 @@ func TestInvalidEventFailsTheWholeBatch(t *testing.T) {
 	}
 }
 
+// TestIngestRejectsAnOversizedBatch wants 413 rather than 400. A batch over the
+// cap is not malformed — it parses fine and is simply larger than this endpoint
+// reads — and the distinction is the one the idempotency middleware draws for
+// the same reason.
 func TestIngestRejectsAnOversizedBatch(t *testing.T) {
 	t.Parallel()
 
@@ -95,8 +99,63 @@ func TestIngestRejectsAnOversizedBatch(t *testing.T) {
 	defer hub.Close()
 
 	rec := post(t, collector.Handler(hub), strings.Repeat("x", (1<<20)+1))
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", rec.Code)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", rec.Code)
+	}
+}
+
+// TestIngestDuringShutdownSaysSo covers the batch that arrives after the hub has
+// closed. Answering 202 would tell the sender its events are on a screen
+// somewhere when the hub took none of them.
+func TestIngestDuringShutdownSaysSo(t *testing.T) {
+	t.Parallel()
+
+	hub := collector.NewHub()
+	hub.Close()
+
+	batch, err := json.Marshal([]obs.Event{event("too late")})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	rec := post(t, collector.Handler(hub), string(batch))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+// TestStreamResumesFromLastEventID is the HTTP half of the reconnect: the
+// header EventSource sends on its own has to reach the hub, or every automatic
+// reconnect repeats the whole transaction.
+func TestStreamResumesFromLastEventID(t *testing.T) {
+	t.Parallel()
+
+	hub := collector.NewHub()
+	defer hub.Close()
+	srv := newServer(t, hub)
+
+	for _, d := range []string{"1", "2", "3"} {
+		hub.Publish(event(d))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+collector.EventsPath, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Last-Event-ID", "2")
+
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// Only what it missed: seq 3, and nothing before it.
+	frame := readFrame(t, bufio.NewReader(resp.Body))
+	if frame["id"] != "3" {
+		t.Errorf("first replayed frame id = %q, want 3 — the reconnect repeated what the client had", frame["id"])
 	}
 }
 

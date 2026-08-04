@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 )
 
 // EventsPath is where the collector listens, for both halves of its job: POST
@@ -43,7 +44,7 @@ func Stream(h *Hub) http.HandlerFunc {
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
 
-		history, sub := h.Subscribe()
+		history, sub := h.Subscribe(lastEventID(r))
 		defer sub.Unsubscribe()
 
 		for _, rec := range history {
@@ -73,6 +74,31 @@ func Stream(h *Hub) http.HandlerFunc {
 			}
 		}
 	}
+}
+
+// lastEventID reads where a reconnecting client got to.
+//
+// EventSource sends the id of the last frame it saw back as Last-Event-ID when
+// it reconnects, which it does on its own after any dropped stream. Honouring
+// it is what makes a reconnect resume rather than repeat: without it the client
+// is handed the whole history again and shows every event twice, and the id
+// line this handler already writes would be a claim nothing acted on.
+//
+// A missing or unparseable value means "send everything you still have", which
+// is the right answer for a first connection and for a client that lost track.
+// The query parameter is accepted alongside the header because a browser cannot
+// set headers on an EventSource, so a client that reconnects manually has no
+// other way to say where it got to.
+func lastEventID(r *http.Request) uint64 {
+	raw := r.Header.Get("Last-Event-ID")
+	if raw == "" {
+		raw = r.URL.Query().Get("last_event_id")
+	}
+	seq, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return seq
 }
 
 // writeRecord emits one SSE frame.

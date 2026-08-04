@@ -27,7 +27,7 @@ func TestPublishReachesASubscriber(t *testing.T) {
 	h := collector.NewHub()
 	defer h.Close()
 
-	history, sub := h.Subscribe()
+	history, sub := h.Subscribe(0)
 	defer sub.Unsubscribe()
 
 	if len(history) != 0 {
@@ -50,7 +50,7 @@ func TestSequenceNumbersAreMonotonic(t *testing.T) {
 	h := collector.NewHub()
 	defer h.Close()
 
-	_, sub := h.Subscribe()
+	_, sub := h.Subscribe(0)
 	defer sub.Unsubscribe()
 
 	for i := range 5 {
@@ -76,7 +76,7 @@ func TestHistoryReplaysToALateSubscriber(t *testing.T) {
 	h.Publish(event("before"))
 	h.Publish(event("also before"))
 
-	history, sub := h.Subscribe()
+	history, sub := h.Subscribe(0)
 	defer sub.Unsubscribe()
 
 	if len(history) != 2 {
@@ -102,7 +102,7 @@ func TestHistoryIsBounded(t *testing.T) {
 		h.Publish(event(d))
 	}
 
-	history, sub := h.Subscribe()
+	history, sub := h.Subscribe(0)
 	defer sub.Unsubscribe()
 
 	if len(history) != 3 {
@@ -143,7 +143,7 @@ func TestNoGapAndNoDuplicateAcrossSubscribe(t *testing.T) {
 	}
 
 	// Subscribe while publishing is in full flight — the whole point.
-	history, sub := h.Subscribe()
+	history, sub := h.Subscribe(0)
 	defer sub.Unsubscribe()
 
 	wg.Wait()
@@ -178,6 +178,51 @@ func TestNoGapAndNoDuplicateAcrossSubscribe(t *testing.T) {
 	}
 }
 
+// TestSubscribeAfterResumesRatherThanRepeats covers the reconnect. EventSource
+// reconnects on its own after any dropped stream, and without honouring where
+// the client got to it would be handed the whole history again and show every
+// event twice — which makes the id line on each frame a claim nothing acted on.
+func TestSubscribeAfterResumesRatherThanRepeats(t *testing.T) {
+	t.Parallel()
+
+	h := collector.NewHub()
+	defer h.Close()
+
+	for _, d := range []string{"1", "2", "3", "4"} {
+		h.Publish(event(d))
+	}
+
+	// A client that saw up to seq 2 asks for the rest.
+	history, sub := h.Subscribe(2)
+	defer sub.Unsubscribe()
+
+	if len(history) != 2 {
+		t.Fatalf("replayed %d records, want 2 — the client was sent what it already had", len(history))
+	}
+	if history[0].Seq != 3 || history[1].Seq != 4 {
+		t.Errorf("replayed seqs %d and %d, want 3 and 4", history[0].Seq, history[1].Seq)
+	}
+
+	// A client fully caught up gets nothing to replay, and still streams.
+	caughtUp, sub2 := h.Subscribe(4)
+	defer sub2.Unsubscribe()
+	if len(caughtUp) != 0 {
+		t.Errorf("a caught-up client was replayed %d records, want 0", len(caughtUp))
+	}
+	h.Publish(event("5"))
+	if rec := <-sub2.C; rec.Seq != 5 {
+		t.Errorf("live seq = %d, want 5", rec.Seq)
+	}
+
+	// A sequence number past anything published asks for nothing, rather than
+	// wrapping round to everything.
+	ahead, sub3 := h.Subscribe(999)
+	defer sub3.Unsubscribe()
+	if len(ahead) != 0 {
+		t.Errorf("a client claiming seq 999 was replayed %d records, want 0", len(ahead))
+	}
+}
+
 // TestSlowSubscriberIsDroppedNotTolerated pins the answer to back pressure. One
 // stalled browser tab must not hold up ingest, and must not back-pressure into
 // the roles that are emitting.
@@ -187,9 +232,9 @@ func TestSlowSubscriberIsDroppedNotTolerated(t *testing.T) {
 	h := collector.NewHub(collector.WithSubscriberLag(2))
 	defer h.Close()
 
-	_, slow := h.Subscribe()
+	_, slow := h.Subscribe(0)
 	defer slow.Unsubscribe()
-	_, keeping := h.Subscribe()
+	_, keeping := h.Subscribe(0)
 	defer keeping.Unsubscribe()
 
 	// Three events with a buffer of two. The slow subscriber never reads.
@@ -227,8 +272,8 @@ func TestCloseEndsEverySubscription(t *testing.T) {
 	t.Parallel()
 
 	h := collector.NewHub()
-	_, a := h.Subscribe()
-	_, b := h.Subscribe()
+	_, a := h.Subscribe(0)
+	_, b := h.Subscribe(0)
 
 	h.Publish(event("before close"))
 	<-a.C
@@ -260,7 +305,7 @@ func TestSubscribeAfterCloseIsNotAHang(t *testing.T) {
 	h.Publish(event("only"))
 	h.Close()
 
-	history, sub := h.Subscribe()
+	history, sub := h.Subscribe(0)
 	if len(history) != 1 {
 		t.Errorf("replayed %d records, want 1", len(history))
 	}
@@ -276,7 +321,7 @@ func TestUnsubscribeIsIdempotent(t *testing.T) {
 	h := collector.NewHub()
 	defer h.Close()
 
-	_, sub := h.Subscribe()
+	_, sub := h.Subscribe(0)
 	sub.Unsubscribe()
 	sub.Unsubscribe() // must not panic on the already-closed channel
 
@@ -301,7 +346,7 @@ func TestConcurrentSubscribeAndPublish(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 20 {
 		wg.Go(func() {
-			_, sub := h.Subscribe()
+			_, sub := h.Subscribe(0)
 			for range sub.C {
 				// Read until the hub ends it, which it may do for lag.
 			}
