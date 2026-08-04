@@ -20,7 +20,7 @@ them locally.
 | Human Present retail purchase | [docs/business/use-cases.md](../business/use-cases.md) | `docs/diagrams/use-cases-2.svg` |
 | Subscription | [docs/business/use-cases.md](../business/use-cases.md) | `docs/diagrams/use-cases-3.svg` |
 | B2B procurement | [docs/business/use-cases.md](../business/use-cases.md) | `docs/diagrams/use-cases-4.svg` |
-| The boundary | [docs/business/where-skyline-sits.md](../business/where-skyline-sits.md) | `docs/diagrams/where-skyline-sits-1.svg` |
+| The boundary | [docs/business/what-this-proves.md](../business/what-this-proves.md) | `docs/diagrams/what-this-proves-1.svg` |
 | The five roles | [docs/protocols/ap2.md](../protocols/ap2.md) | `docs/diagrams/ap2-1.svg` |
 | Human Present | [docs/protocols/ap2.md](../protocols/ap2.md) | `docs/diagrams/ap2-2.svg` |
 | Human Not Present | [docs/protocols/ap2.md](../protocols/ap2.md) | `docs/diagrams/ap2-3.svg` |

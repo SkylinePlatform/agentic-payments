@@ -96,12 +96,22 @@ docs/protocols/
 docs/business/
   problem-statement.md   fragmentation, and why agents make it worse
   use-cases.md           one built scenario, three described, with sequences
-  where-skyline-sits.md  one section: the POC proves a layer, Skyline is the
-                         product above it
+  what-this-proves.md    claims and limits: what this proves, what it does
+                         not prove, where Skyline begins
 
 docs/diagrams/
   INDEX.md               catalogue: diagram → owning document → exported file
 ```
+
+**Correction (found during review):** `where-skyline-sits.md`, planned above
+as one section naming the boundary, was renamed to `what-this-proves.md` and
+rewritten into three sections — what this proves, what it does not prove,
+where Skyline begins. The original remit was wrong, and the file said so
+itself: its own second paragraph read "this document goes no further than
+naming them," which is a document announcing that it will not tell a reader
+anything. The tree above reflects the file as it now stands. The job it does —
+telling a reader what they may and may not conclude — never changed; only how
+it does that job did.
 
 ### Relationship to AGENTS.md
 
