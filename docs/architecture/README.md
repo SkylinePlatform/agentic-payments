@@ -30,13 +30,13 @@ Adapters populate the axes; `core` never learns which protocol filled one.
 ## Module dependencies
 
 The three-layer model above only holds if the code cannot route around it.
-Six `depguard` rules in `backend/.golangci.yml` are enforced by
-`golangci-lint` — via `make lint` locally, and again in CI — not by the Go
-compiler: `go build ./...` succeeds on code that violates every one of them,
-and `golangci-lint run` is the only thing that catches it. AGENTS.md's own
-framing is that a failure against any of these rules is an architecture
-violation, not a style nit, and the fix is never a suppressing comment — the
-rule is the design.
+Six `depguard` rules in `backend/.golangci.yml` enforce it: `make lint` runs
+them locally and CI runs them again on every pull request, and AGENTS.md's own
+framing is that a failure against any of them is an architecture violation
+rather than a style nit, so the fix is never a suppressing comment — the rule
+is the design. The enforcement is `golangci-lint`, not the Go compiler:
+`go build ./...` succeeds on code that violates every one of these rules, and
+`golangci-lint run` is the only thing that catches it.
 
 ```mermaid
 flowchart RL

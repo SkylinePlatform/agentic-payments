@@ -165,10 +165,16 @@ backend/                ⬅ the Go module root. go.mod lives here, not at the to
     httpsig/            RFC 9421 — public standard, externally importable
     sdjwt/              SD-JWT — public standard, externally importable
 frontend/               React + Vite + TypeScript
-docs/                   architecture, business, protocols, diagrams
-specs/                  written specifications driving implementation
+docs/                   architecture, business, protocols, diagrams, specs, plans
+specs/                  empty; relationship to docs/specs/ unresolved — issue #49
 deploy/
 ```
+
+Two directories both promise specifications. `docs/specs/` is real and
+committed — see Conventions. Root `specs/` predates it, holds nothing but a
+`.gitkeep`, and its fate (populate it with something ADRs don't already cover,
+or remove it) is issue #49's to decide, not this document's. Until #49 closes,
+a specification belongs in `docs/specs/`.
 
 `pkg/` holds implementations of **public standards** only. Both are genuine gaps
 in the Go ecosystem and are intended to stand alone.
@@ -275,6 +281,15 @@ issue with `Closes #N`. Squash-merge.
 **Issues:** work is tracked in GitHub Issues under two milestones, *Google AP2*
 (#1–23) and *Visa TAP* (#24–33). Issue bodies carry spec references, dependencies
 and known traps. Read the issue before starting.
+
+**Design specs:** written with an AI assistant, live in `docs/specs/` and are
+committed. They record decisions the code has to honour, and stay true after
+the work lands.
+
+**Plans:** not committed. Still written, to `docs/plans/`, but the directory is
+gitignored. A plan is scaffolding for producing the code and stops being true
+the moment it does, so committing one would leave future readers something to
+reconcile against the code for no benefit.
 
 ---
 

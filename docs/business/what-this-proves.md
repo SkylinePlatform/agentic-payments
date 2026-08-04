@@ -59,19 +59,17 @@ invites overreading more easily than underreading, so each claim below is
 specific — not a general disclaimer.
 
 It does not prove that a real issuer, acquirer, processor or registry
-operator would accept these mandates or signatures. The Credential Provider,
-Merchant, Merchant Payment Processor, agent registry and settlement are all
-mocked, per `../../AGENTS.md`'s Scope section — no real card is ever
-enrolled. What the finished repository proves is that the protocol mechanics
-behave correctly against a stand-in for each of those parties, not that any
-one of them, played for real, would behave the same way.
+operator would accept these mandates or signatures. Every one of those
+parties is stood in for by a mock, so what the finished repository proves is
+that the protocol mechanics behave correctly against a stand-in — not that
+any one of them, played for real, would behave the same way.
+`../architecture/README.md`'s section on what is mocked lists which components
+are stood in for and why each one has to be.
 
-It does not prove anything about Visa's payment infrastructure. TAP is not a
-Visa-rails protocol: verification happens at the merchant edge, and the
-identity layer proves only that a request carries a signature checked against
-a registered agent's key — nothing about which rails a payment travels over
-afterwards. Visa operates the production trusted-agent directory that this
-project's registry stands in for, but a directory is not a settlement rail.
+It does not prove anything about Visa's payment infrastructure. TAP is an
+identity layer verified at the merchant edge, so a verified request says
+nothing about which rails the payment afterwards travels over —
+`../protocols/tap.md` sets out that topology and how firmly it is sourced.
 
 It does not prove anything about stablecoin or other digital-token rails.
 AP2 is payment-method agnostic, and stablecoin funding instruments — USDC and
@@ -90,11 +88,9 @@ The instrument type exists and composes architecturally with the other two;
 it is not exercised end to end the way they are.
 
 It does not prove that the model generalises beyond the one built scenario.
-`use-cases.md` describes three further cases — a Human Present retail
-purchase, a subscription, a B2B procurement — each worked through as one
-paragraph and one sequence diagram, none of them implemented. They show the
-model was designed with those cases in mind; they are not evidence that it
-handles them.
+The three further cases in `use-cases.md` are described and not implemented:
+they show the model was designed with them in mind, which is not evidence
+that it handles them.
 
 Nothing here is PCI-compliant, and nothing here moves real money. No card
 data is handled, no real settlement occurs, and no part of this repository

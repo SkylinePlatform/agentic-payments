@@ -2,9 +2,10 @@
 
 **This document answers:** what the system does — one scenario built end to
 end, three more described.
-**It does not contain:** *explanations* of technical mechanisms — naming one is
-allowed where it says what a demo beat proves, with a link to
-`../architecture/README.md` or `../protocols/`.
+**It does not contain:** how any beat works underneath, or what the finished
+system may be claimed to establish — `../protocols/` covers the first,
+`what-this-proves.md` the second. A beat here says what it demonstrates; a
+mechanism is named only where the name is what makes the demonstration legible.
 
 ## The built scenario
 
@@ -69,11 +70,15 @@ sequenceDiagram
 
 ## Described, not built
 
-Three further cases show the same model applies beyond one flight booking.
-Each is worked through as far as one paragraph and one sequence diagram — none
-of them is implemented. Their amounts are written in major units; the
-minor-unit convention belongs to the built scenario above, where the exact
-integers are what a screenshot has to match.
+None of the three below is implemented. Each is worked as far as one paragraph
+and one sequence diagram and no further, which shows the model was designed
+with these cases in mind — not that it handles them. They are here because a
+model that only ever fits the scenario it was designed against has not been
+tested by anything.
+
+Their amounts are written in major units. The minor-unit convention belongs to
+the built scenario above, where the exact integers are what a screenshot has to
+match.
 
 ### Human Present retail purchase
 
@@ -98,8 +103,6 @@ sequenceDiagram
     A->>M: signed approval
     M-->>A: receipt
 ```
-
-Described here, not built.
 
 ### Subscription
 
@@ -127,8 +130,6 @@ sequenceDiagram
     Note over U,M: mandate expires — no further payment is possible
 ```
 
-Described here, not built.
-
 ### B2B procurement
 
 An agent acts inside a corporate approval limit, where the constraint set
@@ -151,5 +152,3 @@ sequenceDiagram
     A->>M: order from an approved supplier
     M-->>A: accepted + receipt
 ```
-
-Described here, not built.
