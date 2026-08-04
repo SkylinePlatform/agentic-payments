@@ -35,20 +35,35 @@ const ReplayedHeader = "Idempotent-Replayed"
 // with extra steps.
 const defaultMaxBody = 1 << 20 // 1 MiB
 
-// response is what gets remembered: enough to reproduce the answer byte for
-// byte, and nothing else.
+// defaultMaxRemembered caps how much of a response will be held for replay.
+//
+// The request side is capped for a reason, and the response side is the same
+// reason seen from the other end: a remembered response is held for the whole
+// retention window, multiplied by the record limit, so an uncapped one turns
+// the store's bound on record *count* into no bound on memory at all. A
+// response over the cap is still sent in full — it is only the remembered copy
+// that is given up, which costs a retry its replay and nothing else.
+const defaultMaxRemembered = 1 << 20 // 1 MiB
+
+// response is what gets remembered: enough to reproduce the answer the first
+// caller got, and nothing else.
+//
+// The headers are kept in full rather than the content type alone. A 201 whose
+// Location header vanished on replay is not the same answer, and picking which
+// headers matter would mean guessing what every future handler sets.
 type response struct {
-	status      int
-	contentType string
-	body        []byte
+	status int
+	header http.Header
+	body   []byte
 }
 
 // Idempotency is the middleware. It owns its store rather than taking one,
 // because two services sharing a store would let one service's key collide
 // with another's.
 type Idempotency struct {
-	records *store.Idempotency[response]
-	maxBody int64
+	records       *store.Idempotency[response]
+	maxBody       int64
+	maxRemembered int
 }
 
 // NewIdempotency builds the middleware. opts are passed through to the
@@ -58,7 +73,11 @@ func NewIdempotency(clk authz.Clock, opts ...store.Option) (*Idempotency, error)
 	if err != nil {
 		return nil, err
 	}
-	return &Idempotency{records: records, maxBody: defaultMaxBody}, nil
+	return &Idempotency{
+		records:       records,
+		maxBody:       defaultMaxBody,
+		maxRemembered: defaultMaxRemembered,
+	}, nil
 }
 
 // Wrap returns h guarded by the idempotency rules.
@@ -83,6 +102,12 @@ func (m *Idempotency) Wrap(h http.Handler) http.Handler {
 
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, m.maxBody))
 		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				write(w, problem.New(generated.ErrorCodeRequestTooLarge,
+					fmt.Sprintf("the body is larger than the %d bytes this endpoint reads", tooLarge.Limit)))
+				return
+			}
 			write(w, problem.New(generated.ErrorCodeRequestMalformed,
 				fmt.Sprintf("could not read the request body: %v", err)))
 			return
@@ -92,20 +117,37 @@ func (m *Idempotency) Wrap(h http.Handler) http.Handler {
 
 		fingerprint := fingerprintOf(r.Method, r.URL.RequestURI(), body)
 
-		switch stored, found, err := m.records.Lookup(key, fingerprint); {
+		switch stored, replayed, err := m.records.Claim(key, fingerprint); {
 		case errors.Is(err, store.ErrConflict):
 			write(w, problem.New(generated.ErrorCodeIdempotencyConflict,
 				fmt.Sprintf("%s %q was used for a different request", KeyHeader, key)))
 			return
+		case errors.Is(err, store.ErrInFlight):
+			// Not the caller's mistake: their retry overtook the original,
+			// which is what a retry after a timeout does. Refusing is the whole
+			// point — waving it through is how one payment becomes two.
+			write(w, problem.New(generated.ErrorCodeIdempotencyInFlight,
+				fmt.Sprintf("%s %q is held by an attempt that has not finished; retry", KeyHeader, key)))
+			return
 		case err != nil:
+			// Including ErrAtCapacity, which is why the claim happens before
+			// the handler runs: a verifier that cannot promise the operation
+			// will not run twice refuses to run it at all, rather than running
+			// it and discovering afterwards that it cannot remember it.
 			write(w, problem.New(generated.ErrorCodeVerifierUnavailable, err.Error()))
 			return
-		case found:
+		case replayed:
 			replay(w, stored)
 			return
 		}
 
-		rec := &recorder{ResponseWriter: w, status: http.StatusOK}
+		// The key is ours from here. Release gives it back if we never
+		// complete it, and does nothing once we have — so a handler that
+		// panics unwinds through this without stranding the key for the rest
+		// of the window.
+		defer m.records.Release(key)
+
+		rec := &recorder{ResponseWriter: w, status: http.StatusOK, limit: m.maxRemembered}
 		h.ServeHTTP(rec, r)
 
 		// A 5xx is not remembered. Idempotency exists to stop an operation
@@ -113,13 +155,13 @@ func (m *Idempotency) Wrap(h http.Handler) http.Handler {
 		// reasons has not happened once — remembering it would turn a
 		// transient fault into a permanent one for the life of the window,
 		// with the caller holding a key that can now never succeed.
-		if rec.status >= http.StatusInternalServerError {
+		if rec.status >= http.StatusInternalServerError || rec.overflowed {
 			return
 		}
-		if err := m.records.Remember(key, fingerprint, response{
-			status:      rec.status,
-			contentType: rec.Header().Get("Content-Type"),
-			body:        rec.body.Bytes(),
+		if err := m.records.Complete(key, response{
+			status: rec.status,
+			header: rec.Header().Clone(),
+			body:   rec.body.Bytes(),
 		}); err != nil {
 			// The answer has already gone out; there is nothing to change
 			// about this response. What is lost is the guarantee for the next
@@ -165,10 +207,11 @@ func fingerprintOf(method, target string, body []byte) string {
 
 // replay writes a remembered response.
 func replay(w http.ResponseWriter, stored response) {
-	if stored.contentType != "" {
-		w.Header().Set("Content-Type", stored.contentType)
+	dst := w.Header()
+	for name, values := range stored.header {
+		dst[name] = append([]string(nil), values...)
 	}
-	w.Header().Set(ReplayedHeader, "true")
+	dst.Set(ReplayedHeader, "true")
 	w.WriteHeader(stored.status)
 	_, _ = w.Write(stored.body)
 }
@@ -180,11 +223,18 @@ func write(w http.ResponseWriter, p problem.Problem) {
 }
 
 // recorder captures what a handler wrote so it can be remembered.
+//
+// It copies rather than intercepts: everything reaches the real
+// ResponseWriter as the handler writes it, so wrapping a handler never changes
+// what the first caller receives. Only the remembered copy can be given up,
+// and only by exceeding limit.
 type recorder struct {
 	http.ResponseWriter
-	status  int
-	body    bytes.Buffer
-	written bool
+	status     int
+	body       bytes.Buffer
+	limit      int
+	overflowed bool
+	written    bool
 }
 
 func (r *recorder) WriteHeader(status int) {
@@ -202,6 +252,31 @@ func (r *recorder) Write(b []byte) (int, error) {
 		// rather than remembering a zero status.
 		r.WriteHeader(http.StatusOK)
 	}
-	r.body.Write(b)
+	if !r.overflowed {
+		if r.body.Len()+len(b) > r.limit {
+			// Past the cap the copy is worthless — a truncated body replayed
+			// as if it were the answer would be worse than not replaying at
+			// all — so drop what was buffered and stop copying.
+			r.overflowed = true
+			r.body.Reset()
+		} else {
+			r.body.Write(b)
+		}
+	}
 	return r.ResponseWriter.Write(b)
+}
+
+// Flush passes through to the underlying writer when it supports flushing.
+//
+// Wrapping a ResponseWriter silently drops the optional interfaces it
+// implements, and dropping this one turns a streaming handler into one whose
+// output arrives only when the buffer decides. The copy is unaffected: it is
+// taken as the bytes pass, so a response can be both flushed and remembered.
+func (r *recorder) Flush() {
+	if !r.written {
+		r.WriteHeader(http.StatusOK)
+	}
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }

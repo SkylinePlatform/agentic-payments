@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,18 +23,36 @@ var base = time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 // counter is a handler that records how many times it actually ran. Every test
 // here is ultimately about that number.
 type counter struct {
-	runs   int
+	runs   atomic.Int64
 	status int
 	body   string
 	// echoBody, when set, writes back what it read, which is how the tests
 	// check the handler can still read a body the middleware already consumed.
 	echoBody bool
+	// headers are set before the status line, so a test can check what
+	// survives a replay.
+	headers map[string]string
+	// entered and release, when set, hold the *first* request inside the
+	// handler while another one arrives.
+	//
+	// Only the first: a handler that blocked every run would turn a middleware
+	// that wrongly admits the second request into a test that deadlocks rather
+	// than one that fails, and a hang says far less than an assertion does.
+	entered chan struct{}
+	release chan struct{}
 }
 
 func (c *counter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	c.runs++
+	run := c.runs.Add(1)
 	read, _ := io.ReadAll(r.Body)
+	if c.entered != nil && run == 1 {
+		c.entered <- struct{}{}
+		<-c.release
+	}
 	w.Header().Set("Content-Type", "application/json")
+	for k, v := range c.headers {
+		w.Header().Set(k, v)
+	}
 	if c.status != 0 {
 		w.WriteHeader(c.status)
 	}
@@ -90,8 +110,8 @@ func TestSafeMethodsPassThrough(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Errorf("status = %d, want 200 — a safe method needs no key", rec.Code)
 			}
-			if h.runs != 1 {
-				t.Errorf("handler ran %d times, want 1", h.runs)
+			if h.runs.Load() != 1 {
+				t.Errorf("handler ran %d times, want 1", h.runs.Load())
 			}
 		})
 	}
@@ -114,8 +134,8 @@ func TestMissingKeyIsRejected(t *testing.T) {
 	}
 	// The point of refusing rather than deduplicating on the body: the
 	// operation must not have happened.
-	if h.runs != 0 {
-		t.Errorf("handler ran %d times, want 0", h.runs)
+	if h.runs.Load() != 0 {
+		t.Errorf("handler ran %d times, want 0", h.runs.Load())
 	}
 }
 
@@ -131,8 +151,8 @@ func TestRetryReplaysWithoutRerunning(t *testing.T) {
 	second := httptest.NewRecorder()
 	wrapped.ServeHTTP(second, post("k1", "/checkout", `{"amount":100}`))
 
-	if h.runs != 1 {
-		t.Fatalf("handler ran %d times, want 1 — the retry re-executed the operation", h.runs)
+	if h.runs.Load() != 1 {
+		t.Fatalf("handler ran %d times, want 1 — the retry re-executed the operation", h.runs.Load())
 	}
 	if first.Body.String() != second.Body.String() {
 		t.Errorf("replayed body %q, want %q", second.Body, first.Body)
@@ -181,8 +201,8 @@ func TestSameKeyDifferentRequestConflicts(t *testing.T) {
 			if p := problemOf(t, rec); p.Code != generated.ErrorCodeIdempotencyConflict {
 				t.Errorf("code = %q, want %q", p.Code, generated.ErrorCodeIdempotencyConflict)
 			}
-			if h.runs != 1 {
-				t.Errorf("handler ran %d times, want 1 — the conflicting request was executed", h.runs)
+			if h.runs.Load() != 1 {
+				t.Errorf("handler ran %d times, want 1 — the conflicting request was executed", h.runs.Load())
 			}
 		})
 	}
@@ -204,8 +224,8 @@ func TestServerErrorIsNotRemembered(t *testing.T) {
 			t.Fatalf("status = %d, want 500", rec.Code)
 		}
 	}
-	if h.runs != 2 {
-		t.Errorf("handler ran %d times, want 2 — a transient failure was cached", h.runs)
+	if h.runs.Load() != 2 {
+		t.Errorf("handler ran %d times, want 2 — a transient failure was cached", h.runs.Load())
 	}
 
 	// And once it succeeds, that is what gets remembered.
@@ -213,8 +233,8 @@ func TestServerErrorIsNotRemembered(t *testing.T) {
 	for range 2 {
 		wrapped.ServeHTTP(httptest.NewRecorder(), post("k1", "/checkout", `{"amount":100}`))
 	}
-	if h.runs != 3 {
-		t.Errorf("handler ran %d times, want 3 — the success was not remembered", h.runs)
+	if h.runs.Load() != 3 {
+		t.Errorf("handler ran %d times, want 3 — the success was not remembered", h.runs.Load())
 	}
 }
 
@@ -233,8 +253,8 @@ func TestClientErrorIsRemembered(t *testing.T) {
 			t.Fatalf("status = %d, want 403", rec.Code)
 		}
 	}
-	if h.runs != 1 {
-		t.Errorf("handler ran %d times, want 1 — a settled rejection was re-evaluated", h.runs)
+	if h.runs.Load() != 1 {
+		t.Errorf("handler ran %d times, want 1 — a settled rejection was re-evaluated", h.runs.Load())
 	}
 }
 
@@ -264,12 +284,16 @@ func TestRecordLapses(t *testing.T) {
 	c.Advance(2 * time.Hour)
 	wrapped.ServeHTTP(httptest.NewRecorder(), post("k1", "/checkout", `{"amount":100}`))
 
-	if h.runs != 2 {
-		t.Errorf("handler ran %d times, want 2 — the key should be free past its window", h.runs)
+	if h.runs.Load() != 2 {
+		t.Errorf("handler ran %d times, want 2 — the key should be free past its window", h.runs.Load())
 	}
 }
 
-func TestCapacityDoesNotBreakTheAnswer(t *testing.T) {
+// TestCapacityRefusesBeforeTheOperationRuns is why the key is claimed up
+// front. A store that cannot remember the answer cannot promise the operation
+// will not run twice, and the only moment that promise can still be declined
+// is before the operation happens.
+func TestCapacityRefusesBeforeTheOperationRuns(t *testing.T) {
 	t.Parallel()
 
 	h := &counter{body: `{"ok":true}`}
@@ -277,16 +301,208 @@ func TestCapacityDoesNotBreakTheAnswer(t *testing.T) {
 
 	wrapped.ServeHTTP(httptest.NewRecorder(), post("k1", "/checkout", `{"amount":1}`))
 
-	// The store is full, so this response cannot be remembered. The caller
-	// still gets its answer — the operation ran, and failing it afterwards
-	// would be worse than losing the retry guarantee.
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, post("k2", "/checkout", `{"amount":2}`))
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rec.Code)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
 	}
-	if h.runs != 2 {
-		t.Errorf("handler ran %d times, want 2", h.runs)
+	if p := problemOf(t, rec); p.Code != generated.ErrorCodeVerifierUnavailable {
+		t.Errorf("code = %q, want %q", p.Code, generated.ErrorCodeVerifierUnavailable)
+	}
+	if h.runs.Load() != 1 {
+		t.Errorf("handler ran %d times, want 1 — an operation ran that could not be remembered", h.runs.Load())
+	}
+}
+
+// TestRetryWhileTheFirstIsStillRunning is the case a lookup-then-remember
+// middleware waves through. A client whose request times out retries while the
+// original is still in the handler; if both are allowed to proceed, the
+// operation happens twice, which is the whole thing this middleware exists to
+// prevent.
+func TestRetryWhileTheFirstIsStillRunning(t *testing.T) {
+	t.Parallel()
+
+	h := &counter{
+		body:    `{"receipt":"abc"}`,
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	wrapped, _ := wrap(t, h)
+
+	first := httptest.NewRecorder()
+	var wg sync.WaitGroup
+	wg.Go(func() { wrapped.ServeHTTP(first, post("k1", "/checkout", `{"amount":100}`)) })
+
+	<-h.entered // the first request is inside the handler and holding the key
+
+	retry := httptest.NewRecorder()
+	wrapped.ServeHTTP(retry, post("k1", "/checkout", `{"amount":100}`))
+
+	if retry.Code != http.StatusConflict {
+		t.Errorf("status = %d, want 409", retry.Code)
+	}
+	if p := problemOf(t, retry); p.Code != generated.ErrorCodeIdempotencyInFlight {
+		t.Errorf("code = %q, want %q", p.Code, generated.ErrorCodeIdempotencyInFlight)
+	}
+
+	close(h.release)
+	wg.Wait()
+
+	if h.runs.Load() != 1 {
+		t.Errorf("handler ran %d times, want 1 — the retry re-executed an operation still in flight", h.runs.Load())
+	}
+
+	// Once the original finishes, the same retry replays instead of running.
+	after := httptest.NewRecorder()
+	wrapped.ServeHTTP(after, post("k1", "/checkout", `{"amount":100}`))
+	if h.runs.Load() != 1 {
+		t.Errorf("handler ran %d times after completion, want 1", h.runs.Load())
+	}
+	if after.Body.String() != first.Body.String() {
+		t.Errorf("replayed %q, want %q", after.Body, first.Body)
+	}
+}
+
+// TestPanickingHandlerFreesTheKey covers the same rule on the path that does
+// not return normally. net/http recovers a handler panic per connection, so
+// the key has to be given back while unwinding or it is stranded for the
+// window.
+func TestPanickingHandlerFreesTheKey(t *testing.T) {
+	t.Parallel()
+
+	panicking := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("handler exploded")
+	})
+	c := clock.NewFake(base)
+	m, err := transport.NewIdempotency(c)
+	if err != nil {
+		t.Fatalf("NewIdempotency: %v", err)
+	}
+
+	func() {
+		defer func() { _ = recover() }()
+		m.Wrap(panicking).ServeHTTP(httptest.NewRecorder(), post("k1", "/checkout", `{"amount":100}`))
+	}()
+
+	h := &counter{body: `{"ok":true}`}
+	rec := httptest.NewRecorder()
+	m.Wrap(h).ServeHTTP(rec, post("k1", "/checkout", `{"amount":100}`))
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 — the panicking attempt stranded the key", rec.Code)
+	}
+	if h.runs.Load() != 1 {
+		t.Errorf("handler ran %d times, want 1", h.runs.Load())
+	}
+}
+
+// TestReplayKeepsEveryHeader covers the fidelity claim. A 201 whose Location
+// header vanished on replay is not the answer the first caller got, and a
+// client following it would be sent nowhere.
+func TestReplayKeepsEveryHeader(t *testing.T) {
+	t.Parallel()
+
+	h := &counter{
+		status:  http.StatusCreated,
+		body:    `{"receipt":"abc"}`,
+		headers: map[string]string{"Location": "/receipts/abc", "ETag": `"v1"`},
+	}
+	wrapped, _ := wrap(t, h)
+
+	first := httptest.NewRecorder()
+	wrapped.ServeHTTP(first, post("k1", "/checkout", `{"amount":100}`))
+
+	second := httptest.NewRecorder()
+	wrapped.ServeHTTP(second, post("k1", "/checkout", `{"amount":100}`))
+
+	for _, name := range []string{"Location", "ETag", "Content-Type"} {
+		if got, want := second.Header().Get(name), first.Header().Get(name); got != want {
+			t.Errorf("replayed %s = %q, want %q", name, got, want)
+		}
+	}
+	if second.Code != http.StatusCreated {
+		t.Errorf("replayed status = %d, want 201", second.Code)
+	}
+}
+
+// TestOversizedBodyIsRejectedAsSuch covers the status the caller is owed. A
+// body over the cap is not malformed — it parses fine and is simply larger
+// than this endpoint reads — and answering 400 would send its sender looking
+// for a syntax error that is not there.
+func TestOversizedBodyIsRejectedAsSuch(t *testing.T) {
+	t.Parallel()
+
+	h := &counter{body: `{"ok":true}`}
+	wrapped, _ := wrap(t, h)
+
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, post("k1", "/checkout", strings.Repeat("x", (1<<20)+1)))
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", rec.Code)
+	}
+	if p := problemOf(t, rec); p.Code != generated.ErrorCodeRequestTooLarge {
+		t.Errorf("code = %q, want %q", p.Code, generated.ErrorCodeRequestTooLarge)
+	}
+	if h.runs.Load() != 0 {
+		t.Errorf("handler ran %d times, want 0", h.runs.Load())
+	}
+}
+
+// TestOversizedResponseIsNotRemembered covers the cap on the other side. The
+// caller still gets the whole answer; what is given up is the remembered copy,
+// because holding an unbounded response for the whole retention window turns a
+// bound on record count into no bound on memory.
+func TestOversizedResponseIsNotRemembered(t *testing.T) {
+	t.Parallel()
+
+	big := strings.Repeat("x", (1<<20)+1)
+	h := &counter{body: big}
+	wrapped, _ := wrap(t, h)
+
+	first := httptest.NewRecorder()
+	wrapped.ServeHTTP(first, post("k1", "/checkout", `{"amount":100}`))
+	if first.Body.Len() != len(big) {
+		t.Fatalf("the caller got %d bytes, want %d — the cap truncated the real answer",
+			first.Body.Len(), len(big))
+	}
+
+	wrapped.ServeHTTP(httptest.NewRecorder(), post("k1", "/checkout", `{"amount":100}`))
+	if h.runs.Load() != 2 {
+		t.Errorf("handler ran %d times, want 2 — an oversized response was remembered anyway", h.runs.Load())
+	}
+}
+
+// TestFlushReachesTheUnderlyingWriter guards an optional interface that
+// wrapping a ResponseWriter drops by default. Losing it does not fail a test
+// that only reads the finished body — it fails a streaming handler in
+// production, quietly.
+func TestFlushReachesTheUnderlyingWriter(t *testing.T) {
+	t.Parallel()
+
+	flushed := make(chan struct{}, 1)
+	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		f, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("the handler was given a writer that cannot flush")
+			return
+		}
+		_, _ = w.Write([]byte(`{"partial":true}`))
+		f.Flush()
+		flushed <- struct{}{}
+	})
+	wrapped, _ := wrap(t, h)
+
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, post("k1", "/checkout", `{"amount":100}`))
+
+	select {
+	case <-flushed:
+	default:
+		t.Fatal("the handler never reached its flush")
+	}
+	if !rec.Flushed {
+		t.Error("the flush did not reach the underlying writer")
 	}
 }

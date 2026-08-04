@@ -131,9 +131,19 @@ type rendering struct {
 // be rejected as ill-formed, not refused as impermissible.
 var renderings = map[generated.ErrorCode]rendering{
 	// Request handling.
-	generated.ErrorCodeRequestMalformed:      {http.StatusBadRequest, "Request malformed"},
+	generated.ErrorCodeRequestMalformed: {http.StatusBadRequest, "Request malformed"},
+	// 413. Go still spells the constant with RFC 7231's name; RFC 9110 §15.5.14
+	// renamed the reason phrase to "Content Too Large" and the title follows
+	// the current spec rather than the identifier.
+	generated.ErrorCodeRequestTooLarge:       {http.StatusRequestEntityTooLarge, "Content too large"},
 	generated.ErrorCodeIdempotencyKeyMissing: {http.StatusBadRequest, "Idempotency key required"},
 	generated.ErrorCodeIdempotencyConflict:   {http.StatusConflict, "Idempotency key reused for a different request"},
+	// Also 409, and deliberately not 429: nothing is rate-limiting the caller
+	// and slowing down would not help. The request conflicts with the state the
+	// key is already in — RFC 9110 §15.5.10's own description — and the
+	// distinct code is what tells a client to wait for its first attempt
+	// rather than to correct a mistake it did not make.
+	generated.ErrorCodeIdempotencyInFlight: {http.StatusConflict, "Idempotency key held by an unfinished attempt"},
 
 	// Securing format.
 	generated.ErrorCodeMandateMalformed:    {http.StatusBadRequest, "Mandate malformed"},

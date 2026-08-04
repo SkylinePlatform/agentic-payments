@@ -88,7 +88,30 @@ the decision below is why that is wrong.
    risk to hedge against; it is the specific bug shape this decision exists to
    rule out, which is why `platform/store` holds two record types behind two
    names rather than one behind a shared boolean.
-6. **Retention is time-bounded, with a configurable window and bounded
+6. **The key is claimed before the operation runs, not recorded after it.**
+   The obvious shape — ask whether the key is known, run the operation, store
+   the result — answers the sequential retry and misses the concurrent one. A
+   client whose request times out retries while the first attempt is still
+   running: both ask, both are told the key is unknown, and the operation
+   happens twice. The window in which that holds is the duration of the
+   operation, which is exactly when a client gives up waiting and retries, so
+   it is the likely case rather than a rare interleaving.
+
+   A claim therefore creates the record before the work starts, in flight
+   until it is completed or given back. A second request arriving against a
+   claimed key is refused with `409` and its own code —
+   `idempotency_in_flight`, distinct from `idempotency_conflict` because the
+   caller has made no mistake and the remedy is to wait rather than to correct
+   anything. An attempt that produces nothing worth remembering — a 5xx, a
+   panic — gives the key back, so a failure does not lock the caller out of
+   retrying for the rest of the window.
+
+   This is also what makes exhaustion answerable. Capacity is refused at the
+   claim, before anything has happened, so a verifier that cannot promise the
+   operation will not run twice declines to run it at all. Recording after the
+   fact leaves only the choice between answering without a record and failing a
+   request that already succeeded, and both are wrong.
+7. **Retention is time-bounded, with a configurable window and bounded
    memory, for both types.** `crypto.Store`'s `idem` map does not do this
    today — it holds a record forever, because a key store only ever handles
    key generation and rotation, at a volume where that was never a problem.
@@ -125,11 +148,16 @@ the decision below is why that is wrong.
   on an eviction responsibility `crypto.Store`'s inline map has never needed.
   That is a real piece of new work the generalisation creates, not a detail
   the existing code already handles and this ADR merely describes.
-- `contracts/` is not involved. Unlike ADR 0001's error taxonomy, an
-  idempotency key and its fingerprint are not part of the canonical model
-  AP2 or TAP define — they are this repository's own operational bookkeeping
-  for the HTTP transport ADR 0001 already settled on, so they live in
-  `platform/` alone.
+- The mechanism stays out of `contracts/`; its rejection reasons do not. An
+  idempotency key and its fingerprint are not part of the canonical model AP2
+  or TAP define — they are this repository's own operational bookkeeping for
+  the HTTP transport ADR 0001 settled on, so they live in `platform/` alone.
+  But *why a request was refused* is canonical model under ADR 0001, and this
+  design refuses for three reasons rather than two, so `idempotency_in_flight`
+  joins `idempotency_key_missing` and `idempotency_conflict` in the error
+  taxonomy. `request_too_large` lands there for the same reason: capping the
+  body that gets fingerprinted creates a rejection, and a rejection without a
+  code is one a receipt cannot record.
 
 ## Rejected alternatives
 
@@ -141,6 +169,17 @@ failure. A merged implementation is forced to pick one answer, which makes it
 silently wrong for whichever feature did not get to pick. This was the
 central risk this ADR was written to close off, not a minor implementation
 detail.
+
+**Record the outcome after the operation, and accept that concurrent retries
+both execute.** Rejected, and it is the alternative this ADR most nearly
+shipped: it is simpler, it is what `crypto.Store` does today, and it passes
+every test written against sequential retries. It fails the case the mechanism
+exists for. A duplicate charge caused by a client retrying a request that had
+not finished is indistinguishable, afterwards, from one caused by having no
+idempotency at all — the guarantee either holds while the operation is running
+or it is not a guarantee. `crypto.Store` escapes this only because `Generate`
+and `Rotate` hold their own lock across the whole call, which an HTTP handler
+doing I/O cannot.
 
 **No caller-supplied key; the server deduplicates on a hash of the request
 alone.** Rejected, and already rejected by the code this ADR generalises:
