@@ -238,9 +238,12 @@ core from *importing* adapters, not from being AP2-shaped. `contracts/README.md`
 records where the line falls and why.
 
 `make generate` needs Go **and Node** — the TypeScript half runs through npm.
-Nothing else does: `make check`, the gate every task has to pass, regenerates
-only the Go half and is pure Go. The TypeScript half is generated in CI, so
-Go-only work needs no Node toolchain and cross-language drift is still caught.
+So do `make generate-ts`, which is that half on its own, and `make diagrams`,
+which drives a headless Chromium through `@mermaid-js/mermaid-cli`. Nothing on
+the path to a green build does: `make check`, the gate every task has to pass,
+regenerates only the Go half and is pure Go. The TypeScript half is generated in
+CI, so Go-only work needs no Node toolchain and cross-language drift is still
+caught.
 
 The Go generator is pinned in `contracts/tools/go.mod`, deliberately not in
 `backend/go.mod` — a code generator is not a dependency of the thing it
@@ -300,13 +303,15 @@ make vectors          # conformance suite against golden vectors
 make generate         # regenerate Go and TS types from contracts/  ⟵ needs Node
 make generate-ts      # the TypeScript half on its own              ⟵ needs Node
 make generate-verify  # prove generation is reproducible and touches nothing tracked
+make diagrams         # export inline mermaid from docs/ to SVG     ⟵ needs Node
 ```
 
-**`make check` needs only Go.** Node is required by `make generate` and
-`make generate-ts`, and by nothing else. `check` regenerates the *Go* half of
-the canonical model before linting — testing a tree whose generated half came
-from an older schema checks the wrong thing — but it stops there, so work that
-never touches the frontend never needs npm.
+**`make check` needs only Go.** Node is required by `make generate`,
+`make generate-ts` and `make diagrams` — the last of which pulls a headless
+Chromium, which is exactly why it was kept out of `check`. `check` regenerates
+the *Go* half of the canonical model before linting — testing a tree whose
+generated half came from an older schema checks the wrong thing — but it stops
+there, so work that touches neither the frontend nor a diagram never needs npm.
 
 **`make check` is no longer the whole of CI.** It is the local gate; CI runs
 three jobs, and the *Contracts* job additionally runs `make generate-verify`,

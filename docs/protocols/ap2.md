@@ -78,6 +78,14 @@ Crossing the two mandate types with the two states gives four objects, and
 `checkout_mandate_open.json`, `payment_mandate.json`,
 `payment_mandate_open.json`.
 
+**An open mandate is not the Intent Mandate renamed.** The Intent Mandate was a
+mandate *type* in v0.1, a third object standing beside Cart and Payment. Open
+and closed are not types at all — they are states that each of the two v0.2
+types occupies, which is why crossing them yields the four schemas above rather
+than a third file. A reader carrying the v0.1 model forward goes looking for an
+object and has to find a state instead: a different mechanism, not a new name
+for the same one.
+
 Two further points the specification makes about open mandates:
 
 - Expiry should be the smallest value that lets the agent complete the task it
@@ -218,6 +226,15 @@ sequenceDiagram
     M-->>A: accepted + Checkout Receipt
 ```
 
+That sequence is the **authorisation leg only**, and stops where the open
+mandate's distinctive work is done. The payment leg is not different in this
+mode: from the Payment Mandate onward — Credential Provider, scoped
+credential, MPP, Payment Receipt — it is identical to the Human Present
+diagram above, and is left out here rather than drawn a second time. The
+built scenario in `../business/use-cases.md` runs to the end, which is why its
+beat 7 has the Credential Provider returning a scoped token and its beat 9 has
+both receipts signed.
+
 **The rejection at 21000 is refused by the merchant, not by the agent.** An
 agent that skipped its own check, or one whose model hallucinated that 21000
 was under the cap, would fail at exactly the same point and in exactly the same
@@ -268,7 +285,7 @@ Three traps sit on this one value.
 
 **Recompute, never trust.** Verification must recompute the hash of the
 Checkout JWT it holds and compare the result to the `checkout_hash` claim as
-presented. A verifier that reads the claim and believes it has verified nothing
+presented. A verifier that reads the claim and believes it, has verified nothing
 at all: the claim is written by the party being checked. Issue #5 states the
 rule directly, and issue #18 repeats it as step 2 of dispute-time verification,
 where the recomputation is independent by construction.

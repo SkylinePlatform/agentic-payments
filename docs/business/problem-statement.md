@@ -1,7 +1,9 @@
 # Problem Statement
 
 **This document answers:** why fragmentation matters, and to whom.
-**It does not contain:** technical detail — see `../architecture/README.md`.
+**It does not contain:** *explanations* of technical mechanisms — naming one is
+allowed where it says what a demo beat proves, with a link to
+`../architecture/README.md`.
 
 ## Fragmentation predates AI
 

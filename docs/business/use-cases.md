@@ -2,8 +2,9 @@
 
 **This document answers:** what the system does — one scenario built end to
 end, three more described.
-**It does not contain:** technical detail — see `../architecture/README.md`
-and `../protocols/`.
+**It does not contain:** *explanations* of technical mechanisms — naming one is
+allowed where it says what a demo beat proves, with a link to
+`../architecture/README.md` or `../protocols/`.
 
 ## The built scenario
 
@@ -70,7 +71,9 @@ sequenceDiagram
 
 Three further cases show the same model applies beyond one flight booking.
 Each is worked through as far as one paragraph and one sequence diagram — none
-of them is implemented.
+of them is implemented. Their amounts are written in major units; the
+minor-unit convention belongs to the built scenario above, where the exact
+integers are what a screenshot has to match.
 
 ### Human Present retail purchase
 
@@ -108,14 +111,18 @@ authority ends on its own, without anyone having to revoke it.
 sequenceDiagram
     actor U as User
     participant A as Agent
+    participant S as Trusted Surface
     participant M as Merchant
-    U->>A: approve: this service, monthly, max $30, until December
-    Note over A: one open mandate, reused each period
+    U->>A: "pay for this service every month, until December"
+    A->>S: this service · monthly · max $30 · until December
+    S->>U: approve?
+    U->>S: approve and sign
+    Note over A,M: one open mandate, reused each period
     loop each billing period, until expiry
         M->>A: invoice
-        A->>A: within the approved recurrence and cap?
-        A->>M: pay
-        M-->>A: receipt
+        A->>M: pay this period's invoice
+        M->>M: within the approved recurrence and cap?
+        M-->>A: accepted + receipt
     end
     Note over U,M: mandate expires — no further payment is possible
 ```
@@ -136,7 +143,7 @@ sequenceDiagram
     participant P as Policy owner
     participant M as Supplier
     E->>A: "order 40 laptops"
-    A->>P: category IT · max EUR 60000 · approved suppliers only
+    A->>P: category IT · max €60,000 · approved suppliers only
     P->>P: within delegated authority?
     P-->>A: signed open mandate
     A->>M: order

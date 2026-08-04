@@ -125,11 +125,13 @@ below is why that temptation is wrong.
    today — it holds a record forever, because a key store only ever handles
    key generation and rotation, at a volume where that was never a problem.
    Generalised to every state-changing HTTP call across every role, unbounded
-   retention is a slow memory leak, not a simplification. The window is
-   read from the injected `Clock` — `authz.Clock`, the same port
-   `crypto.Store` already takes as a constructor argument — so that eviction
-   is testable by advancing a fake clock rather than by sleeping, matching
-   AGENTS.md's rule that time goes through the injected clock everywhere.
+   retention is a slow memory leak, not a simplification. The window itself is
+   configuration; what it is evaluated against is the injected `Clock` —
+   `authz.Clock`, the same port `crypto.Store` already takes as a constructor
+   argument, and one that exposes nothing but `Now()`. A record's age is that
+   `Now()` less the time the record was written, so eviction is exercised by
+   advancing a fake clock rather than by sleeping, matching AGENTS.md's rule
+   that time goes through the injected clock everywhere.
 
 ## Consequences
 

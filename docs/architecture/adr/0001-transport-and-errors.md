@@ -15,10 +15,11 @@ once, rather than rediscovered separately in each service.
 
 TAP secures a request with RFC 9421 HTTP Message Signatures: the signature
 covers the request as an HTTP message — method, path, headers — not an
-arbitrary payload. `docs/protocols/tap.md` covers the signing mechanism
-itself; the only fact this ADR needs from it is that the thing being signed
-is specifically an HTTP request, and `pkg/httpsig` implements RFC 9421 in
-those terms.
+arbitrary payload, and `pkg/httpsig` implements RFC 9421 in those terms.
+`docs/protocols/tap.md` covers the signing mechanism itself. The fact this
+ADR needs from it is less the signing than the *place*: verification happens
+at the merchant edge, in the bot-mitigation proxy that already sits in front
+of the storefront, and that is a component built to read HTTP requests.
 
 Separately, `contracts/evidence/receipt.json` already states a rule this ADR
 has to satisfy, not one it is inventing: receipts are mandatory in both
@@ -34,10 +35,13 @@ the two will drift the first time someone edits one without the other.
 
 ## Decision
 
-1. **The transport is HTTP.** Not a preference — RFC 9421 signs HTTP
-   messages, so a transport that is not HTTP gives TAP nothing to sign. gRPC
-   and every other RPC framework are ruled out by that fact, not weighed and
-   found wanting on their own merits.
+1. **The transport is HTTP**, and specifically the kind of HTTP an ordinary
+   reverse proxy can read. TAP is verified at the merchant edge, by the
+   bot-mitigation and CDN layer sitting in front of the storefront, and that
+   layer inspects HTTP requests. A transport it cannot inspect is a transport
+   TAP cannot be verified over in the topology TAP assumes. The rejected
+   alternatives below record why this rules out gRPC even though gRPC is
+   itself carried over HTTP/2.
 2. **Payloads are JSON.** Request and response bodies are JSON over HTTP,
    matching what the mandate schemas and `pkg/sdjwt` already assume.
 3. **Errors are RFC 9457 Problem Details**, served as
@@ -87,13 +91,31 @@ the two will drift the first time someone edits one without the other.
 
 ## Rejected alternatives
 
-**Non-HTTP transport (gRPC or similar).** Rejected for the reason already
-given in the Decision section: RFC 9421 signs an HTTP request's method, path
-and headers, so a transport that does not present a request in those terms
-leaves TAP with nothing to sign. This was not HTTP winning a trade-off
-against gRPC's usual advantages — typed contracts, streaming, lower
-overhead. Those advantages were never weighed, because the choice was
-already made the moment TAP's signing scheme was fixed to RFC 9421.
+**gRPC or a similar RPC framework.** Rejected — but not on the grounds that
+RFC 9421 would have nothing to sign. gRPC runs over HTTP/2, and HTTP/2 is
+HTTP: `@method`, `@authority` and `@target-uri` all have values in a gRPC
+call, and so do the header fields a signature covers. Signing one would be
+awkward rather than impossible — every `@method` is POST, so the derived
+component that usually distinguishes a read from a write distinguishes
+nothing; metadata travels in trailers as well as headers; and the framing
+belongs to the framework rather than to the message. Awkward is not a
+rejection.
+
+The constraint that decides it sits one layer out, in where verification
+happens. `docs/protocols/tap.md` and issue #30 both place TAP's verification
+point at the merchant edge — the bot-mitigation proxy or CDN already in front
+of the storefront, which is the component TAP exists to stop blocking
+legitimate agents. Those products terminate and inspect ordinary HTTP
+requests and apply per-route policy to them; they do not parse gRPC frames.
+Choosing gRPC would mean either abandoning the deployment topology TAP's
+reference architecture assumes, or writing the verifying proxy from scratch
+instead of configuring one that already exists.
+
+gRPC's usual advantages are real and were weighed against that. Typed
+contracts this repository already has, from `contracts/`, generated into Go
+and TypeScript alike; streaming and lower per-call overhead are not properties
+a proof of concept moving one booking at a time is short of. None of the three
+buys back a verification point.
 
 **URL API versioning (`/v1/...`).** Rejected. AP2 mandates already carry a
 version inside their SD-JWT credential type — the `vct` suffix, for example

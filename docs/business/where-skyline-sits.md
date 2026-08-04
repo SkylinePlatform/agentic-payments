@@ -8,11 +8,11 @@ that drifts the moment the article changes.
 
 ## The boundary
 
-This repository proves that the layers set out in `../architecture/README.md`
-— identity, authorisation, instrument — interoperate: a real TAP signature
-verified at the merchant edge, a real AP2 mandate constructed, signed and
-verified, both enforced against the one transaction walked through in
-`use-cases.md`. That is the whole of what it proves. The instrument layer is
+This repository proves that the three layers set out in
+`../architecture/README.md` interoperate: a real TAP signature verified at the
+merchant edge, a real AP2 mandate constructed, signed and verified, both
+enforced against the one transaction walked through in `use-cases.md`. That is
+the whole of what it proves. The third layer, the payment instrument, is
 modelled alongside the other two but not integrated into that proof, for the
 reason `../../AGENTS.md`'s Scope section gives: Mastercard Agentic Tokens have
 no self-serve path for a project outside an issuing bank.
