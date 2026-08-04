@@ -10,10 +10,11 @@ that drifts the moment the article changes.
 
 Four issues are closed at the time of writing, and all four sit below the
 protocol layer: module scaffolding, the canonical model in `contracts/`, the
-signing and key infrastructure, and the SD-JWT implementation. They are
-tracked under the Foundations milestone. The Google AP2 and Visa TAP
-milestones — which carry mandate construction, the two adapters and the role
-binaries — are both still open: `backend/internal/adapters/ap2/` and
+signing and key infrastructure, and the SD-JWT implementation. The Google AP2
+and Visa TAP milestones — which carry mandate construction, the two adapters
+and the role binaries — are both still open, as is Foundations, which holds
+the cross-cutting work the architecture decision records specify.
+`backend/internal/adapters/ap2/` and
 `backend/internal/adapters/tap/` each hold nothing but a `doc.go`, and every
 binary under `backend/cmd/` exits printing `not implemented yet`. Nothing
 below this paragraph describes what runs today. It describes what the
