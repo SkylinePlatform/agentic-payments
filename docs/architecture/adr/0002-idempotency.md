@@ -49,10 +49,17 @@ the decision below is why that is wrong.
    this ADR does not settle — the same way ADR 0001 settled where the error
    taxonomy lives without settling what it contains.
 2. **The key travels in an `Idempotency-Key` request header.** The fingerprint
-   is computed over the HTTP method, the path, and the request body — the
-   same shape of computation `crypto.Store` already does over its own call
-   arguments, generalised from Go function arguments to an HTTP request's
+   is computed over the HTTP method, the request target, and the request body
+   — the same shape of computation `crypto.Store` already does over its own
+   call arguments, generalised from Go function arguments to an HTTP request's
    defining fields.
+
+   The target, not the path: a query string is part of what makes a request
+   that request, so a fingerprint blind to it would let `?currency=EUR` be
+   answered with the stored result of `?currency=USD`. That is the exact
+   failure the fingerprint exists to prevent. The three parts are
+   length-prefixed before hashing, so no choice of method, target or body can
+   produce the bytes of a different request's input.
 3. **Same key, same fingerprint: replay the stored response.** The caller gets
    back exactly what the first call produced, without the operation running
    twice — a retried "buy" is not a second purchase.
