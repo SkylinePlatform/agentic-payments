@@ -49,6 +49,22 @@ fmt: ## Apply formatters
 tidy: ## go mod tidy
 	cd $(BACKEND) && $(GO) mod tidy
 
+# The frontend targets need Node, which is why they are not in `check`. The
+# same reasoning as generate-ts: work that never touches the frontend should
+# not need npm installed to pass the local gate.
+#
+# Both depend on generate-ts because src/protocol/generated is not committed —
+# a fresh checkout has no canonical types, and the app imports them. That is
+# the same shape as the Go half, where `check` regenerates before it lints.
+
+.PHONY: frontend
+frontend: generate-ts ## Run the frontend dev server (needs Node)
+	cd $(FRONTEND) && npm run dev
+
+.PHONY: frontend-check
+frontend-check: generate-ts ## Type-check and build the frontend (needs Node)
+	cd $(FRONTEND) && npm run build
+
 # go.mod sits in backend/, so an editor opened at the repository root finds no
 # module, falls back to a GOPATH view, and reports every intra-module import as
 # unresolvable. A go.work listing both modules fixes that, and it stays
