@@ -3,13 +3,27 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "React + Vite + TypeScript UI. Not scaffolded yet — see #20. Today this package exists only to run the TypeScript half of the contracts codegen.",
+  "description": "React + Vite + TypeScript UI. The app shell; the three-lane view, the Mandate Inspector and the Trusted Surface consent screen slot into it — see #20, #21 and #22.",
   "license": "Apache-2.0",
   "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
     "generate": "node scripts/generate-protocol-types.mjs"
   },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.1.1"
+  },
   "devDependencies": {
-    "json-schema-to-typescript": "^15.0.4"
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "json-schema-to-typescript": "^15.0.4",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
   },
   "engines": {
     "node": ">=20"

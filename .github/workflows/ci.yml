@@ -42,6 +42,16 @@ jobs:
         working-directory: backend
         run: go build ./...
 
+      # The other half of the same check. The frontend imports the generated
+      # canonical types, so type-checking it is what proves a schema change
+      # reached TypeScript intact — a Go-only build would let the two languages
+      # drift for as long as nobody opened the app.
+      - name: Frontend type-checks and builds
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
   test:
     name: Build and test
     runs-on: ubuntu-latest
