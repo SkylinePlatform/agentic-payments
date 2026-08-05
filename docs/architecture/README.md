@@ -209,7 +209,6 @@ backend/                ⬅ the Go module root. go.mod lives here, not at the to
     sdjwt/              SD-JWT — public standard, externally importable
 frontend/               React + Vite + TypeScript
 docs/                   architecture, business, protocols, diagrams
-specs/                  written specifications driving implementation
 deploy/                demo.json — the topology `make demo` starts
 ```
 

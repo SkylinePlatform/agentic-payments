@@ -172,15 +172,17 @@ backend/                ⬅ the Go module root. go.mod lives here, not at the to
     sdjwt/              SD-JWT — public standard, externally importable
 frontend/               React + Vite + TypeScript
 docs/                   architecture, business, protocols, diagrams, specs, plans
-specs/                  empty; relationship to docs/specs/ unresolved — issue #49
 deploy/                demo.json — the topology `make demo` starts
 ```
 
-Two directories both promise specifications. `docs/specs/` is real and
-committed — see Conventions. Root `specs/` predates it, holds nothing but a
-`.gitkeep`, and its fate (populate it with something ADRs don't already cover,
-or remove it) is issue #49's to decide, not this document's. Until #49 closes,
-a specification belongs in `docs/specs/`.
+A specification belongs in `docs/specs/` — see Conventions. There is no second
+home for one: a root `specs/` existed from the scaffolding commit, was declared
+in this section as "written specifications driving implementation", and never
+held anything but a `.gitkeep` while every real design decision went to
+`docs/architecture/adr/` or `docs/specs/`. Issue #49 removed it rather than
+inventing a job for it, because a directory a written rule calls load-bearing
+while it sits empty is the same drift this documentation exists to close
+elsewhere.
 
 `pkg/` holds implementations of **public standards** only. Both are genuine gaps
 in the Go ecosystem and are intended to stand alone.

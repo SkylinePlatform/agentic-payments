@@ -106,7 +106,6 @@ backend/
 
 frontend/             React + Vite + TypeScript
 docs/                 architecture, business, protocol notes, diagrams
-specs/                written specifications driving implementation
 deploy/
 ```
 
