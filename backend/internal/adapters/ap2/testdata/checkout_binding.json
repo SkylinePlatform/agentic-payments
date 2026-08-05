@@ -1,0 +1,35 @@
+{
+  "_comment": [
+    "Golden vectors for AP2's checkout_hash, the value that binds a Checkout",
+    "Mandate to the merchant's offer and a Payment Mandate to the same one.",
+    "",
+    "checkout_jwt below is a stand-in for a merchant-signed Checkout JWT. Its",
+    "contents do not matter and are never read: the binding is a digest over",
+    "the compact serialisation as a string, which is what removes any need to",
+    "canonicalise the merchant's JSON.",
+    "",
+    "Each digest is base64url of the hash of those ASCII bytes, unpadded, with",
+    "no algorithm prefix — not 'sha-256:...'. The prefixed form appears nowhere",
+    "in the specification and would be a different value.",
+    "",
+    "Three algorithms are pinned because AP2 ties checkout_hash to the SD-JWT's",
+    "own _sd_alg rather than to a fixed algorithm. A verifier that hardcoded",
+    "sha-256 passes the first row and fails the other two, reporting a hash",
+    "mismatch — which reads as tampering rather than as the bug it is.",
+    "",
+    "These are reproducible by anyone: printf the checkout_jwt value into",
+    "sha256sum and base64url-encode the raw digest."
+  ],
+  "checkout_jwt": "eyJhbGciOiJFUzI1NiJ9.eyJyb3V0ZSI6IkJFRy1QTUkiLCJhbW91bnQiOjE4OTAwfQ.c2ln",
+  "checkout_hash": {
+    "sha-256": "Eo_-w3Yl9o0qA-6XNlNeNHjHpFUWK5zFcGsuIAqtLCw",
+    "sha-384": "DqmRiV3rzeI5OoW_NIesRBHlA0a24kQdhgljyOnItArHPtSHe3W3swj-AdWbPyZO",
+    "sha-512": "tAIOL46aQ4U8DMtkSyZU1MSU6lJHapEVQexLwZMIwvzUSr8q1rmhrhwLSK4g5oYlf3C6lxBJaQFQ3moSQw1G6Q"
+  },
+  "vct": {
+    "checkout_closed": "mandate.checkout.1",
+    "checkout_open": "mandate.checkout.open.1",
+    "payment_closed": "mandate.payment.1",
+    "payment_open": "mandate.payment.open.1"
+  }
+}

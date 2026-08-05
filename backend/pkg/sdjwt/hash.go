@@ -46,15 +46,23 @@ func (h HashAlg) newHash() (func() hash.Hash, error) {
 	}
 }
 
-// digest hashes the US-ASCII bytes of a Disclosure and base64url-encodes the
+// Digest hashes the US-ASCII bytes of encoded and base64url-encodes the
 // result, per RFC 9901 §4.2.3.
 //
 // Two mistakes are easy here and the spec calls out both. The input is the
-// base64url-encoded Disclosure string, not the bytes it encodes — which is
-// what makes the encoding the Issuer chose immutable, and removes any need for
-// JSON canonicalisation. The output is base64url of the digest bytes, not the
-// hex representation of them.
-func (h HashAlg) digest(encoded string) (string, error) {
+// base64url-encoded string, not the bytes it encodes — which is what makes the
+// encoding the Issuer chose immutable, and removes any need for JSON
+// canonicalisation. The output is base64url of the digest bytes, not the hex
+// representation of them.
+//
+// It is exported because RFC 9901 is not the only specification that digests a
+// compact serialisation this way. AP2 binds a Checkout Mandate to a merchant's
+// Checkout JWT with a hash "of the value of checkout_jwt", using the algorithm
+// this SD-JWT's _sd_alg names — the same operation over a different string. A
+// caller reaching for crypto/sha256 directly would have to reimplement the
+// algorithm table below, and would get sha-384 wrong the first time somebody
+// used it.
+func (h HashAlg) Digest(encoded string) (string, error) {
 	newHash, err := h.newHash()
 	if err != nil {
 		return "", err
