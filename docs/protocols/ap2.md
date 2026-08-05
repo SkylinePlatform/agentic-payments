@@ -116,10 +116,29 @@ Two further points the specification makes about open mandates:
 ### The `vct` trap
 
 Mandates are SD-JWTs, and the SD-JWT credential type claim `vct` carries a
-**version suffix**: `mandate.payment.1`, `mandate.checkout.open.1`.
+**version suffix**. There are four values, and all four are worth writing down
+together, because the shape of the set is where the trap is:
+
+| Mandate | `vct` |
+|---|---|
+| Checkout, closed | `mandate.checkout.1` |
+| Checkout, open | `mandate.checkout.open.1` |
+| Payment, closed | `mandate.payment.1` |
+| Payment, open | `mandate.payment.open.1` |
+
+The specification's overview page prints exactly two of them as examples —
+`mandate.payment.1` and `mandate.checkout.open.1` — and those two happen to be
+a *closed* Payment Mandate and an *open* Checkout Mandate. A reader
+generalising from that pair infers the wrong rule for the two it does not
+print, and the mistake is invisible until a verifier rejects a mandate that was
+built correctly. The per-mandate specification pages state each of the four as
+a MUST; the overview page is not a source for any of them.
+
 Implementations must match the exact string including the suffix, and issue #5
 requires that a wrong `vct` version is rejected rather than tolerated. It is an
-easy claim to compare loosely and an easy one to get wrong from memory.
+easy claim to compare loosely and an easy one to get wrong from memory. A
+prefix comparison accepts `mandate.checkout.2`, which is the version this
+verifier has been told it does not implement.
 
 `vct` is an AP2 encoding detail and does not appear in the canonical model —
 `../../contracts/README.md` records why, along with `cnf`, `iat`/`exp` and the
@@ -288,7 +307,7 @@ to pay.
 ```mermaid
 flowchart LR
     CJ["Checkout JWT<br/><i>merchant-signed</i>"]
-    H{{"SHA-256"}}
+    H{{"hash named by _sd_alg<br/>default sha-256"}}
     CM["Checkout Mandate<br/>checkout_hash"]
     PM["Payment Mandate<br/>checkout_hash"]
     CJ --> H
@@ -297,7 +316,18 @@ flowchart LR
     CM -.->|"same value binds the two"| PM
 ```
 
-Three traps sit on this one value.
+Four traps sit on this one value.
+
+**The algorithm is not fixed, and the input is a string.** `checkout_hash` is
+the base64url digest **of the value of `checkout_jwt`** — the compact
+serialisation as it travels, not the bytes it decodes to and not the checkout
+object inside it, which is what removes any need to canonicalise the merchant's
+JSON. The algorithm MUST be the one the SD-JWT's own `_sd_alg` claim names,
+defaulting to `sha-256` when that claim is absent. Hardcoding `sha-256`
+produces a verifier that works until somebody issues with a wider digest and
+then reports a **hash mismatch** — which reads as tampering rather than as the
+bug it is. The output carries no algorithm prefix: it is bare base64url, never
+`sha-256:…`.
 
 **Recompute, never trust.** Verification must recompute the hash of the
 Checkout JWT it holds and compare the result to the `checkout_hash` claim as
@@ -305,6 +335,23 @@ presented. A verifier that reads the claim and believes it, has verified nothing
 at all: the claim is written by the party being checked. Issue #5 states the
 rule directly, and issue #18 repeats it as step 2 of dispute-time verification,
 where the recomputation is independent by construction.
+
+That rule collides with a second one, and the collision is the interesting
+part. `checkout_jwt` is **selectively disclosable** while `checkout_hash` is
+not, so a verifier can legitimately receive a mandate carrying the hash but not
+the document it hashes — and `checkout_mandate.json` says as much, because a
+verifier that already holds the checkout does not need to be sent it again.
+Neither rule says what happens when the presentation withholds the document and
+the verifier holds no copy either.
+
+This implementation refuses it, with `disclosure_insufficient`. A hash nobody
+can recompute asserts only that whoever signed the mandate wrote a hash into
+it, which is precisely the assertion the recompute rule exists to distrust — so
+the binding is checked against the disclosed document or against one the
+verifier already holds, and a mandate with neither does not pass. Where both
+are present they must be the same document: preferring one silently would
+decide, without saying so, whether the mandate being checked is the one that
+was presented or the one that was expected.
 
 **The Checkout JWT must be signed with a non-deterministic scheme**, such as
 ECDSA — never a deterministic one such as Ed25519. A deterministic signature

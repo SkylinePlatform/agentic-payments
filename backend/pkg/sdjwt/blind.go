@@ -25,6 +25,15 @@ type Blinder struct {
 	decoys int
 }
 
+// HashAlg returns the digest algorithm this Blinder will write into _sd_alg.
+//
+// A caller needs it when it has to hash something of its own with the same
+// algorithm the SD-JWT uses. AP2 requires exactly that of checkout_hash, and
+// the alternative — hardcoding sha-256 at the call site — produces a mandate
+// that verifies until somebody issues with a wider digest and then fails as a
+// hash mismatch, which reads as tampering rather than as the bug it is.
+func (b *Blinder) HashAlg() HashAlg { return b.hash }
+
 // BlinderOption configures a Blinder.
 type BlinderOption func(*Blinder)
 
@@ -300,7 +309,7 @@ func (b *Blinder) decoyDigest() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return b.hash.digest(random)
+	return b.hash.Digest(random)
 }
 
 // normalizeObject encodes claims and decodes it again, producing the

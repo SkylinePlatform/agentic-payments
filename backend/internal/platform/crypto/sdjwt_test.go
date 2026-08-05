@@ -52,8 +52,11 @@ const rfc9901IssuerJWK = `{
 // those four lines are the entire cost of keeping key material out of a
 // package that implements a public standard.
 //
-// A production version of this lands with the AP2 adapter in #5; here it stays
-// in the test, so that this change adds no code outside pkg/sdjwt.
+// The production version landed with the AP2 adapter in #5 —
+// internal/adapters/ap2/jose.go, alongside the signing half and a clock bridge.
+// This copy stays here rather than importing it: platform implements the ports
+// that adapters consume, and a test in platform reaching up into an adapter
+// would invert that for four lines of convenience.
 type joseVerifier struct{ inner authz.Verifier }
 
 func (v joseVerifier) Algorithm() string { return string(v.inner.Key().Algorithm) }

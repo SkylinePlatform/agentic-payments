@@ -143,7 +143,7 @@ func (d Disclosure) Value() any { return d.value }
 
 // Digest returns the base64url-encoded digest of this Disclosure under h —
 // the string that appears in an _sd array or behind a "..." key.
-func (d Disclosure) Digest(h HashAlg) (string, error) { return h.digest(d.encoded) }
+func (d Disclosure) Digest(h HashAlg) (string, error) { return h.Digest(d.encoded) }
 
 // newSalt reads saltEntropyBytes from r and base64url-encodes them.
 //

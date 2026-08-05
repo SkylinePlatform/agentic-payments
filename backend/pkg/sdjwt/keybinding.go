@@ -59,22 +59,27 @@ type keyBindingClaims struct {
 // or removing a Disclosure after the fact changes sd_hash, so a KB-JWT cannot
 // be lifted from one presentation onto another.
 func (s *SDJWT) SDHash() (string, error) {
-	alg, err := s.hashAlg()
+	alg, err := s.HashAlg()
 	if err != nil {
 		return "", err
 	}
-	return alg.digest(s.sdPart())
+	return alg.Digest(s.sdPart())
 }
 
-// hashAlg reads _sd_alg out of the Issuer-signed JWT without verifying its
-// signature.
+// HashAlg reads _sd_alg out of the Issuer-signed JWT without verifying its
+// signature, defaulting to DefaultHashAlg when the claim is absent.
 //
 // Reading an unverified payload is safe here because the value is only ever
 // used to decide which digest function to compute, and the digests it is
 // compared against are themselves inside the signed payload. An attacker who
 // changes _sd_alg makes every digest fail to match, which is a rejection, not
 // a forgery. Verify still checks the signature before any of this matters.
-func (s *SDJWT) hashAlg() (HashAlg, error) {
+//
+// It is exported for the same reason Digest is: a specification layered on top
+// of SD-JWT may need to hash something of its own with the algorithm this
+// SD-JWT declared. AP2's checkout_hash is that case, and Verify cannot answer
+// it — the Processed SD-JWT Payload has _sd_alg stripped out of it by then.
+func (s *SDJWT) HashAlg() (HashAlg, error) {
 	jwt, err := parseJWT(s.issuerJWT)
 	if err != nil {
 		return "", err
