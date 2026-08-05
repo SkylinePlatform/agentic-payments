@@ -235,7 +235,7 @@ sequenceDiagram
     A->>A: assemble closed mandates, sign with agent key
     A->>M: open + closed mandates
     M->>M: does closed satisfy every constraint?
-    M-->>A: rejected — price.max exceeded + rejection receipt
+    M-->>A: rejected — the amount bound is exceeded + rejection receipt
     A->>M: current price?
     M-->>A: 18900
     A->>M: open + closed mandates
@@ -366,7 +366,7 @@ This extension point has a consequence the specification does not solve.
 Because every implementer defines their own constraint vocabulary, and the
 verifier must understand it to evaluate it, two AP2 implementations with
 different constraint types cannot interoperate. An agent that expresses a
-booking window as `temporal.window` and a merchant that only knows
+booking window with a `within` comparison on `at` and a merchant that only knows
 `validity.period` have no path to agreement: the merchant is required to reject
 what it cannot evaluate, and it is correct to do so.
 
@@ -377,15 +377,23 @@ step would each be a genuine addition to the protocol rather than an
 implementation detail. It is recorded here because it is the kind of thing that
 is obvious in hindsight and invisible until an implementation hits it.
 
-Two things the implementation does about it, neither of which is a fix. The
-registry can list what it understands, which is the raw material a profile or
-negotiation step would need and costs nothing to expose. And a rejection for an
-unknown type carries `constraint_type_unknown` rather than
-`constraint_violated`, so the two failures stay distinguishable all the way out
-to the receipt: one says the verifier could not form a view, the other says it
-formed one and the answer was no. Collapsing them would tell a user their limit
-was exceeded when in fact nobody could read it — which is how a fragmentation
-problem gets misfiled as a policy decision, once per transaction, invisibly.
+Two things the implementation does about it, neither of which is a fix. It can
+list the fields and operators it understands, which is the raw material a
+profile or negotiation step would need and costs nothing to expose. And a
+rejection for an unknown field or operator carries `constraint_type_unknown`
+rather than `constraint_violated`, so the two failures stay distinguishable all
+the way out to the receipt: one says the verifier could not form a view, the
+other says it formed one and the answer was no. Collapsing them would tell a
+user their limit was exceeded when in fact nobody could read it — which is how a
+fragmentation problem gets misfiled as a policy decision, once per transaction,
+invisibly.
+
+Moving to an expression tree made this worse rather than better, and that is
+worth stating plainly. Two implementations now have to agree on a *language* —
+the operators, how they compose, what nesting means — and not merely on a list
+of constraint names. A richer vocabulary buys expressiveness at the cost of a
+larger surface over which two parties must already agree before they can talk,
+and nothing about the protocol helps them get there.
 
 ## Selective disclosure
 
