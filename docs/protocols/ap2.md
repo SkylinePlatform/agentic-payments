@@ -377,6 +377,16 @@ step would each be a genuine addition to the protocol rather than an
 implementation detail. It is recorded here because it is the kind of thing that
 is obvious in hindsight and invisible until an implementation hits it.
 
+Two things the implementation does about it, neither of which is a fix. The
+registry can list what it understands, which is the raw material a profile or
+negotiation step would need and costs nothing to expose. And a rejection for an
+unknown type carries `constraint_type_unknown` rather than
+`constraint_violated`, so the two failures stay distinguishable all the way out
+to the receipt: one says the verifier could not form a view, the other says it
+formed one and the answer was no. Collapsing them would tell a user their limit
+was exceeded when in fact nobody could read it — which is how a fragmentation
+problem gets misfiled as a policy decision, once per transaction, invisibly.
+
 ## Selective disclosure
 
 Mandates are secured with **SD-JWT** (RFC 9901), not with W3C Verifiable
