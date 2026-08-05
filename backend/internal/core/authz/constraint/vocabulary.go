@@ -77,6 +77,13 @@ func (p priceMax) Type() Type { return PriceMax }
 // The bound is inclusive: "max 20000" permits exactly 20000. That is what the
 // word means to the person who set it, and the alternative makes the limit a
 // figure that can never be spent.
+//
+// Currencies are compared case-insensitively here while the parameter had to be
+// upper case. That asymmetry is deliberate and one-directional: what this
+// package emits into a signed mandate is held to the shape the schema states,
+// and what arrives from an adapter is read generously. Being lenient in this
+// direction can only cause a limit to be applied where a stricter reading would
+// have refused to compare at all.
 func (p priceMax) Evaluate(s Subject) Result {
 	switch {
 	case !strings.EqualFold(s.Amount.Currency, p.currency):

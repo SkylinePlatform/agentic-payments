@@ -192,6 +192,12 @@ func (r *Registry) Types() []Type {
 //
 // It returns ErrUnknownType for a type the registry does not hold, which the
 // caller must treat as a rejection.
+//
+// It is exported separately from Evaluate because there is a caller that needs
+// to know a constraint is well-formed without having a purchase to judge: the
+// Trusted Surface renders the constraints for the user to read before anything
+// is signed, and a surface that displayed a constraint nobody could later parse
+// would be collecting a signature on a limit that cannot be enforced.
 func (r *Registry) Parse(c generated.Constraint) (Evaluator, error) {
 	d, ok := r.definitions[Type(c.Type)]
 	if !ok {
@@ -247,6 +253,20 @@ func (r Report) Violations() []Result {
 // all. A partial answer is the dangerous one: a report saying "satisfied" while
 // one constraint was never evaluated is exactly the silent skip this package
 // exists to prevent.
+//
+// # Every constraint must hold, including repeats of one type
+//
+// The list is conjunctive. A mandate carrying price.max twice is satisfied only
+// by an amount under both, so the stricter wins — which is the safe direction
+// and the useful one. A mandate carrying item.route twice with different routes
+// is satisfiable by nothing, and is refused for every purchase.
+//
+// Worth stating because the two plausible alternative readings are both worse.
+// "Later overrides earlier" would let a constraint appended to a signed list
+// loosen what the user approved. "Any one matches" would let an attacker widen
+// authority by adding a permissive twin of a strict constraint. Conjunction is
+// the only reading where adding a constraint cannot increase what the agent may
+// do — so a mandate that has been tampered with by addition fails closed.
 func (r *Registry) Evaluate(constraints []generated.Constraint, subject Subject) (Report, error) {
 	evaluators := make([]Evaluator, 0, len(constraints))
 	for _, c := range constraints {

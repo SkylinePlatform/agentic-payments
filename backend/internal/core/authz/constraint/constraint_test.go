@@ -410,6 +410,56 @@ func TestEveryViolationIsReported(t *testing.T) {
 	}
 }
 
+// TestRepeatedTypesConjoin pins the reading of a list carrying one type twice.
+//
+// It is worth a test rather than a comment because the two plausible
+// alternatives are both worse, and both would pass every other test here.
+// "Later overrides earlier" would let a constraint appended to a signed list
+// loosen what the user approved; "any one matches" would let an attacker widen
+// authority by adding a permissive twin. Conjunction is the only reading where
+// adding a constraint cannot increase what the agent may do.
+func TestRepeatedTypesConjoin(t *testing.T) {
+	t.Parallel()
+
+	strict := c(constraint.PriceMax, map[string]any{"amount": 5000, "currency": "USD"})
+	loose := c(constraint.PriceMax, map[string]any{"amount": 50000, "currency": "USD"})
+
+	for _, tc := range []struct {
+		name   string
+		order  []generated.Constraint
+		amount int
+		want   bool
+	}{
+		{"under both", []generated.Constraint{strict, loose}, 4000, true},
+		// Between the two: the stricter has to win, in either order, or a
+		// tampered mandate could loosen itself by appending.
+		{"between them, strict first", []generated.Constraint{strict, loose}, 20000, false},
+		{"between them, loose first", []generated.Constraint{loose, strict}, 20000, false},
+		{"over both", []generated.Constraint{strict, loose}, 60000, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := subject()
+			s.Amount = usd(tc.amount)
+			if got := evaluate(t, tc.order, s).Satisfied(); got != tc.want {
+				t.Errorf("Satisfied() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	// Two contradictory routes are satisfiable by nothing, and that is the
+	// right answer: the user cannot have approved a journey that is two
+	// different journeys.
+	contradictory := []generated.Constraint{
+		c(constraint.ItemRoute, map[string]any{"origin": "BEG", "destination": "PMI"}),
+		c(constraint.ItemRoute, map[string]any{"origin": "ZRH", "destination": "AMS"}),
+	}
+	if evaluate(t, contradictory, subject()).Satisfied() {
+		t.Error("a subject satisfied two contradictory routes")
+	}
+}
+
 // TestNoConstraintsIsSatisfied is a loophole worth pinning deliberately: a
 // mandate carrying no constraints is one where the user placed no limits, which
 // is different from one whose limits could not be read.
