@@ -16,6 +16,24 @@ func is(err, target error) bool { return errors.Is(err, target) }
 // error code — see codeFor — because AP2 requires a rejection to be answered
 // with a receipt naming why, and a failure with no code cannot be put in one.
 var (
+	// ErrMisconfigured means this package was not given something it needs to do
+	// its job: a nil signer or blinder at issuance, a nil issuer key or clock at
+	// verification. It says nothing about the mandate.
+	//
+	// It is separate from ErrMandateMalformed because the two blame different
+	// parties, and the receipt is where that distinction becomes irreversible. A
+	// verifier whose operator forgot to wire up a clock has not been shown a bad
+	// mandate — it has failed for its own reasons, which is why this maps to
+	// verifier_unavailable and not to any code in the "Securing format" block.
+	// Answering such a caller with mandate_malformed would send the one party
+	// who did nothing wrong away to debug their own request.
+	//
+	// pkg/sdjwt drew this same line one layer down, in the self-review on #40:
+	// a nil Issuer or Clock used to report ErrUnsupportedAlgorithm, dressing a
+	// configuration bug as a protocol failure. This is that lesson applied at
+	// the adapter boundary, where the error becomes an error code.
+	ErrMisconfigured = errors.New("ap2: verifier misconfigured")
+
 	// ErrMandateMalformed means the payload verified but is not shaped like the
 	// mandate it claims to be: a required claim missing, or of the wrong JSON
 	// type. Distinct from a signature failure, which pkg/sdjwt reports.
@@ -64,14 +82,24 @@ func CodeOf(err error) generated.ErrorCode {
 	return sdjwtCodeOf(err)
 }
 
-// sdjwtCodeOf maps the securing format's failures. The codes are the
+// sdjwtCodeOf maps the securing format's failures. The codes are mostly the
 // "Securing format" block of contracts/evidence/error_code.json, which was
 // written from the protocol documentation rather than from this package — so a
 // gap here is a gap in the mapping, not in the vocabulary.
+//
+// ErrInvalidOptions is the one that leaves that block, for the reason
+// ErrMisconfigured gives: pkg/sdjwt raises it when Verify is handed a policy it
+// cannot apply, which is the calling verifier's fault and not the mandate's.
+// VerifyCheckout guards the two cases it could reach today, so this arm is
+// currently unreachable through it — but an unmapped sentinel returns the empty
+// code, and an empty code is not in the enum, so the day a second caller
+// appears the failure would be a rejection nobody can name.
 func sdjwtCodeOf(err error) generated.ErrorCode {
 	switch {
 	case err == nil:
 		return ""
+	case is(err, sdjwt.ErrInvalidOptions):
+		return generated.ErrorCodeVerifierUnavailable
 	case is(err, sdjwt.ErrSignatureInvalid):
 		return generated.ErrorCodeSignatureInvalid
 	case is(err, sdjwt.ErrExpired):

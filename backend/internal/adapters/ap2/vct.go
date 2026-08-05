@@ -95,6 +95,8 @@ func codeFor(err error) generated.ErrorCode {
 	switch {
 	case err == nil:
 		return ""
+	case is(err, ErrMisconfigured):
+		return generated.ErrorCodeVerifierUnavailable
 	case is(err, ErrUnsupportedVersion), is(err, ErrWrongMandateType):
 		return generated.ErrorCodeMandateVersionUnsupported
 	case is(err, ErrCheckoutHashMismatch):

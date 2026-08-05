@@ -18,13 +18,19 @@ import (
 //
 // What is pinned here is what a second implementation would have to reproduce
 // to interoperate: the exact vct strings, and the exact digest of a given
-// Checkout JWT under each hash algorithm. What is deliberately not pinned is a
-// whole signed mandate — AP2 requires the Checkout JWT to carry a
-// non-deterministic signature so that checkout_hash cannot be attacked with a
-// rainbow table over plausible checkouts, and this project signs its mandates
-// with ECDSA for the same reason. A byte-for-byte golden mandate would
-// therefore be either impossible or evidence that something deterministic had
-// been used where it must not be.
+// Checkout JWT under each hash algorithm. Those are the interoperable facts —
+// the digest is over bytes both implementations hold, so it is reproducible by
+// anyone, which is what makes it conformance evidence rather than a snapshot of
+// our own output.
+//
+// What is deliberately not pinned is a whole signed mandate. This project signs
+// mandates with ECDSA, which draws a fresh random nonce for every signature, so
+// two runs over identical input produce different bytes and a byte-for-byte
+// golden mandate could never hold. That is a property of ECDSA, not a rule AP2
+// imposes on the mandate envelope — AP2's non-determinism requirement is about
+// the merchant's Checkout JWT and the predictability of checkout_hash, a
+// different document with a different reason. Pinning the digests rather than a
+// signature is therefore the only option here, and also the better one.
 
 type bindingVectors struct {
 	CheckoutJWT  string            `json:"checkout_jwt"`

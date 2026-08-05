@@ -41,11 +41,19 @@ type fixture struct {
 
 // newFixture builds a store with one ES256 key and a deterministic blinder.
 //
-// ES256 rather than EdDSA is not incidental. AP2 requires the Checkout JWT to
-// be signed with a non-deterministic scheme so that checkout_hash is not
-// vulnerable to a rainbow table over plausible checkouts, and a mandate signed
-// with Ed25519 would be a spec violation this package should never demonstrate,
-// not even in a test.
+// The key signs the Checkout Mandate, not the checkout inside it, and the two
+// are worth keeping apart because the rule that is easy to misremember belongs
+// to the other one. AP2 requires the merchant's *Checkout JWT* to carry a
+// non-deterministic signature, so that checkout_hash — which the mandate
+// publishes in the clear even when checkout_jwt is withheld — is not open to a
+// rainbow table over plausible checkouts. Nothing in the specification
+// constrains what algorithm signs the mandate envelope, and IssueCheckout
+// accordingly accepts any authz.Signer.
+//
+// So this fixture does not exercise that rule at all: merchantCheckout is a
+// fixed constant and is never signed by this key. ES256 is here because it is
+// what the rest of the project mints, not because a test signing the mandate
+// with EdDSA would be violating anything.
 func newFixture(t *testing.T, opts ...sdjwt.BlinderOption) fixture {
 	t.Helper()
 
@@ -218,6 +226,83 @@ func TestTheVersionSuffixIsMatchedExactly(t *testing.T) {
 	require.ErrorIs(t, err, ap2.ErrUnsupportedVersion)
 	assert.Equal(t, generated.ErrorCodeMandateVersionUnsupported, ap2.CodeOf(err),
 		"a version this verifier does not implement is a different refusal from a malformed one")
+}
+
+// TestAMisconfiguredCallerIsNotTheMandatesFault covers the five ways this
+// package can be handed nothing to work with, and asserts that none of them is
+// reported as a problem with the mandate.
+//
+// The distinction only becomes visible at the receipt, and there it is
+// irreversible. A verifier stood up without a clock, or an issuer that dropped
+// its signer, has not been shown a bad mandate — answering the counterparty
+// with mandate_malformed would send the one party who did nothing wrong away to
+// debug a request that was fine. verifier_unavailable says whose problem it is.
+//
+// The missing signer is also the case that used to panic rather than return:
+// joseSigner wraps the interface before sdjwt.Issue can check it, so a nil
+// arrived inside a non-nil struct, slipped past pkg/sdjwt's own guard, and
+// surfaced as a nil dereference inside Algorithm().
+func TestAMisconfiguredCallerIsNotTheMandatesFault(t *testing.T) {
+	t.Parallel()
+
+	t.Run("issuing with no signer", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t)
+		_, err := ap2.IssueCheckout(t.Context(), nil, mandate(), f.blinder)
+		assertMisconfigured(t, err)
+	})
+
+	t.Run("issuing with no blinder", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t)
+		_, err := ap2.IssueCheckout(t.Context(), f.signer, mandate(), nil)
+		assertMisconfigured(t, err)
+	})
+
+	t.Run("verifying with no issuer key", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t)
+		_, err := ap2.VerifyCheckout(reparse(t, issue(t, f, mandate())),
+			ap2.CheckoutOptions{Clock: f.clock})
+		assertMisconfigured(t, err)
+	})
+
+	t.Run("verifying with no clock", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t)
+		_, err := ap2.VerifyCheckout(reparse(t, issue(t, f, mandate())),
+			ap2.CheckoutOptions{Issuer: f.verifier})
+		assertMisconfigured(t, err)
+	})
+
+	t.Run("verifying nothing at all", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t)
+		_, err := ap2.VerifyCheckout(nil, f.options())
+		assertMisconfigured(t, err)
+	})
+}
+
+// assertMisconfigured checks that a failure blames the caller and not the
+// mandate. Both halves matter and they are read by different audiences: the
+// sentinel is what a Go caller branches on, the code is what a counterparty
+// finds in the receipt.
+//
+// assert rather than require throughout, per AGENTS.md — a shared assertion
+// helper must stay safe if a later caller reaches it from a goroutine.
+func assertMisconfigured(t *testing.T, err error) {
+	t.Helper()
+
+	assert.ErrorIs(t, err, ap2.ErrMisconfigured)
+	assert.NotErrorIs(t, err, ap2.ErrMandateMalformed,
+		"blaming the mandate here would point a dispute at the wrong party")
+	assert.Equal(t, generated.ErrorCodeVerifierUnavailable, ap2.CodeOf(err),
+		"the receipt has to say the failure was not the counterparty's")
 }
 
 // issueClaims signs an arbitrary claim set, which the exported constructors

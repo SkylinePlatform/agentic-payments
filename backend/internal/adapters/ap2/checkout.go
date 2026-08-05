@@ -81,13 +81,22 @@ func IssueCheckout(
 	m generated.CheckoutMandate,
 	blinder *sdjwt.Blinder,
 ) (*sdjwt.SDJWT, error) {
+	// signer and blinder are this caller's to supply; m.Checkout is the mandate's
+	// own content. The guards are separated along that line because the errors
+	// name different culprits — and signer is guarded rather than left to fail
+	// inside sdjwt.Issue because joseSigner wraps it before it gets there, so
+	// pkg/sdjwt's own nil check sees a non-nil struct around a nil interface and
+	// the call reaches joseSigner.Algorithm, which panics.
+	if signer == nil {
+		return nil, fmt.Errorf("%w: no signer", ErrMisconfigured)
+	}
+	if blinder == nil {
+		return nil, fmt.Errorf("%w: no blinder", ErrMisconfigured)
+	}
 	if m.Checkout == nil || *m.Checkout == "" {
 		return nil, fmt.Errorf(
 			"%w: no checkout to bind to, so checkout_hash cannot be computed",
 			ErrMandateMalformed)
-	}
-	if blinder == nil {
-		return nil, fmt.Errorf("%w: no blinder", ErrMandateMalformed)
 	}
 
 	// The digest must use the algorithm the Blinder will write into _sd_alg,
@@ -153,12 +162,18 @@ type CheckoutOptions struct {
 // accepting a hash on the word of whoever wrote it.
 func VerifyCheckout(sd *sdjwt.SDJWT, opts CheckoutOptions) (generated.CheckoutMandate, error) {
 	var zero generated.CheckoutMandate
+	// None of these three is a statement about the mandate — a nil *SDJWT means
+	// the caller never parsed one, and a nil Issuer or Clock means this verifier
+	// was stood up without them. The guards on Issuer and Clock also have to be
+	// here rather than left to sdjwt.Verify: joseVerifier and joseClock wrap the
+	// interface values, so a nil one arrives inside a non-nil struct and slips
+	// past pkg/sdjwt's own check.
 	if sd == nil {
-		return zero, fmt.Errorf("%w: no SD-JWT", ErrMandateMalformed)
+		return zero, fmt.Errorf("%w: no SD-JWT", ErrMisconfigured)
 	}
 	if opts.Issuer == nil || opts.Clock == nil {
 		return zero, fmt.Errorf("%w: verification needs both an issuer key and a clock",
-			ErrMandateMalformed)
+			ErrMisconfigured)
 	}
 
 	// The algorithm for checkout_hash comes from _sd_alg, which Verify strips
