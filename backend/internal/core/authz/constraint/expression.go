@@ -82,6 +82,16 @@ type Expression struct {
 // Op returns what this node does.
 func (e Expression) Op() Op { return e.op }
 
+// parsed reports whether this expression came from Parse rather than being
+// declared. A group needs children and a leaf needs a field to read; an
+// expression with neither is the zero value.
+func (e Expression) parsed() bool {
+	if isGroup(e.op) {
+		return len(e.children) > 0
+	}
+	return e.field.read != nil
+}
+
 // Parse reads one constraint from the canonical model into an expression.
 //
 // It is exported separately from Evaluate because there is a caller that needs
@@ -161,7 +171,18 @@ func parseLeaf(c generated.Constraint, op Op) (Expression, error) {
 }
 
 // Evaluate decides whether the subject satisfies the expression.
+//
+// An Expression that did not come from Parse is refused rather than evaluated.
+// The type is exported, so nothing stops a caller declaring one, and its zero
+// value has no field to read and no children to combine — reaching either would
+// panic, and a verifier that panics on one request stops answering all of them.
+// Refusing is also the safe direction: an expression nobody parsed is not one
+// the user signed.
 func (e Expression) Evaluate(s Subject) Result {
+	if !e.parsed() {
+		return Result{Reason: "this constraint was never parsed, so nothing about it has been checked"}
+	}
+
 	switch e.op {
 	case OpAll:
 		return e.evaluateAll(s)
@@ -253,14 +274,32 @@ func (e Expression) apply(got value) (bool, error) {
 		}
 
 	case OpIn, OpNin:
+		// Every operand is tried before answering, and an incomparable one is
+		// remembered rather than returned at once.
+		//
+		// Returning on the first error made the answer depend on the order of
+		// the list: `in [EUR 1.00, USD 200.00]` against a USD purchase failed
+		// on the euro, while the same two values the other way round matched
+		// the dollar and never reached it. One mandate, two answers, decided
+		// by which operand the author happened to write first — and a verifier
+		// whose result depends on that is not deterministic in any sense worth
+		// the name.
+		var incomparable error
 		for _, want := range e.operands {
 			c, err := compare(got, want)
 			if err != nil {
-				return false, err
+				incomparable = err
+				continue
 			}
 			if c == 0 {
 				return e.op == OpIn, nil
 			}
+		}
+		if incomparable != nil {
+			// Nothing matched, and at least one operand could not be compared
+			// at all — so "no match" is not something this verifier established.
+			// Saying so beats reporting an absence it did not verify.
+			return false, incomparable
 		}
 		return e.op == OpNin, nil
 

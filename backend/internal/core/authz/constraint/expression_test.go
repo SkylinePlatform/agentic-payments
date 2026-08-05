@@ -3,6 +3,7 @@ package constraint_test
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -23,14 +24,14 @@ var (
 // fixtures double as documentation of the format.
 func node(t *testing.T, raw string) generated.Constraint {
 	t.Helper()
+	// A plain Unmarshal, deliberately, because it is what any caller gets.
+	// Setting json.Decoder.UseNumber here would look more careful and do
+	// nothing: the generated Constraint.UnmarshalJSON re-runs a plain
+	// json.Unmarshal internally, so every number arrives as a float64 whatever
+	// the caller asked for. That ceiling is what
+	// TestAmountsPastTheCeilingAreRefused pins.
 	var c generated.Constraint
-	// UseNumber, because that is what an adapter has to do. Constraint.Value is
-	// an open type, so a plain json.Unmarshal turns every number into a float64
-	// before this package sees it — lossless under 2^53 and, above it, silently
-	// wrong about money. TestPrecisionLossIsRefused covers the sloppy caller.
-	dec := json.NewDecoder(strings.NewReader(raw))
-	dec.UseNumber()
-	if err := dec.Decode(&c); err != nil {
+	if err := json.Unmarshal([]byte(raw), &c); err != nil {
 		t.Fatalf("the test's own fixture is not valid JSON: %v\n%s", err, raw)
 	}
 	return c
@@ -604,6 +605,90 @@ func TestAmountsPastTheCeilingAreRefused(t *testing.T) {
 	}
 }
 
+// TestMembershipDoesNotDependOnOrder covers a defect the first version had: an
+// operand that could not be compared returned at once, so `in [EUR, USD]`
+// against a USD purchase failed on the euro while the same two values written
+// the other way round matched the dollar and never reached it.
+//
+// One mandate, two answers, decided by which value the author happened to write
+// first. A verifier whose result turns on that is not deterministic in any sense
+// worth the name.
+func TestMembershipDoesNotDependOnOrder(t *testing.T) {
+	t.Parallel()
+
+	s := flight()
+	s.Amount = generated.Amount{Amount: 20000, Currency: "USD"}
+
+	const usdFirst = `{"op":"in","field":"amount","value":[
+		{"amount":20000,"currency":"USD"},{"amount":100,"currency":"EUR"}]}`
+	const eurFirst = `{"op":"in","field":"amount","value":[
+		{"amount":100,"currency":"EUR"},{"amount":20000,"currency":"USD"}]}`
+
+	first, second := evaluate(t, usdFirst, s), evaluate(t, eurFirst, s)
+	if first.Satisfied != second.Satisfied {
+		t.Errorf("the same values in a different order gave %v and %v", first.Satisfied, second.Satisfied)
+	}
+	if !first.Satisfied {
+		t.Errorf("a matching amount was refused: %s", first.Reason)
+	}
+
+	// And when nothing matches while something could not be compared, the
+	// verifier says so rather than reporting an absence it never established.
+	s.Amount = generated.Amount{Amount: 999, Currency: "USD"}
+	if got := evaluate(t, eurFirst, s); got.Satisfied {
+		t.Error("a non-matching amount was reported as a member")
+	}
+}
+
+// TestIdentifiersCompareExactly covers the other half of the same review. A
+// category is a word two parties are trying to agree on, so folding case stops
+// a spelling difference reading as a policy decision. An identifier is a key,
+// and folding it decides on the identifier scheme's behalf that "ABC" and "abc"
+// name one thing — which most schemes say they do not.
+func TestIdentifiersCompareExactly(t *testing.T) {
+	t.Parallel()
+
+	s := flight()
+	s.Item.ID = "SKU-AbC"
+
+	if got := evaluate(t, `{"op":"eq","field":"item.id","value":"SKU-AbC"}`, s); !got.Satisfied {
+		t.Errorf("an identifier did not match itself: %s", got.Reason)
+	}
+	if got := evaluate(t, `{"op":"eq","field":"item.id","value":"sku-abc"}`, s); got.Satisfied {
+		t.Error("two identifiers differing only in case were merged into one")
+	}
+	// Surrounding space is transport noise, not identity.
+	if got := evaluate(t, `{"op":"eq","field":"item.id","value":"  SKU-AbC  "}`, s); !got.Satisfied {
+		t.Errorf("surrounding space defeated an identifier match: %s", got.Reason)
+	}
+
+	// Labels keep folding, which is what makes an allow-list forgiving.
+	s.Item.Category = "Flights"
+	if got := evaluate(t, `{"op":"eq","field":"item.category","value":"flights"}`, s); !got.Satisfied {
+		t.Errorf("a category did not fold: %s", got.Reason)
+	}
+}
+
+// TestZeroExpressionDoesNotPanic guards the exported type's zero value. An
+// Expression can only be built by Parse, but nothing stops a caller declaring
+// one, and a verifier that panics on a request is a verifier that stops
+// answering any of them.
+func TestZeroExpressionDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	var zero constraint.Expression
+	got := zero.Evaluate(flight())
+	if got.Satisfied {
+		t.Error("an expression that was never parsed was satisfied")
+	}
+	if got.Reason == "" {
+		t.Error("the refusal carried no reason")
+	}
+	if s := zero.Render(); s == "" {
+		t.Error("an unparsed expression rendered nothing at all")
+	}
+}
+
 func TestVocabularyIsPublished(t *testing.T) {
 	t.Parallel()
 
@@ -615,17 +700,8 @@ func TestVocabularyIsPublished(t *testing.T) {
 	}
 	ops := constraint.OperatorNames()
 	for _, want := range []string{"all", "any", "not", "lte", "within", "in", "between"} {
-		if !slicesContains(ops, want) {
+		if !slices.Contains(ops, want) {
 			t.Errorf("OperatorNames() is missing %q: %v", want, ops)
 		}
 	}
-}
-
-func slicesContains(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
 }

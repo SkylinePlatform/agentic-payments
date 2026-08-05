@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
@@ -41,7 +42,7 @@ const maxExactFloat = 1 << 53
 func parseOperands(o operator, f Field, raw any) ([]value, error) {
 	switch o.shape {
 	case operandOne:
-		v, err := parseValue(f.Kind, raw)
+		v, err := parseValue(f, raw)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %s %s: %w", ErrTypeMismatch, f.Name, o.op, err)
 		}
@@ -60,7 +61,7 @@ func parseOperands(o operator, f Field, raw any) ([]value, error) {
 		}
 		out := make([]value, 0, len(items))
 		for i, item := range items {
-			v, err := parseValue(f.Kind, item)
+			v, err := parseValue(f, item)
 			if err != nil {
 				return nil, fmt.Errorf("%w: %s %s value %d: %w", ErrTypeMismatch, f.Name, o.op, i, err)
 			}
@@ -78,11 +79,11 @@ func parseOperands(o operator, f Field, raw any) ([]value, error) {
 		if !hasFrom || !hasTo || len(bounds) != 2 {
 			return nil, fmt.Errorf("%w: %s %s needs exactly from and to", ErrMalformed, f.Name, o.op)
 		}
-		low, err := parseValue(f.Kind, from)
+		low, err := parseValue(f, from)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %s %s from: %w", ErrTypeMismatch, f.Name, o.op, err)
 		}
-		high, err := parseValue(f.Kind, to)
+		high, err := parseValue(f, to)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %s %s to: %w", ErrTypeMismatch, f.Name, o.op, err)
 		}
@@ -98,12 +99,16 @@ func parseOperands(o operator, f Field, raw any) ([]value, error) {
 	}
 }
 
-// parseValue reads one operand of the given kind.
-func parseValue(kind Kind, raw any) (value, error) {
+// parseValue reads one operand for a field.
+//
+// It takes the whole Field rather than its Kind because text has two
+// comparison rules — folded for labels, exact for identifiers — and an operand
+// normalised differently from the subject's value would simply never match.
+func parseValue(f Field, raw any) (value, error) {
 	if raw == nil {
 		return value{}, fmt.Errorf("no value")
 	}
-	switch kind {
+	switch f.Kind {
 	case KindMoney:
 		amount, err := parseMoney(raw)
 		if err != nil {
@@ -134,14 +139,17 @@ func parseValue(kind Kind, raw any) (value, error) {
 		if !ok {
 			return value{}, fmt.Errorf("not text")
 		}
-		folded := fold(s)
-		if folded == "" {
+		normalised := fold(s)
+		if f.exact {
+			normalised = strings.TrimSpace(s)
+		}
+		if normalised == "" {
 			return value{}, fmt.Errorf("empty")
 		}
-		return value{kind: KindText, text: folded}, nil
+		return value{kind: KindText, text: normalised}, nil
 
 	default:
-		return value{}, fmt.Errorf("unknown kind %s", kind)
+		return value{}, fmt.Errorf("unknown kind %s", f.Kind)
 	}
 }
 

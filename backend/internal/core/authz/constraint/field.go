@@ -61,6 +61,19 @@ type Field struct {
 	// sentence reads like English rather than like a field path.
 	Noun string
 
+	// exact stops a text value being case-folded before comparison.
+	//
+	// Set on identifiers and not on labels, because the two are different
+	// things. A category is a word two parties are trying to agree on, so
+	// "Flights" and "flights" are the same word and folding them stops a
+	// spelling difference reading as a policy decision. An identifier is a
+	// key: whether "ABC" and "abc" name the same thing is the identifier
+	// scheme's business, and folding decides it on the scheme's behalf. Most
+	// schemes say no — a base64 or case-sensitive SKU has genuinely distinct
+	// values differing only in case — so folding silently merges two things
+	// the user did not approve as one.
+	exact bool
+
 	// read pulls the value out of a subject. The second result is false when
 	// the purchase does not state this fact at all, which is never the same as
 	// stating an empty one.
@@ -90,12 +103,12 @@ var fields = buildFields(
 		read: func(s Subject) (value, bool) {
 			return value{kind: KindNumber, number: int64(s.Quantity)}, s.Quantity > 0
 		}},
-	Field{Name: "item.id", Kind: KindText, Noun: "the item",
-		read: func(s Subject) (value, bool) { return text(s.Item.ID) }},
+	Field{Name: "item.id", Kind: KindText, Noun: "the item", exact: true,
+		read: func(s Subject) (value, bool) { return exactText(s.Item.ID) }},
 	Field{Name: "item.category", Kind: KindText, Noun: "the item category",
 		read: func(s Subject) (value, bool) { return text(s.Item.Category) }},
-	Field{Name: "merchant.id", Kind: KindText, Noun: "the merchant",
-		read: func(s Subject) (value, bool) { return text(s.Merchant.ID) }},
+	Field{Name: "merchant.id", Kind: KindText, Noun: "the merchant", exact: true,
+		read: func(s Subject) (value, bool) { return exactText(s.Merchant.ID) }},
 	Field{Name: "merchant.category", Kind: KindText, Noun: "the merchant category",
 		read: func(s Subject) (value, bool) { return text(s.Merchant.Category) }},
 )
@@ -108,10 +121,17 @@ func buildFields(in ...Field) map[string]Field {
 	return out
 }
 
-// text builds a text value, reporting absence.
+// text builds a folded text value, reporting absence.
 func text(s string) (value, bool) {
 	folded := fold(s)
 	return value{kind: KindText, text: folded}, folded != ""
+}
+
+// exactText builds a text value compared as written, for identifiers.
+// Surrounding space still goes: that is transport noise, not identity.
+func exactText(s string) (value, bool) {
+	trimmed := strings.TrimSpace(s)
+	return value{kind: KindText, text: trimmed}, trimmed != ""
 }
 
 // fold is how text is compared: lower case, surrounding space removed.

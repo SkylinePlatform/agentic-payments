@@ -23,6 +23,12 @@ import (
 // that adding an operator without a phrase for it fails to compile rather than
 // producing a screen with a gap in it.
 func (e Expression) Render() string {
+	if !e.parsed() {
+		// Same reasoning as Evaluate: the zero value has nothing to say, and a
+		// surface asked to show one should print that rather than crash the
+		// screen the user is meant to be reading.
+		return "an unparsed constraint"
+	}
 	switch e.op {
 	case OpAll:
 		return joinReasons(e.renderChildren(), " and ")
