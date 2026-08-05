@@ -43,12 +43,22 @@ is deliberately kept thin until a third protocol proves where the real seams are
 | Visa TAP — RFC 9421 agent identity | Planned |
 | Mastercard Agent Pay | Research only — see below |
 
-### What is real
+### What is real, rather than simulated
 
-- Full SD-JWT issuance, disclosure and verification
-- Real ECDSA / Ed25519 signing and verification
-- Real constraint schemas and deterministic evaluation
-- Real mandate binding, receipts and dispute evidence assembly
+This list is about the *real versus mocked* axis, not the *finished versus
+unfinished* one. Everything here is implemented properly where it is
+implemented at all — nothing is faked to make a demonstration work — and the
+table above is what says how far along each protocol is.
+
+- Full SD-JWT issuance, disclosure and verification — **built**
+- Real ECDSA / Ed25519 signing and verification — **built**
+- Correlation IDs, the event log and its live stream — **built**
+- Real constraint schemas and deterministic evaluation — *not yet built*
+- Real mandate binding, receipts and dispute evidence assembly — *not yet built*
+
+The two unbuilt lines are the next work, not a different plan. When they land
+they will be real in the same sense as the rest; see
+[Running it](#running-it) for what starts today.
 
 ### What is mocked, deliberately and loudly
 
@@ -67,6 +77,64 @@ requires a certified processor or a partner relationship. Note that the
 "Mastercard Agent Toolkit" is an MCP server for reading Mastercard's API
 documentation — it is not an Agent Pay SDK.
 
+## Running it
+
+```bash
+make demo
+```
+
+That builds every binary and brings the stack up under one process. **Ctrl-C
+stops all of it**, including the frontend's dev server.
+
+| | |
+|---|---|
+| Frontend | <http://localhost:5173> |
+| Collector | <http://localhost:8085> |
+
+You need **Go 1.26+** and **Node 20+**. Older Go toolchains download the right
+one on their own; Node is needed because the frontend is part of the stack.
+Nothing else — no Docker, no database, no accounts, no keys.
+
+### What actually comes up today
+
+Two of the nine processes. `make demo` prints exactly which, and names the
+issue that will build each of the rest:
+
+```
+  Protocol participants
+    [ -- ]    agent         Shopping Agent — watches the price and assembles mandates
+                            not built yet — issue #10
+    …
+
+  Demo infrastructure — takes no part in the protocol
+    [ up ]    collector     gathers protocol events and streams them to the frontend over SSE
+
+  Interface
+    [ up ]    frontend      three lanes, the Mandate Inspector and the Trusted Surface consent screen
+
+  2 up, 7 not built yet.
+```
+
+So the ten-beat scenario does **not** run end to end yet. What you can see is
+the event stream working and the app shell serving; the seven role binaries
+still print a line and exit. That is said here because the demo runner says it
+too, and a README claiming otherwise would be the only optimistic thing in the
+repository.
+
+### Working on it
+
+```bash
+make check            # the gate before any change is done — needs only Go
+make demo             # the whole stack                    ⟵ needs Node
+make frontend         # just the frontend dev server       ⟵ needs Node
+make workspace        # write the go.work an editor opened at the root needs
+```
+
+`make check` regenerates the Go half of the canonical model, then lints and
+tests. It deliberately needs no Node, so work that never touches the frontend
+never needs npm installed. [AGENTS.md](AGENTS.md) has the rest, including the
+dependency rules CI enforces as architecture.
+
 ## Architecture
 
 ```
@@ -83,8 +151,12 @@ backend/
     surface/          trusted surface — non-agentic by protocol requirement
     registry/         local agent key registry (TAP)
     proxy/            verifying proxy in front of the merchant (TAP)
+    collector/        event log and SSE stream — NOT a role, demo infrastructure
+    demo/             brings the whole stack up; what `make demo` runs
 
   internal/
+    collector/        the event log behind cmd/collector. never evidence
+    demo/             the demo runner. topology lives in deploy/demo.json
     core/             the domain. imports nothing else in this module
       authz/          open/closed mandates, checkout_hash binding, constraints
       identity/       agent identity
@@ -106,7 +178,7 @@ backend/
 
 frontend/             React + Vite + TypeScript
 docs/                 architecture, business, protocol notes, diagrams
-deploy/
+deploy/               demo.json — the topology `make demo` starts
 ```
 
 **The one rule that matters:** `core/` never imports from `adapters/`. If the

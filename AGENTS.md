@@ -282,13 +282,24 @@ feat(authz): add open mandate constraint evaluation
 fix(sdjwt): correct disclosure hash ordering
 ```
 
+**Every unit of work has an issue, and every pull request links it.** No
+exceptions, and the small changes are the ones this is for: a documentation
+fix, a rename, a lint rule. If the work is worth a branch, it is worth a
+sentence saying what problem it solves — and the issue is where that sentence
+survives, because a squashed commit message is not somewhere anybody looks
+back. Open the issue first when one does not already exist; it takes a minute
+and it is what makes the pull request's *Why* section have something to point
+at.
+
 **Pull requests:** every change goes through one. Fill in the *Why* section
-properly — it is what makes the work reusable as article material later. Link the
-issue with `Closes #N`. Squash-merge.
+properly — it is what makes the work reusable as article material later.
+Squash-merge. Link the issue with `Closes #N` when the pull request finishes
+it, or `Refs #N` when it does not — and say in the body what is left, so that
+an issue staying open is a decision rather than an oversight.
 
 **Issues:** work is tracked in GitHub Issues under two milestones, *Google AP2*
-(#1–23) and *Visa TAP* (#24–33). Issue bodies carry spec references, dependencies
-and known traps. Read the issue before starting.
+(#1–23) and *Visa TAP* (#24–33), plus *Foundations*. Issue bodies carry spec
+references, dependencies and known traps. Read the issue before starting.
 
 **Design specs:** written with an AI assistant, live in `docs/specs/` and are
 committed. They record decisions the code has to honour, and stay true after
