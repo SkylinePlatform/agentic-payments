@@ -340,6 +340,14 @@ reconcile against the code for no benefit.
   can leave the test hanging instead of failing. `internal/collector`,
   `internal/platform/obs` and `internal/demo` all assert from goroutines.
 
+  This reaches further than it first looks, and the conversion that
+  introduced this rule tripped over it: a **helper** containing `require` is
+  unsafe as soon as any caller invokes it from a goroutine, even though
+  nothing in the helper mentions concurrency. Grepping the goroutine bodies
+  is not enough — the call there may be one word long. A shared assertion
+  helper should therefore use `assert`, because a helper that is safe only at
+  some call sites is one the next caller gets wrong.
+
   `assert.Equal` compares types as well as values, so an untyped literal
   against a `uint64` or an `int64` fails where `if got != 1` compiled. Write
   `int64(1)`, or reach for `assert.Zero` when that reads better.

@@ -17,10 +17,19 @@ var base = time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 
 // publish is Publish with its error asserted away, for the tests whose subject
 // is something else.
+// publish is Publish with its error asserted away, for the tests whose subject
+// is something else.
+//
+// assert rather than require, because TestNoGapAndNoDuplicateAcrossSubscribe
+// calls this from inside a wg.Go. require would call t.FailNow off the test
+// goroutine, which the testing package does not permit — the failure is lost
+// and the test can hang rather than fail. A helper that is safe only at some
+// call sites is a helper the next caller gets wrong, so it is safe at all of
+// them.
 func publish(t *testing.T, h *collector.Hub, e obs.Event) uint64 {
 	t.Helper()
 	seq, err := h.Publish(e)
-	require.NoError(t, err, "Publish")
+	assert.NoError(t, err, "Publish")
 	return seq
 }
 
