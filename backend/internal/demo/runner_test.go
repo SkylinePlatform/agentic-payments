@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/demo"
 )
 
@@ -33,9 +36,7 @@ func runOnce(t *testing.T, processes ...demo.Process) []demo.Status {
 	t.Helper()
 
 	m := &demo.Manifest{Processes: processes}
-	if err := m.Validate(); err != nil {
-		t.Fatalf("the test's own manifest is invalid: %v", err)
-	}
+	require.NoError(t, m.Validate(), "the test's own manifest is invalid")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var out strings.Builder
@@ -89,9 +90,7 @@ func TestStubThatRunsIsReportedMislabelled(t *testing.T) {
 	stub.Issue = "10"
 
 	got := stateOf(t, runOnce(t, stub), "agent")
-	if got.State != demo.StateMislabelled {
-		t.Errorf("state = %q, want %q", got.State, demo.StateMislabelled)
-	}
+	assert.Equal(t, demo.StateMislabelled, got.State)
 }
 
 func TestProcessThatStaysUpIsRunning(t *testing.T) {
@@ -107,9 +106,7 @@ func TestProcessThatDiesImmediatelyIsFailed(t *testing.T) {
 	t.Parallel()
 
 	got := stateOf(t, runOnce(t, shell("merchant", "echo boom >&2; exit 2")), "merchant")
-	if got.State != demo.StateFailed {
-		t.Errorf("state = %q, want %q", got.State, demo.StateFailed)
-	}
+	assert.Equal(t, demo.StateFailed, got.State)
 	if got.Detail == "" {
 		t.Error("a failure with no explanation tells the reader nothing")
 	}
@@ -123,9 +120,7 @@ func TestUnstartableCommandIsFailed(t *testing.T) {
 	p.Args = nil
 
 	got := stateOf(t, runOnce(t, p), "merchant")
-	if got.State != demo.StateFailed {
-		t.Errorf("state = %q, want %q", got.State, demo.StateFailed)
-	}
+	assert.Equal(t, demo.StateFailed, got.State)
 }
 
 // TestHealthyProcessIsRunning covers the wait-for-ready path, using a real
@@ -146,9 +141,7 @@ func TestHealthyProcessIsRunning(t *testing.T) {
 	// port, which is correct and is a different test — so this one asserts
 	// the conflict is reported rather than silently overwritten.
 	got := stateOf(t, runOnce(t, p), "collector")
-	if got.State != demo.StateFailed {
-		t.Errorf("state = %q, want %q — a port already answering is a conflict", got.State, demo.StateFailed)
-	}
+	assert.Equal(t, demo.StateFailed, got.State, "a port already answering is a conflict")
 	if !strings.Contains(got.Detail, "already answering") {
 		t.Errorf("detail = %q, want it to name the conflict", got.Detail)
 	}
@@ -187,9 +180,7 @@ func TestHealthCheckFailureIsReported(t *testing.T) {
 	// Health never answers, so this waits out the budget. Nothing sleeps —
 	// the budget is a context deadline — but it is the slowest test here.
 	got := stateOf(t, runOnce(t, p), "collector")
-	if got.State != demo.StateFailed {
-		t.Errorf("state = %q, want %q", got.State, demo.StateFailed)
-	}
+	assert.Equal(t, demo.StateFailed, got.State)
 }
 
 // TestShutdownStopsDescendants is why every child gets its own process group.

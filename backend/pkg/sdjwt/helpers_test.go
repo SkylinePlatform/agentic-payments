@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
 
@@ -110,9 +112,7 @@ func newSalts() *deterministicSalts { return &deterministicSalts{} }
 func mustBlind(t *testing.T, b *sdjwt.Blinder, claims any, paths ...string) (map[string]any, []sdjwt.Disclosure) {
 	t.Helper()
 	payload, disclosures, err := b.Blind(claims, paths...)
-	if err != nil {
-		t.Fatalf("Blind(%v): %v", paths, err)
-	}
+	require.NoError(t, err, "Blind(%v)", paths)
 	return payload, disclosures
 }
 
@@ -120,9 +120,7 @@ func mustBlind(t *testing.T, b *sdjwt.Blinder, claims any, paths ...string) (map
 func mustIssue(t *testing.T, signer sdjwt.Signer, payload map[string]any, ds []sdjwt.Disclosure, opts ...sdjwt.IssueOption) *sdjwt.SDJWT {
 	t.Helper()
 	issued, err := sdjwt.Issue(t.Context(), signer, payload, ds, opts...)
-	if err != nil {
-		t.Fatalf("Issue: %v", err)
-	}
+	require.NoError(t, err, "Issue")
 	return issued
 }
 

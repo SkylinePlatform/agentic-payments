@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant"
@@ -19,18 +22,14 @@ func demoInventory(t *testing.T) (*merchant.Inventory, *clock.Fake) {
 	t.Helper()
 	c := clock.NewFake(base)
 	inv, err := merchant.NewDemoInventory(c, base, merchant.DefaultStep)
-	if err != nil {
-		t.Fatalf("NewDemoInventory: %v", err)
-	}
+	require.NoError(t, err, "NewDemoInventory")
 	return inv, c
 }
 
 func quote(t *testing.T, inv *merchant.Inventory) merchant.Quote {
 	t.Helper()
 	q, err := inv.Quote(merchant.DemoRoute)
-	if err != nil {
-		t.Fatalf("Quote: %v", err)
-	}
+	require.NoError(t, err, "Quote")
 	return q
 }
 
@@ -108,9 +107,7 @@ func TestPriceStepsThroughTheSequence(t *testing.T) {
 		if q.Final != want.final {
 			t.Errorf("after %d steps: final = %v, want %v", want.afterStep, q.Final, want.final)
 		}
-		if q.Price.Currency != merchant.DemoCurrency {
-			t.Errorf("currency = %q, want %q", q.Price.Currency, merchant.DemoCurrency)
-		}
+		assert.Equal(t, merchant.DemoCurrency, q.Price.Currency)
 		c.Advance(merchant.DefaultStep)
 	}
 }
@@ -143,9 +140,7 @@ func TestAnEarlyReadSeesTheOpeningPrice(t *testing.T) {
 	c := clock.NewFake(base)
 	// The schedule starts an hour after the clock does.
 	inv, err := merchant.NewDemoInventory(c, base.Add(time.Hour), merchant.DefaultStep)
-	if err != nil {
-		t.Fatalf("NewDemoInventory: %v", err)
-	}
+	require.NoError(t, err, "NewDemoInventory")
 
 	q := quote(t, inv)
 	if q.Price.Amount != merchant.DemoPriceWatched {
@@ -165,9 +160,7 @@ func TestQuotesAreReproducible(t *testing.T) {
 	read := func() []int {
 		c := clock.NewFake(base)
 		inv, err := merchant.NewDemoInventory(c, base, merchant.DefaultStep)
-		if err != nil {
-			t.Fatalf("NewDemoInventory: %v", err)
-		}
+		require.NoError(t, err, "NewDemoInventory")
 		var prices []int
 		for range 6 {
 			prices = append(prices, quote(t, inv).Price.Amount)
@@ -197,9 +190,7 @@ func TestUnknownRouteIsRefused(t *testing.T) {
 	// A zero quote would let a caller that ignores the error book a free
 	// flight on a route the merchant does not sell.
 	q, err := inv.Quote(merchant.Route{Origin: "LHR", Destination: "JFK"})
-	if !errors.Is(err, merchant.ErrNoSuchRoute) {
-		t.Errorf("err = %v, want ErrNoSuchRoute", err)
-	}
+	assert.ErrorIs(t, err, merchant.ErrNoSuchRoute, "err = %v, want ErrNoSuchRoute", err)
 	if q.Price.Amount != 0 || q.Route != (merchant.Route{}) {
 		t.Errorf("a refused quote carried data: %+v", q)
 	}
@@ -210,17 +201,13 @@ func TestRoutesAreListedStably(t *testing.T) {
 
 	c := clock.NewFake(base)
 	one, err := merchant.NewSchedule(base, time.Minute, generated.Amount{Amount: 100, Currency: "USD"})
-	if err != nil {
-		t.Fatalf("NewSchedule: %v", err)
-	}
+	require.NoError(t, err, "NewSchedule")
 	inv, err := merchant.New(c, map[merchant.Route]*merchant.Schedule{
 		{Origin: "ZRH", Destination: "AMS"}: one,
 		{Origin: "BEG", Destination: "PMI"}: one,
 		{Origin: "LHR", Destination: "CDG"}: one,
 	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	require.NoError(t, err, "New")
 
 	// Go's map iteration is deliberately unordered; output that varies between
 	// runs is output a screenshot cannot be taken of.
@@ -228,9 +215,7 @@ func TestRoutesAreListedStably(t *testing.T) {
 	for range 5 {
 		got := inv.Routes()
 		for i := range want {
-			if got[i].String() != want[i] {
-				t.Fatalf("Routes() = %v, want %v", got, want)
-			}
+			require.Equal(t, want[i], got[i].String())
 		}
 	}
 }
@@ -254,9 +239,7 @@ func TestRejectsNonsense(t *testing.T) {
 	}
 
 	good, err := merchant.NewSchedule(base, time.Minute, ok)
-	if err != nil {
-		t.Fatalf("NewSchedule: %v", err)
-	}
+	require.NoError(t, err, "NewSchedule")
 	if _, err := merchant.New(nil, map[merchant.Route]*merchant.Schedule{merchant.DemoRoute: good}); err == nil {
 		t.Error("an inventory with no clock was accepted; the price could not move")
 	}
@@ -329,9 +312,7 @@ func TestScheduleReportsItsLength(t *testing.T) {
 	t.Parallel()
 
 	s, err := merchant.NewSchedule(base, time.Minute, merchant.DemoPrices()...)
-	if err != nil {
-		t.Fatalf("NewSchedule: %v", err)
-	}
+	require.NoError(t, err, "NewSchedule")
 	if got := s.Steps(); got != 3 {
 		t.Errorf("Steps() = %d, want 3", got)
 	}
@@ -345,13 +326,9 @@ func TestConstructionCopiesItsInputs(t *testing.T) {
 	prices := merchant.DemoPrices()
 	c := clock.NewFake(base)
 	s, err := merchant.NewSchedule(base, merchant.DefaultStep, prices...)
-	if err != nil {
-		t.Fatalf("NewSchedule: %v", err)
-	}
+	require.NoError(t, err, "NewSchedule")
 	inv, err := merchant.New(c, map[merchant.Route]*merchant.Schedule{merchant.DemoRoute: s})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
+	require.NoError(t, err, "New")
 
 	prices[0] = generated.Amount{Amount: 1, Currency: "USD"}
 

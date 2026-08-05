@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/collector"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 )
@@ -39,9 +42,7 @@ func TestIngestAcceptsABatch(t *testing.T) {
 	h := collector.Handler(hub)
 
 	batch, err := json.Marshal([]obs.Event{event("first"), event("second")})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	require.NoError(t, err, "marshal")
 	rec := post(t, h, string(batch))
 
 	if rec.Code != http.StatusAccepted {
@@ -123,9 +124,7 @@ func TestIngestDuringShutdownSaysSo(t *testing.T) {
 	hub.Close()
 
 	batch, err := json.Marshal([]obs.Event{event("too late")})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	require.NoError(t, err, "marshal")
 	rec := post(t, collector.Handler(hub), string(batch))
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -150,22 +149,16 @@ func TestStreamResumesFromLastEventID(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+collector.EventsPath, nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	require.NoError(t, err, "NewRequest")
 	req.Header.Set("Last-Event-ID", "2")
 
 	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatalf("open stream: %v", err)
-	}
+	require.NoError(t, err, "open stream")
 	defer func() { _ = resp.Body.Close() }()
 
 	// Only what it missed: seq 3, and nothing before it.
 	frame := readFrame(t, bufio.NewReader(resp.Body))
-	if frame["id"] != "3" {
-		t.Errorf("first replayed frame id = %q, want 3 — the reconnect repeated what the client had", frame["id"])
-	}
+	assert.Equal(t, "3", frame["id"], "the reconnect repeated what the client had")
 }
 
 func TestWrongMethodIsRefused(t *testing.T) {
@@ -273,26 +266,18 @@ func TestStreamDeliversOverARealSocket(t *testing.T) {
 	if first["id"] != "1" {
 		t.Errorf("first frame id = %q, want 1", first["id"])
 	}
-	if first["event"] != string(obs.KindMandateConstructed) {
-		t.Errorf("first frame event = %q, want %q", first["event"], obs.KindMandateConstructed)
-	}
+	assert.Equal(t, string(obs.KindMandateConstructed), first["event"])
 	var replayed collector.Record
-	if err := json.Unmarshal([]byte(first["data"]), &replayed); err != nil {
-		t.Fatalf("decode replayed frame: %v", err)
-	}
+	require.NoError(t, json.Unmarshal([]byte(first["data"]), &replayed), "decode replayed frame")
 	if replayed.Event.Detail != "before the viewer arrived" {
 		t.Errorf("replayed detail = %q", replayed.Event.Detail)
 	}
 
 	// Now a live one, posted through the ingest endpoint — the whole path.
 	batch, err := json.Marshal([]obs.Event{event("live")})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	require.NoError(t, err, "marshal")
 	resp, err := srv.Client().Post(srv.URL+collector.EventsPath, "application/json", strings.NewReader(string(batch)))
-	if err != nil {
-		t.Fatalf("post: %v", err)
-	}
+	require.NoError(t, err, "post")
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("ingest status = %d, want 202", resp.StatusCode)
@@ -303,12 +288,8 @@ func TestStreamDeliversOverARealSocket(t *testing.T) {
 		t.Errorf("second frame id = %q, want 2", second["id"])
 	}
 	var live collector.Record
-	if err := json.Unmarshal([]byte(second["data"]), &live); err != nil {
-		t.Fatalf("decode live frame: %v", err)
-	}
-	if live.Event.Detail != "live" {
-		t.Errorf("live detail = %q, want %q", live.Event.Detail, "live")
-	}
+	require.NoError(t, json.Unmarshal([]byte(second["data"]), &live), "decode live frame")
+	assert.Equal(t, "live", live.Event.Detail)
 }
 
 // TestStreamEndsWhenTheHubCloses covers shutdown from the client's side: the

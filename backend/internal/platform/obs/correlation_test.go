@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 )
 
@@ -19,14 +21,10 @@ func TestNewCorrelationIDIsEightLegibleCharacters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCorrelationID: %v", err)
 	}
-	if id != "6aQx3Kef" {
-		t.Errorf("id = %q, want %q", id, "6aQx3Kef")
-	}
+	assert.Equal(t, "6aQx3Kef", id)
 	// The length is the whole point of choosing six bytes: ADR 0003 rejected
 	// traceparent on legibility, and a value that grew would give that up.
-	if len(id) != 8 {
-		t.Errorf("len(id) = %d, want 8 — the ID has to read in a screenshot", len(id))
-	}
+	assert.Equal(t, 8, len(id), "the ID has to read in a screenshot")
 	if !obs.ValidCorrelationID(id) {
 		t.Error("a minted ID did not pass our own validator")
 	}

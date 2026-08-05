@@ -8,6 +8,9 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 )
@@ -62,9 +65,7 @@ func (s *blockingSink) Send(context.Context, []obs.Event) error {
 func newEmitter(t *testing.T, opts ...obs.EmitterOption) *obs.Emitter {
 	t.Helper()
 	e, err := obs.NewEmitter(clock.NewFake(base), "agent", opts...)
-	if err != nil {
-		t.Fatalf("NewEmitter: %v", err)
-	}
+	require.NoError(t, err, "NewEmitter")
 	// Every emitter owns a goroutine. go test -race runs the whole suite in one
 	// process, so one that outlives its test outlives every test after it.
 	t.Cleanup(func() { _ = e.Close(context.Background()) })
@@ -85,15 +86,9 @@ func TestEmitReachesTheSink(t *testing.T) {
 		t.Fatalf("batch of %d, want 1", len(batch))
 	}
 	got := batch[0]
-	if got.Kind != obs.KindMandateConstructed {
-		t.Errorf("kind = %q, want %q", got.Kind, obs.KindMandateConstructed)
-	}
-	if got.CorrelationID != "7aQx-3Kf" {
-		t.Errorf("correlation = %q — the emitter did not read it off the context", got.CorrelationID)
-	}
-	if got.Role != "agent" {
-		t.Errorf("role = %q, want %q", got.Role, "agent")
-	}
+	assert.Equal(t, obs.KindMandateConstructed, got.Kind)
+	assert.Equal(t, "7aQx-3Kf", got.CorrelationID, "the emitter did not read it off the context")
+	assert.Equal(t, "agent", got.Role)
 	// From the injected clock, never time.Now. A wall-clock read here would be
 	// untestable and would breach the rule forbidigo enforces.
 	if !got.At.Equal(base) {
@@ -113,9 +108,7 @@ func TestEmitRejectionCarriesTheCode(t *testing.T) {
 	if batch[0].Kind != obs.KindMandateRejected {
 		t.Errorf("kind = %q, want a rejection", batch[0].Kind)
 	}
-	if batch[0].Code != "constraint_violated" {
-		t.Errorf("code = %q, want %q", batch[0].Code, "constraint_violated")
-	}
+	assert.Equal(t, "constraint_violated", batch[0].Code)
 }
 
 // TestEmitNeverBlocks is the constraint ADR 0003 states outright: a collector
@@ -130,9 +123,7 @@ func TestEmitNeverBlocks(t *testing.T) {
 		sink := newBlockingSink()
 		e, err := obs.NewEmitter(clock.NewFake(base), "agent",
 			obs.WithSink(sink), obs.WithBuffer(4))
-		if err != nil {
-			t.Fatalf("NewEmitter: %v", err)
-		}
+		require.NoError(t, err, "NewEmitter")
 
 		// Get the sender parked inside Send, so nothing is draining.
 		e.Emit(context.Background(), obs.KindMandateConstructed, "first")
@@ -165,9 +156,7 @@ func TestFullBufferDropsOldest(t *testing.T) {
 	sink := newBlockingSink()
 	e, err := obs.NewEmitter(clock.NewFake(base), "agent",
 		obs.WithSink(sink), obs.WithBuffer(2))
-	if err != nil {
-		t.Fatalf("NewEmitter: %v", err)
-	}
+	require.NoError(t, err, "NewEmitter")
 
 	// Park the sender, which also empties the ring: it takes this event as a
 	// batch before blocking.
@@ -184,9 +173,7 @@ func TestFullBufferDropsOldest(t *testing.T) {
 	}
 
 	close(sink.release)
-	if err := e.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	require.NoError(t, e.Close(context.Background()), "Close")
 	// The blocking sink records nothing, so assert through the counters: four
 	// emitted, one dropped, three delivered.
 	s := e.Stats()
@@ -206,9 +193,7 @@ func TestCloseFlushes(t *testing.T) {
 	for range 10 {
 		e.Emit(context.Background(), obs.KindReceiptIssued, "issued")
 	}
-	if err := e.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	require.NoError(t, e.Close(context.Background()), "Close")
 
 	if got := len(sink.events()); got != 10 {
 		t.Errorf("the sink saw %d events, want 10 — Close did not drain", got)
@@ -224,9 +209,7 @@ func TestEmitAfterCloseIsADropNotAPanic(t *testing.T) {
 	sink := newRecordingSink()
 	e := newEmitter(t, obs.WithSink(sink))
 
-	if err := e.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	require.NoError(t, e.Close(context.Background()), "Close")
 	e.Emit(context.Background(), obs.KindMandateVerified, "after the door shut")
 
 	if got := e.Stats().Dropped; got != 1 {
@@ -248,16 +231,12 @@ func TestInvalidEventIsRejectedNotBuffered(t *testing.T) {
 	// A kind outside the closed set. Nothing downstream could display it.
 	e.Emit(context.Background(), obs.Kind("mandate_teleported"), "not a real moment")
 
-	if err := e.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	require.NoError(t, e.Close(context.Background()), "Close")
 	s := e.Stats()
 	if s.Rejected != 1 {
 		t.Errorf("Rejected = %d, want 1", s.Rejected)
 	}
-	if s.Emitted != 0 {
-		t.Errorf("Emitted = %d, want 0 — an invalid event was buffered", s.Emitted)
-	}
+	assert.Equal(t, 0, s.Emitted, "an invalid event was buffered")
 	if got := len(sink.events()); got != 0 {
 		t.Errorf("the sink saw %d events, want 0", got)
 	}
@@ -276,9 +255,7 @@ func TestSinkFailureIsCountedNotRetried(t *testing.T) {
 	e.Emit(context.Background(), obs.KindMandateConstructed, "first")
 	<-sink.sent
 
-	if err := e.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	require.NoError(t, e.Close(context.Background()), "Close")
 	s := e.Stats()
 	if s.Failed != 1 {
 		t.Errorf("Failed = %d, want 1", s.Failed)
@@ -299,9 +276,7 @@ func TestDefaultSinkThrowsEventsAway(t *testing.T) {
 	e := newEmitter(t)
 	e.Emit(context.Background(), obs.KindMandateConstructed, "nobody is listening")
 
-	if err := e.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	require.NoError(t, e.Close(context.Background()), "Close")
 	if got := e.Stats().Delivered; got != 1 {
 		t.Errorf("Delivered = %d, want 1 — Discard should accept everything", got)
 	}
@@ -331,9 +306,7 @@ func TestCloseRespectsItsDeadline(t *testing.T) {
 
 	sink := newBlockingSink()
 	e, err := obs.NewEmitter(clock.NewFake(base), "agent", obs.WithSink(sink))
-	if err != nil {
-		t.Fatalf("NewEmitter: %v", err)
-	}
+	require.NoError(t, err, "NewEmitter")
 	e.Emit(context.Background(), obs.KindMandateConstructed, "stuck in the sink")
 	<-sink.entered
 
@@ -370,9 +343,7 @@ func TestConcurrentEmit(t *testing.T) {
 	}
 	wg.Wait()
 
-	if err := e.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	require.NoError(t, e.Close(context.Background()), "Close")
 	if got := e.Stats().Emitted; got != 50 {
 		t.Errorf("Emitted = %d, want 50", got)
 	}

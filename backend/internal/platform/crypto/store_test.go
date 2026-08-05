@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
 )
@@ -27,18 +30,12 @@ func TestRotationRetiresThePreviousKey(t *testing.T) {
 	payload := []byte("signed before the rotation")
 
 	beforeRotation, err := store.Signer(testSlot)
-	if err != nil {
-		t.Fatalf("Signer: %v", err)
-	}
+	require.NoError(t, err, "Signer")
 	sig, err := beforeRotation.Sign(t.Context(), payload)
-	if err != nil {
-		t.Fatalf("Sign: %v", err)
-	}
+	require.NoError(t, err, "Sign")
 
 	second, err := store.Rotate(testSlot, "rotate-1")
-	if err != nil {
-		t.Fatalf("Rotate: %v", err)
-	}
+	require.NoError(t, err, "Rotate")
 	if second.KeyID == first.KeyID {
 		t.Fatal("Rotate reused the previous kid; a rotation must produce new key material")
 	}
@@ -51,9 +48,7 @@ func TestRotationRetiresThePreviousKey(t *testing.T) {
 
 	// The slot now signs with the new key.
 	current, err := store.Signer(testSlot)
-	if err != nil {
-		t.Fatalf("Signer after rotation: %v", err)
-	}
+	require.NoError(t, err, "Signer after rotation")
 	if current.Key() != second {
 		t.Errorf("Signer after rotation uses %s, want %s", current.Key(), second)
 	}
@@ -66,9 +61,7 @@ func TestRotationRetiresThePreviousKey(t *testing.T) {
 
 	// What it signed before the rotation still verifies.
 	verifier, err := store.Resolve(t.Context(), first)
-	if err != nil {
-		t.Fatalf("Resolve retired key: %v", err)
-	}
+	require.NoError(t, err, "Resolve retired key")
 	if err := verifier.Verify(payload, sig); err != nil {
 		t.Errorf("Verify a signature made before the rotation: %v", err)
 	}
@@ -104,14 +97,10 @@ func TestKeyExpiresAtTheEndOfItsLifetime(t *testing.T) {
 	store, fake, ref := storeWithKey(t, authz.EdDSA, crypto.WithKeyLifetime(lifetime))
 
 	signer, err := store.Signer(testSlot)
-	if err != nil {
-		t.Fatalf("Signer: %v", err)
-	}
+	require.NoError(t, err, "Signer")
 	payload := []byte("payload")
 	sig, err := signer.Sign(t.Context(), payload)
-	if err != nil {
-		t.Fatalf("Sign: %v", err)
-	}
+	require.NoError(t, err, "Sign")
 
 	// One instant before expiry everything still works.
 	fake.Advance(lifetime - time.Nanosecond)
@@ -120,9 +109,7 @@ func TestKeyExpiresAtTheEndOfItsLifetime(t *testing.T) {
 		t.Errorf("Signer one nanosecond before expiry: %v", err)
 	}
 	verifier, err := store.Resolve(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("Resolve one nanosecond before expiry: %v", err)
-	}
+	require.NoError(t, err, "Resolve one nanosecond before expiry")
 	if err := verifier.Verify(payload, sig); err != nil {
 		t.Errorf("Verify one nanosecond before expiry: %v", err)
 	}
@@ -204,16 +191,10 @@ func TestIdempotency(t *testing.T) {
 
 		store, _ := newStore()
 		first, err := store.Generate(testSlot, authz.ES256, "boot")
-		if err != nil {
-			t.Fatalf("Generate: %v", err)
-		}
+		require.NoError(t, err, "Generate")
 		again, err := store.Generate(testSlot, authz.ES256, "boot")
-		if err != nil {
-			t.Fatalf("replayed Generate: %v", err)
-		}
-		if again != first {
-			t.Errorf("replayed Generate = %s, want %s", again, first)
-		}
+		require.NoError(t, err, "replayed Generate")
+		assert.Equal(t, first, again)
 	})
 
 	t.Run("replayed rotate does not burn a second key", func(t *testing.T) {
@@ -221,16 +202,10 @@ func TestIdempotency(t *testing.T) {
 
 		store, _, original := storeWithKey(t, authz.ES256)
 		rotated, err := store.Rotate(testSlot, "rotate-1")
-		if err != nil {
-			t.Fatalf("Rotate: %v", err)
-		}
+		require.NoError(t, err, "Rotate")
 		again, err := store.Rotate(testSlot, "rotate-1")
-		if err != nil {
-			t.Fatalf("replayed Rotate: %v", err)
-		}
-		if again != rotated {
-			t.Errorf("replayed Rotate = %s, want %s", again, rotated)
-		}
+		require.NoError(t, err, "replayed Rotate")
+		assert.Equal(t, rotated, again)
 		assertJWKSContains(t, store, original.KeyID, rotated.KeyID)
 	})
 
@@ -242,9 +217,7 @@ func TestIdempotency(t *testing.T) {
 			t.Fatalf("Generate: %v", err)
 		}
 		_, err := store.Generate("second", authz.ES256, "shared")
-		if !errors.Is(err, crypto.ErrIdempotencyConflict) {
-			t.Errorf("Generate replaying a key with new arguments = %v, want ErrIdempotencyConflict", err)
-		}
+		assert.ErrorIs(t, err, crypto.ErrIdempotencyConflict, "Generate replaying a key with new arguments = %v, want ErrIdempotencyConflict", err)
 	})
 
 	t.Run("an idempotency key is required", func(t *testing.T) {
@@ -287,9 +260,7 @@ func TestJWKSCarriesNoPrivateMaterial(t *testing.T) {
 			}
 
 			raw, err := store.JWKS(t.Context())
-			if err != nil {
-				t.Fatalf("JWKS: %v", err)
-			}
+			require.NoError(t, err, "JWKS")
 
 			var set struct {
 				Keys []map[string]json.RawMessage `json:"keys"`
@@ -328,14 +299,10 @@ func TestJWKSIsStable(t *testing.T) {
 	}
 
 	first, err := store.JWKS(t.Context())
-	if err != nil {
-		t.Fatalf("JWKS: %v", err)
-	}
+	require.NoError(t, err, "JWKS")
 	for range 8 {
 		again, err := store.JWKS(t.Context())
-		if err != nil {
-			t.Fatalf("JWKS: %v", err)
-		}
+		require.NoError(t, err, "JWKS")
 		if string(again) != string(first) {
 			t.Fatalf("JWK Set is not stable between calls:\n%s\n%s", first, again)
 		}
@@ -399,9 +366,7 @@ func assertState(t *testing.T, store *crypto.Store, kid string, want crypto.KeyS
 	t.Helper()
 
 	got, err := store.State(kid)
-	if err != nil {
-		t.Fatalf("State(%s): %v", kid, err)
-	}
+	require.NoError(t, err, "State(%s)", kid)
 	if got != want {
 		t.Errorf("State(%s) = %s, want %s", kid, got, want)
 	}
@@ -412,14 +377,10 @@ func assertJWKSContains(t *testing.T, store *crypto.Store, kids ...string) {
 	t.Helper()
 
 	raw, err := store.JWKS(t.Context())
-	if err != nil {
-		t.Fatalf("JWKS: %v", err)
-	}
+	require.NoError(t, err, "JWKS")
 
 	set, err := crypto.ParseJWKS(raw)
-	if err != nil {
-		t.Fatalf("ParseJWKS: %v", err)
-	}
+	require.NoError(t, err, "ParseJWKS")
 
 	published := make(map[string]bool)
 	for _, ref := range set.Keys() {

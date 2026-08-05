@@ -11,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/problem"
@@ -67,9 +70,7 @@ func wrap(t *testing.T, h http.Handler, opts ...store.Option) (http.Handler, *cl
 	t.Helper()
 	c := clock.NewFake(base)
 	m, err := transport.NewIdempotency(c, opts...)
-	if err != nil {
-		t.Fatalf("NewIdempotency: %v", err)
-	}
+	require.NoError(t, err, "NewIdempotency")
 	return m.Wrap(h), c
 }
 
@@ -107,9 +108,7 @@ func TestSafeMethodsPassThrough(t *testing.T) {
 			rec := httptest.NewRecorder()
 			wrapped.ServeHTTP(rec, httptest.NewRequest(method, "/checkout", nil))
 
-			if rec.Code != http.StatusOK {
-				t.Errorf("status = %d, want 200 — a safe method needs no key", rec.Code)
-			}
+			assert.Equal(t, http.StatusOK, rec.Code, "a safe method needs no key")
 			if h.runs.Load() != 1 {
 				t.Errorf("handler ran %d times, want 1", h.runs.Load())
 			}
@@ -151,9 +150,7 @@ func TestRetryReplaysWithoutRerunning(t *testing.T) {
 	second := httptest.NewRecorder()
 	wrapped.ServeHTTP(second, post("k1", "/checkout", `{"amount":100}`))
 
-	if h.runs.Load() != 1 {
-		t.Fatalf("handler ran %d times, want 1 — the retry re-executed the operation", h.runs.Load())
-	}
+	require.Equal(t, int64(1), h.runs.Load(), "the retry re-executed the operation")
 	if first.Body.String() != second.Body.String() {
 		t.Errorf("replayed body %q, want %q", second.Body, first.Body)
 	}
@@ -201,9 +198,7 @@ func TestSameKeyDifferentRequestConflicts(t *testing.T) {
 			if p := problemOf(t, rec); p.Code != generated.ErrorCodeIdempotencyConflict {
 				t.Errorf("code = %q, want %q", p.Code, generated.ErrorCodeIdempotencyConflict)
 			}
-			if h.runs.Load() != 1 {
-				t.Errorf("handler ran %d times, want 1 — the conflicting request was executed", h.runs.Load())
-			}
+			assert.Equal(t, int64(1), h.runs.Load(), "the conflicting request was executed")
 		})
 	}
 }
@@ -224,18 +219,14 @@ func TestServerErrorIsNotRemembered(t *testing.T) {
 			t.Fatalf("status = %d, want 500", rec.Code)
 		}
 	}
-	if h.runs.Load() != 2 {
-		t.Errorf("handler ran %d times, want 2 — a transient failure was cached", h.runs.Load())
-	}
+	assert.Equal(t, int64(2), h.runs.Load(), "a transient failure was cached")
 
 	// And once it succeeds, that is what gets remembered.
 	h.status, h.body = http.StatusOK, `{"receipt":"abc"}`
 	for range 2 {
 		wrapped.ServeHTTP(httptest.NewRecorder(), post("k1", "/checkout", `{"amount":100}`))
 	}
-	if h.runs.Load() != 3 {
-		t.Errorf("handler ran %d times, want 3 — the success was not remembered", h.runs.Load())
-	}
+	assert.Equal(t, int64(3), h.runs.Load(), "the success was not remembered")
 }
 
 // TestClientErrorIsRemembered is the other side of that rule: a 4xx is a
@@ -253,9 +244,7 @@ func TestClientErrorIsRemembered(t *testing.T) {
 			t.Fatalf("status = %d, want 403", rec.Code)
 		}
 	}
-	if h.runs.Load() != 1 {
-		t.Errorf("handler ran %d times, want 1 — a settled rejection was re-evaluated", h.runs.Load())
-	}
+	assert.Equal(t, int64(1), h.runs.Load(), "a settled rejection was re-evaluated")
 }
 
 func TestHandlerStillReadsTheBody(t *testing.T) {
@@ -284,9 +273,7 @@ func TestRecordLapses(t *testing.T) {
 	c.Advance(2 * time.Hour)
 	wrapped.ServeHTTP(httptest.NewRecorder(), post("k1", "/checkout", `{"amount":100}`))
 
-	if h.runs.Load() != 2 {
-		t.Errorf("handler ran %d times, want 2 — the key should be free past its window", h.runs.Load())
-	}
+	assert.Equal(t, int64(2), h.runs.Load(), "the key should be free past its window")
 }
 
 // TestCapacityRefusesBeforeTheOperationRuns is why the key is claimed up
@@ -310,9 +297,7 @@ func TestCapacityRefusesBeforeTheOperationRuns(t *testing.T) {
 	if p := problemOf(t, rec); p.Code != generated.ErrorCodeVerifierUnavailable {
 		t.Errorf("code = %q, want %q", p.Code, generated.ErrorCodeVerifierUnavailable)
 	}
-	if h.runs.Load() != 1 {
-		t.Errorf("handler ran %d times, want 1 — an operation ran that could not be remembered", h.runs.Load())
-	}
+	assert.Equal(t, int64(1), h.runs.Load(), "an operation ran that could not be remembered")
 }
 
 // TestRetryWhileTheFirstIsStillRunning is the case a lookup-then-remember
@@ -349,9 +334,7 @@ func TestRetryWhileTheFirstIsStillRunning(t *testing.T) {
 	close(h.release)
 	wg.Wait()
 
-	if h.runs.Load() != 1 {
-		t.Errorf("handler ran %d times, want 1 — the retry re-executed an operation still in flight", h.runs.Load())
-	}
+	assert.Equal(t, int64(1), h.runs.Load(), "the retry re-executed an operation still in flight")
 
 	// Once the original finishes, the same retry replays instead of running.
 	after := httptest.NewRecorder()
@@ -376,9 +359,7 @@ func TestPanickingHandlerFreesTheKey(t *testing.T) {
 	})
 	c := clock.NewFake(base)
 	m, err := transport.NewIdempotency(c)
-	if err != nil {
-		t.Fatalf("NewIdempotency: %v", err)
-	}
+	require.NoError(t, err, "NewIdempotency")
 
 	func() {
 		defer func() { _ = recover() }()
@@ -389,9 +370,7 @@ func TestPanickingHandlerFreesTheKey(t *testing.T) {
 	rec := httptest.NewRecorder()
 	m.Wrap(h).ServeHTTP(rec, post("k1", "/checkout", `{"amount":100}`))
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200 — the panicking attempt stranded the key", rec.Code)
-	}
+	assert.Equal(t, http.StatusOK, rec.Code, "the panicking attempt stranded the key")
 	if h.runs.Load() != 1 {
 		t.Errorf("handler ran %d times, want 1", h.runs.Load())
 	}
@@ -469,9 +448,7 @@ func TestOversizedResponseIsNotRemembered(t *testing.T) {
 	}
 
 	wrapped.ServeHTTP(httptest.NewRecorder(), post("k1", "/checkout", `{"amount":100}`))
-	if h.runs.Load() != 2 {
-		t.Errorf("handler ran %d times, want 2 — an oversized response was remembered anyway", h.runs.Load())
-	}
+	assert.Equal(t, int64(2), h.runs.Load(), "an oversized response was remembered anyway")
 }
 
 // TestFlushReachesTheUnderlyingWriter guards an optional interface that

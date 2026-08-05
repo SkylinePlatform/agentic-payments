@@ -3,6 +3,8 @@ package crypto
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 )
 
@@ -27,15 +29,11 @@ func TestParsedKeysCannotBeWidenedIntoSigners(t *testing.T) {
 
 			// A generated key signs.
 			generated, err := generate(alg)
-			if err != nil {
-				t.Fatalf("generate: %v", err)
-			}
+			require.NoError(t, err, "generate")
 
 			// The same key, round-tripped through publication, does not.
 			parsed, _, err := parseJWK(publish(generated, "kid"))
-			if err != nil {
-				t.Fatalf("parseJWK: %v", err)
-			}
+			require.NoError(t, err, "parseJWK")
 			if _, widened := parsed.(signingMaterial); widened {
 				t.Fatalf("a key parsed from a JWK Set satisfies signingMaterial; "+
 					"%T must not have a sign method", parsed)
@@ -44,9 +42,7 @@ func TestParsedKeysCannotBeWidenedIntoSigners(t *testing.T) {
 			// And it still verifies, so the split cost nothing.
 			payload := []byte("payload")
 			sig, err := generated.sign(payload)
-			if err != nil {
-				t.Fatalf("sign: %v", err)
-			}
+			require.NoError(t, err, "sign")
 			if err := parsed.verify(payload, sig); err != nil {
 				t.Errorf("verify: %v", err)
 			}
@@ -61,17 +57,13 @@ func TestSigningKeysCannotBeBuiltWithoutAPrivateKey(t *testing.T) {
 	t.Parallel()
 
 	ec, err := paramsFor(authz.ES256)
-	if err != nil {
-		t.Fatalf("paramsFor: %v", err)
-	}
+	require.NoError(t, err, "paramsFor")
 	if _, err := newECSigningKey(ec, nil); err == nil {
 		t.Error("newECSigningKey accepted a nil private key")
 	}
 
 	okp, err := paramsFor(authz.EdDSA)
-	if err != nil {
-		t.Fatalf("paramsFor: %v", err)
-	}
+	require.NoError(t, err, "paramsFor")
 	for _, short := range [][]byte{nil, make([]byte, 32), make([]byte, 63)} {
 		if _, err := newOKPSigningKey(okp, short); err == nil {
 			t.Errorf("newOKPSigningKey accepted a %d-byte private key", len(short))

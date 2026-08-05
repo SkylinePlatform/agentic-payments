@@ -319,6 +319,30 @@ reconcile against the code for no benefit.
 - State machines are explicit, not implicit through `if` chains.
 - Constraints are typed and evaluated by the **verifier**, never the agent.
 - Table-driven tests for constraint evaluation.
+- **Assertions use `require` and `assert`**, not hand-rolled `if` blocks.
+  `require` where the test cannot sensibly continue, `assert` where it can —
+  the distinction the old `t.Fatalf`/`t.Errorf` split already made.
+
+  Two rules that are not obvious, both learned by getting them wrong:
+
+  **The message carries the reasoning, not the values.** `assert` already
+  prints expected and actual, so `assert.Equal(t, 8, len(id), "id = %d, want
+  8")` says everything twice. What belongs there is why the reader should
+  care — `"the ID has to read in a screenshot"`. A failure that states only a
+  number tells you what broke; one that states the reason tells you whether
+  it matters, and these tests are the main place that reasoning is written
+  down.
+
+  **`require` must never be called off the test goroutine.** It calls
+  `t.FailNow`, which the testing package documents as legal only from the
+  goroutine running the test. Inside a `wg.Go`, an HTTP handler or any other
+  callback, use `assert` — a `require` there loses the failure silently and
+  can leave the test hanging instead of failing. `internal/collector`,
+  `internal/platform/obs` and `internal/demo` all assert from goroutines.
+
+  `assert.Equal` compares types as well as values, so an untyped literal
+  against a `uint64` or an `int64` fails where `if got != 1` compiled. Write
+  `int64(1)`, or reach for `assert.Zero` when that reads better.
 - Golden test vectors for all mandate construction and verification. `make
   vectors` runs `-run 'TestGolden'` over `internal/adapters/...` and `pkg/...`
   — a golden test named or placed outside those is not in the conformance

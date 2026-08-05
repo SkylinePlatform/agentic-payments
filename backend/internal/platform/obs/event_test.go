@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 )
 
@@ -53,9 +56,7 @@ func TestEventValidate(t *testing.T) {
 		Role:          "agent",
 		At:            base,
 	}
-	if err := ok.Validate(); err != nil {
-		t.Fatalf("a well-formed event was rejected: %v", err)
-	}
+	require.NoError(t, ok.Validate(), "a well-formed event was rejected")
 
 	// A correlation ID is optional: a startup line or a health check has no
 	// transaction to belong to, and forcing one would put a check on a path
@@ -96,9 +97,7 @@ func TestEventValidate(t *testing.T) {
 			if err == nil {
 				t.Fatal("accepted")
 			}
-			if !errors.Is(err, obs.ErrInvalidEvent) {
-				t.Errorf("err = %v, want it to wrap ErrInvalidEvent", err)
-			}
+			assert.ErrorIs(t, err, obs.ErrInvalidEvent, "err = %v, want it to wrap ErrInvalidEvent", err)
 		})
 	}
 }

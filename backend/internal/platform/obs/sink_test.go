@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 )
@@ -50,9 +52,7 @@ func TestHTTPSinkPostsTheBatch(t *testing.T) {
 	defer srv.Close()
 
 	sink := obs.NewHTTPSink(srv.URL)
-	if err := sink.Send(context.Background(), []obs.Event{sample("one"), sample("two")}); err != nil {
-		t.Fatalf("Send: %v", err)
-	}
+	require.NoError(t, sink.Send(context.Background(), []obs.Event{sample("one"), sample("two")}), "Send")
 
 	batch := <-got
 	if len(batch) != 2 {
@@ -93,13 +93,9 @@ func TestHTTPSinkSendsNothingForAnEmptyBatch(t *testing.T) {
 func deadAddr(t *testing.T) string {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
+	require.NoError(t, err, "listen")
 	addr := l.Addr().String()
-	if err := l.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
+	require.NoError(t, l.Close(), "close")
 	return addr
 }
 
@@ -115,9 +111,7 @@ func TestAnAbsentCollectorNeitherBlocksNorFails(t *testing.T) {
 
 	e, err := obs.NewEmitter(clock.NewFake(base), "agent",
 		obs.WithSink(obs.NewHTTPSink("http://"+deadAddr(t))))
-	if err != nil {
-		t.Fatalf("NewEmitter: %v", err)
-	}
+	require.NoError(t, err, "NewEmitter")
 
 	// Emitting has to return regardless. If any of these waited on the dead
 	// socket, this loop would take the sink's full timeout per event.
@@ -128,9 +122,7 @@ func TestAnAbsentCollectorNeitherBlocksNorFails(t *testing.T) {
 		t.Errorf("Emitted = %d, want 20", got)
 	}
 
-	if err := e.Close(context.Background()); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	require.NoError(t, e.Close(context.Background()), "Close")
 	// Every one failed to deliver, and not one of them was an error the caller
 	// ever saw: Emit has no error to return, by design.
 	if got := e.Stats().Failed; got != 20 {

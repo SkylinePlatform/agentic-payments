@@ -5,6 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
 )
@@ -26,32 +29,22 @@ func TestPublishThenResolve(t *testing.T) {
 			// Signing side.
 			store, _, _ := storeWithKey(t, alg)
 			signer, err := store.Signer(testSlot)
-			if err != nil {
-				t.Fatalf("Signer: %v", err)
-			}
+			require.NoError(t, err, "Signer")
 			payload := []byte("protected.payload")
 			sig, err := signer.Sign(t.Context(), payload)
-			if err != nil {
-				t.Fatalf("Sign: %v", err)
-			}
+			require.NoError(t, err, "Sign")
 			published, err := store.JWKS(t.Context())
-			if err != nil {
-				t.Fatalf("JWKS: %v", err)
-			}
+			require.NoError(t, err, "JWKS")
 
 			// Verifying side: nothing but the published document.
 			set, err := crypto.ParseJWKS(published)
-			if err != nil {
-				t.Fatalf("ParseJWKS: %v", err)
-			}
+			require.NoError(t, err, "ParseJWKS")
 			if got := set.Keys(); len(got) != 1 || got[0] != signer.Key() {
 				t.Fatalf("KeySet holds %v, want [%s]", got, signer.Key())
 			}
 
 			verifier, err := set.Resolve(t.Context(), signer.Key())
-			if err != nil {
-				t.Fatalf("Resolve: %v", err)
-			}
+			require.NoError(t, err, "Resolve")
 			if err := verifier.Verify(payload, sig); err != nil {
 				t.Errorf("Verify across the publication boundary: %v", err)
 			}
@@ -70,35 +63,21 @@ func TestKidSurvivesRotation(t *testing.T) {
 
 	store, _, first := storeWithKey(t, authz.ES256)
 	oldSigner, err := store.Signer(testSlot)
-	if err != nil {
-		t.Fatalf("Signer: %v", err)
-	}
+	require.NoError(t, err, "Signer")
 	oldSig, err := oldSigner.Sign(t.Context(), []byte("before"))
-	if err != nil {
-		t.Fatalf("Sign: %v", err)
-	}
+	require.NoError(t, err, "Sign")
 
 	second, err := store.Rotate(testSlot, "rotate-1")
-	if err != nil {
-		t.Fatalf("Rotate: %v", err)
-	}
+	require.NoError(t, err, "Rotate")
 	newSigner, err := store.Signer(testSlot)
-	if err != nil {
-		t.Fatalf("Signer: %v", err)
-	}
+	require.NoError(t, err, "Signer")
 	newSig, err := newSigner.Sign(t.Context(), []byte("after"))
-	if err != nil {
-		t.Fatalf("Sign: %v", err)
-	}
+	require.NoError(t, err, "Sign")
 
 	published, err := store.JWKS(t.Context())
-	if err != nil {
-		t.Fatalf("JWKS: %v", err)
-	}
+	require.NoError(t, err, "JWKS")
 	set, err := crypto.ParseJWKS(published)
-	if err != nil {
-		t.Fatalf("ParseJWKS: %v", err)
-	}
+	require.NoError(t, err, "ParseJWKS")
 
 	cases := []struct {
 		name    string
@@ -112,9 +91,7 @@ func TestKidSurvivesRotation(t *testing.T) {
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			verifier, err := set.Resolve(t.Context(), tt.ref)
-			if err != nil {
-				t.Fatalf("Resolve: %v", err)
-			}
+			require.NoError(t, err, "Resolve")
 			if err := verifier.Verify(tt.payload, tt.sig); err != nil {
 				t.Errorf("Verify: %v", err)
 			}
@@ -123,9 +100,7 @@ func TestKidSurvivesRotation(t *testing.T) {
 
 	// And crossing them over must fail.
 	verifier, err := set.Resolve(t.Context(), first)
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
+	require.NoError(t, err, "Resolve")
 	if err := verifier.Verify([]byte("after"), newSig); !errors.Is(err, authz.ErrSignatureInvalid) {
 		t.Errorf("the retired key verified the new key's signature: %v", err)
 	}
@@ -194,9 +169,7 @@ func TestParseJWKSRejectsMalformedKeys(t *testing.T) {
 			if err == nil {
 				t.Fatalf("ParseJWKS accepted a malformed document, producing %v", set.Keys())
 			}
-			if !errors.Is(err, crypto.ErrMalformedJWK) {
-				t.Errorf("ParseJWKS = %v, want ErrMalformedJWK", err)
-			}
+			assert.ErrorIs(t, err, crypto.ErrMalformedJWK, "ParseJWKS = %v, want ErrMalformedJWK", err)
 		})
 	}
 }
@@ -229,9 +202,7 @@ func TestParseJWKSSkipsKeysItCannotUse(t *testing.T) {
 			t.Parallel()
 
 			set, err := crypto.ParseJWKS([]byte(`{"keys":[` + tt.skipped + `,` + usable + `]}`))
-			if err != nil {
-				t.Fatalf("ParseJWKS: %v", err)
-			}
+			require.NoError(t, err, "ParseJWKS")
 			keys := set.Keys()
 			if len(keys) != 1 || keys[0].KeyID != "usable" {
 				t.Fatalf("KeySet holds %v, want only the usable key", keys)
@@ -251,9 +222,7 @@ func TestParseJWKSNamesUnlabelledKeysByThumbprint(t *testing.T) {
 		"x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]}`
 
 	set, err := crypto.ParseJWKS([]byte(doc))
-	if err != nil {
-		t.Fatalf("ParseJWKS: %v", err)
-	}
+	require.NoError(t, err, "ParseJWKS")
 	keys := set.Keys()
 	if len(keys) != 1 {
 		t.Fatalf("KeySet holds %d keys, want 1", len(keys))
@@ -274,9 +243,7 @@ func TestKeySetResolveRejectsAlgorithmConfusion(t *testing.T) {
 		"x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}]}`
 
 	set, err := crypto.ParseJWKS([]byte(doc))
-	if err != nil {
-		t.Fatalf("ParseJWKS: %v", err)
-	}
+	require.NoError(t, err, "ParseJWKS")
 
 	tests := []struct {
 		name string
@@ -295,14 +262,10 @@ func TestKeySetResolveRejectsAlgorithmConfusion(t *testing.T) {
 
 			_, err := set.Resolve(t.Context(), tt.ref)
 			if tt.want == nil {
-				if err != nil {
-					t.Fatalf("Resolve: %v", err)
-				}
+				require.NoError(t, err, "Resolve")
 				return
 			}
-			if !errors.Is(err, tt.want) {
-				t.Errorf("Resolve = %v, want %v", err, tt.want)
-			}
+			assert.ErrorIs(t, err, tt.want, "Resolve = %v, want %v", err, tt.want)
 		})
 	}
 }
@@ -323,9 +286,7 @@ func TestGeneratedKidsAreThumbprints(t *testing.T) {
 
 			store, _, ref := storeWithKey(t, alg)
 			published, err := store.JWKS(t.Context())
-			if err != nil {
-				t.Fatalf("JWKS: %v", err)
-			}
+			require.NoError(t, err, "JWKS")
 
 			var set struct {
 				Keys []map[string]any `json:"keys"`
@@ -337,14 +298,10 @@ func TestGeneratedKidsAreThumbprints(t *testing.T) {
 				delete(key, "kid")
 			}
 			anonymous, err := json.Marshal(set)
-			if err != nil {
-				t.Fatalf("marshal JWK Set: %v", err)
-			}
+			require.NoError(t, err, "marshal JWK Set")
 
 			parsed, err := crypto.ParseJWKS(anonymous)
-			if err != nil {
-				t.Fatalf("ParseJWKS: %v", err)
-			}
+			require.NoError(t, err, "ParseJWKS")
 			keys := parsed.Keys()
 			if len(keys) != 1 {
 				t.Fatalf("KeySet holds %d keys, want 1", len(keys))
@@ -360,14 +317,10 @@ func TestParseEmptyJWKS(t *testing.T) {
 	t.Parallel()
 
 	set, err := crypto.ParseJWKS([]byte(`{"keys":[]}`))
-	if err != nil {
-		t.Fatalf("ParseJWKS: %v", err)
-	}
+	require.NoError(t, err, "ParseJWKS")
 	if got := set.Keys(); len(got) != 0 {
 		t.Errorf("KeySet holds %v, want nothing", got)
 	}
 	_, err = set.Resolve(t.Context(), authz.KeyRef{KeyID: "any", Algorithm: authz.ES256})
-	if !errors.Is(err, authz.ErrKeyNotFound) {
-		t.Errorf("Resolve against an empty set = %v, want ErrKeyNotFound", err)
-	}
+	assert.ErrorIs(t, err, authz.ErrKeyNotFound, "Resolve against an empty set = %v, want ErrKeyNotFound", err)
 }

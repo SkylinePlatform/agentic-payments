@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
 
@@ -19,9 +22,7 @@ var b64 = base64.RawURLEncoding
 func rawDisclosure(t *testing.T, contents string) sdjwt.Disclosure {
 	t.Helper()
 	d, err := sdjwt.ParseDisclosure(b64.EncodeToString([]byte(contents)))
-	if err != nil {
-		t.Fatalf("ParseDisclosure(%s): %v", contents, err)
-	}
+	require.NoError(t, err, "ParseDisclosure(%s)", contents)
 	return d
 }
 
@@ -29,9 +30,7 @@ func rawDisclosure(t *testing.T, contents string) sdjwt.Disclosure {
 func digestOf(t *testing.T, d sdjwt.Disclosure) string {
 	t.Helper()
 	digest, err := d.Digest(sdjwt.SHA256)
-	if err != nil {
-		t.Fatalf("Digest: %v", err)
-	}
+	require.NoError(t, err, "Digest")
 	return digest
 }
 
@@ -54,9 +53,7 @@ func TestVerifyRejects(t *testing.T) {
 			name: "a disclosure matching no digest",
 			build: func(t *testing.T) (map[string]any, []sdjwt.Disclosure) {
 				d, err := sdjwt.NewObjectDisclosure("salt-1", "role", "administrator")
-				if err != nil {
-					t.Fatalf("NewObjectDisclosure: %v", err)
-				}
+				require.NoError(t, err, "NewObjectDisclosure")
 				return map[string]any{"sub": "agent-42"}, []sdjwt.Disclosure{d}
 			},
 			wantErr: sdjwt.ErrDisclosureUnmatched,
@@ -67,9 +64,7 @@ func TestVerifyRejects(t *testing.T) {
 			name: "one digest appearing twice",
 			build: func(t *testing.T) (map[string]any, []sdjwt.Disclosure) {
 				d, err := sdjwt.NewObjectDisclosure("salt-1", "merchant", "acme")
-				if err != nil {
-					t.Fatalf("NewObjectDisclosure: %v", err)
-				}
+				require.NoError(t, err, "NewObjectDisclosure")
 				digest := digestOf(t, d)
 				return map[string]any{"_sd": []any{digest, digest}}, []sdjwt.Disclosure{d}
 			},
@@ -80,9 +75,7 @@ func TestVerifyRejects(t *testing.T) {
 			name: "the same disclosure sent twice",
 			build: func(t *testing.T) (map[string]any, []sdjwt.Disclosure) {
 				d, err := sdjwt.NewObjectDisclosure("salt-1", "merchant", "acme")
-				if err != nil {
-					t.Fatalf("NewObjectDisclosure: %v", err)
-				}
+				require.NoError(t, err, "NewObjectDisclosure")
 				return map[string]any{"_sd": []any{digestOf(t, d)}}, []sdjwt.Disclosure{d, d}
 			},
 			wantErr: sdjwt.ErrDigestRepeated,
@@ -93,9 +86,7 @@ func TestVerifyRejects(t *testing.T) {
 			name: "a disclosure overwriting a plaintext claim",
 			build: func(t *testing.T) (map[string]any, []sdjwt.Disclosure) {
 				d, err := sdjwt.NewObjectDisclosure("salt-1", "merchant", "attacker")
-				if err != nil {
-					t.Fatalf("NewObjectDisclosure: %v", err)
-				}
+				require.NoError(t, err, "NewObjectDisclosure")
 				return map[string]any{
 					"merchant": "acme",
 					"_sd":      []any{digestOf(t, d)},
@@ -118,9 +109,7 @@ func TestVerifyRejects(t *testing.T) {
 			name: "an array-element disclosure inside _sd",
 			build: func(t *testing.T) (map[string]any, []sdjwt.Disclosure) {
 				d, err := sdjwt.NewArrayDisclosure("salt-1", "acme")
-				if err != nil {
-					t.Fatalf("NewArrayDisclosure: %v", err)
-				}
+				require.NoError(t, err, "NewArrayDisclosure")
 				return map[string]any{"_sd": []any{digestOf(t, d)}}, []sdjwt.Disclosure{d}
 			},
 			wantErr: sdjwt.ErrMalformedDisclosure,
@@ -130,9 +119,7 @@ func TestVerifyRejects(t *testing.T) {
 			name: "an object-property disclosure behind an ellipsis",
 			build: func(t *testing.T) (map[string]any, []sdjwt.Disclosure) {
 				d, err := sdjwt.NewObjectDisclosure("salt-1", "merchant", "acme")
-				if err != nil {
-					t.Fatalf("NewObjectDisclosure: %v", err)
-				}
+				require.NoError(t, err, "NewObjectDisclosure")
 				return map[string]any{
 					"constraints": []any{map[string]any{"...": digestOf(t, d)}},
 				}, []sdjwt.Disclosure{d}
@@ -256,9 +243,7 @@ func TestVerifyPolicy(t *testing.T) {
 			Nonce:             "n-1",
 			Clock:             at(1750000000),
 		})
-		if !errors.Is(err, sdjwt.ErrKeyBindingRequired) {
-			t.Errorf("Verify: got %v, want %v", err, sdjwt.ErrKeyBindingRequired)
-		}
+		assert.ErrorIs(t, err, sdjwt.ErrKeyBindingRequired, "Verify: got %v, want %v", err, sdjwt.ErrKeyBindingRequired)
 	})
 
 	t.Run("key binding required with no resolver", func(t *testing.T) {
@@ -272,9 +257,7 @@ func TestVerifyPolicy(t *testing.T) {
 			Nonce:             "n-1",
 			Clock:             at(1750000000),
 		})
-		if !errors.Is(err, sdjwt.ErrInvalidOptions) {
-			t.Errorf("Verify: got %v, want %v", err, sdjwt.ErrInvalidOptions)
-		}
+		assert.ErrorIs(t, err, sdjwt.ErrInvalidOptions, "Verify: got %v, want %v", err, sdjwt.ErrInvalidOptions)
 	})
 
 	// A Verifier that asks for Key Binding and does not say what it expects
@@ -300,9 +283,7 @@ func TestVerifyPolicy(t *testing.T) {
 				bound, err := sd.AttachKeyBinding(t.Context(), holder, sdjwt.KeyBinding{
 					Nonce: "n-1", Audience: "https://verifier.example", IssuedAt: at(1750000000).Now(),
 				})
-				if err != nil {
-					t.Fatalf("AttachKeyBinding: %v", err)
-				}
+				require.NoError(t, err, "AttachKeyBinding")
 				_, err = sdjwt.Verify(bound, sdjwt.Options{
 					Issuer:            key,
 					HolderKey:         func(json.RawMessage) (sdjwt.Verifier, error) { return holder, nil },
@@ -311,9 +292,7 @@ func TestVerifyPolicy(t *testing.T) {
 					Nonce:             tc.nonce,
 					Clock:             at(1750000000),
 				})
-				if !errors.Is(err, sdjwt.ErrInvalidOptions) {
-					t.Errorf("Verify: got %v, want %v", err, sdjwt.ErrInvalidOptions)
-				}
+				assert.ErrorIs(t, err, sdjwt.ErrInvalidOptions, "Verify: got %v, want %v", err, sdjwt.ErrInvalidOptions)
 			})
 		}
 	})
@@ -322,9 +301,7 @@ func TestVerifyPolicy(t *testing.T) {
 		t.Parallel()
 
 		blinder, err := sdjwt.NewBlinder(sdjwt.WithHashAlg(sdjwt.SHA512), sdjwt.WithSaltSource(newSalts()))
-		if err != nil {
-			t.Fatalf("NewBlinder: %v", err)
-		}
+		require.NoError(t, err, "NewBlinder")
 		payload, disclosures := mustBlind(t, blinder, map[string]any{"sub": "a", "merchant": "acme"}, "merchant")
 		sd := mustIssue(t, key, payload, disclosures)
 
@@ -333,9 +310,7 @@ func TestVerifyPolicy(t *testing.T) {
 			AllowedHashAlgs: []sdjwt.HashAlg{sdjwt.SHA256},
 			Clock:           at(1750000000),
 		})
-		if !errors.Is(err, sdjwt.ErrUnsupportedHashAlg) {
-			t.Errorf("Verify: got %v, want %v", err, sdjwt.ErrUnsupportedHashAlg)
-		}
+		assert.ErrorIs(t, err, sdjwt.ErrUnsupportedHashAlg, "Verify: got %v, want %v", err, sdjwt.ErrUnsupportedHashAlg)
 	})
 
 	t.Run("no issuer verifier", func(t *testing.T) {
@@ -363,9 +338,7 @@ func TestVerifyPolicy(t *testing.T) {
 		bound, err := sd.AttachKeyBinding(t.Context(), holder, sdjwt.KeyBinding{
 			Nonce: "n-1", Audience: "https://verifier.example", IssuedAt: at(1750000000).Now(),
 		})
-		if err != nil {
-			t.Fatalf("AttachKeyBinding: %v", err)
-		}
+		require.NoError(t, err, "AttachKeyBinding")
 		// No HolderKey resolver: the Verifier's policy does not rely on Key
 		// Binding, so the proof is neither checked nor a reason to reject.
 		if _, err := sdjwt.Verify(bound, sdjwt.Options{Issuer: key, Clock: at(1750000000)}); err != nil {
@@ -383,9 +356,7 @@ func TestAlgNoneIsRefused(t *testing.T) {
 	header := b64.EncodeToString([]byte(`{"alg":"none"}`))
 	payload := b64.EncodeToString([]byte(`{"sub":"agent-42"}`))
 	sd, err := sdjwt.Parse(header + "." + payload + ".~")
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
+	require.NoError(t, err, "Parse")
 
 	// Even a Verifier that would accept anything must not get the chance: the
 	// refusal is by name, before any signature check.
@@ -393,9 +364,7 @@ func TestAlgNoneIsRefused(t *testing.T) {
 		Issuer: acceptingVerifier{alg: "none"},
 		Clock:  at(1750000000),
 	})
-	if !errors.Is(err, sdjwt.ErrUnsupportedAlgorithm) {
-		t.Errorf("Verify: got %v, want %v", err, sdjwt.ErrUnsupportedAlgorithm)
-	}
+	assert.ErrorIs(t, err, sdjwt.ErrUnsupportedAlgorithm, "Verify: got %v, want %v", err, sdjwt.ErrUnsupportedAlgorithm)
 
 	if _, err := sdjwt.Issue(t.Context(), noneSigner{}, map[string]any{"sub": "a"}, nil); !errors.Is(err, sdjwt.ErrUnsupportedAlgorithm) {
 		t.Errorf("Issue: got %v, want %v", err, sdjwt.ErrUnsupportedAlgorithm)
@@ -421,17 +390,13 @@ func TestProtectedHeader(t *testing.T) {
 
 	encoded, _, _ := strings.Cut(sd.IssuerJWT(), ".")
 	raw, err := b64.DecodeString(encoded)
-	if err != nil {
-		t.Fatalf("decode protected header: %v", err)
-	}
+	require.NoError(t, err, "decode protected header")
 	var header struct {
 		Alg string `json:"alg"`
 		Typ string `json:"typ"`
 		Kid string `json:"kid"`
 	}
-	if err := json.Unmarshal(raw, &header); err != nil {
-		t.Fatalf("unmarshal protected header: %v", err)
-	}
+	require.NoError(t, json.Unmarshal(raw, &header), "unmarshal protected header")
 	if header.Alg != testAlg || header.Kid != "issuer-1" || header.Typ != "mandate+sd-jwt" {
 		t.Errorf("protected header = %+v, want alg %q, kid %q, typ %q",
 			header, testAlg, "issuer-1", "mandate+sd-jwt")

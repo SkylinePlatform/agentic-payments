@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/demo"
 )
 
@@ -29,9 +32,7 @@ func TestShippedManifestIsValid(t *testing.T) {
 	t.Parallel()
 
 	m, err := demo.Load(manifestPath)
-	if err != nil {
-		t.Fatalf("the shipped manifest does not load: %v", err)
-	}
+	require.NoError(t, err, "the shipped manifest does not load")
 	if len(m.Processes) == 0 {
 		t.Fatal("the shipped manifest starts nothing")
 	}
@@ -71,9 +72,7 @@ func TestCollectorIsNotAProtocolParticipant(t *testing.T) {
 	t.Parallel()
 
 	m, err := demo.Load(manifestPath)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	require.NoError(t, err, "Load")
 
 	var found bool
 	for _, p := range m.Processes {
@@ -84,9 +83,7 @@ func TestCollectorIsNotAProtocolParticipant(t *testing.T) {
 		if p.IsProtocolParticipant() {
 			t.Error("the collector is declared a protocol participant; ADR 0003 says it is not")
 		}
-		if p.Kind != demo.KindInfrastructure {
-			t.Errorf("collector kind = %q, want %q", p.Kind, demo.KindInfrastructure)
-		}
+		assert.Equal(t, demo.KindInfrastructure, p.Kind)
 		if p.Note == "" {
 			t.Error("the collector carries no note saying what it is not")
 		}
@@ -172,9 +169,7 @@ func TestLoadReportsAMissingOrBrokenFile(t *testing.T) {
 	}
 
 	broken := filepath.Join(t.TempDir(), "broken.json")
-	if err := writeFile(broken, "{ not json"); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	require.NoError(t, writeFile(broken, "{ not json"), "write")
 	if _, err := demo.Load(broken); err == nil {
 		t.Error("a malformed manifest was accepted")
 	}

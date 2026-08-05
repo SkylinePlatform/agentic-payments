@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
-          cache: false
+          cache-dependency-path: backend/go.sum
 
       - uses: actions/setup-node@v4
         with:
@@ -61,9 +61,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
-          # Re-enable once backend/go.sum exists; setup-go fails when the
-          # dependency lock file it is pointed at is absent.
-          cache: false
+          cache-dependency-path: backend/go.sum
 
       - uses: actions/setup-node@v4
         with:
@@ -98,7 +96,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
-          cache: false
+          cache-dependency-path: backend/go.sum
 
       - uses: actions/setup-node@v4
         with:

@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/collector"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 )
@@ -17,9 +20,7 @@ var base = time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 func publish(t *testing.T, h *collector.Hub, e obs.Event) uint64 {
 	t.Helper()
 	seq, err := h.Publish(e)
-	if err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
+	require.NoError(t, err, "Publish")
 	return seq
 }
 
@@ -48,9 +49,7 @@ func TestPublishReachesASubscriber(t *testing.T) {
 
 	publish(t, h, event("first"))
 	rec := <-sub.C
-	if rec.Event.Detail != "first" {
-		t.Errorf("detail = %q, want %q", rec.Event.Detail, "first")
-	}
+	assert.Equal(t, "first", rec.Event.Detail)
 	if rec.Seq != 1 {
 		t.Errorf("seq = %d, want 1", rec.Seq)
 	}
@@ -176,9 +175,7 @@ func TestNoGapAndNoDuplicateAcrossSubscribe(t *testing.T) {
 		break
 	}
 
-	if len(seen) != total {
-		t.Fatalf("saw %d distinct events, want %d — the subscribe window dropped some", len(seen), total)
-	}
+	require.Equal(t, total, len(seen), "the subscribe window dropped some")
 	for seq := uint64(1); seq <= total; seq++ {
 		switch seen[seq] {
 		case 1:
@@ -224,12 +221,8 @@ func TestPublishRefusesAnEventThatCouldForgeAFrame(t *testing.T) {
 			t.Parallel()
 
 			seq, err := h.Publish(tc.event)
-			if !errors.Is(err, obs.ErrInvalidEvent) {
-				t.Errorf("Publish = %v, want it to wrap ErrInvalidEvent", err)
-			}
-			if seq != 0 {
-				t.Errorf("seq = %d, want 0 — a refused event consumed a sequence number", seq)
-			}
+			assert.ErrorIs(t, err, obs.ErrInvalidEvent, "Publish = %v, want it to wrap ErrInvalidEvent", err)
+			assert.Zero(t, seq, "a refused event consumed a sequence number")
 		})
 	}
 
@@ -257,9 +250,7 @@ func TestSubscribeAfterResumesRatherThanRepeats(t *testing.T) {
 	history, sub := h.Subscribe(2)
 	defer sub.Unsubscribe()
 
-	if len(history) != 2 {
-		t.Fatalf("replayed %d records, want 2 — the client was sent what it already had", len(history))
-	}
+	require.Equal(t, 2, len(history), "the client was sent what it already had")
 	if history[0].Seq != 3 || history[1].Seq != 4 {
 		t.Errorf("replayed seqs %d and %d, want 3 and 4", history[0].Seq, history[1].Seq)
 	}

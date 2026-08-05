@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
 
@@ -27,9 +30,7 @@ import (
 func loadVector(t *testing.T, name string) string {
 	t.Helper()
 	data, err := os.ReadFile("testdata/" + name)
-	if err != nil {
-		t.Fatalf("read vector: %v", err)
-	}
+	require.NoError(t, err, "read vector")
 	return strings.TrimSpace(string(data))
 }
 
@@ -38,9 +39,7 @@ func loadVector(t *testing.T, name string) string {
 func canonicalJSON(t *testing.T, v any) string {
 	t.Helper()
 	encoded, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	require.NoError(t, err, "marshal")
 	return string(encoded)
 }
 
@@ -52,9 +51,7 @@ func canonicalJSONText(t *testing.T, text string) string {
 	dec := json.NewDecoder(strings.NewReader(text))
 	dec.UseNumber()
 	var v any
-	if err := dec.Decode(&v); err != nil {
-		t.Fatalf("decode expected JSON: %v", err)
-	}
+	require.NoError(t, dec.Decode(&v), "decode expected JSON")
 	return canonicalJSON(t, v)
 }
 
@@ -111,9 +108,7 @@ func TestGoldenRFC9901Disclosures(t *testing.T) {
 			t.Parallel()
 
 			d, err := sdjwt.ParseDisclosure(tc.encoded)
-			if err != nil {
-				t.Fatalf("ParseDisclosure: %v", err)
-			}
+			require.NoError(t, err, "ParseDisclosure")
 			if got := d.String(); got != tc.encoded {
 				t.Errorf("String() = %q, want the input unchanged", got)
 			}
@@ -121,9 +116,7 @@ func TestGoldenRFC9901Disclosures(t *testing.T) {
 				t.Errorf("Salt() = %q, want %q", got, tc.salt)
 			}
 			name, named := d.Name()
-			if named != tc.isObject {
-				t.Errorf("Name() named = %v, want %v", named, tc.isObject)
-			}
+			assert.Equal(t, tc.isObject, named)
 			if named && name != tc.claim {
 				t.Errorf("Name() = %q, want %q", name, tc.claim)
 			}
@@ -132,9 +125,7 @@ func TestGoldenRFC9901Disclosures(t *testing.T) {
 			}
 
 			digest, err := d.Digest(sdjwt.SHA256)
-			if err != nil {
-				t.Fatalf("Digest: %v", err)
-			}
+			require.NoError(t, err, "Digest")
 			switch {
 			case tc.digest == "" && digest == "X9yH0Ajrdm1Oij4tWso9UzzKJvPoDxwmuEcO3XAdRC0":
 				t.Error("a different encoding of the same value produced the same digest")
@@ -223,9 +214,7 @@ func TestGoldenRFC9901Issuance(t *testing.T) {
 	t.Parallel()
 
 	sd, err := sdjwt.Parse(loadVector(t, "rfc9901_issuance.sdjwt"))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
+	require.NoError(t, err, "Parse")
 	if got, want := len(sd.Disclosures()), 10; got != want {
 		t.Fatalf("got %d disclosures, want %d", got, want)
 	}
@@ -250,9 +239,7 @@ func TestGoldenRFC9901Issuance(t *testing.T) {
 	}
 	for i, d := range sd.Disclosures() {
 		digest, err := d.Digest(sdjwt.SHA256)
-		if err != nil {
-			t.Fatalf("Digest: %v", err)
-		}
+		require.NoError(t, err, "Digest")
 		if digest != wantDigests[i] {
 			name, _ := d.Name()
 			t.Errorf("disclosure %d (%s): digest = %q, want %q", i, name, digest, wantDigests[i])
@@ -263,9 +250,7 @@ func TestGoldenRFC9901Issuance(t *testing.T) {
 		Issuer: acceptingVerifier{alg: es256},
 		Clock:  at(rfc9901Now),
 	})
-	if err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
+	require.NoError(t, err, "Verify")
 	if got, want := canonicalJSON(t, payload), canonicalJSONText(t, rfc9901IssuanceClaims); got != want {
 		t.Errorf("processed payload:\n got %s\nwant %s", got, want)
 	}
@@ -278,9 +263,7 @@ func TestGoldenRFC9901Presentation(t *testing.T) {
 	t.Parallel()
 
 	sd, err := sdjwt.Parse(loadVector(t, "rfc9901_presentation.sdjwt"))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
+	require.NoError(t, err, "Parse")
 	if !sd.HasKeyBinding() {
 		t.Fatal("the §5.2 presentation is an SD-JWT+KB")
 	}
@@ -291,12 +274,8 @@ func TestGoldenRFC9901Presentation(t *testing.T) {
 	// §5.2 states this value in the Key Binding JWT payload it prints.
 	const wantSDHash = "0_Af-2B-EhLWX5ydh_w2xzwmO6iM66B_2QCEanI4fUY"
 	sdHash, err := sd.SDHash()
-	if err != nil {
-		t.Fatalf("SDHash: %v", err)
-	}
-	if sdHash != wantSDHash {
-		t.Errorf("SDHash() = %q, want %q", sdHash, wantSDHash)
-	}
+	require.NoError(t, err, "SDHash")
+	assert.Equal(t, wantSDHash, sdHash)
 
 	payload, err := sdjwt.Verify(sd, sdjwt.Options{
 		Issuer:            acceptingVerifier{alg: es256},
@@ -306,9 +285,7 @@ func TestGoldenRFC9901Presentation(t *testing.T) {
 		Nonce:             "1234567890",
 		Clock:             at(rfc9901Now),
 	})
-	if err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
+	require.NoError(t, err, "Verify")
 	if got, want := canonicalJSON(t, payload), canonicalJSONText(t, rfc9901PresentationClaims); got != want {
 		t.Errorf("processed payload:\n got %s\nwant %s", got, want)
 	}
@@ -375,9 +352,7 @@ func TestGoldenRFC9901KeyBindingIsChecked(t *testing.T) {
 			t.Parallel()
 
 			sd, err := sdjwt.Parse(loadVector(t, "rfc9901_presentation.sdjwt"))
-			if err != nil {
-				t.Fatalf("Parse: %v", err)
-			}
+			require.NoError(t, err, "Parse")
 			opts := valid
 			tc.mutate(&opts)
 
@@ -395,9 +370,7 @@ func TestRFC9901SignatureIsLoadBearing(t *testing.T) {
 	t.Parallel()
 
 	sd, err := sdjwt.Parse(loadVector(t, "rfc9901_issuance.sdjwt"))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
+	require.NoError(t, err, "Parse")
 
 	if _, err := sdjwt.Verify(sd, sdjwt.Options{
 		Issuer: rejectingVerifier{alg: es256},
@@ -455,13 +428,9 @@ func TestGoldenRFC9901RecursiveDisclosure(t *testing.T) {
 	parsed := map[string]sdjwt.Disclosure{}
 	for name, encoded := range disclosures {
 		d, err := sdjwt.ParseDisclosure(encoded)
-		if err != nil {
-			t.Fatalf("ParseDisclosure(%s): %v", name, err)
-		}
+		require.NoError(t, err, "ParseDisclosure(%s)", name)
 		digest, err := d.Digest(sdjwt.SHA256)
-		if err != nil {
-			t.Fatalf("Digest(%s): %v", name, err)
-		}
+		require.NoError(t, err, "Digest(%s)", name)
 		if digest != wantDigests[name] {
 			t.Errorf("%s: digest = %q, want %q", name, digest, wantDigests[name])
 		}
@@ -531,14 +500,10 @@ func TestGoldenRFC9901RecursiveDisclosure(t *testing.T) {
 				Clock:  at(rfc9901Now),
 			})
 			if tc.wantErr != nil {
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("Verify: got %v, want %v", err, tc.wantErr)
-				}
+				require.ErrorIs(t, err, tc.wantErr, "Verify: got %v, want %v", err, tc.wantErr)
 				return
 			}
-			if err != nil {
-				t.Fatalf("Verify: %v", err)
-			}
+			require.NoError(t, err, "Verify")
 			if got, want := canonicalJSON(t, payload), canonicalJSONText(t, tc.want); got != want {
 				t.Errorf("processed payload:\n got %s\nwant %s", got, want)
 			}
@@ -554,8 +519,6 @@ func decodeSpecPayload(t *testing.T, payloadJSON string) map[string]any {
 	dec := json.NewDecoder(strings.NewReader(payloadJSON))
 	dec.UseNumber()
 	var payload map[string]any
-	if err := dec.Decode(&payload); err != nil {
-		t.Fatalf("decode spec payload: %v", err)
-	}
+	require.NoError(t, dec.Decode(&payload), "decode spec payload")
 	return payload
 }
