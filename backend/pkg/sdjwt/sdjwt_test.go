@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
 
@@ -131,32 +134,24 @@ func TestRoundTrip(t *testing.T) {
 			holderKey := newHMACKey("holder-secret", "holder-1")
 
 			blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-			if err != nil {
-				t.Fatalf("NewBlinder: %v", err)
-			}
+			require.NoError(t, err, "NewBlinder")
 			payload, disclosures := mustBlind(t, blinder, mandateClaims(), blindPaths...)
 			issued := mustIssue(t, issuerKey, payload, disclosures, sdjwt.WithType("mandate+sd-jwt"))
 
 			presented, err := issued.Present(tc.keep)
-			if err != nil {
-				t.Fatalf("Present: %v", err)
-			}
+			require.NoError(t, err, "Present")
 			bound, err := presented.AttachKeyBinding(t.Context(), holderKey, sdjwt.KeyBinding{
 				Nonce:    nonce,
 				Audience: audience,
 				IssuedAt: time.Unix(now, 0),
 			})
-			if err != nil {
-				t.Fatalf("AttachKeyBinding: %v", err)
-			}
+			require.NoError(t, err, "AttachKeyBinding")
 
 			// Round-tripping through the wire form is what a Verifier actually
 			// receives, so the checks below run against a re-parsed value
 			// rather than the one just built.
 			reparsed, err := sdjwt.Parse(bound.String())
-			if err != nil {
-				t.Fatalf("Parse: %v", err)
-			}
+			require.NoError(t, err, "Parse")
 			if !reparsed.HasKeyBinding() {
 				t.Fatal("re-parsed presentation lost its key binding")
 			}
@@ -170,9 +165,7 @@ func TestRoundTrip(t *testing.T) {
 				MaxKeyBindingAge:  5 * time.Minute,
 				Clock:             at(now),
 			})
-			if err != nil {
-				t.Fatalf("Verify: %v", err)
-			}
+			require.NoError(t, err, "Verify")
 			if got, want := canonicalJSON(t, got), canonicalJSONText(t, tc.want); got != want {
 				t.Errorf("processed payload:\n got %s\nwant %s", got, want)
 			}
@@ -190,34 +183,24 @@ func TestKeyBindingCoversTheSelection(t *testing.T) {
 	holderKey := newHMACKey("holder-secret", "holder-1")
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	if err != nil {
-		t.Fatalf("NewBlinder: %v", err)
-	}
+	require.NoError(t, err, "NewBlinder")
 	payload, disclosures := mustBlind(t, blinder, mandateClaims(), blindPaths...)
 	issued := mustIssue(t, issuerKey, payload, disclosures)
 
 	narrow, err := issued.Present(named("merchant"))
-	if err != nil {
-		t.Fatalf("Present: %v", err)
-	}
+	require.NoError(t, err, "Present")
 	bound, err := narrow.AttachKeyBinding(t.Context(), holderKey, sdjwt.KeyBinding{
 		Nonce: "n-1", Audience: "https://verifier.example", IssuedAt: time.Unix(1750000000, 0),
 	})
-	if err != nil {
-		t.Fatalf("AttachKeyBinding: %v", err)
-	}
+	require.NoError(t, err, "AttachKeyBinding")
 
 	// Splice the key binding proof made for the narrow presentation onto a
 	// wider one — the attack sd_hash exists to stop.
 	wider, err := issued.Present(named("merchant", "amount"))
-	if err != nil {
-		t.Fatalf("Present: %v", err)
-	}
+	require.NoError(t, err, "Present")
 	parts := strings.Split(bound.String(), "~")
 	spliced, err := sdjwt.Parse(strings.TrimSuffix(wider.String(), "~") + "~" + parts[len(parts)-1])
-	if err != nil {
-		t.Fatalf("Parse spliced: %v", err)
-	}
+	require.NoError(t, err, "Parse spliced")
 
 	_, err = sdjwt.Verify(spliced, sdjwt.Options{
 		Issuer:            issuerKey,
@@ -227,9 +210,7 @@ func TestKeyBindingCoversTheSelection(t *testing.T) {
 		Nonce:             "n-1",
 		Clock:             at(1750000000),
 	})
-	if !errors.Is(err, sdjwt.ErrKeyBindingInvalid) {
-		t.Errorf("Verify a spliced presentation: got %v, want %v", err, sdjwt.ErrKeyBindingInvalid)
-	}
+	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid, "Verify a spliced presentation: got %v, want %v", err, sdjwt.ErrKeyBindingInvalid)
 }
 
 // TestPresentRejectsUnreachableDisclosure checks the Holder-side guard of
@@ -240,9 +221,7 @@ func TestPresentRejectsUnreachableDisclosure(t *testing.T) {
 	t.Parallel()
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	if err != nil {
-		t.Fatalf("NewBlinder: %v", err)
-	}
+	require.NoError(t, err, "NewBlinder")
 	payload, disclosures := mustBlind(t, blinder, mandateClaims(), blindPaths...)
 	issued := mustIssue(t, newHMACKey("issuer-secret", "issuer-1"), payload, disclosures)
 
@@ -267,9 +246,7 @@ func TestPresentAgreesWithVerify(t *testing.T) {
 
 	key := newHMACKey("issuer-secret", "issuer-1")
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	if err != nil {
-		t.Fatalf("NewBlinder: %v", err)
-	}
+	require.NoError(t, err, "NewBlinder")
 	payload, disclosures := mustBlind(t, blinder, mandateClaims(), blindPaths...)
 	issued := mustIssue(t, key, payload, disclosures)
 
@@ -321,9 +298,7 @@ func TestNestedStructures(t *testing.T) {
 
 	key := newHMACKey("issuer-secret", "issuer-1")
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	if err != nil {
-		t.Fatalf("NewBlinder: %v", err)
-	}
+	require.NoError(t, err, "NewBlinder")
 	payload, disclosures := mustBlind(t, blinder, claims, "constraints[]")
 	issued := mustIssue(t, key, payload, disclosures)
 
@@ -333,14 +308,10 @@ func TestNestedStructures(t *testing.T) {
 		object, ok := d.Value().(map[string]any)
 		return ok && object["type"] == "region"
 	})
-	if err != nil {
-		t.Fatalf("Present: %v", err)
-	}
+	require.NoError(t, err, "Present")
 
 	got, err := sdjwt.Verify(presented, sdjwt.Options{Issuer: key, Clock: at(1750000000)})
-	if err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
+	require.NoError(t, err, "Verify")
 	want := canonicalJSONText(t, `{
 	  "sub": "agent-42",
 	  "constraints": [{"type": "region", "allow": ["DE", "FR"]}],
@@ -390,9 +361,7 @@ func TestRecursiveArrayDisclosure(t *testing.T) {
 
 	key := newHMACKey("issuer-secret", "issuer-1")
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	if err != nil {
-		t.Fatalf("NewBlinder: %v", err)
-	}
+	require.NoError(t, err, "NewBlinder")
 	claims := map[string]any{
 		"sub":         "agent-42",
 		"constraints": []any{"max_amount", "eu_only"},
@@ -441,18 +410,12 @@ func TestRecursiveArrayDisclosure(t *testing.T) {
 
 			presented, err := issued.Present(tc.keep)
 			if tc.wantErr != nil {
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("Present: got %v, want %v", err, tc.wantErr)
-				}
+				require.ErrorIs(t, err, tc.wantErr, "Present: got %v, want %v", err, tc.wantErr)
 				return
 			}
-			if err != nil {
-				t.Fatalf("Present: %v", err)
-			}
+			require.NoError(t, err, "Present")
 			got, err := sdjwt.Verify(presented, sdjwt.Options{Issuer: key, Clock: at(1750000000)})
-			if err != nil {
-				t.Fatalf("Verify: %v", err)
-			}
+			require.NoError(t, err, "Verify")
 			if got, want := canonicalJSON(t, got), canonicalJSONText(t, tc.want); got != want {
 				t.Errorf("processed payload:\n got %s\nwant %s", got, want)
 			}
@@ -528,14 +491,10 @@ func TestParse(t *testing.T) {
 
 			sd, err := sdjwt.Parse(tc.input)
 			if tc.wantErr != nil {
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("Parse: got %v, want %v", err, tc.wantErr)
-				}
+				require.ErrorIs(t, err, tc.wantErr, "Parse: got %v, want %v", err, tc.wantErr)
 				return
 			}
-			if err != nil {
-				t.Fatalf("Parse: %v", err)
-			}
+			require.NoError(t, err, "Parse")
 			if got := len(sd.Disclosures()); got != tc.wantDisclosure {
 				t.Errorf("got %d disclosures, want %d", got, tc.wantDisclosure)
 			}
@@ -561,31 +520,21 @@ func TestSDHashIsIndependentOfKeyBinding(t *testing.T) {
 	holderKey := newHMACKey("holder-secret", "holder-1")
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	if err != nil {
-		t.Fatalf("NewBlinder: %v", err)
-	}
+	require.NoError(t, err, "NewBlinder")
 	payload, disclosures := mustBlind(t, blinder, mandateClaims(), blindPaths...)
 	issued := mustIssue(t, issuerKey, payload, disclosures)
 
 	presented, err := issued.Present(named("merchant"))
-	if err != nil {
-		t.Fatalf("Present: %v", err)
-	}
+	require.NoError(t, err, "Present")
 	before, err := presented.SDHash()
-	if err != nil {
-		t.Fatalf("SDHash: %v", err)
-	}
+	require.NoError(t, err, "SDHash")
 
 	bound, err := presented.AttachKeyBinding(t.Context(), holderKey, sdjwt.KeyBinding{
 		Nonce: "n-1", Audience: "https://verifier.example", IssuedAt: time.Unix(1750000000, 0),
 	})
-	if err != nil {
-		t.Fatalf("AttachKeyBinding: %v", err)
-	}
+	require.NoError(t, err, "AttachKeyBinding")
 	after, err := bound.SDHash()
-	if err != nil {
-		t.Fatalf("SDHash: %v", err)
-	}
+	require.NoError(t, err, "SDHash")
 	if before != after {
 		t.Errorf("sd_hash changed when the KB-JWT was attached: %q then %q", before, after)
 	}

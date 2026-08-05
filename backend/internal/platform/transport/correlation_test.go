@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/transport"
 )
@@ -26,9 +29,7 @@ func (s *seen) ServeHTTP(_ http.ResponseWriter, r *http.Request) {
 func wrapCorrelation(t *testing.T, h http.Handler, opts ...transport.CorrelationOption) http.Handler {
 	t.Helper()
 	c, err := transport.NewCorrelation(opts...)
-	if err != nil {
-		t.Fatalf("NewCorrelation: %v", err)
-	}
+	require.NoError(t, err, "NewCorrelation")
 	return c.Wrap(h)
 }
 
@@ -142,9 +143,7 @@ func TestHandlerRunsWhenEntropyFails(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rec.Code)
 	}
-	if h.id != "" {
-		t.Errorf("handler saw %q, want none — nothing could be minted", h.id)
-	}
+	assert.Equal(t, "", h.id, "nothing could be minted")
 }
 
 // roundTripFunc lets a test stand in for a transport and observe the request as
@@ -166,13 +165,9 @@ func TestOutboundCarriesTheID(t *testing.T) {
 
 	ctx := obs.WithCorrelationID(context.Background(), "7aQx-3Kf")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://merchant.example/checkout", nil)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
+	require.NoError(t, err, "NewRequest")
 	resp, err := rt.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
+	require.NoError(t, err, "RoundTrip")
 	_ = resp.Body.Close()
 
 	if sent != "7aQx-3Kf" {
@@ -201,9 +196,7 @@ func TestOutboundLeavesAnExplicitHeaderAlone(t *testing.T) {
 	req.Header.Set(transport.CorrelationHeader, "set-by-caller")
 
 	resp, err := rt.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
+	require.NoError(t, err, "RoundTrip")
 	_ = resp.Body.Close()
 
 	// Overwriting would be this transport regenerating a value the ADR says no
@@ -226,9 +219,7 @@ func TestOutboundWithoutAnIDSendsNoHeader(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, "http://merchant.example/checkout", nil)
 	resp, err := rt.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("RoundTrip: %v", err)
-	}
+	require.NoError(t, err, "RoundTrip")
 	_ = resp.Body.Close()
 
 	if had {

@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/problem"
 )
@@ -26,15 +29,11 @@ func declaredCodes(t *testing.T) []generated.ErrorCode {
 	t.Helper()
 
 	raw, err := os.ReadFile(errorCodeSchema)
-	if err != nil {
-		t.Fatalf("read %s: %v", errorCodeSchema, err)
-	}
+	require.NoError(t, err, "read %s", errorCodeSchema)
 	var schema struct {
 		Enum []generated.ErrorCode `json:"enum"`
 	}
-	if err := json.Unmarshal(raw, &schema); err != nil {
-		t.Fatalf("parse %s: %v", errorCodeSchema, err)
-	}
+	require.NoError(t, json.Unmarshal(raw, &schema), "parse %s", errorCodeSchema)
 	if len(schema.Enum) == 0 {
 		t.Fatalf("%s declares no codes", errorCodeSchema)
 	}
@@ -60,9 +59,7 @@ func TestEveryCodeRenders(t *testing.T) {
 			if p.Title == "Error code has no rendering" {
 				t.Fatalf("%q is declared in contracts/ but has no entry in the rendering table", code)
 			}
-			if p.Code != code {
-				t.Errorf("Code = %q, want %q", p.Code, code)
-			}
+			assert.Equal(t, code, p.Code)
 			if p.Title == "" {
 				t.Error("Title is empty")
 			}
@@ -106,24 +103,16 @@ func TestWrite(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	p := problem.New(generated.ErrorCodeConstraintViolated, "price.max is 20000, checkout is 21000")
-	if err := p.Write(rec); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
+	require.NoError(t, p.Write(rec), "Write")
 
 	if got := rec.Header().Get("Content-Type"); got != problem.ContentType {
 		t.Errorf("Content-Type = %q, want %q", got, problem.ContentType)
 	}
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
+	assert.Equal(t, http.StatusForbidden, rec.Code)
 
 	var back problem.Problem
-	if err := json.Unmarshal(rec.Body.Bytes(), &back); err != nil {
-		t.Fatalf("unmarshal body: %v", err)
-	}
-	if back.Code != generated.ErrorCodeConstraintViolated {
-		t.Errorf("code = %q, want %q", back.Code, generated.ErrorCodeConstraintViolated)
-	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &back), "unmarshal body")
+	assert.Equal(t, generated.ErrorCodeConstraintViolated, back.Code)
 	if back.Status != rec.Code {
 		t.Errorf("body status %d disagrees with the status line %d", back.Status, rec.Code)
 	}
@@ -139,13 +128,9 @@ func TestDetailIsOptional(t *testing.T) {
 	t.Parallel()
 
 	body, err := json.Marshal(problem.New(generated.ErrorCodeKeyUnknown, ""))
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+	require.NoError(t, err, "marshal")
 	var members map[string]any
-	if err := json.Unmarshal(body, &members); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+	require.NoError(t, json.Unmarshal(body, &members), "unmarshal")
 	if _, present := members["detail"]; present {
 		t.Errorf("detail present when empty: %s", body)
 	}
@@ -221,9 +206,7 @@ func TestUnmappedCodeStillAnswers(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	if err := p.Write(rec); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
+	require.NoError(t, p.Write(rec), "Write")
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("wrote status %d, want %d", rec.Code, http.StatusInternalServerError)
 	}

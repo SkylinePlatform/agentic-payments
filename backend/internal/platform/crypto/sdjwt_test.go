@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
@@ -68,25 +70,17 @@ func TestRFC9901IssuerSignatureVerifies(t *testing.T) {
 	t.Parallel()
 
 	set, err := crypto.ParseJWKS([]byte(rfc9901IssuerJWK))
-	if err != nil {
-		t.Fatalf("ParseJWKS: %v", err)
-	}
+	require.NoError(t, err, "ParseJWKS")
 	refs := set.Keys()
 	if len(refs) != 1 {
 		t.Fatalf("got %d keys, want 1", len(refs))
 	}
-	if refs[0].Algorithm != authz.ES256 {
-		t.Fatalf("key algorithm = %s, want %s", refs[0].Algorithm, authz.ES256)
-	}
+	require.Equal(t, authz.ES256, refs[0].Algorithm)
 	verifier, err := set.Resolve(t.Context(), refs[0])
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
+	require.NoError(t, err, "Resolve")
 
 	sd, err := sdjwt.Parse(loadSDJWTVector(t, "rfc9901_presentation.sdjwt"))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
+	require.NoError(t, err, "Parse")
 
 	// An instant between the iat and exp of the example — the moment its Key
 	// Binding JWT was issued.
@@ -100,9 +94,7 @@ func TestRFC9901IssuerSignatureVerifies(t *testing.T) {
 		Issuer: joseVerifier{inner: verifier},
 		Clock:  now,
 	})
-	if err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
+	require.NoError(t, err, "Verify")
 	// A spot check that the disclosed claims came through; pkg/sdjwt's own
 	// tests compare the whole Processed SD-JWT Payload against the RFC.
 	if got, want := payload["family_name"], "Doe"; got != want {
@@ -117,9 +109,7 @@ func TestRFC9901IssuerSignatureVerifies(t *testing.T) {
 	// on the plumbing.
 	store, _, ref := storeWithKey(t, authz.ES256)
 	other, err := store.Resolve(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
+	require.NoError(t, err, "Resolve")
 	if _, err := sdjwt.Verify(sd, sdjwt.Options{
 		Issuer: joseVerifier{inner: other},
 		Clock:  now,
@@ -135,8 +125,6 @@ func TestRFC9901IssuerSignatureVerifies(t *testing.T) {
 func loadSDJWTVector(t *testing.T, name string) string {
 	t.Helper()
 	data, err := os.ReadFile("../../../pkg/sdjwt/testdata/" + name)
-	if err != nil {
-		t.Fatalf("read vector: %v", err)
-	}
+	require.NoError(t, err, "read vector")
 	return strings.TrimSpace(string(data))
 }

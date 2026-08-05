@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 )
@@ -54,9 +57,7 @@ func flight() constraint.Subject {
 func parse(t *testing.T, raw string) constraint.Expression {
 	t.Helper()
 	e, err := constraint.Parse(node(t, raw))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
+	require.NoError(t, err, "Parse")
 	return e
 }
 
@@ -268,9 +269,7 @@ func TestNotTakesExactlyOneChild(t *testing.T) {
 	_, err := constraint.Parse(node(t, `{"op":"not","of":[
 		{"op":"eq","field":"item.category","value":"a"},
 		{"op":"eq","field":"item.category","value":"b"}]}`))
-	if !errors.Is(err, constraint.ErrMalformed) {
-		t.Errorf("err = %v, want ErrMalformed", err)
-	}
+	assert.ErrorIs(t, err, constraint.ErrMalformed, "err = %v, want ErrMalformed", err)
 }
 
 // TestEmptyGroupIsRefused covers the two vacuous readings. `all` of nothing
@@ -351,9 +350,7 @@ func TestTypeMismatchesFailAtParse(t *testing.T) {
 			t.Parallel()
 
 			_, err := constraint.Parse(node(t, tc.raw))
-			if !errors.Is(err, tc.want) {
-				t.Errorf("err = %v, want %v", err, tc.want)
-			}
+			assert.ErrorIs(t, err, tc.want, "err = %v, want %v", err, tc.want)
 		})
 	}
 }
@@ -370,9 +367,7 @@ func TestUnknownIsRejectedNotSkipped(t *testing.T) {
 	}
 
 	report, err := constraint.Evaluate(cs, flight())
-	if !errors.Is(err, constraint.ErrUnknownField) {
-		t.Fatalf("err = %v, want ErrUnknownField", err)
-	}
+	require.ErrorIs(t, err, constraint.ErrUnknownField, "err = %v, want ErrUnknownField", err)
 	// No partial answer: a report saying "satisfied" while one constraint was
 	// never evaluated is the silent skip in a different costume.
 	if len(report.Results) != 0 {
@@ -526,12 +521,8 @@ func TestConjunctionAtTheTopLevel(t *testing.T) {
 			s := flight()
 			s.Amount = generated.Amount{Amount: 20000, Currency: "USD"}
 			report, err := constraint.Evaluate(tc.order, s)
-			if err != nil {
-				t.Fatalf("Evaluate: %v", err)
-			}
-			if report.Satisfied() != tc.want {
-				t.Errorf("Satisfied() = %v, want %v — the stricter did not win", report.Satisfied(), tc.want)
-			}
+			require.NoError(t, err, "Evaluate")
+			assert.Equal(t, tc.want, report.Satisfied(), "the stricter did not win")
 		})
 	}
 }
@@ -542,9 +533,7 @@ func TestNoConstraintsIsSatisfied(t *testing.T) {
 	// A mandate carrying no constraints is one where the user placed no
 	// limits, which is different from one whose limits could not be read.
 	report, err := constraint.Evaluate(nil, flight())
-	if err != nil {
-		t.Fatalf("Evaluate: %v", err)
-	}
+	require.NoError(t, err, "Evaluate")
 	if !report.Satisfied() {
 		t.Error("a mandate with no constraints was not satisfied")
 	}
@@ -560,9 +549,7 @@ func TestEveryViolationIsReported(t *testing.T) {
 	}
 
 	report, err := constraint.Evaluate(cs, flight())
-	if err != nil {
-		t.Fatalf("Evaluate: %v", err)
-	}
+	require.NoError(t, err, "Evaluate")
 	if got := len(report.Violations()); got != 3 {
 		t.Errorf("%d violations, want 3 — evaluation stopped early", got)
 	}
@@ -591,9 +578,7 @@ func TestAmountsPastTheCeilingAreRefused(t *testing.T) {
 	// 2^53 + 1, the first integer a float64 cannot hold.
 	_, err := constraint.Parse(node(t,
 		`{"op":"lte","field":"amount","value":{"amount":9007199254740993,"currency":"USD"}}`))
-	if !errors.Is(err, constraint.ErrTypeMismatch) {
-		t.Fatalf("err = %v, want ErrTypeMismatch", err)
-	}
+	require.ErrorIs(t, err, constraint.ErrTypeMismatch, "err = %v, want ErrTypeMismatch", err)
 	if !strings.Contains(err.Error(), "2^53") {
 		t.Errorf("the error does not explain the ceiling: %v", err)
 	}

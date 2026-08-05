@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/store"
 )
@@ -19,9 +21,7 @@ func newStore(t *testing.T, opts ...store.Option) (*store.Idempotency[string], *
 	t.Helper()
 	c := clock.NewFake(base)
 	s, err := store.NewIdempotency[string](c, opts...)
-	if err != nil {
-		t.Fatalf("NewIdempotency: %v", err)
-	}
+	require.NoError(t, err, "NewIdempotency")
 	return s, c
 }
 
@@ -39,9 +39,7 @@ func claim(t *testing.T, s *store.Idempotency[string], key, fingerprint string) 
 func remember(t *testing.T, s *store.Idempotency[string], key, fingerprint, result string) {
 	t.Helper()
 	claim(t, s, key, fingerprint)
-	if err := s.Complete(key, result); err != nil {
-		t.Fatalf("Complete(%s): %v", key, err)
-	}
+	require.NoError(t, s.Complete(key, result), "Complete(%s)", key)
 }
 
 func TestKeyIsRequired(t *testing.T) {
@@ -86,9 +84,7 @@ func TestSecondClaimWhileInFlight(t *testing.T) {
 
 	// And once the first attempt finishes, the retry replays rather than
 	// running anything.
-	if err := s.Complete("k1", "the answer"); err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
+	require.NoError(t, s.Complete("k1", "the answer"), "Complete")
 	if got, replayed, err := s.Claim("k1", "fp"); err != nil || !replayed || got != "the answer" {
 		t.Errorf("Claim after Complete: got %q replayed=%v err=%v", got, replayed, err)
 	}

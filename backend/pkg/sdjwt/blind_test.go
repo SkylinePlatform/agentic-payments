@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
 
@@ -93,19 +95,13 @@ func TestBlindPaths(t *testing.T) {
 			t.Parallel()
 
 			blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-			if err != nil {
-				t.Fatalf("NewBlinder: %v", err)
-			}
+			require.NoError(t, err, "NewBlinder")
 			payload, disclosures, err := blinder.Blind(claims, tc.paths...)
 			if tc.wantErr != nil {
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("Blind: got %v, want %v", err, tc.wantErr)
-				}
+				require.ErrorIs(t, err, tc.wantErr, "Blind: got %v, want %v", err, tc.wantErr)
 				return
 			}
-			if err != nil {
-				t.Fatalf("Blind: %v", err)
-			}
+			require.NoError(t, err, "Blind")
 			if got := len(disclosures); got != tc.wantDisclosure {
 				t.Errorf("got %d disclosures, want %d", got, tc.wantDisclosure)
 			}
@@ -132,9 +128,7 @@ func resolveDigests(t *testing.T, expected string, disclosures []sdjwt.Disclosur
 	elements := 0
 	for _, d := range disclosures {
 		digest, err := d.Digest(sdjwt.SHA256)
-		if err != nil {
-			t.Fatalf("Digest: %v", err)
-		}
+		require.NoError(t, err, "Digest")
 		placeholder := fmt.Sprintf("DIGEST[%d]", elements)
 		if name, named := d.Name(); named {
 			placeholder = "DIGEST(" + name + ")"
@@ -162,9 +156,7 @@ func TestBlindLeavesTheInputAlone(t *testing.T) {
 	before := canonicalJSON(t, claims)
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	if err != nil {
-		t.Fatalf("NewBlinder: %v", err)
-	}
+	require.NoError(t, err, "NewBlinder")
 	if _, _, err := blinder.Blind(claims, "sub", "address.locality"); err != nil {
 		t.Fatalf("Blind: %v", err)
 	}
@@ -189,16 +181,12 @@ func TestBlindAcceptsAStruct(t *testing.T) {
 	}
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	if err != nil {
-		t.Fatalf("NewBlinder: %v", err)
-	}
+	require.NoError(t, err, "NewBlinder")
 	payload, disclosures, err := blinder.Blind(mandate{
 		Subject: "agent-42",
 		Amount:  amount{Currency: "EUR", MinorUnits: 1999},
 	}, "amount.minor_units")
-	if err != nil {
-		t.Fatalf("Blind: %v", err)
-	}
+	require.NoError(t, err, "Blind")
 	if len(disclosures) != 1 {
 		t.Fatalf("got %d disclosures, want 1", len(disclosures))
 	}
@@ -220,9 +208,7 @@ func TestBlindIsReproducible(t *testing.T) {
 
 	render := func() string {
 		blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-		if err != nil {
-			t.Fatalf("NewBlinder: %v", err)
-		}
+		require.NoError(t, err, "NewBlinder")
 		payload, disclosures := mustBlind(t, blinder, mandateClaims(), blindPaths...)
 		encoded := canonicalJSON(t, payload)
 		for _, d := range disclosures {
@@ -255,9 +241,7 @@ func TestBlindRejectsReservedClaims(t *testing.T) {
 			t.Parallel()
 
 			blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-			if err != nil {
-				t.Fatalf("NewBlinder: %v", err)
-			}
+			require.NoError(t, err, "NewBlinder")
 			if _, _, err := blinder.Blind(tc.claims); !errors.Is(err, sdjwt.ErrReservedClaim) {
 				t.Errorf("Blind: got %v, want %v", err, sdjwt.ErrReservedClaim)
 			}
@@ -276,15 +260,11 @@ func TestDecoyDigests(t *testing.T) {
 		sdjwt.WithSaltSource(newSalts()),
 		sdjwt.WithDecoyDigests(decoys),
 	)
-	if err != nil {
-		t.Fatalf("NewBlinder: %v", err)
-	}
+	require.NoError(t, err, "NewBlinder")
 
 	claims := map[string]any{"sub": "agent-42", "merchant": "acme", "region": "eu"}
 	payload, disclosures, err := blinder.Blind(claims, "merchant", "region")
-	if err != nil {
-		t.Fatalf("Blind: %v", err)
-	}
+	require.NoError(t, err, "Blind")
 	if got, want := len(disclosures), 2; got != want {
 		t.Fatalf("got %d disclosures, want %d", got, want)
 	}
@@ -301,9 +281,7 @@ func TestDecoyDigests(t *testing.T) {
 	key := newHMACKey("issuer-secret", "issuer-1")
 	issued := mustIssue(t, key, payload, disclosures)
 	got, err := sdjwt.Verify(issued, sdjwt.Options{Issuer: key, Clock: at(1750000000)})
-	if err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
+	require.NoError(t, err, "Verify")
 	if want := canonicalJSONText(t, `{"sub":"agent-42","merchant":"acme","region":"eu"}`); canonicalJSON(t, got) != want {
 		t.Errorf("processed payload:\n got %s\nwant %s", canonicalJSON(t, got), want)
 	}
@@ -329,9 +307,7 @@ func TestWiderHashAlgorithms(t *testing.T) {
 			t.Parallel()
 
 			blinder, err := sdjwt.NewBlinder(sdjwt.WithHashAlg(alg), sdjwt.WithSaltSource(newSalts()))
-			if err != nil {
-				t.Fatalf("NewBlinder: %v", err)
-			}
+			require.NoError(t, err, "NewBlinder")
 			payload, disclosures := mustBlind(t, blinder, map[string]any{"sub": "agent-42", "merchant": "acme"}, "merchant")
 			if got := payload["_sd_alg"]; got != string(alg) {
 				t.Errorf("_sd_alg = %v, want %q", got, alg)
@@ -340,9 +316,7 @@ func TestWiderHashAlgorithms(t *testing.T) {
 			key := newHMACKey("issuer-secret", "issuer-1")
 			issued := mustIssue(t, key, payload, disclosures)
 			got, err := sdjwt.Verify(issued, sdjwt.Options{Issuer: key, Clock: at(1750000000)})
-			if err != nil {
-				t.Fatalf("Verify: %v", err)
-			}
+			require.NoError(t, err, "Verify")
 			if want := canonicalJSONText(t, `{"sub":"agent-42","merchant":"acme"}`); canonicalJSON(t, got) != want {
 				t.Errorf("processed payload = %s, want %s", canonicalJSON(t, got), want)
 			}
@@ -370,9 +344,7 @@ func TestDisclosureValueIsNormalised(t *testing.T) {
 	t.Parallel()
 
 	d, err := sdjwt.NewObjectDisclosure("salt", "updated_at", 1570000000)
-	if err != nil {
-		t.Fatalf("NewObjectDisclosure: %v", err)
-	}
+	require.NoError(t, err, "NewObjectDisclosure")
 	number, ok := d.Value().(json.Number)
 	if !ok {
 		t.Fatalf("Value() is %T, want json.Number", d.Value())

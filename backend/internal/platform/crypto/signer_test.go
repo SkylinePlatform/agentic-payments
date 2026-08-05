@@ -7,6 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
@@ -37,9 +40,7 @@ func storeWithKey(t *testing.T, alg authz.Algorithm, opts ...crypto.Option) (*cr
 
 	store, c := newStore(opts...)
 	ref, err := store.Generate(testSlot, alg, "test-generate")
-	if err != nil {
-		t.Fatalf("Generate(%s): %v", alg, err)
-	}
+	require.NoError(t, err, "Generate(%s)", alg)
 	return store, c, ref
 }
 
@@ -54,25 +55,15 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 			payload := []byte("eyJhbGciOiJFUzI1NiJ9.eyJ2Y3QiOiJtYW5kYXRlLmNoZWNrb3V0Lm9wZW4uMSJ9")
 
 			signer, err := store.Signer(testSlot)
-			if err != nil {
-				t.Fatalf("Signer: %v", err)
-			}
-			if signer.Key() != ref {
-				t.Errorf("Signer.Key() = %s, want %s", signer.Key(), ref)
-			}
-			if signer.Key().Algorithm != alg {
-				t.Errorf("Signer.Key().Algorithm = %s, want %s", signer.Key().Algorithm, alg)
-			}
+			require.NoError(t, err, "Signer")
+			assert.Equal(t, ref, signer.Key())
+			assert.Equal(t, alg, signer.Key().Algorithm)
 
 			sig, err := signer.Sign(t.Context(), payload)
-			if err != nil {
-				t.Fatalf("Sign: %v", err)
-			}
+			require.NoError(t, err, "Sign")
 
 			verifier, err := store.Resolve(t.Context(), signer.Key())
-			if err != nil {
-				t.Fatalf("Resolve: %v", err)
-			}
+			require.NoError(t, err, "Resolve")
 			if err := verifier.Verify(payload, sig); err != nil {
 				t.Errorf("Verify: %v", err)
 			}
@@ -104,18 +95,14 @@ func TestSignatureIsJOSEFixedWidth(t *testing.T) {
 
 			store, _, _ := storeWithKey(t, tt.alg)
 			signer, err := store.Signer(testSlot)
-			if err != nil {
-				t.Fatalf("Signer: %v", err)
-			}
+			require.NoError(t, err, "Signer")
 
 			// Sign repeatedly: an ECDSA scalar that happens to have leading
 			// zero bytes must still be padded to the full width, and that only
 			// shows up over several signatures.
 			for i := range 24 {
 				sig, err := signer.Sign(t.Context(), []byte{byte(i)})
-				if err != nil {
-					t.Fatalf("Sign: %v", err)
-				}
+				require.NoError(t, err, "Sign")
 				if len(sig) != tt.want {
 					t.Fatalf("signature %d is %d bytes, want %d", i, len(sig), tt.want)
 				}
@@ -147,17 +134,11 @@ func TestNonDeterminismMatchesTheProtocolRequirement(t *testing.T) {
 			payload := []byte("the same payload, twice")
 
 			signer, err := store.Signer(testSlot)
-			if err != nil {
-				t.Fatalf("Signer: %v", err)
-			}
+			require.NoError(t, err, "Signer")
 			first, err := signer.Sign(t.Context(), payload)
-			if err != nil {
-				t.Fatalf("Sign: %v", err)
-			}
+			require.NoError(t, err, "Sign")
 			second, err := signer.Sign(t.Context(), payload)
-			if err != nil {
-				t.Fatalf("Sign: %v", err)
-			}
+			require.NoError(t, err, "Sign")
 
 			identical := bytes.Equal(first, second)
 			if identical != alg.Deterministic() {
@@ -167,9 +148,7 @@ func TestNonDeterminismMatchesTheProtocolRequirement(t *testing.T) {
 
 			// Whichever it is, both signatures must verify.
 			verifier, err := store.Resolve(t.Context(), signer.Key())
-			if err != nil {
-				t.Fatalf("Resolve: %v", err)
-			}
+			require.NoError(t, err, "Resolve")
 			for i, sig := range [][]byte{first, second} {
 				if err := verifier.Verify(payload, sig); err != nil {
 					t.Errorf("Verify signature %d: %v", i, err)
@@ -190,17 +169,11 @@ func TestVerifyRejectsBadInput(t *testing.T) {
 			payload := []byte("authentic payload")
 
 			signer, err := store.Signer(testSlot)
-			if err != nil {
-				t.Fatalf("Signer: %v", err)
-			}
+			require.NoError(t, err, "Signer")
 			sig, err := signer.Sign(t.Context(), payload)
-			if err != nil {
-				t.Fatalf("Sign: %v", err)
-			}
+			require.NoError(t, err, "Sign")
 			verifier, err := store.Resolve(t.Context(), signer.Key())
-			if err != nil {
-				t.Fatalf("Resolve: %v", err)
-			}
+			require.NoError(t, err, "Resolve")
 
 			flipped := bytes.Clone(sig)
 			flipped[0] ^= 0x01
@@ -223,9 +196,7 @@ func TestVerifyRejectsBadInput(t *testing.T) {
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {
 					err := verifier.Verify(tt.payload, tt.signature)
-					if !errors.Is(err, authz.ErrSignatureInvalid) {
-						t.Errorf("Verify = %v, want ErrSignatureInvalid", err)
-					}
+					assert.ErrorIs(t, err, authz.ErrSignatureInvalid, "Verify = %v, want ErrSignatureInvalid", err)
 				})
 			}
 		})
@@ -244,22 +215,14 @@ func TestVerifyRejectsAnotherKeysSignature(t *testing.T) {
 	payload := []byte("payload")
 
 	otherSigner, err := store.Signer("other")
-	if err != nil {
-		t.Fatalf("Signer: %v", err)
-	}
+	require.NoError(t, err, "Signer")
 	sig, err := otherSigner.Sign(t.Context(), payload)
-	if err != nil {
-		t.Fatalf("Sign: %v", err)
-	}
+	require.NoError(t, err, "Sign")
 
 	ourSigner, err := store.Signer(testSlot)
-	if err != nil {
-		t.Fatalf("Signer: %v", err)
-	}
+	require.NoError(t, err, "Signer")
 	verifier, err := store.Resolve(t.Context(), ourSigner.Key())
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
+	require.NoError(t, err, "Resolve")
 
 	if err := verifier.Verify(payload, sig); !errors.Is(err, authz.ErrSignatureInvalid) {
 		t.Errorf("Verify with another key's signature = %v, want ErrSignatureInvalid", err)
@@ -298,17 +261,11 @@ func TestResolveRejectsAlgorithmConfusion(t *testing.T) {
 
 			verifier, err := store.Resolve(t.Context(), tt.ref)
 			if tt.want == nil {
-				if err != nil {
-					t.Fatalf("Resolve: %v", err)
-				}
-				if verifier.Key() != ref {
-					t.Errorf("Verifier.Key() = %s, want %s", verifier.Key(), ref)
-				}
+				require.NoError(t, err, "Resolve")
+				assert.Equal(t, ref, verifier.Key())
 				return
 			}
-			if !errors.Is(err, tt.want) {
-				t.Errorf("Resolve = %v, want %v", err, tt.want)
-			}
+			assert.ErrorIs(t, err, tt.want, "Resolve = %v, want %v", err, tt.want)
 		})
 	}
 }
@@ -318,9 +275,7 @@ func TestSignAndResolveRespectContextCancellation(t *testing.T) {
 
 	store, _, ref := storeWithKey(t, authz.ES256)
 	signer, err := store.Signer(testSlot)
-	if err != nil {
-		t.Fatalf("Signer: %v", err)
-	}
+	require.NoError(t, err, "Signer")
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
