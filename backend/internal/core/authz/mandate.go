@@ -102,35 +102,101 @@ type Endorsement struct {
 // now comes from the caller's injected clock. This package never reads one:
 // a mandate check that consulted the wall time directly would be untestable at
 // exactly the boundaries that matter.
-func (e Endorsement) Verify(signedBy KeyRef, now time.Time) error {
+func (e Endorsement) Verify(signedBy generated.PublicKey, now time.Time) error {
 	if err := e.endorses(signedBy); err != nil {
 		return err
 	}
 	return e.live(now)
 }
 
-// endorses reports whether the key that signed the closed mandate is the one
+// endorses reports whether the key that verified the closed mandate is the one
 // the user approved.
-func (e Endorsement) endorses(signedBy KeyRef) error {
-	if e.AgentKey == nil || e.AgentKey.Kid == nil || *e.AgentKey.Kid == "" {
+//
+// # It compares the key, not its name
+//
+// An open mandate carries a whole JWK rather than a key reference, and that is
+// deliberate: AP2 puts the key itself in the cnf claim so a verifier does not
+// have to trust a directory to say which key a name belongs to.
+//
+// Comparing kid alone would throw that away. A key identifier is a label chosen
+// by whoever minted the key, and nothing stops two keys carrying the same one —
+// so a verifier that resolved the label through a registry and then checked
+// only that the labels agreed would accept any signature that registry vouched
+// for. The user signed a key. This compares that key.
+//
+// kid and alg are still checked where the endorsement states them, because a
+// mismatch means something is wrong even when the material agrees — but they
+// are checked in addition to the material, never instead of it.
+func (e Endorsement) endorses(signedBy generated.PublicKey) error {
+	if e.AgentKey == nil || !usableKey(*e.AgentKey) {
 		return ErrNoEndorsedKey
 	}
-	if *e.AgentKey.Kid != signedBy.KeyID {
-		return fmt.Errorf("%w: signed by %q, endorsed %q",
-			ErrAgentKeyMismatch, signedBy.KeyID, *e.AgentKey.Kid)
+	endorsed := *e.AgentKey
+
+	if !sameKey(endorsed, signedBy) {
+		return fmt.Errorf("%w: the signing key is not the endorsed one", ErrAgentKeyMismatch)
 	}
 
-	// The algorithm is checked too, where the endorsement states one. A key
-	// identifier alone does not say what may be done with it, and a signature
-	// verified under an algorithm the user did not approve is a signature
-	// checked against a different assumption than the one they signed under.
-	if e.AgentKey.Alg != nil && *e.AgentKey.Alg != "" &&
-		*e.AgentKey.Alg != string(signedBy.Algorithm) {
-		return fmt.Errorf("%w: signed with %s, endorsed for %s",
-			ErrAgentKeyMismatch, signedBy.Algorithm, *e.AgentKey.Alg)
+	if endorsed.Kid != nil && *endorsed.Kid != "" {
+		if signedBy.Kid == nil || *signedBy.Kid != *endorsed.Kid {
+			return fmt.Errorf("%w: key identifier does not match the endorsed %q",
+				ErrAgentKeyMismatch, *endorsed.Kid)
+		}
+	}
+
+	// The algorithm too, where the endorsement states one. A key alone does not
+	// say what may be done with it, and a signature verified under an algorithm
+	// the user did not approve is checked against a different assumption from
+	// the one they signed under.
+	if endorsed.Alg != nil && *endorsed.Alg != "" {
+		if signedBy.Alg == nil || *signedBy.Alg != *endorsed.Alg {
+			return fmt.Errorf("%w: signed under a different algorithm from the endorsed %s",
+				ErrAgentKeyMismatch, *endorsed.Alg)
+		}
 	}
 	return nil
 }
+
+// usableKey reports whether a key carries enough material to be compared at
+// all. An endorsement naming a key type and nothing else endorses nobody, and
+// treating it as a match would invert the rule this package exists for.
+func usableKey(k generated.PublicKey) bool {
+	switch k.Kty {
+	case "EC":
+		return nonEmpty(k.Crv) && nonEmpty(k.X) && nonEmpty(k.Y)
+	case "OKP":
+		return nonEmpty(k.Crv) && nonEmpty(k.X)
+	case "RSA":
+		return nonEmpty(k.N) && nonEmpty(k.E)
+	default:
+		return false
+	}
+}
+
+// sameKey compares two JWKs by the fields that decide which key they are.
+//
+// Only the material: the key type, the curve, and the coordinates or modulus.
+// kid and alg are metadata about a key rather than part of it, and comparing
+// them here would let a relabelled copy of the same key read as a different one.
+func sameKey(a, b generated.PublicKey) bool {
+	if a.Kty != b.Kty {
+		return false
+	}
+	switch a.Kty {
+	case "EC":
+		return same(a.Crv, b.Crv) && same(a.X, b.X) && same(a.Y, b.Y)
+	case "OKP":
+		return same(a.Crv, b.Crv) && same(a.X, b.X)
+	case "RSA":
+		return same(a.N, b.N) && same(a.E, b.E)
+	default:
+		return false
+	}
+}
+
+func nonEmpty(s *string) bool { return s != nil && *s != "" }
+
+func same(a, b *string) bool { return a != nil && b != nil && *a == *b }
 
 // live reports whether the mandate's own window covers now.
 func (e Endorsement) live(now time.Time) error {
@@ -182,7 +248,7 @@ func PaymentEndorsementOf(open generated.OpenPaymentMandate) Endorsement {
 // reads it looking in the wrong place.
 func AuthoriseCheckout(
 	open generated.OpenCheckoutMandate,
-	signedBy KeyRef,
+	signedBy generated.PublicKey,
 	subject constraint.Subject,
 	now time.Time,
 ) (constraint.Report, error) {
@@ -203,7 +269,7 @@ func AuthoriseCheckout(
 func AuthorisePayment(
 	open generated.OpenPaymentMandate,
 	closed generated.PaymentMandate,
-	signedBy KeyRef,
+	signedBy generated.PublicKey,
 	subject constraint.Subject,
 	now time.Time,
 ) (constraint.Report, error) {

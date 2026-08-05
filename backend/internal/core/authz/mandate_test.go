@@ -22,13 +22,24 @@ var (
 
 // theAgent is the key the user endorses; anotherAgent is every other key in the
 // world, which is the population the endorsement exists to exclude.
+//
+// They are whole keys rather than references, because that is what an open
+// mandate carries and what the endorsement compares. The x coordinate is what
+// tells them apart.
 var (
-	theAgent     = authz.KeyRef{KeyID: "agent-7a3f", Algorithm: authz.ES256}
-	anotherAgent = authz.KeyRef{KeyID: "agent-beef", Algorithm: authz.ES256}
+	theAgent     = key("agent-7a3f", ptr(string(authz.ES256)), "x-of-the-endorsed-agent")
+	anotherAgent = key("agent-beef", ptr(string(authz.ES256)), "x-of-somebody-else")
 )
 
-func key(kid string, alg *string) generated.PublicKey {
-	return generated.PublicKey{Kty: "EC", Kid: &kid, Alg: alg}
+func key(kid string, alg *string, x string) generated.PublicKey {
+	return generated.PublicKey{
+		Kty: "EC",
+		Crv: ptr("P-256"),
+		X:   &x,
+		Y:   ptr("y-coordinate"),
+		Kid: &kid,
+		Alg: alg,
+	}
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -47,7 +58,7 @@ func openCheckout(t *testing.T) generated.OpenCheckoutMandate {
 	]`), &constraints), "the test's own constraints")
 
 	return generated.OpenCheckoutMandate{
-		AgentKey:    key(theAgent.KeyID, ptr(string(authz.ES256))),
+		AgentKey:    theAgent,
 		Constraints: constraints,
 		IssuedAt:    &issued,
 		ExpiresAt:   &expires,
@@ -100,6 +111,56 @@ func TestAStolenOpenMandateIsUselessToAnotherAgent(t *testing.T) {
 		"the receipt would not name the real reason")
 }
 
+// TestABorrowedKeyIdentifierIsNotTheKey is the attack an earlier version of
+// this package allowed, and the reason the endorsement compares material.
+//
+// A `kid` is a label chosen by whoever minted the key. Nothing stops a second
+// key carrying the same one — so a verifier that resolved the label through a
+// registry and then checked only that the labels agreed would accept any
+// signature that registry vouched for, and the endorsement would be worth
+// exactly as much as the directory. AP2 embeds the whole key in the cnf claim
+// precisely so the verifier need not trust one.
+func TestABorrowedKeyIdentifierIsNotTheKey(t *testing.T) {
+	t.Parallel()
+
+	// Same kid, same algorithm, different key. Everything a label-only check
+	// would look at agrees.
+	impostor := anotherAgent
+	impostor.Kid = theAgent.Kid
+	impostor.Alg = theAgent.Alg
+
+	_, err := authz.AuthoriseCheckout(openCheckout(t), impostor, purchase(), acting)
+
+	require.ErrorIs(t, err, authz.ErrAgentKeyMismatch,
+		"a different key wearing the endorsed key's identifier was accepted")
+	assert.Equal(t, generated.ErrorCodeAgentKeyMismatch, authz.CodeOf(err))
+}
+
+// TestRelabellingTheEndorsedKeyDoesNotDefeatIt is the mirror image: the same
+// key material must not stop being the endorsed key because its label changed.
+//
+// Both directions matter. If material alone decided, a relabelled copy would
+// pass and the kid would be decoration; if the label alone decided, the test
+// above would pass. The endorsement checks both, and material is the one that
+// cannot be borrowed.
+func TestRelabellingTheEndorsedKeyDoesNotDefeatIt(t *testing.T) {
+	t.Parallel()
+
+	relabelled := theAgent
+	relabelled.Kid = ptr("some-other-name")
+
+	_, err := authz.AuthoriseCheckout(openCheckout(t), relabelled, purchase(), acting)
+	require.ErrorIs(t, err, authz.ErrAgentKeyMismatch,
+		"a key identifier the user did not endorse was accepted")
+
+	// And with no kid endorsed at all, the material alone decides — which is
+	// the schema's reading, since kid is optional on a PublicKey.
+	open := openCheckout(t)
+	open.AgentKey.Kid = nil
+	_, err = authz.AuthoriseCheckout(open, relabelled, purchase(), acting)
+	require.NoError(t, err, "an endorsement naming no identifier insisted on one anyway")
+}
+
 // TestAnEndorsementOfNobodyEndorsesNobody covers the degenerate mandate. An
 // absent key must not read as "any key will do", which would invert the rule
 // above rather than merely weaken it.
@@ -110,8 +171,9 @@ func TestAnEndorsementOfNobodyEndorsesNobody(t *testing.T) {
 		name string
 		key  generated.PublicKey
 	}{
-		{"no kid at all", generated.PublicKey{Kty: "EC"}},
-		{"an empty kid", key("", nil)},
+		{"a key type and nothing else", generated.PublicKey{Kty: "EC"}},
+		{"a curve but no coordinates", generated.PublicKey{Kty: "EC", Crv: ptr("P-256")}},
+		{"a key type nobody knows", generated.PublicKey{Kty: "magic"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -132,7 +194,8 @@ func TestAnEndorsementOfNobodyEndorsesNobody(t *testing.T) {
 func TestTheEndorsedAlgorithmIsChecked(t *testing.T) {
 	t.Parallel()
 
-	sameKeyOtherAlgorithm := authz.KeyRef{KeyID: theAgent.KeyID, Algorithm: authz.EdDSA}
+	sameKeyOtherAlgorithm := theAgent
+	sameKeyOtherAlgorithm.Alg = ptr(string(authz.EdDSA))
 
 	_, err := authz.AuthoriseCheckout(openCheckout(t), sameKeyOtherAlgorithm, purchase(), acting)
 	require.ErrorIs(t, err, authz.ErrAgentKeyMismatch)
@@ -140,7 +203,7 @@ func TestTheEndorsedAlgorithmIsChecked(t *testing.T) {
 	// An endorsement that names no algorithm constrains only the key, and that
 	// is the schema's own reading — alg is optional on a PublicKey.
 	open := openCheckout(t)
-	open.AgentKey = key(theAgent.KeyID, nil)
+	open.AgentKey.Alg = nil
 	_, err = authz.AuthoriseCheckout(open, sameKeyOtherAlgorithm, purchase(), acting)
 	require.NoError(t, err, "an endorsement naming no algorithm refused one")
 }

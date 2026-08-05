@@ -36,7 +36,7 @@ func openPayment(t *testing.T) generated.OpenPaymentMandate {
 
 	payee, instrument, amount := merchant(), card(), usd(18900)
 	return generated.OpenPaymentMandate{
-		AgentKey:          key(theAgent.KeyID, ptr(string(authz.ES256))),
+		AgentKey:          theAgent,
 		Constraints:       constraints,
 		Payee:             &payee,
 		PaymentInstrument: &instrument,
