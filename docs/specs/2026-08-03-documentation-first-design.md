@@ -242,7 +242,7 @@ and the screenshots. It breaks into beats, each of which is one screenshot.
 | # | Beat | What it proves |
 |---|---|---|
 | 1 | User types "buy a flight to Palma when it drops below $200, this summer" | entry point |
-| 2 | Interpreted **once** into typed constraints: `price.max`, `temporal.window`, `item.route` | the model translates, it does not execute |
+| 2 | Interpreted **once** into a typed constraint expression — an amount bound, a booking window, the route | the model translates, it does not execute |
 | 3 | Trusted Surface shows the **interpretation, not the prompt**; the user signs | where a misread "summer" is caught |
 | 4 | Agent watches the price deterministically — $240, no model call | after signing there is no model |
 | 5 | A candidate at $210; the agent assembles mandates and **the verifier rejects** | the verifier rejects, not the agent |

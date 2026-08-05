@@ -1,19 +1,30 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Constraint",
-  "description": "One limit the user placed on what the agent may do. Constraints are carried by an open mandate and evaluated by the verifier against the closed mandate the agent presents — never by the agent, which is what makes the design safe against a model that proposes anything it likes. The vocabulary is ours; AP2 merely transports it. The type registry, the per-type parameter schemas and the evaluators are defined in internal/core/authz/constraint (#11).",
+  "description": "One limit the user placed on what the agent may do, as a node in an expression tree. Constraints are carried by an open mandate and evaluated by the verifier against the closed mandate the agent presents — never by the agent, which is what makes the design safe against a model that proposes anything it likes. The vocabulary is ours; AP2 merely transports it. The field registry, the operator table and the evaluator live in internal/core/authz/constraint.\n\nA node is either a leaf or a group. A leaf carries op, field and value, and compares one fact about the purchase — amount lte 20000 USD. A group carries op and of, and combines the nodes beneath it: all, any, not.\n\nGenerality comes from the field-by-operator matrix rather than from a growing list of named constraint types. A closed registry of fields, each with a declared value type, and a table of operators valid for each type: adding a fact about a purchase is one field entry, after which every operator that fits its type works on it.",
+  "$comment": "The of array references this schema, which makes Constraint the one recursive type in the canonical model. Two traps, both found in the generators' own source rather than assumed. The $ref uses the bare filename form and never '#': go-jsonschema special-cases the latter and can fall back to interface{}, losing the type. And it carries no sibling keyword — a description beside a $ref makes json-schema-to-typescript emit a second copy of the type, which is why the prose about of lives here. contracts/README.md records that rule for every $ref in this directory.\n\nWhat may be withheld under selective disclosure is a whole top-level constraint, never a subtree: removing one branch of an any leaves the remaining branch looking mandatory, which misrepresents what the user approved rather than merely telling the verifier less. So x-disclosable-items stays on the mandate's constraints array and goes no deeper.",
   "type": "object",
   "properties": {
-    "type": {
+    "op": {
       "type": "string",
-      "description": "Identifier of the constraint type, e.g. 'price.max' or 'temporal.window'. Deliberately not an enum: an unknown constraint type must be representable so that the verifier can reject it explicitly and say so in a receipt. Closing the set here would turn that into a parse failure instead, which cannot be receipted and cannot be told apart from a malformed message."
+      "description": "What this node does. Group operators — all, any, not — combine the nodes in of. Leaf operators compare field against value: eq, neq, lt, lte, gt, gte, in, nin, between, within, before, after. Deliberately not an enum, for the same reason field is not: an operator this verifier does not implement must be representable so that it can be rejected explicitly and named in a receipt. Closing the set here would turn that into a parse failure, which cannot be receipted and cannot be told apart from a malformed message."
     },
-    "params": {
-      "type": "object",
-      "description": "Parameters for this constraint type, interpreted by the evaluator registered for it. Open by construction — the registry, not this schema, decides what is valid for a given type.",
-      "additionalProperties": true
+    "field": {
+      "type": "string",
+      "description": "Which fact about the purchase a leaf node compares — amount, at, quantity, item.id, item.category, merchant.id, merchant.category, or an item attribute such as item.attr.route.origin. Absent on a group node. Not an enum, for the reason given on op: a field this verifier does not know has to be rejectable rather than unparseable."
+    },
+    "value": {
+      "description": "What a leaf node compares against. Its shape is decided by the operator and by the field's declared type — a number for quantity, an Amount for amount, an RFC 3339 timestamp for at, an array for in, an object carrying from and to for between and within. Checked when the constraint is parsed rather than when it is evaluated: a value of the wrong type is a malformed mandate, which is a different failure from a purchase falling outside a limit, and conflating the two would tell a user their limit was exceeded when in fact it could not be read."
+    },
+    "of": {
+      "type": "array",
+      "items": {
+        "$ref": "constraint.json"
+      }
     }
   },
-  "required": ["type"],
+  "required": [
+    "op"
+  ],
   "additionalProperties": false
 }
