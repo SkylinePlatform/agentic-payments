@@ -413,6 +413,14 @@ func VerifyChain(c *Chain, opts ChainOptions) ([]map[string]any, error) {
 		return nil, fmt.Errorf("%w: the delegated element is %T, not an object",
 			ErrDelegatePayloadInvalid, elements[0])
 	}
+	// Draft §6 step 3.1 names _sd_alg as the one claim that does not travel
+	// into the Delegate Payload; it stays at the delegating JWT's level, which
+	// is what alg above already read. Delegate itself never writes a copy in
+	// here, but a chain this package did not build might, and a caller reading
+	// the algorithm off the returned payload — the pattern HashAlg's own doc
+	// comment invites — must see the one the digests actually verified under,
+	// not one the delegate chose and stashed alongside it.
+	delete(delegated, sdAlgClaim)
 
 	// The delegated content carries its own lifetime, and it is not the root's.
 	// An open mandate valid for a day may delegate a closed one valid for a

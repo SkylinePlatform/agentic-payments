@@ -161,7 +161,10 @@ func (s *SDJWT) verifyKeyBinding(holder Verifier, opts Options) error {
 		return fmt.Errorf("%w: payload: %w", ErrKeyBindingInvalid, err)
 	}
 
-	if err := checkFreshness(freshness{claims.Nonce, claims.Audience, claims.IssuedAt},
+	// Freshness before sd_hash: this rejects a replayed nonce without hashing
+	// the presentation first, and it is the RFC's own order too — §7.3 step 5
+	// enumerates iat, then nonce and aud, then sd_hash last.
+	if err := checkFreshness(freshness{nonce: claims.Nonce, audience: claims.Audience, issuedAt: claims.IssuedAt},
 		opts.Nonce, opts.Audience, opts.MaxKeyBindingAge, opts.Clock); err != nil {
 		return err
 	}

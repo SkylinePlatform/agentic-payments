@@ -69,6 +69,11 @@ func TestTwoDelegationHopsAreRefused(t *testing.T) {
 	_, err := sdjwt.ParseChain(twoHops)
 	require.Error(t, err, "this implementation is two-hop; a longer chain must be refused, never silently shortened")
 	assert.ErrorIs(t, err, sdjwt.ErrMalformedChain)
+	// The sentinel alone is not enough: dropping the sep >= 0 guard still
+	// rejects, via parseDisclosures choking on the empty component that would
+	// otherwise start a second hop, and that failure wraps the same sentinel.
+	// Only the message pins the rejection to the two-hops rule specifically.
+	assert.ErrorContains(t, err, "two delegation hops")
 }
 
 func TestAPlainSDJWTIsNotAChain(t *testing.T) {
@@ -231,12 +236,15 @@ func TestTheDelegationIsBoundToTheDisclosuresTheRootPresented(t *testing.T) {
 func TestIssuerJWTHashBindsWithoutCoveringDisclosures(t *testing.T) {
 	// A chain built with issuer_jwt_hash instead of sd_hash verifies, and keeps
 	// verifying when a root disclosure is dropped — which is exactly the
-	// weaker guarantee the draft offers, written down so nobody reaches for it
-	// by accident.
-	chain := delegatedChainWithIssuerJWTHash(t) // helper below
+	// weaker guarantee the draft offers, proved here rather than only claimed:
+	// TestTheDelegationIsBoundToTheDisclosuresTheRootPresented shows sd_hash
+	// rejecting the identical drop, so the asymmetry between the two hashes is
+	// evidence, not prose.
+	chain := delegatedChainWithIssuerJWTHash(t, issuedRootWithExtraDisclosure(t)) // helper below
+	narrowed := dropOneRootDisclosure(t, chain)
 
-	_, err := sdjwt.VerifyChain(chain, chainOptions(t))
-	require.NoError(t, err, "the draft permits issuer_jwt_hash, so a chain that uses it must verify")
+	_, err := sdjwt.VerifyChain(narrowed, chainOptions(t))
+	require.NoError(t, err, "issuer_jwt_hash covers only the delegating JWT, not the disclosures presented alongside the root, so dropping one must not break verification")
 }
 
 func TestVerifyChainRefusesOptionsItCannotApply(t *testing.T) {
@@ -385,6 +393,82 @@ func TestAllowedHashAlgsAppliesToTheDelegateHopToo(t *testing.T) {
 	require.Error(t, err,
 		"AllowedHashAlgs documents itself as applying at both hops, so a verifier that refuses sha-384 must refuse it on the delegated content too, not only on the root")
 	assert.ErrorIs(t, err, sdjwt.ErrUnsupportedHashAlg)
+}
+
+func TestVerifyChainRejectsAReplayedOrStaleDelegation(t *testing.T) {
+	// verifyDelegateFreshness is the delegating JWT's replay protection: the
+	// nonce and audience it was signed for have to match what this Verifier
+	// asked for, and — when policy sets a window — iat has to fall inside it.
+	// No other test in this file drives a mismatch through any of the three,
+	// so nothing else here would catch the call being deleted, or rewritten to
+	// compare the claims against themselves.
+	for _, tc := range []struct {
+		name         string
+		mutateOpts   func(*sdjwt.ChainOptions)
+		mutateClaims func(map[string]any)
+		why          string
+	}{
+		{
+			name:       "nonce mismatch",
+			mutateOpts: func(o *sdjwt.ChainOptions) { o.Nonce = "different-nonce" },
+			why:        "a delegation signed for nonce n-1 must not verify against a different one asked for here, or the nonce constrains nothing",
+		},
+		{
+			name:       "audience mismatch",
+			mutateOpts: func(o *sdjwt.ChainOptions) { o.Audience = "https://not-the-merchant.example" },
+			why:        "a delegation signed for https://merchant.example must not verify at a different audience, or the audience constrains nothing",
+		},
+		{
+			name:       "iat before the window",
+			mutateOpts: func(o *sdjwt.ChainOptions) { o.MaxKeyBindingAge = 5 * time.Second },
+			why:        "chainOptions' clock reads 1_777_326_200; delegatedChain's default iat of 1_777_326_189 is 11 seconds earlier, outside a 5-second window",
+		},
+		{
+			name:       "iat after the window",
+			mutateOpts: func(o *sdjwt.ChainOptions) { o.MaxKeyBindingAge = 5 * time.Second },
+			mutateClaims: func(c map[string]any) {
+				c["iat"] = int64(1_777_326_400) // 200s ahead of chainOptions' clock
+			},
+			why: "a proof from the future is as suspect as a stale one: iat 200 seconds ahead of chainOptions' clock is outside a 5-second window in either direction",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var chain *sdjwt.Chain
+			if tc.mutateClaims != nil {
+				chain = delegatedChainWithClaims(t, issuedRoot(t), tc.mutateClaims)
+			} else {
+				chain = delegatedChain(t, "delegate")
+			}
+
+			opts := chainOptions(t)
+			tc.mutateOpts(&opts)
+
+			_, err := sdjwt.VerifyChain(chain, opts)
+			require.Error(t, err, tc.why)
+			assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid)
+		})
+	}
+}
+
+func TestDelegatedSDAlgDoesNotSurviveIntoThePayload(t *testing.T) {
+	// Delegate itself never writes a copy of _sd_alg into the delegated
+	// content — draft §6 step 3.1 names it the one claim that stays at the
+	// delegating JWT's level, and Delegate strips it on the way in. This
+	// reaches through the wire format the same way every other use of
+	// delegatedChainWithElements does, to build a chain that carries one
+	// anyway: a chain Delegate's own API could never produce, but a chain
+	// this package did not build might.
+	chain := delegatedChainWithElements(t, []any{
+		map[string]any{"vct": "closed.example", "_sd_alg": "sha-512"},
+	})
+
+	payloads, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	require.NoError(t, err,
+		"the digest matches under the delegating JWT's real _sd_alg (sha-256); a claim of the same name smuggled inside the content must not stop verification")
+
+	_, ok := payloads[1]["_sd_alg"]
+	assert.False(t, ok,
+		"a caller reading the algorithm off the returned payload — the pattern HashAlg's own doc comment invites — must not see a delegate-chosen value the digest was never verified under")
 }
 
 // delegatedChain is issuedRoot delegated to the named key. The root always
@@ -663,13 +747,18 @@ func delegatedChainWithHashClaims(t *testing.T, root *sdjwt.SDJWT, claim map[str
 	})
 }
 
-// delegatedChainWithIssuerJWTHash is a delegation bound by issuer_jwt_hash
-// instead of sd_hash: the digest of the Issuer-signed JWT alone, computed the
-// same way c.verifyBinding computes it, not the digest of the JWT and its
-// presented Disclosures that SDHash returns.
-func delegatedChainWithIssuerJWTHash(t *testing.T) *sdjwt.Chain {
+// delegatedChainWithIssuerJWTHash is a delegation over root bound by
+// issuer_jwt_hash instead of sd_hash: the digest of the Issuer-signed JWT
+// alone, computed the same way c.verifyBinding computes it, not the digest of
+// the JWT and its presented Disclosures that SDHash returns.
+//
+// root is a parameter, not built here, so a caller can hand it one that has a
+// disclosure to drop afterwards — TestIssuerJWTHashBindsWithoutCoveringDisclosures
+// needs issuedRootWithExtraDisclosure specifically, the same fixture
+// TestTheDelegationIsBoundToTheDisclosuresTheRootPresented drops from under
+// sd_hash.
+func delegatedChainWithIssuerJWTHash(t *testing.T, root *sdjwt.SDJWT) *sdjwt.Chain {
 	t.Helper()
-	root := issuedRoot(t)
 	alg, err := root.HashAlg()
 	require.NoError(t, err)
 	issuerHash, err := alg.Digest(root.IssuerJWT())
