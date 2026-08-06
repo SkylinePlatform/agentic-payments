@@ -54,6 +54,12 @@ type fixture struct {
 // fixed constant and is never signed by this key. ES256 is here because it is
 // what the rest of the project mints, not because a test signing the mandate
 // with EdDSA would be violating anything.
+//
+// **One fixture per parallel subtest.** The Blinder draws its salts from a
+// single strings.Reader, so two parallel subtests issuing through one fixture
+// read and advance the same reader at once — a data race, and one that surfaces
+// as an unrelated test failing rather than as anything pointing here. Build a
+// fixture inside each t.Parallel() body rather than sharing one above them.
 func newFixture(t *testing.T, opts ...sdjwt.BlinderOption) fixture {
 	t.Helper()
 

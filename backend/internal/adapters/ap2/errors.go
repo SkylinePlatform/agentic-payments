@@ -66,6 +66,21 @@ var (
 	// valid — only that they do not belong together.
 	ErrPaymentBindingMismatch = errors.New("ap2: payment and checkout mandates name different checkouts")
 
+	// ErrCredentialScopeMismatch means the payment credential is good for a
+	// different purchase from the one being paid for.
+	//
+	// Distinct from the two mandate-level mismatches, and the distinction is
+	// what a reader of the receipt needs: the mandates may agree with each other
+	// perfectly and the money still be wrong. A credential naming no checkout at
+	// all lands here too, because a credential scoped to nothing is scoped to
+	// everything, which is the failure this claim exists to prevent.
+	ErrCredentialScopeMismatch = errors.New("ap2: credential is scoped to another checkout")
+
+	// ErrCredentialExpired means the credential was good for this purchase and
+	// is no longer good for anything. Separate from the scope failure so a
+	// retryable condition is not reported as a permanent one.
+	ErrCredentialExpired = errors.New("ap2: credential has expired")
+
 	// ErrReceiptMismatch means a receipt's reference is not the digest of the
 	// mandate it is being checked against. The receipt may be perfectly valid
 	// and correctly signed — it simply answers a different presentation.
@@ -112,6 +127,8 @@ var adapterCodes = []struct {
 	{ErrCheckoutHashMismatch, generated.ErrorCodeCheckoutHashMismatch},
 	{ErrPaymentBindingMismatch, generated.ErrorCodePaymentBindingMismatch},
 	{ErrReceiptMismatch, generated.ErrorCodeMandateMalformed},
+	{ErrCredentialScopeMismatch, generated.ErrorCodeCredentialScopeMismatch},
+	{ErrCredentialExpired, generated.ErrorCodeMandateExpired},
 	{ErrBindingUnverifiable, generated.ErrorCodeDisclosureInsufficient},
 }
 
