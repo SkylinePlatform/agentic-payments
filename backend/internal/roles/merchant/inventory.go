@@ -180,12 +180,20 @@ func New(clk authz.Clock, routes map[Route]*Schedule) (*Inventory, error) {
 		if s == nil {
 			return nil, fmt.Errorf("merchant: route %s has no schedule", r)
 		}
-		// A zero-value &Schedule{} is the one a caller can build without
-		// NewSchedule, and it carries no prices — so quoting it would index
-		// an empty slice and take the process down. Refusing here is the
-		// difference between a constructor error and a panic in a handler.
+		// A Schedule built without NewSchedule is the one a caller can get
+		// wrong, and quoting it would take the process down. Refusing here is
+		// the difference between a constructor error and a panic in a handler.
+		//
+		// Both of at's panics, not just the first. An empty schedule indexes
+		// prices[0] on an empty slice; a zero step divides by zero one line
+		// later. NewSchedule refuses both, so this only bites a literal built
+		// inside this package — but the guard is worth nothing if it stops one
+		// short of what at can actually do.
 		if s.Steps() == 0 {
 			return nil, fmt.Errorf("merchant: route %s: %w", r, ErrEmptySchedule)
+		}
+		if s.step <= 0 {
+			return nil, fmt.Errorf("merchant: route %s has a step of %s; build schedules with NewSchedule", r, s.step)
 		}
 		own[r] = s
 	}
