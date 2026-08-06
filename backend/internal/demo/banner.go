@@ -66,36 +66,94 @@ func Banner(out io.Writer, statuses []Status) {
 	w("")
 }
 
-// mark renders a state as something scannable down the left margin.
+// tally is which of the summary line's three counters a state feeds.
+type tally int
+
+const (
+	tallyUp tally = iota
+	tallyPending
+	tallyFailed
+)
+
+// stateDisplay is how each state is marked, explained and counted — the state
+// machine written out, rather than implied by three switches that have to
+// agree with each other.
+//
+// It was three: one in mark, one in trailer, one in summarise. The first two
+// carried a default and the third did not, so a fifth state would have rendered
+// as "[ ?? ]" with no explanation and been counted as neither up, pending nor
+// failed — a summary line quietly disagreeing with the list printed above it,
+// and nothing anywhere failing to say so. internal/platform/crypto writes its
+// key lifecycle out as a table for the same reason, and AGENTS.md asks for it:
+// state machines explicit, not implied by chains at each call site.
+//
+// Adding a state is now one row here and one entry in states; init refuses to
+// start without both.
+var stateDisplay = map[State]struct {
+	// mark is the tag down the left margin.
+	mark string
+
+	// trailer explains a state that is not simply up. It takes the whole
+	// Status because what needs saying lives in the process and the detail
+	// rather than in the state.
+	trailer func(Status) string
+
+	// tally is the counter this state feeds. Failed and mislabelled share one:
+	// both mean somebody has to go and look.
+	tally tally
+}{
+	StateRunning: {
+		mark:    "[ up ]",
+		trailer: func(Status) string { return "" },
+		tally:   tallyUp,
+	},
+	StatePending: {
+		mark:    "[ -- ]",
+		trailer: func(s Status) string { return fmt.Sprintf("not built yet — issue #%s", s.Process.Issue) },
+		tally:   tallyPending,
+	},
+	StateFailed: {
+		mark:    "[FAIL]",
+		trailer: func(s Status) string { return s.Detail },
+		tally:   tallyFailed,
+	},
+	StateMislabelled: {
+		mark:    "[ ?? ]",
+		trailer: func(s Status) string { return s.Detail + "; the manifest is out of date" },
+		tally:   tallyFailed,
+	},
+}
+
+// Proof at start-up that every state can be displayed, the same guard
+// internal/core/authz/constraint puts on operator phrases. A state added to
+// runner.go without a row above would be shown as unknown and counted as
+// nothing, which is a demo reporting the wrong total to whoever is watching it.
+func init() {
+	for _, s := range states {
+		if _, ok := stateDisplay[s]; !ok {
+			panic("demo: state " + string(s) + " has no display entry; it could not be shown or counted")
+		}
+	}
+}
+
+// mark renders a state as something scannable down the left margin. A state
+// with no row reads as unknown — which init makes unreachable for any declared
+// one, so this is the fallback for a State somebody minted by hand.
 func mark(s State) string {
-	switch s {
-	case StateRunning:
-		return "[ up ]"
-	case StatePending:
-		return "[ -- ]"
-	case StateFailed:
-		return "[FAIL]"
-	case StateMislabelled:
-		return "[ ?? ]"
-	default:
+	d, known := stateDisplay[s]
+	if !known {
 		return "[ ?? ]"
 	}
+	return d.mark
 }
 
 // trailer is the explanatory line under a process that is not simply up.
 func trailer(s Status) string {
-	switch s.State {
-	case StatePending:
-		return fmt.Sprintf("not built yet — issue #%s", s.Process.Issue)
-	case StateFailed:
-		return s.Detail
-	case StateMislabelled:
-		return s.Detail + "; the manifest is out of date"
-	case StateRunning:
-		return ""
-	default:
+	d, known := stateDisplay[s.State]
+	if !known {
 		return ""
 	}
+	return d.trailer(s)
 }
 
 func filterKind(statuses []Status, k Kind) []Status {
@@ -121,19 +179,15 @@ func urlsOf(statuses []Status) []string {
 // summarise is the one line somebody reads before deciding whether the demo is
 // worth looking at.
 func summarise(statuses []Status) string {
-	var up, pending, failed int
+	counts := make(map[tally]int, 3)
 	for _, s := range statuses {
-		switch s.State {
-		case StateRunning:
-			up++
-		case StatePending:
-			pending++
-		case StateFailed, StateMislabelled:
-			failed++
+		if d, known := stateDisplay[s.State]; known {
+			counts[d.tally]++
 		}
 	}
+	pending, failed := counts[tallyPending], counts[tallyFailed]
 
-	line := fmt.Sprintf("%d up", up)
+	line := fmt.Sprintf("%d up", counts[tallyUp])
 	if pending > 0 {
 		line += fmt.Sprintf(", %d not built yet", pending)
 	}
