@@ -1,0 +1,50 @@
+{
+  "_comment": [
+    "Golden vectors for AP2's receipts — the verifier's signed answer to a",
+    "closed mandate, mandatory on rejection as well as on success.",
+    "",
+    "No token is pinned here, and the reason is the same one golden_test.go",
+    "gives for not pinning a whole signed mandate: a receipt is a compact JWS",
+    "signed with ECDSA, which draws a fresh nonce for every signature, so two",
+    "runs over identical input produce different bytes.",
+    "",
+    "The reference cannot be pinned either, and that is worth stating because",
+    "it is not obvious. reference is sd_hash, which is a digest over the",
+    "issuer-signed JWT together with the disclosures present — and that JWT",
+    "carries the mandate's own ECDSA signature. So the reference of a given",
+    "mandate is stable for one presentation and unreproducible across",
+    "issuances, even with the salts pinned. What a second implementation has",
+    "to reproduce is the rule, which the suite asserts directly: the reference",
+    "equals the sd_hash of the presentation the verifier was shown, and",
+    "nothing the mandate itself claims.",
+    "",
+    "What is pinned is what two implementations have to agree on by name.",
+    "AP2 fixes only 'reference'; the rest is this project's encoding, recorded",
+    "in docs/specs/2026-08-06-receipts-design.md. Registered JWT claims are",
+    "used where one already means the thing — iss for the answering party and",
+    "iat for when it answered — so a generic JWT reader sees a coherent token",
+    "rather than a bag of custom names.",
+    "",
+    "typ is not decoration. Mandates and receipts are both compact JWS signed",
+    "by the same keys, so a verifier that reads the claims it expected and",
+    "ignores the rest would accept whichever artefact it was handed."
+  ],
+  "typ": "ap2-receipt+jwt",
+  "claims": {
+    "issuer": "iss",
+    "issued_at": "iat",
+    "reference": "reference",
+    "mandate_type": "mandate_type",
+    "result": "result",
+    "error": "error",
+    "error_description": "error_description"
+  },
+  "mandate_type": {
+    "checkout": "checkout",
+    "payment": "payment"
+  },
+  "result": {
+    "success": "success",
+    "error": "error"
+  }
+}

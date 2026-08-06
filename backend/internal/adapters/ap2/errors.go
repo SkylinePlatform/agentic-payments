@@ -66,6 +66,17 @@ var (
 	// valid — only that they do not belong together.
 	ErrPaymentBindingMismatch = errors.New("ap2: payment and checkout mandates name different checkouts")
 
+	// ErrReceiptMismatch means a receipt's reference is not the digest of the
+	// mandate it is being checked against. The receipt may be perfectly valid
+	// and correctly signed — it simply answers a different presentation.
+	//
+	// That includes another presentation of the same mandate. The reference is
+	// sd_hash, which covers the disclosures actually present, so a receipt
+	// issued against a presentation that withheld a claim does not answer the
+	// full one. Treating those as interchangeable would let a verifier shown
+	// less produce evidence implying it was shown more.
+	ErrReceiptMismatch = errors.New("ap2: receipt answers a different mandate")
+
 	// ErrBindingUnverifiable means the binding could be neither confirmed nor
 	// refuted: the Checkout JWT was withheld from the presentation and the
 	// verifier was given no copy of its own.
@@ -100,6 +111,7 @@ var adapterCodes = []struct {
 	{ErrWrongMandateType, generated.ErrorCodeMandateVersionUnsupported},
 	{ErrCheckoutHashMismatch, generated.ErrorCodeCheckoutHashMismatch},
 	{ErrPaymentBindingMismatch, generated.ErrorCodePaymentBindingMismatch},
+	{ErrReceiptMismatch, generated.ErrorCodeMandateMalformed},
 	{ErrBindingUnverifiable, generated.ErrorCodeDisclosureInsufficient},
 }
 

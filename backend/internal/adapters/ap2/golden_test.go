@@ -3,12 +3,14 @@ package ap2_test
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
 
@@ -150,4 +152,57 @@ func TestGoldenBothMandatesBindOneDigest(t *testing.T) {
 		"the Payment Mandate must bind the published digest, not merely a self-consistent one")
 	assert.Equal(t, checkout.CheckoutHash, payment.CheckoutHash,
 		"one purchase, one digest — this equality is the entire binding")
+}
+
+type receiptVectors struct {
+	Typ         string            `json:"typ"`
+	Claims      map[string]string `json:"claims"`
+	MandateType map[string]string `json:"mandate_type"`
+	Result      map[string]string `json:"result"`
+}
+
+// TestGoldenReceiptEncoding pins what two implementations must agree on by name
+// to exchange receipts at all.
+//
+// No token and no reference are pinned, and the reason the reference cannot be
+// is worth knowing: it is sd_hash, a digest over the issuer-signed JWT together
+// with the disclosures present, and that JWT carries the mandate's own ECDSA
+// signature. The value is therefore stable for one presentation and different
+// for every issuance. What a second implementation reproduces is the rule, which
+// TestTheReferenceIsTheMandatesOwnDigest asserts directly.
+func TestGoldenReceiptEncoding(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile("testdata/receipt.json")
+	require.NoError(t, err, "reading the receipt vectors")
+
+	var v receiptVectors
+	require.NoError(t, json.Unmarshal(raw, &v), "decoding the receipt vectors")
+
+	assert.Equal(t, v.Typ, ap2.ReceiptType,
+		"the protected header's typ is what stops a receipt being replayed where a mandate is expected")
+
+	// The claim names are asserted through a real receipt rather than against a
+	// table of constants, so this fails if the encoder stops using them — which
+	// a constants-only check would not notice.
+	f := newFixture(t)
+	token, err := ap2.IssueReceipt(t.Context(), reparse(t, issue(t, f, mandate())),
+		ap2.ErrCheckoutHashMismatch, ap2.ReceiptOptions{
+			Issuer:      "air-serbia",
+			MandateType: generated.ReceiptMandateTypeCheckout,
+			Signer:      f.signer,
+			Clock:       f.clock,
+		})
+	require.NoError(t, err)
+
+	payload := decodeSegment(t, strings.Split(token, ".")[1])
+	var onWire map[string]any
+	require.NoError(t, json.Unmarshal([]byte(payload), &onWire), "decoding the receipt payload")
+
+	for canonical, wire := range v.Claims {
+		assert.Contains(t, onWire, wire,
+			"%s must travel as %q; a rejection receipt carries every one of these", canonical, wire)
+	}
+	assert.Equal(t, v.MandateType["checkout"], onWire["mandate_type"])
+	assert.Equal(t, v.Result["error"], onWire["result"])
 }

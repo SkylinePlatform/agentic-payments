@@ -200,23 +200,30 @@ func epochSeconds(name string, raw any) (int64, error) {
 	}
 }
 
-// timestamps reads the iat and exp claims into the canonical fields, which both
-// closed mandates carry identically.
-func timestamps(claims map[string]any, issuedAt, expiresAt **time.Time) error {
-	for claim, dst := range map[string]**time.Time{
-		claimIssuedAt:  issuedAt,
-		claimExpiresAt: expiresAt,
-	} {
-		raw, ok := claims[claim]
-		if !ok {
-			continue
-		}
-		secs, err := epochSeconds(claim, raw)
-		if err != nil {
-			return err
-		}
-		t := time.Unix(secs, 0).UTC()
-		*dst = &t
+// epochTime reads one NumericDate claim into a canonical timestamp, leaving dst
+// untouched when the claim is absent. Every timestamp here is optional, on the
+// mandates because AP2 marks iat and exp optional and on a receipt because it
+// carries no expiry at all.
+func epochTime(claims map[string]any, name string, dst **time.Time) error {
+	raw, ok := claims[name]
+	if !ok {
+		return nil
 	}
+	secs, err := epochSeconds(name, raw)
+	if err != nil {
+		return err
+	}
+	t := time.Unix(secs, 0).UTC()
+	*dst = &t
 	return nil
+}
+
+// timestamps reads the iat and exp claims into the canonical fields, which both
+// closed mandates carry identically. A receipt reads iat on its own — it has no
+// expiry, being a statement about a moment that has already passed.
+func timestamps(claims map[string]any, issuedAt, expiresAt **time.Time) error {
+	if err := epochTime(claims, claimIssuedAt, issuedAt); err != nil {
+		return err
+	}
+	return epochTime(claims, claimExpiresAt, expiresAt)
 }
