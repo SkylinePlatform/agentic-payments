@@ -1,3 +1,14 @@
+//go:build unix
+
+// Process-group signalling, which is a Unix concept and named as one here.
+//
+// The constraint is the point of the file split. syscall.SysProcAttr has no
+// Setpgid member outside Unix and syscall.Kill does not exist there at all, so
+// before the tag this package simply did not compile for GOOS=windows — and
+// nothing said so, because CI is Linux only and a compile error on a platform
+// nobody builds is invisible until somebody tries. signal_other.go is the
+// fallback, and it is deliberately weaker rather than absent.
+
 package demo
 
 import (

@@ -2,7 +2,6 @@ package crypto_test
 
 import (
 	"encoding/json"
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +11,9 @@ import (
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
+
+	// cryptostore, because this file's own subject is already called store.
+	cryptostore "github.com/SkylinePlatform/agentic-payments/backend/internal/platform/store"
 )
 
 // TestRotationRetiresThePreviousKey walks the whole lifecycle on a clock the
@@ -36,12 +38,10 @@ func TestRotationRetiresThePreviousKey(t *testing.T) {
 
 	second, err := store.Rotate(testSlot, "rotate-1")
 	require.NoError(t, err, "Rotate")
-	if second.KeyID == first.KeyID {
-		t.Fatal("Rotate reused the previous kid; a rotation must produce new key material")
-	}
-	if second.Algorithm != first.Algorithm {
-		t.Errorf("Rotate changed the algorithm from %s to %s", first.Algorithm, second.Algorithm)
-	}
+	require.NotEqual(t, first.KeyID, second.KeyID,
+		"a rotation that reuses the kid has produced no new key material")
+	assert.Equal(t, first.Algorithm, second.Algorithm,
+		"changing algorithm has different protocol consequences and does not belong behind the word rotate")
 
 	assertState(t, store, first.KeyID, crypto.KeyRetired)
 	assertState(t, store, second.KeyID, crypto.KeyActive)
@@ -49,22 +49,19 @@ func TestRotationRetiresThePreviousKey(t *testing.T) {
 	// The slot now signs with the new key.
 	current, err := store.Signer(testSlot)
 	require.NoError(t, err, "Signer after rotation")
-	if current.Key() != second {
-		t.Errorf("Signer after rotation uses %s, want %s", current.Key(), second)
-	}
+	assert.Equal(t, second, current.Key(), "the slot still signs with the key that was rotated out")
 
 	// A Signer held across the rotation must refuse, not quietly keep minting
 	// signatures under a key the JWK Set is about to stop publishing.
-	if _, err := beforeRotation.Sign(t.Context(), payload); !errors.Is(err, authz.ErrKeyRetired) {
-		t.Errorf("Sign with a retired key = %v, want ErrKeyRetired", err)
-	}
+	_, err = beforeRotation.Sign(t.Context(), payload)
+	assert.ErrorIs(t, err, authz.ErrKeyRetired,
+		"a Signer held across a rotation minted a signature under the retired key")
 
 	// What it signed before the rotation still verifies.
 	verifier, err := store.Resolve(t.Context(), first)
 	require.NoError(t, err, "Resolve retired key")
-	if err := verifier.Verify(payload, sig); err != nil {
-		t.Errorf("Verify a signature made before the rotation: %v", err)
-	}
+	assert.NoError(t, verifier.Verify(payload, sig),
+		"signatures in flight at the moment of rotation must survive it")
 
 	// Both keys are published while the overlap lasts, so a relying party that
 	// has not refreshed yet and one that has both find what they need.
@@ -75,15 +72,13 @@ func TestRotationRetiresThePreviousKey(t *testing.T) {
 	fake.Advance(overlap + time.Second)
 
 	assertState(t, store, first.KeyID, crypto.KeyExpired)
-	if _, err := store.Resolve(t.Context(), first); !errors.Is(err, authz.ErrKeyExpired) {
-		t.Errorf("Resolve after the overlap = %v, want ErrKeyExpired", err)
-	}
+	_, err = store.Resolve(t.Context(), first)
+	assert.ErrorIs(t, err, authz.ErrKeyExpired, "the overlap window did not end")
 	assertJWKSContains(t, store, second.KeyID)
 
 	// The active key is unaffected by the passage of time within its lifetime.
-	if _, err := store.Signer(testSlot); err != nil {
-		t.Errorf("Signer for the active key after the overlap: %v", err)
-	}
+	_, err = store.Signer(testSlot)
+	assert.NoError(t, err, "the overlap ending took the active key with it")
 }
 
 // TestKeyExpiresAtTheEndOfItsLifetime covers expiry without a rotation: a key
@@ -105,32 +100,27 @@ func TestKeyExpiresAtTheEndOfItsLifetime(t *testing.T) {
 	// One instant before expiry everything still works.
 	fake.Advance(lifetime - time.Nanosecond)
 	assertState(t, store, ref.KeyID, crypto.KeyActive)
-	if _, err := store.Signer(testSlot); err != nil {
-		t.Errorf("Signer one nanosecond before expiry: %v", err)
-	}
+	_, err = store.Signer(testSlot)
+	assert.NoError(t, err, "the key died one nanosecond early, so the boundary is off by one")
 	verifier, err := store.Resolve(t.Context(), ref)
 	require.NoError(t, err, "Resolve one nanosecond before expiry")
-	if err := verifier.Verify(payload, sig); err != nil {
-		t.Errorf("Verify one nanosecond before expiry: %v", err)
-	}
+	assert.NoError(t, verifier.Verify(payload, sig), "verification failed while the key was still alive")
 
 	// At expiry it stops: no signing, no verifying, not published. The
 	// boundary is exclusive — notAfter is the first instant the key is dead.
 	fake.Advance(time.Nanosecond)
 	assertState(t, store, ref.KeyID, crypto.KeyExpired)
 
-	if _, err := store.Signer(testSlot); !errors.Is(err, authz.ErrKeyExpired) {
-		t.Errorf("Signer at expiry = %v, want ErrKeyExpired", err)
-	}
-	if _, err := signer.Sign(t.Context(), payload); !errors.Is(err, authz.ErrKeyExpired) {
-		t.Errorf("Sign at expiry = %v, want ErrKeyExpired", err)
-	}
+	_, err = store.Signer(testSlot)
+	assert.ErrorIs(t, err, authz.ErrKeyExpired, "an expired key was still handed out for signing")
+	_, err = signer.Sign(t.Context(), payload)
+	assert.ErrorIs(t, err, authz.ErrKeyExpired,
+		"a Signer obtained before expiry kept signing after it")
 	// The signature it made while it was alive can no longer be checked
 	// through this store: there is no key left to check it against, which is
 	// the point of an expiry rather than a warning.
-	if _, err := store.Resolve(t.Context(), ref); !errors.Is(err, authz.ErrKeyExpired) {
-		t.Errorf("Resolve at expiry = %v, want ErrKeyExpired", err)
-	}
+	_, err = store.Resolve(t.Context(), ref)
+	assert.ErrorIs(t, err, authz.ErrKeyExpired, "an expired key still resolved to a verifier")
 	assertJWKSContains(t, store)
 }
 
@@ -148,9 +138,8 @@ func TestRotationNeverExtendsAKeysLife(t *testing.T) {
 	)
 
 	fake.Advance(30 * time.Minute)
-	if _, err := store.Rotate(testSlot, "rotate-1"); err != nil {
-		t.Fatalf("Rotate: %v", err)
-	}
+	_, err := store.Rotate(testSlot, "rotate-1")
+	require.NoError(t, err, "Rotate")
 	assertState(t, store, first.KeyID, crypto.KeyRetired)
 
 	// Half an hour later the original lifetime is up, overlap or no overlap.
@@ -162,21 +151,19 @@ func TestGenerateRejectsAnOccupiedSlot(t *testing.T) {
 	t.Parallel()
 
 	store, _, _ := storeWithKey(t, authz.ES256)
-	if _, err := store.Generate(testSlot, authz.ES256, "second-generate"); !errors.Is(err, crypto.ErrSlotExists) {
-		t.Errorf("Generate into an occupied slot = %v, want ErrSlotExists", err)
-	}
+	_, err := store.Generate(testSlot, authz.ES256, "second-generate")
+	assert.ErrorIs(t, err, crypto.ErrSlotExists,
+		"a second Generate would orphan the key the slot already holds; replacing one is Rotate")
 }
 
 func TestUnknownSlot(t *testing.T) {
 	t.Parallel()
 
-	store, _ := newStore()
-	if _, err := store.Signer("nothing-here"); !errors.Is(err, crypto.ErrSlotNotFound) {
-		t.Errorf("Signer for an unknown slot = %v, want ErrSlotNotFound", err)
-	}
-	if _, err := store.Rotate("nothing-here", "rotate-1"); !errors.Is(err, crypto.ErrSlotNotFound) {
-		t.Errorf("Rotate an unknown slot = %v, want ErrSlotNotFound", err)
-	}
+	store, _ := newStore(t)
+	_, err := store.Signer("nothing-here")
+	assert.ErrorIs(t, err, crypto.ErrSlotNotFound, "Signer for a slot no key was generated for")
+	_, err = store.Rotate("nothing-here", "rotate-1")
+	assert.ErrorIs(t, err, crypto.ErrSlotNotFound, "Rotate of a slot no key was generated for")
 }
 
 // TestIdempotency covers the repository rule that every state-changing
@@ -189,12 +176,12 @@ func TestIdempotency(t *testing.T) {
 	t.Run("replayed generate returns the first result", func(t *testing.T) {
 		t.Parallel()
 
-		store, _ := newStore()
+		store, _ := newStore(t)
 		first, err := store.Generate(testSlot, authz.ES256, "boot")
 		require.NoError(t, err, "Generate")
 		again, err := store.Generate(testSlot, authz.ES256, "boot")
 		require.NoError(t, err, "replayed Generate")
-		assert.Equal(t, first, again)
+		assert.Equal(t, first, again, "the replay minted a second key instead of returning the first")
 	})
 
 	t.Run("replayed rotate does not burn a second key", func(t *testing.T) {
@@ -205,31 +192,64 @@ func TestIdempotency(t *testing.T) {
 		require.NoError(t, err, "Rotate")
 		again, err := store.Rotate(testSlot, "rotate-1")
 		require.NoError(t, err, "replayed Rotate")
-		assert.Equal(t, rotated, again)
+		assert.Equal(t, rotated, again,
+			"a second rotation retires the key the first one just installed")
 		assertJWKSContains(t, store, original.KeyID, rotated.KeyID)
 	})
 
 	t.Run("replay with different arguments conflicts", func(t *testing.T) {
 		t.Parallel()
 
-		store, _ := newStore()
-		if _, err := store.Generate("first", authz.ES256, "shared"); err != nil {
-			t.Fatalf("Generate: %v", err)
-		}
-		_, err := store.Generate("second", authz.ES256, "shared")
-		assert.ErrorIs(t, err, crypto.ErrIdempotencyConflict, "Generate replaying a key with new arguments = %v, want ErrIdempotencyConflict", err)
+		store, _ := newStore(t)
+		_, err := store.Generate("first", authz.ES256, "shared")
+		require.NoError(t, err, "Generate")
+		_, err = store.Generate("second", authz.ES256, "shared")
+		assert.ErrorIs(t, err, cryptostore.ErrConflict,
+			"replaying a key with new arguments has no right answer: the first result is not what was asked for")
 	})
 
 	t.Run("an idempotency key is required", func(t *testing.T) {
 		t.Parallel()
 
-		store, _ := newStore()
-		if _, err := store.Generate(testSlot, authz.ES256, ""); !errors.Is(err, crypto.ErrIdempotencyKeyRequired) {
-			t.Errorf("Generate without an idempotency key = %v, want ErrIdempotencyKeyRequired", err)
+		store, _ := newStore(t)
+		_, err := store.Generate(testSlot, authz.ES256, "")
+		assert.ErrorIs(t, err, cryptostore.ErrKeyRequired,
+			"a state-changing call with no key cannot be made safe to retry")
+		_, err = store.Rotate(testSlot, "")
+		assert.ErrorIs(t, err, cryptostore.ErrKeyRequired,
+			"a state-changing call with no key cannot be made safe to retry")
+	})
+
+	t.Run("a failed operation leaves the key usable", func(t *testing.T) {
+		t.Parallel()
+
+		// The claim is taken before the work and given back when the work does
+		// not happen. Without that, one mistyped slot name would strand the
+		// idempotency key for the whole retention window and the corrected retry
+		// would be refused as a conflict.
+		store, _ := newStore(t)
+		_, err := store.Rotate("never generated", "boot")
+		require.ErrorIs(t, err, crypto.ErrSlotNotFound, "Rotate of an unknown slot")
+
+		ref, err := store.Generate(testSlot, authz.ES256, "boot")
+		require.NoError(t, err, "the same idempotency key after a failed attempt")
+		assert.NotEmpty(t, ref.KeyID, "the retry produced no key")
+	})
+
+	t.Run("records are bounded", func(t *testing.T) {
+		t.Parallel()
+
+		// The map this replaced could only grow. A key store is the longest-lived
+		// object in a role's process, so "one entry per idempotency key, for
+		// ever" was the wrong shape here more than anywhere else.
+		store, _ := newStore(t, crypto.WithIdempotency(cryptostore.WithLimit(2)))
+		for i, slot := range []crypto.Slot{"a", "b"} {
+			_, err := store.Generate(slot, authz.ES256, string(slot))
+			require.NoError(t, err, "Generate %d", i)
 		}
-		if _, err := store.Rotate(testSlot, ""); !errors.Is(err, crypto.ErrIdempotencyKeyRequired) {
-			t.Errorf("Rotate without an idempotency key = %v, want ErrIdempotencyKeyRequired", err)
-		}
+		_, err := store.Generate("c", authz.ES256, "c")
+		assert.ErrorIs(t, err, cryptostore.ErrAtCapacity,
+			"the store took a third record past its limit, so the bound is not a bound")
 	})
 }
 
@@ -255,9 +275,8 @@ func TestJWKSCarriesNoPrivateMaterial(t *testing.T) {
 			t.Parallel()
 
 			store, _, _ := storeWithKey(t, alg)
-			if _, err := store.Rotate(testSlot, "rotate-1"); err != nil {
-				t.Fatalf("Rotate: %v", err)
-			}
+			_, err := store.Rotate(testSlot, "rotate-1")
+			require.NoError(t, err, "Rotate")
 
 			raw, err := store.JWKS(t.Context())
 			require.NoError(t, err, "JWKS")
@@ -265,22 +284,15 @@ func TestJWKSCarriesNoPrivateMaterial(t *testing.T) {
 			var set struct {
 				Keys []map[string]json.RawMessage `json:"keys"`
 			}
-			if err := json.Unmarshal(raw, &set); err != nil {
-				t.Fatalf("unmarshal JWK Set: %v", err)
-			}
-			if len(set.Keys) != 2 {
-				t.Fatalf("published %d keys, want 2 (active plus retired)", len(set.Keys))
-			}
+			require.NoError(t, json.Unmarshal(raw, &set), "unmarshal JWK Set: %s", raw)
+			require.Len(t, set.Keys, 2, "the set should carry the active key and the retired one")
 
 			for i, key := range set.Keys {
 				for member := range key {
-					if !allowed[member] {
-						t.Errorf("key %d publishes member %q, which is not on the public allowlist", i, member)
-					}
+					assert.True(t, allowed[member],
+						"key %d publishes %q, which nobody has decided is safe to publish", i, member)
 				}
-				if _, private := key["d"]; private {
-					t.Errorf("key %d publishes a private key parameter", i)
-				}
+				assert.NotContains(t, key, "d", "key %d publishes a private key parameter", i)
 			}
 		})
 	}
@@ -293,9 +305,8 @@ func TestJWKSIsStable(t *testing.T) {
 
 	store, _, _ := storeWithKey(t, authz.ES256)
 	for i, key := range []string{"r1", "r2", "r3"} {
-		if _, err := store.Rotate(testSlot, key); err != nil {
-			t.Fatalf("Rotate %d: %v", i, err)
-		}
+		_, err := store.Rotate(testSlot, key)
+		require.NoError(t, err, "Rotate %d", i)
 	}
 
 	first, err := store.JWKS(t.Context())
@@ -303,24 +314,26 @@ func TestJWKSIsStable(t *testing.T) {
 	for range 8 {
 		again, err := store.JWKS(t.Context())
 		require.NoError(t, err, "JWKS")
-		if string(again) != string(first) {
-			t.Fatalf("JWK Set is not stable between calls:\n%s\n%s", first, again)
-		}
+		require.Equal(t, string(first), string(again),
+			"map iteration order reached the published bytes, so the document is not cacheable")
 	}
 }
 
 func TestStateOfUnknownKey(t *testing.T) {
 	t.Parallel()
 
-	store, _ := newStore()
-	if _, err := store.State("nope"); !errors.Is(err, authz.ErrKeyNotFound) {
-		t.Errorf("State of an unknown kid = %v, want ErrKeyNotFound", err)
-	}
+	store, _ := newStore(t)
+	_, err := store.State("nope")
+	assert.ErrorIs(t, err, authz.ErrKeyNotFound, "State of a kid this store never issued")
 }
 
 // TestConcurrentUse runs the operations a role actually interleaves — signing
 // on request goroutines while a rotation happens and the JWK Set is being
 // served — under -race.
+//
+// Every assertion below is assert rather than require: they run off the test
+// goroutine, where FailNow is not legal and loses the failure instead of
+// reporting it.
 func TestConcurrentUse(t *testing.T) {
 	t.Parallel()
 
@@ -328,48 +341,45 @@ func TestConcurrentUse(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			signer, err := store.Signer(testSlot)
 			if err != nil {
 				return // the key may be mid-rotation; that is a valid outcome
 			}
-			if _, err := signer.Sign(t.Context(), []byte("payload")); err != nil &&
-				!errors.Is(err, authz.ErrKeyRetired) {
-				t.Errorf("Sign: %v", err)
+			if _, err := signer.Sign(t.Context(), []byte("payload")); err != nil {
+				assert.ErrorIs(t, err, authz.ErrKeyRetired,
+					"signing raced with a rotation and failed for some other reason")
 			}
-		}()
+		})
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if _, err := store.JWKS(t.Context()); err != nil {
-				t.Errorf("JWKS: %v", err)
-			}
-		}()
+		wg.Go(func() {
+			_, err := store.JWKS(t.Context())
+			assert.NoError(t, err, "publishing must not fail because a rotation is in progress")
+		})
 
 		if i%4 == 0 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if _, err := store.Rotate(testSlot, "concurrent-"+string(rune('a'+i))); err != nil {
-					t.Errorf("Rotate: %v", err)
-				}
-			}()
+			wg.Go(func() {
+				_, err := store.Rotate(testSlot, "concurrent-"+string(rune('a'+i)))
+				assert.NoError(t, err, "a rotation failed while the key was being used")
+			})
 		}
 	}
 	wg.Wait()
 }
 
+// assertState checks a key's lifecycle position.
+//
+// assert throughout, per the convention for a shared assertion helper: a helper
+// that calls require is unsafe the moment any caller reaches it from a
+// goroutine, and nothing in the helper would say so.
 func assertState(t *testing.T, store *crypto.Store, kid string, want crypto.KeyState) {
 	t.Helper()
 
 	got, err := store.State(kid)
-	require.NoError(t, err, "State(%s)", kid)
-	if got != want {
-		t.Errorf("State(%s) = %s, want %s", kid, got, want)
+	if !assert.NoError(t, err, "State(%s)", kid) {
+		return
 	}
+	assert.Equal(t, want, got, "the key is in the wrong lifecycle position")
 }
 
 // assertJWKSContains checks the published set holds exactly the given kids.
@@ -377,21 +387,18 @@ func assertJWKSContains(t *testing.T, store *crypto.Store, kids ...string) {
 	t.Helper()
 
 	raw, err := store.JWKS(t.Context())
-	require.NoError(t, err, "JWKS")
-
+	if !assert.NoError(t, err, "JWKS") {
+		return
+	}
 	set, err := crypto.ParseJWKS(raw)
-	require.NoError(t, err, "ParseJWKS")
+	if !assert.NoError(t, err, "ParseJWKS of the document this store just published: %s", raw) {
+		return
+	}
 
-	published := make(map[string]bool)
+	published := make([]string, 0, len(kids))
 	for _, ref := range set.Keys() {
-		published[ref.KeyID] = true
+		published = append(published, ref.KeyID)
 	}
-	if len(published) != len(kids) {
-		t.Fatalf("JWK Set holds %d keys, want %d: %s", len(published), len(kids), raw)
-	}
-	for _, kid := range kids {
-		if !published[kid] {
-			t.Errorf("JWK Set does not publish %s: %s", kid, raw)
-		}
-	}
+	assert.ElementsMatch(t, kids, published,
+		"the published set is not the set of keys a relying party should currently accept: %s", raw)
 }

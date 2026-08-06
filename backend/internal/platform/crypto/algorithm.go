@@ -14,9 +14,18 @@ import (
 // another, in one place.
 //
 // The rest of this package reads these fields; it does not switch on algorithm
-// names. Adding an algorithm is a row in the table below plus, if it is a new
-// key type, an implementation of keyMaterial — not a search for every switch
-// statement that mentions a curve.
+// names. So adding an *algorithm* on a key type that already exists — another
+// NIST curve, say — is a row in the table below and nothing else.
+//
+// Adding a *key type* is not that, and the distinction is worth stating because
+// the sentence that used to stand here blurred it. Three places switch on kty
+// and each needs a case: generate in material.go, which builds a key pair;
+// parseJWK in jwk.go, which reads a published one; and thumbprint in jwk.go,
+// which picks the RFC 7638 canonical form, since the members hashed differ by
+// key type and the order is lexicographic. An implementation of keyMaterial is
+// then the fourth piece, not the only one. Two entries below share ktyEC and
+// one is ktyOKP, which is why the table alone carries an algorithm and not a
+// key type.
 type params struct {
 	alg authz.Algorithm
 	// kty is the JWK key type (RFC 7517 §4.1): "EC" or "OKP".

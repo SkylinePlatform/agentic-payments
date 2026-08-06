@@ -64,7 +64,8 @@ func newFixture(t *testing.T, opts ...sdjwt.BlinderOption) fixture {
 	t.Helper()
 
 	c := clock.NewFake(base)
-	store := crypto.NewStore(c)
+	store, err := crypto.NewStore(c)
+	require.NoError(t, err, "standing up the key store")
 	ref, err := store.Generate(testSlot, authz.ES256, "test-generate")
 	require.NoError(t, err, "generating the issuer key")
 
@@ -248,9 +249,11 @@ func TestTheVersionSuffixIsMatchedExactly(t *testing.T) {
 // debug a request that was fine. verifier_unavailable says whose problem it is.
 //
 // The missing signer is also the case that used to panic rather than return:
-// joseSigner wraps the interface before sdjwt.Issue can check it, so a nil
+// joseSigner wrapped the interface before sdjwt.Issue could check it, so a nil
 // arrived inside a non-nil struct, slipped past pkg/sdjwt's own guard, and
-// surfaced as a nil dereference inside Algorithm().
+// surfaced as a nil dereference inside Algorithm(). The guards below are what
+// caught it at the time; TestTheBridgesPreserveNil is what stops the wrapper
+// creating it in the first place.
 func TestAMisconfiguredCallerIsNotTheMandatesFault(t *testing.T) {
 	t.Parallel()
 
@@ -312,6 +315,41 @@ func assertMisconfigured(t *testing.T, err error) {
 		"blaming the mandate here would point a dispute at the wrong party")
 	assert.Equal(t, generated.ErrorCodeVerifierUnavailable, ap2.CodeOf(err),
 		"the receipt has to say the failure was not the counterparty's")
+}
+
+// TestTheBridgesPreserveNil moves the invariant off the entry-point guards and
+// onto the wrapper.
+//
+// Wrapping an interface in a struct is what makes a nil arrive non-nil, and the
+// guards in this package were the only thing standing between that and a panic
+// several frames inside pkg/sdjwt — which meant every new entry point had to
+// remember one, with no help from the compiler. So the constructors return a nil
+// interface for a nil inner value, and pkg/sdjwt's own checks get to run.
+//
+// Calling sdjwt directly is the point: it is the path an entry point that forgot
+// its guard would take, and before the change it panicked.
+func TestTheBridgesPreserveNil(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a nil signer does not become a non-nil sdjwt.Signer", func(t *testing.T) {
+		t.Parallel()
+
+		require.Nil(t, ap2.JOSESigner(nil), "the wrapper manufactured a signer out of nothing")
+
+		_, err := sdjwt.Issue(t.Context(), ap2.JOSESigner(nil), map[string]any{"vct": "x"}, nil)
+		assert.ErrorIs(t, err, sdjwt.ErrUnsupportedAlgorithm,
+			"pkg/sdjwt has a nil check for this and has to be allowed to reach it")
+	})
+
+	t.Run("a nil verifier does not become a non-nil sdjwt.Verifier", func(t *testing.T) {
+		t.Parallel()
+
+		require.Nil(t, ap2.JOSEVerifier(nil), "the wrapper manufactured a verifier out of nothing")
+
+		_, err := sdjwt.VerifyJWT("a.b.c", "kb+jwt", ap2.JOSEVerifier(nil))
+		assert.ErrorIs(t, err, sdjwt.ErrInvalidOptions,
+			"pkg/sdjwt has a nil check for this and has to be allowed to reach it")
+	})
 }
 
 // issueClaims signs an arbitrary claim set, which the exported constructors

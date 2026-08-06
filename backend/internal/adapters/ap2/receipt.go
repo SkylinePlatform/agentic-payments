@@ -114,7 +114,7 @@ func IssueReceipt(
 		claims[claimErrorDescription] = verdict.Error()
 	}
 
-	return sdjwt.SignJWT(ctx, joseSigner{opts.Signer}, ReceiptType, claims)
+	return sdjwt.SignJWT(ctx, JOSESigner(opts.Signer), ReceiptType, claims)
 }
 
 // VerifyReceipt checks a receipt's signature and returns it in canonical form.
@@ -129,7 +129,7 @@ func VerifyReceipt(token string, verifier authz.Verifier) (generated.Receipt, er
 		return zero, fmt.Errorf("%w: verifying a receipt needs the issuer's key", ErrMisconfigured)
 	}
 
-	claims, err := sdjwt.VerifyJWT(token, ReceiptType, joseVerifier{verifier})
+	claims, err := sdjwt.VerifyJWT(token, ReceiptType, JOSEVerifier(verifier))
 	if err != nil {
 		return zero, err
 	}

@@ -112,6 +112,19 @@ func usableForVerification(j jwk) bool {
 
 // Resolve implements authz.KeyResolver. Like the store's, it refuses a
 // reference whose algorithm is not the one the published key is for.
+//
+// Unlike the store's it never returns ErrKeyExpired, and cannot. A JWK carries
+// no expiry — RFC 7517 defines no such member — so a set says which keys are
+// current and nothing about when any of them stops being so. What a publisher
+// states is membership: Store.JWKS omits every key past its life, so a key that
+// has expired is a key the next fetch does not contain, and resolving it against
+// the refreshed set gives ErrKeyNotFound. TestExpiredKeyLeavesThePublishedSet
+// pins that round trip.
+//
+// Which leaves the failure mode a caller has to own: this set is immutable, so
+// one that is never re-fetched keeps verifying under keys the publisher has
+// retired. The refresh is the expiry check on this side of the boundary. There
+// is no clock here to make it look otherwise.
 func (s *KeySet) Resolve(ctx context.Context, ref authz.KeyRef) (authz.Verifier, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

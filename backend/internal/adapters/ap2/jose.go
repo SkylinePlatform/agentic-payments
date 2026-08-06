@@ -24,6 +24,24 @@ import (
 // note saying the production version arrives with this issue. This is it, and
 // the test can now use it instead of its own copy.
 
+// A wrapper must not turn a nil interface into a non-nil one.
+//
+// That is the rule the three constructors below exist to keep, and it is worth
+// stating separately from what they adapt. A struct wrapping a nil interface is
+// itself non-nil, so `joseSigner{nil}` sails past every `if signer == nil` in
+// pkg/sdjwt and panics on the first method call instead — a nil dereference
+// several frames inside a package that had a check for exactly this and was
+// denied the chance to run it.
+//
+// The guards in IssueCheckout, VerifyCheckout, IssuePayment and VerifyPayment
+// were written because of that, and they are still there because ErrMisconfigured
+// names the culprit better than "no signer" does. What they are no longer is
+// load-bearing: nothing in this package constructs a bridge except through these
+// functions, so an entry point added tomorrow without a guard produces an error
+// from pkg/sdjwt rather than a panic. internal/platform/crypto's material.go
+// records the same class of bug one interface further down, and refuses it the
+// same way — by never letting the nil be wrapped.
+
 // JOSESigner adapts an authz.Signer for the JOSE layer.
 //
 // Exported because the roles sign AP2 artefacts this package does not construct
@@ -34,10 +52,32 @@ import (
 //
 // It was test-only until a role needed one. Growing an exported API for a test
 // would have been the wrong order; this is the right one.
-func JOSESigner(s authz.Signer) sdjwt.Signer { return joseSigner{s} }
+//
+// A nil Signer produces a nil sdjwt.Signer rather than a wrapper around nothing.
+func JOSESigner(s authz.Signer) sdjwt.Signer {
+	if s == nil {
+		return nil
+	}
+	return joseSigner{s}
+}
 
-// JOSEVerifier is the verifying half, for the same reason.
-func JOSEVerifier(v authz.Verifier) sdjwt.Verifier { return joseVerifier{v} }
+// JOSEVerifier is the verifying half, for the same reason, and preserves nil for
+// the same reason again.
+func JOSEVerifier(v authz.Verifier) sdjwt.Verifier {
+	if v == nil {
+		return nil
+	}
+	return joseVerifier{v}
+}
+
+// joseClockOf is the third of the trio. It is unexported because no role holds
+// an sdjwt.Clock, only this package does.
+func joseClockOf(c authz.Clock) sdjwt.Clock {
+	if c == nil {
+		return nil
+	}
+	return joseClock{c}
+}
 
 // joseSigner adapts an authz.Signer to the sdjwt.Signer pkg/sdjwt takes.
 type joseSigner struct{ inner authz.Signer }

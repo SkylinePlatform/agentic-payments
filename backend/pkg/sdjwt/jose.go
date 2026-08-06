@@ -53,9 +53,16 @@ type Verifier interface {
 	// Algorithm returns the JOSE "alg" this Verifier's key is bound to.
 	Algorithm() string
 
-	// Verify returns nil when signature is valid over signingInput, and an
-	// error wrapping ErrSignatureInvalid otherwise. It performs no I/O, so it
-	// takes no context.
+	// Verify returns nil when signature is valid over signingInput, and any
+	// error otherwise. It performs no I/O, so it takes no context.
+	//
+	// The sentinel is this package's to attach, not the implementation's: every
+	// call site here wraps what comes back in ErrSignatureInvalid, so a caller
+	// matches that sentinel however the implementation phrased its refusal, and
+	// an implementation wrapping it as well only says the same thing twice in
+	// one message. Implementations are also free to describe the failure in
+	// their own vocabulary — internal/adapters/ap2's bridge returns core's
+	// authz.ErrSignatureInvalid, and both sentinels survive in the chain.
 	Verify(signingInput, signature []byte) error
 }
 
@@ -146,6 +153,12 @@ func (j *jwt) verifyWith(v Verifier) error {
 		return fmt.Errorf("%w: header says %q, key is %q",
 			ErrUnsupportedAlgorithm, j.header.Alg, v.Algorithm())
 	}
+	// ErrSignatureInvalid is attached here rather than expected back from the
+	// Verifier, which is what the interface's own documentation says. A Verifier
+	// is free to refuse in whatever vocabulary it has — the AP2 bridge returns
+	// core's sentinel, a test double returns a bare string — and this is the one
+	// line that makes every one of them matchable as
+	// errors.Is(err, ErrSignatureInvalid).
 	if err := v.Verify(j.signingInput, j.signature); err != nil {
 		return fmt.Errorf("%w: %w", ErrSignatureInvalid, err)
 	}

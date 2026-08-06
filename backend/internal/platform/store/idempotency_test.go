@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
@@ -27,11 +28,17 @@ func newStore(t *testing.T, opts ...store.Option) (*store.Idempotency[string], *
 
 // claim takes a key and fails the test if it was not free, which is what most
 // of these tests need as a precondition rather than as the thing under test.
+//
+// assert, not require: AGENTS.md's rule is that a shared assertion helper uses
+// assert, because require inside one becomes illegal the moment any caller
+// invokes it from a goroutine — and nothing in the helper would say so. This
+// file already drives the store from fifty goroutines at once, so that caller is
+// one edit away.
 func claim(t *testing.T, s *store.Idempotency[string], key, fingerprint string) {
 	t.Helper()
-	if _, replayed, err := s.Claim(key, fingerprint); err != nil || replayed {
-		t.Fatalf("Claim(%s): replayed=%v err=%v, want a free key", key, replayed, err)
-	}
+	_, replayed, err := s.Claim(key, fingerprint)
+	assert.NoError(t, err, "the key was expected to be free")
+	assert.False(t, replayed, "the key already held an answer, so this test's precondition is wrong")
 }
 
 // remember is the whole successful sequence, for tests that care about the
@@ -39,19 +46,18 @@ func claim(t *testing.T, s *store.Idempotency[string], key, fingerprint string) 
 func remember(t *testing.T, s *store.Idempotency[string], key, fingerprint, result string) {
 	t.Helper()
 	claim(t, s, key, fingerprint)
-	require.NoError(t, s.Complete(key, result), "Complete(%s)", key)
+	assert.NoError(t, s.Complete(key, result), "Complete after a successful claim")
 }
 
 func TestKeyIsRequired(t *testing.T) {
 	t.Parallel()
 	s, _ := newStore(t)
 
-	if _, _, err := s.Claim("", "fp"); !errors.Is(err, store.ErrKeyRequired) {
-		t.Errorf("Claim with no key: got %v, want %v", err, store.ErrKeyRequired)
-	}
-	if err := s.Complete("", "result"); !errors.Is(err, store.ErrKeyRequired) {
-		t.Errorf("Complete with no key: got %v, want %v", err, store.ErrKeyRequired)
-	}
+	_, _, err := s.Claim("", "fp")
+	assert.ErrorIs(t, err, store.ErrKeyRequired,
+		"deduplicating on the request content alone cannot tell two identical purchases apart")
+	assert.ErrorIs(t, s.Complete("", "result"), store.ErrKeyRequired,
+		"there is no record to complete without a key naming it")
 }
 
 func TestClaimThenReplay(t *testing.T) {
@@ -61,12 +67,9 @@ func TestClaimThenReplay(t *testing.T) {
 	remember(t, s, "k1", "fp", "the answer")
 
 	got, replayed, err := s.Claim("k1", "fp")
-	if err != nil || !replayed {
-		t.Fatalf("second Claim: replayed=%v err=%v, want a replay", replayed, err)
-	}
-	if got != "the answer" {
-		t.Errorf("replayed %q, want %q", got, "the answer")
-	}
+	require.NoError(t, err, "the second Claim of a completed key")
+	require.True(t, replayed, "a completed key must replay rather than be handed out again")
+	assert.Equal(t, "the answer", got, "the replay returned something other than the first result")
 }
 
 // TestSecondClaimWhileInFlight is the case a lookup-then-remember store gets
@@ -78,16 +81,17 @@ func TestSecondClaimWhileInFlight(t *testing.T) {
 
 	claim(t, s, "k1", "fp")
 
-	if _, _, err := s.Claim("k1", "fp"); !errors.Is(err, store.ErrInFlight) {
-		t.Errorf("Claim while in flight: got %v, want %v", err, store.ErrInFlight)
-	}
+	_, _, err := s.Claim("k1", "fp")
+	assert.ErrorIs(t, err, store.ErrInFlight,
+		"waving the retry through is how one payment becomes two")
 
 	// And once the first attempt finishes, the retry replays rather than
 	// running anything.
 	require.NoError(t, s.Complete("k1", "the answer"), "Complete")
-	if got, replayed, err := s.Claim("k1", "fp"); err != nil || !replayed || got != "the answer" {
-		t.Errorf("Claim after Complete: got %q replayed=%v err=%v", got, replayed, err)
-	}
+	got, replayed, err := s.Claim("k1", "fp")
+	require.NoError(t, err, "Claim after Complete")
+	assert.True(t, replayed, "the finished operation was offered for running again")
+	assert.Equal(t, "the answer", got, "the replay lost the first attempt's result")
 }
 
 // TestReleaseFreesTheKey covers the attempt that produced no answer worth
@@ -100,9 +104,7 @@ func TestReleaseFreesTheKey(t *testing.T) {
 	claim(t, s, "k1", "fp")
 	s.Release("k1")
 
-	if n := s.Len(); n != 0 {
-		t.Errorf("Len = %d, want 0 — the released claim is still held", n)
-	}
+	assert.Zero(t, s.Len(), "the released claim is still held")
 	claim(t, s, "k1", "fp")
 }
 
@@ -116,9 +118,11 @@ func TestReleaseAfterCompleteIsANoOp(t *testing.T) {
 	remember(t, s, "k1", "fp", "the answer")
 	s.Release("k1")
 
-	if got, replayed, err := s.Claim("k1", "fp"); err != nil || !replayed || got != "the answer" {
-		t.Errorf("after Release: got %q replayed=%v err=%v — the record was dropped", got, replayed, err)
-	}
+	got, replayed, err := s.Claim("k1", "fp")
+	require.NoError(t, err, "Claim after Release")
+	assert.True(t, replayed, "Release dropped a completed record, so the deferred call is not safe to write")
+	assert.Equal(t, "the answer", got, "the completed result did not survive Release")
+
 	// Releasing a key nobody holds is also harmless.
 	s.Release("never-claimed")
 }
@@ -127,9 +131,8 @@ func TestCompleteWithoutAClaim(t *testing.T) {
 	t.Parallel()
 	s, _ := newStore(t)
 
-	if err := s.Complete("k1", "result"); !errors.Is(err, store.ErrNotClaimed) {
-		t.Errorf("Complete without Claim: got %v, want %v", err, store.ErrNotClaimed)
-	}
+	assert.ErrorIs(t, s.Complete("k1", "result"), store.ErrNotClaimed,
+		"a result recorded against a key nobody claimed would be replayed to whoever claims it next")
 }
 
 func TestSameKeyDifferentRequestConflicts(t *testing.T) {
@@ -140,14 +143,15 @@ func TestSameKeyDifferentRequestConflicts(t *testing.T) {
 
 	// The caller reused the key for something else. Neither answer is
 	// available: replaying the first would answer a question they did not ask.
-	if _, _, err := s.Claim("k1", "fingerprint-of-second"); !errors.Is(err, store.ErrConflict) {
-		t.Errorf("Claim: got %v, want %v", err, store.ErrConflict)
-	}
+	_, _, err := s.Claim("k1", "fingerprint-of-second")
+	assert.ErrorIs(t, err, store.ErrConflict,
+		"replaying the first result would answer a question the caller did not ask")
 
 	// And the original survived the attempt.
-	if got, replayed, err := s.Claim("k1", "fingerprint-of-first"); err != nil || !replayed || got != "first" {
-		t.Errorf("original record: got %q replayed=%v err=%v", got, replayed, err)
-	}
+	got, replayed, err := s.Claim("k1", "fingerprint-of-first")
+	require.NoError(t, err, "the original record after a conflicting claim")
+	assert.True(t, replayed, "a rejected claim destroyed the record it conflicted with")
+	assert.Equal(t, "first", got, "the original record was overwritten by the conflicting claim")
 }
 
 // TestConflictBeatsInFlight pins the order of the two refusals. A caller that
@@ -159,9 +163,9 @@ func TestConflictBeatsInFlight(t *testing.T) {
 
 	claim(t, s, "k1", "fingerprint-of-first")
 
-	if _, _, err := s.Claim("k1", "fingerprint-of-second"); !errors.Is(err, store.ErrConflict) {
-		t.Errorf("got %v, want %v — an in-flight claim masked a genuine conflict", err, store.ErrConflict)
-	}
+	_, _, err := s.Claim("k1", "fingerprint-of-second")
+	assert.ErrorIs(t, err, store.ErrConflict,
+		"an in-flight claim masked a genuine conflict, so the caller retries a bug for ever")
 }
 
 func TestRecordLapses(t *testing.T) {
@@ -171,21 +175,19 @@ func TestRecordLapses(t *testing.T) {
 	remember(t, s, "k1", "fp", "result")
 
 	c.Advance(59 * time.Minute)
-	if _, replayed, _ := s.Claim("k1", "fp"); !replayed {
-		t.Error("record was forgotten inside its window")
-	}
+	_, replayed, _ := s.Claim("k1", "fp")
+	assert.True(t, replayed, "the record was forgotten inside its window")
 
 	c.Advance(2 * time.Minute)
-	if _, replayed, err := s.Claim("k1", "fp"); replayed || err != nil {
-		t.Errorf("record survived past its window: replayed=%v err=%v", replayed, err)
-	}
+	_, replayed, err := s.Claim("k1", "fp")
+	assert.False(t, replayed, "the record survived past its window")
+	assert.NoError(t, err, "a lapsed key must be claimable, not an error")
 	s.Release("k1")
 
 	// Past the window the key is free for different work too, which is what
 	// makes the window a retention policy rather than a permanent reservation.
-	if _, _, err := s.Claim("k1", "different-fp"); err != nil {
-		t.Errorf("reusing a lapsed key: %v", err)
-	}
+	_, _, err = s.Claim("k1", "different-fp")
+	assert.NoError(t, err, "a lapsed key stayed bound to the request it was first used for")
 }
 
 // TestLapsedClaimIsNotCompletable covers the operation that outran its own
@@ -198,9 +200,8 @@ func TestLapsedClaimIsNotCompletable(t *testing.T) {
 	claim(t, s, "k1", "fp")
 	c.Advance(2 * time.Hour)
 
-	if err := s.Complete("k1", "result"); !errors.Is(err, store.ErrNotClaimed) {
-		t.Errorf("Complete after the claim lapsed: got %v, want %v", err, store.ErrNotClaimed)
-	}
+	assert.ErrorIs(t, s.Complete("k1", "result"), store.ErrNotClaimed,
+		"re-creating the record here would hand a much later retry a stale answer")
 }
 
 // TestRetryDoesNotExtendTheWindow pins a rule that is easy to get wrong by
@@ -215,28 +216,24 @@ func TestRetryDoesNotExtendTheWindow(t *testing.T) {
 
 	// Retry three times, all of it inside the original hour. Each retry both
 	// reads and writes, which is what a middleware does.
-	for range 3 {
+	for i := range 3 {
 		c.Advance(15 * time.Minute)
-		if _, replayed, _ := s.Claim("k1", "fp"); !replayed {
-			t.Fatal("record lapsed early")
-		}
-		if err := s.Complete("k1", "result"); err != nil {
-			t.Fatalf("Complete on a retry: %v", err)
-		}
+		_, replayed, _ := s.Claim("k1", "fp")
+		require.True(t, replayed, "the record lapsed early, before retry %d", i)
+		require.NoError(t, s.Complete("k1", "result"), "Complete on retry %d", i)
 	}
 
 	// t+45m: still live, as it should be.
-	if _, replayed, _ := s.Claim("k1", "fp"); !replayed {
-		t.Fatal("record lapsed inside its window")
-	}
+	_, replayed, _ := s.Claim("k1", "fp")
+	require.True(t, replayed, "the record lapsed inside its window")
 
 	// t+65m: past the expiry the first claim set. If any of those retries had
 	// rewritten the record, the expiry would have moved with it and this would
 	// still be a replay.
 	c.Advance(20 * time.Minute)
-	if _, replayed, _ := s.Claim("k1", "fp"); replayed {
-		t.Error("a retry inside the window pushed the expiry out")
-	}
+	_, replayed, _ = s.Claim("k1", "fp")
+	assert.False(t, replayed,
+		"a retry inside the window pushed the expiry out, so a client can hold a key for ever")
 }
 
 func TestCapacityIsRefusedNotAbsorbed(t *testing.T) {
@@ -251,41 +248,35 @@ func TestCapacityIsRefusedNotAbsorbed(t *testing.T) {
 	// would silently turn its owner's retry into a second execution — and the
 	// refusal arrives from Claim, before the third operation runs, so its
 	// caller can still decline to run it.
-	if _, _, err := s.Claim("k3", "fp"); !errors.Is(err, store.ErrAtCapacity) {
-		t.Errorf("Claim at capacity: got %v, want %v", err, store.ErrAtCapacity)
-	}
-	if _, replayed, _ := s.Claim("k1", "fp"); !replayed {
-		t.Error("an existing record was evicted to make room")
-	}
+	_, _, err := s.Claim("k3", "fp")
+	assert.ErrorIs(t, err, store.ErrAtCapacity,
+		"a store that cannot promise the operation will not run twice must not let it run")
+	_, replayed, _ := s.Claim("k1", "fp")
+	assert.True(t, replayed, "an existing record was evicted to make room, silently arming a second execution")
 
 	// Capacity frees up as records lapse, not by discarding live ones.
 	c.Advance(2 * time.Hour)
-	if _, _, err := s.Claim("k3", "fp"); err != nil {
-		t.Errorf("Claim after the window lapsed: %v", err)
-	}
-	if n := s.Len(); n != 1 {
-		t.Errorf("Len = %d, want 1 — the lapsed records should be gone", n)
-	}
+	_, _, err = s.Claim("k3", "fp")
+	assert.NoError(t, err, "capacity never came back after the records lapsed")
+	assert.Equal(t, 1, s.Len(), "the lapsed records were not swept, so the limit is smaller than it says")
 }
 
 func TestClockIsRequired(t *testing.T) {
 	t.Parallel()
 
-	if _, err := store.NewIdempotency[string](nil); err == nil {
-		t.Error("a store with no clock was accepted; retention would never lapse")
-	}
+	_, err := store.NewIdempotency[string](nil)
+	assert.Error(t, err, "without a clock, retention is a deadline that never arrives")
 }
 
 func TestRejectsNonsenseConfiguration(t *testing.T) {
 	t.Parallel()
 	c := clock.NewFake(base)
 
-	if _, err := store.NewIdempotency[string](c, store.WithWindow(0)); err == nil {
-		t.Error("a zero window was accepted; every record would lapse immediately")
-	}
-	if _, err := store.NewIdempotency[string](c, store.WithLimit(0)); err == nil {
-		t.Error("a zero limit was accepted; nothing could ever be remembered")
-	}
+	_, err := store.NewIdempotency[string](c, store.WithWindow(0))
+	assert.Error(t, err, "a zero window makes every record lapse immediately, so nothing is ever replayed")
+
+	_, err = store.NewIdempotency[string](c, store.WithLimit(0))
+	assert.Error(t, err, "a zero limit means nothing can ever be remembered")
 }
 
 // TestOnlyOneClaimantWins is the guarantee the whole reservation protocol
@@ -299,24 +290,24 @@ func TestOnlyOneClaimantWins(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 50 {
 		wg.Go(func() {
+			// assert, never require: this is not the test goroutine, and
+			// FailNow off it loses the failure and can hang the test.
 			switch _, replayed, err := s.Claim("k1", "fp"); {
 			case errors.Is(err, store.ErrInFlight):
 				inFlight.Add(1)
 			case err == nil && !replayed:
 				won.Add(1)
-			case err != nil:
-				t.Errorf("unexpected error: %v", err)
+			default:
+				assert.NoError(t, err, "a claimant was refused for a reason this race cannot produce")
 			}
 		})
 	}
 	wg.Wait()
 
-	if got := won.Load(); got != 1 {
-		t.Errorf("%d claimants were told to run the operation, want exactly 1", got)
-	}
-	if got := inFlight.Load(); got != 49 {
-		t.Errorf("%d claimants were refused, want 49", got)
-	}
+	assert.Equal(t, int64(1), won.Load(),
+		"more than one claimant was told to run the operation, which is the duplicate charge")
+	assert.Equal(t, int64(49), inFlight.Load(),
+		"a claimant was neither the winner nor refused")
 }
 
 // TestConcurrentUse exists for the race detector. An idempotency store is
@@ -343,7 +334,5 @@ func TestConcurrentUse(t *testing.T) {
 	}
 	wg.Wait()
 
-	if n := s.Len(); n != 10 {
-		t.Errorf("Len = %d, want 10 distinct keys", n)
-	}
+	assert.Equal(t, 10, s.Len(), "the ten distinct keys did not all survive the race")
 }

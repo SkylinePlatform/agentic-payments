@@ -50,7 +50,10 @@ type Identity struct {
 // roles means no binary can be the exception by accident.
 func NewIdentity(role string) (Identity, error) {
 	clk := clock.New()
-	store := crypto.NewStore(clk)
+	store, err := crypto.NewStore(clk)
+	if err != nil {
+		return Identity{}, fmt.Errorf("standing up the %s key store: %w", role, err)
+	}
 
 	// The idempotency key is the role name: a process restarting mints a new
 	// key, but a single process cannot accidentally mint two.

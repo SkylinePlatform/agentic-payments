@@ -485,6 +485,22 @@ func TestParse(t *testing.T) {
 			input:   jwt + "~" + "eyJhIjoxfQ" + "~",
 			wantErr: sdjwt.ErrMalformedDisclosure,
 		},
+		{
+			// The case that makes checking the final part worth doing. Lose the
+			// trailing tilde and the last Disclosure lands where a KB-JWT
+			// belongs; accepting it there drops the Disclosure from the list,
+			// and §7.1 step 3.c.i then reads its unclaimed digest as a withheld
+			// claim. Verification would pass with a claim missing and nothing
+			// said. A Disclosure is not a JWT, so the check catches it.
+			name:    "a truncated SD-JWT puts a disclosure where the KB-JWT goes",
+			input:   jwt + "~" + disclosure,
+			wantErr: sdjwt.ErrMalformedSDJWT,
+		},
+		{
+			name:    "a key binding JWT that is not base64url",
+			input:   jwt + "~" + "not.base64.here",
+			wantErr: sdjwt.ErrMalformedSDJWT,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -509,6 +525,45 @@ func TestParse(t *testing.T) {
 		})
 	}
 }
+
+// TestTruncatedSDJWTIsRejectedRatherThanShortened is the same rule as the
+// truncation case in TestParse, asserted against a real credential so that the
+// consequence is visible rather than inferred.
+//
+// Drop the trailing tilde and the last Disclosure occupies the KB-JWT's
+// position. Before Parse checked that position, the Disclosure was accepted as
+// a KB-JWT and vanished from the list, its digest went unclaimed, §7.1 step
+// 3.c.i read that as a claim the Holder chose to withhold, and Verify returned
+// a payload missing "merchant" with no error anywhere. Silently verifying a
+// different mandate from the one that was sent is the failure; a rejection is
+// the fix.
+func TestTruncatedSDJWTIsRejectedRatherThanShortened(t *testing.T) {
+	t.Parallel()
+
+	key := newHMACKey("issuer-secret", "issuer-1")
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err, "NewBlinder")
+	payload, disclosures := mustBlind(t, blinder, mandateClaims(), blindPaths...)
+	issued := mustIssue(t, key, payload, disclosures)
+
+	intact := issued.String()
+	require.True(t, strings.HasSuffix(intact, separatorTilde), "a bare SD-JWT ends in a tilde")
+
+	whole, err := sdjwt.Parse(intact)
+	require.NoError(t, err, "Parse of the intact presentation")
+	claims, err := sdjwt.Verify(whole, sdjwt.Options{Issuer: key, Clock: at(1750000000)})
+	require.NoError(t, err, "Verify of the intact presentation")
+	require.Contains(t, claims, "merchant",
+		"the claim the truncated form used to lose has to be present in the intact one")
+
+	_, err = sdjwt.Parse(strings.TrimSuffix(intact, separatorTilde))
+	assert.ErrorIs(t, err, sdjwt.ErrMalformedSDJWT,
+		"a truncated presentation verified as a mandate with one fewer claim, and said nothing")
+}
+
+// separatorTilde is RFC 9901 §4's part separator, spelled out here because the
+// package's own constant is unexported and this test is about the character.
+const separatorTilde = "~"
 
 // TestSDHashIsIndependentOfKeyBinding pins RFC 9901 §4.3.1: the digest covers
 // the Issuer-signed JWT and the Disclosures each followed by a tilde, and does

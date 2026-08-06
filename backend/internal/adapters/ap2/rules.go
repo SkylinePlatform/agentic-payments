@@ -112,14 +112,23 @@ type CredentialProviderRules struct {
 // Provider that wanted to close it itself would have to be sent the document,
 // which is a protocol change rather than a call this function could make.
 func (r CredentialProviderRules) VerifyPayment(sd *sdjwt.SDJWT) (generated.PaymentMandate, error) {
-	// A conversion rather than a field-by-field literal. The two shapes match
-	// today because this role's rules are exactly the verification options and
-	// nothing more — and writing it this way means the compiler refuses the day
-	// they stop matching, rather than a literal silently continuing to fill in
-	// the fields it knows about. Open mandates will make them diverge: #12 gives
-	// this role constraints to evaluate, which PaymentOptions has no business
-	// carrying.
-	return VerifyPayment(sd, PaymentOptions(r))
+	// This used to be the conversion PaymentOptions(r), written that way so the
+	// compiler would refuse the day the two shapes stopped matching. That day
+	// arrived from the other direction than the one predicted: PaymentOptions
+	// grew a KeyBindingPolicy, so the options are now wider than the rules
+	// rather than the rules wider than the options.
+	//
+	// The literal below therefore leaves the policy at its zero value, and that
+	// is a placeholder rather than an answer. A Credential Provider is the party
+	// that most wants proof the presenter holds the key it is being asked to
+	// fund on behalf of — but the nonce it would check against has to be issued
+	// by somebody, and who issues it is a question about the Human Not Present
+	// flow. #12 answers it; until then this role verifies exactly what it
+	// verified before, with the gap visible instead of implied.
+	return VerifyPayment(sd, PaymentOptions{
+		Issuer: r.Issuer,
+		Clock:  r.Clock,
+	})
 }
 
 // MPPRules is what a Merchant Payment Processor checks before it moves money.
