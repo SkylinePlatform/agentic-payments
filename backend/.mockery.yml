@@ -1,0 +1,47 @@
+# mockery v3 — generated test doubles.
+#
+# What belongs here is one kind of double: the one a test asserts *about*.
+# Recording that a collaborator was called, how often and with what is
+# mechanical, and hand-rolling it produces a different recorder every time —
+# several of ours also needed their own mutex, because the emitter and the
+# idempotency middleware call their collaborators from another goroutine.
+#
+# What does not belong here is a double that does real work. pkg/sdjwt's
+# hmacKey computes a real HMAC-SHA256 and its deterministicSalts is what makes
+# a golden vector reproducible; clock.Fake is a driven clock. Replacing any of
+# those with a mock returning canned values deletes the thing the test proves.
+# See the comments in those files — the absence of a pkg/ entry below is a
+# decision, not an omission.
+#
+# Layout: mockery v3's default, which writes mocks_test.go into the package
+# that owns the interface. Nothing new appears in the import graph — an
+# external test package (obs_test, transport_test) can name the exported
+# identifiers its subject package declares in _test.go files — so the
+# dependency rules in .golangci.yml keep meaning exactly what they meant
+# before. A shared internal/mocks package would eventually hold a mock of an
+# internal/collector interface, and collector-containment would then make the
+# whole of it unimportable outside cmd/collector.
+all: false
+dir: '{{.InterfaceDir}}'
+filename: mocks_test.go
+force-file-write: true
+formatter: goimports
+structname: '{{.Mock}}{{.InterfaceName}}'
+pkgname: '{{.SrcPackageName}}'
+template: testify
+
+packages:
+  github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs:
+    interfaces:
+      Sink:
+
+  # net/http's own interface, so InterfaceDir is GOROOT and the defaults above
+  # cannot apply: both the destination and the package name have to be said
+  # out loud. The middleware under test wraps an http.Handler, and what these
+  # tests are about is how many times the wrapped handler actually ran.
+  net/http:
+    config:
+      dir: internal/platform/transport
+      pkgname: transport
+    interfaces:
+      Handler:

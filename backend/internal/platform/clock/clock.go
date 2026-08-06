@@ -34,6 +34,11 @@ func (System) Now() time.Time { return time.Now().UTC() }
 // every package with a deadline needs it, and Go test files cannot be imported
 // across packages. It is safe for concurrent use so that tests running under
 // -race can advance time while other goroutines read it.
+//
+// This is a fake, not a mock, and it is not a candidate for mockery — see
+// backend/.mockery.yml. A generated Clock returning a canned instant answers
+// Now; what hard rule 5 needs is time that can be *moved*, which is what
+// Advance and Set are and what every expiry test in this module drives.
 type Fake struct {
 	mu  sync.RWMutex
 	now time.Time

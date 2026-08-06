@@ -20,7 +20,7 @@ FRONTEND       := frontend
 NPM            ?= npm
 
 .PHONY: generate
-generate: generate-go generate-disclosure generate-ts ## Regenerate Go and TypeScript types from contracts/
+generate: generate-go generate-disclosure generate-ts ## Regenerate Go and TypeScript types from contracts/, and the mocks
 
 # go-jsonschema is pinned in contracts/tools/go.mod, not in backend/go.mod. A
 # code generator is not a dependency of the thing it generates, and backend/ is

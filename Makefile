@@ -22,6 +22,37 @@ help: ## Show this help
 build: ## Build every binary under backend/cmd
 	cd $(BACKEND) && $(GO) build ./...
 
+# Generated test doubles. mockery is pinned in tools/mockery/go.mod — its own
+# module, for the reason contracts/tools is one: a generator is not a
+# dependency of the thing it generates, and backend/ is what gets imported. It
+# is a second tools module rather than an entry in the first because the two
+# generators share cobra and pflag, and one build list would let a mockery
+# upgrade move the versions the schema generator compiles against.
+#
+# The binary is built rather than run through `go tool`, because mockery
+# resolves the packages it mocks from its working directory: it has to run
+# inside backend/, and `go -C tools/mockery tool` would run it inside the tools
+# module, where none of those packages exist.
+#
+# Output is mocks_test.go beside each interface, gitignored and regenerated —
+# the same rule generated types follow. `generate` and `check` both produce it,
+# which is what keeps a fresh checkout able to run the tests.
+MOCKERY_MODULE := tools/mockery
+MOCKERY        := $(abspath $(BACKEND))/bin/mockery
+
+$(MOCKERY): $(MOCKERY_MODULE)/go.mod $(MOCKERY_MODULE)/go.sum
+	@$(GO) -C $(MOCKERY_MODULE) build -o $(MOCKERY) github.com/vektra/mockery/v3
+
+.PHONY: generate-mocks
+generate-mocks: $(MOCKERY) ## Regenerate the mocks configured in backend/.mockery.yml
+	@cd $(BACKEND) && $(MOCKERY) --log-level warn
+	@echo "generate-mocks: $(BACKEND)/.mockery.yml -> mocks_test.go"
+
+# Mocks are not the canonical model, so their target lives here rather than in
+# contracts/codegen.mk — but they are generated code that the tests need, so
+# `generate` produces them too.
+generate: generate-mocks
+
 .PHONY: test
 test: ## Unit tests
 	cd $(BACKEND) && $(GO) test -race ./...
@@ -130,9 +161,12 @@ diagrams: ## Export inline mermaid from docs/ to SVG for the article series
 # pull request, so cross-language drift is still caught — just not on the path
 # of a Go-only contributor.
 .PHONY: check
-check: generate-go generate-disclosure lint test ## Lint and test against freshly generated Go types
+check: generate-go generate-disclosure generate-mocks lint test ## Lint and test against freshly generated Go types
 
+# mocks_test.go is mockery's filename and nothing hand-written may take it —
+# .gitignore covers it, so a hand-written one would be invisible to git anyway.
 .PHONY: clean
 clean: ## Remove build output and generated types
 	cd $(BACKEND) && $(GO) clean -cache -testcache
 	rm -rf $(BACKEND)/bin $(GENERATED_GO) $(GENERATED_TS)
+	find $(BACKEND) -name mocks_test.go -delete
