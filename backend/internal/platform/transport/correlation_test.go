@@ -27,6 +27,21 @@ import (
 // The ID is captured rather than matched on, because mock.MatchedBy would
 // report a mismatch as "unexpected call" — and the useful failure here is the
 // one that prints the ID the handler actually saw.
+//
+// **Every caller must invoke the wrapped handler on the test goroutine**, and
+// two things here depend on it. Once() makes a second call an unexpected one,
+// which testify reports through t.FailNow — legal only from the goroutine
+// running the test, the same rule AGENTS.md states for require. And id is
+// written in Run and read by the returned closure with nothing between them, so
+// a handler called from elsewhere races on it.
+//
+// Neither is a reason to make this concurrency-safe: the middleware under test
+// is synchronous, and a helper that guarded against a caller it does not have
+// would be describing a design nobody chose. It is a reason to say so, because
+// the first test to wrap this in a wg.Go gets both failures at once and neither
+// points here. internal/platform/obs takes the other route, with Maybe() and
+// counts asserted afterwards, because there the collaborator genuinely is
+// called from a background goroutine.
 func seenBy(t *testing.T) (*transport.MockHandler, func() string) {
 	t.Helper()
 	var id string

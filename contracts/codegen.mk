@@ -63,7 +63,23 @@ $(FRONTEND)/node_modules: $(FRONTEND)/package.json $(FRONTEND)/package-lock.json
 # against the repository can find. What can still go stale is generation
 # itself: a schema the tools cannot process, output that changes on a second
 # run, or a tracked file the generators quietly rewrite. This checks all three.
-SHA_GENERATED = find $(GENERATED_GO) $(GENERATED_TS) -type f | sort | xargs sha256sum
+#
+# The mocks are found by name rather than by directory, because they are
+# generated beside the interface they mock rather than into one place. Listing
+# the two directories that hold them today would be a list that goes out of date
+# the first time .mockery.yml names a third package — and it would go out of
+# date silently, since a path this misses is not checked rather than reported.
+#
+# They belong here for the reason the schema output does: mockery's output is
+# deterministic for the two single-method interfaces configured now, but nothing
+# makes that a property of mockery rather than of this configuration. A package
+# with several interfaces could order them by however go/packages happened to
+# walk the filesystem, and a check that covered only some generated code would
+# pass while saying it had proved generation reproducible.
+SHA_GENERATED = { \
+	find $(GENERATED_GO) $(GENERATED_TS) -type f; \
+	find $(BACKEND) -name 'mocks_test.go' -type f; \
+	} | sort | xargs sha256sum
 
 # The tracked-file check compares the working tree against how it looked before
 # generation, not against clean. The question this target asks is whether
