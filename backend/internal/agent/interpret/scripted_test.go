@@ -310,13 +310,15 @@ func TestInterpretingTwiceReturnsIndependentTrees(t *testing.T) {
 // Building a script
 // ---------------------------------------------------------------------------
 
-// TestNewScriptedRefusesAScriptTheVerifierCouldNotRead is the early warning.
+// TestNewScriptedRefusesAScriptThatCouldNotDoItsJob is the early warning.
 //
 // Interpret validates too, so nothing unreadable escapes either way. The point
 // of failing here is when: a script wired at startup that nobody can evaluate
 // should stop the program that wired it, rather than surfacing three minutes
-// later as a demo that will not run.
-func TestNewScriptedRefusesAScriptTheVerifierCouldNotRead(t *testing.T) {
+// later as a demo that will not run. The last row is the other half of the same
+// idea — an entry with nothing to match on can never answer anything, so it is a
+// dead line in a table whose whole content is the matching.
+func TestNewScriptedRefusesAScriptThatCouldNotDoItsJob(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
