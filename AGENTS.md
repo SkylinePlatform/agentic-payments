@@ -355,6 +355,20 @@ feat(authz): add open mandate constraint evaluation
 fix(sdjwt): correct disclosure hash ordering
 ```
 
+**Commits are signed.** `main` has `required_signatures` enabled, so one
+unsigned commit anywhere in a branch blocks its pull request — and it blocks it
+as a bare `BLOCKED` status with every check green and no review outstanding,
+which reads like a missing approval or a stale base rather than a missing
+signature. `git log --format='%G? %s'` is what actually answers it: `G` is
+signed, `N` is not, and `E` is a signature made by a key the local keyring does
+not hold, which is what GitHub's own squash-merge commits look like.
+
+`commit.gpgsign` and `user.signingkey` are configured globally and GPG signs
+without prompting, so this only bites work done somewhere that bypasses it — a
+git worktree, a container, a CI runner. **Never work around a signing failure by
+committing unsigned.** It makes the immediate problem disappear and moves the
+cost to whoever tries to merge, who has no signal pointing at the cause.
+
 **Every unit of work has an issue, and every pull request links it.** No
 exceptions, and the small changes are the ones this is for: a documentation
 fix, a rename, a lint rule. If the work is worth a branch, it is worth a
