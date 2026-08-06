@@ -298,6 +298,65 @@ func TestVerifyChainRefusesOptionsItCannotApply(t *testing.T) {
 	}
 }
 
+func TestAChainVerifiesAgainstTheKeyTheRootEndorsed(t *testing.T) {
+	chain := delegatedChain(t, "delegate")
+
+	payloads, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	require.NoError(t, err, "the happy path is what every rejection is measured against")
+
+	require.Len(t, payloads, 2, "a two-hop chain yields the root payload and the delegated one, in that order")
+	assert.Equal(t, "open.example", payloads[0]["vct"],
+		"index 0 is the root, which is what carries the constraints a verifier evaluates")
+	assert.Equal(t, "closed.example", payloads[1]["vct"],
+		"index 1 is the delegated content, which is what those constraints are evaluated against")
+}
+
+func TestExactlyOneDelegatePayloadElementIsDisclosed(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		elements []any
+		why      string
+	}{
+		{
+			name:     "none disclosed",
+			elements: []any{},
+			why:      "an empty array delegates nothing, and returning a nil payload would let a caller read absence as permission",
+		},
+		{
+			name:     "two disclosed",
+			elements: []any{map[string]any{"vct": "a"}, map[string]any{"vct": "b"}},
+			why:      "two authorisations means the verifier chooses which one it was shown, which is a choice an attacker makes for it",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chain := delegatedChainWithElements(t, tc.elements) // helper below
+
+			_, err := sdjwt.VerifyChain(chain, chainOptions(t))
+			require.Error(t, err, tc.why)
+			assert.ErrorIs(t, err, sdjwt.ErrDelegatePayloadInvalid)
+		})
+	}
+}
+
+func TestADelegatedDisclosureThatMatchesNothingIsRejected(t *testing.T) {
+	chain := delegatedChainWithStrayDisclosure(t) // helper below
+
+	_, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	require.Error(t, err,
+		"a disclosure matching no digest is content the delegate never signed, which RFC 9901 §7.1 step 5 requires be rejected")
+	assert.ErrorIs(t, err, sdjwt.ErrDisclosureUnmatched)
+}
+
+func TestAnExpiredDelegatedPayloadIsRejected(t *testing.T) {
+	chain := delegatedChainExpiringAt(t, time.Unix(1_777_326_100, 0)) // helper below
+
+	// chainOptions' clock reads 1_777_326_200, a hundred seconds later.
+	_, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	require.Error(t, err,
+		"exp inside the delegated content is the closed mandate's own lifetime and has to be enforced somewhere")
+	assert.ErrorIs(t, err, sdjwt.ErrExpired)
+}
+
 // delegatedChain is issuedRoot delegated to the named key. The root always
 // endorses "delegate" in its cnf; passing a different name is how the
 // unendorsed-key case is built.
@@ -620,4 +679,124 @@ func dropOneRootDisclosure(t *testing.T, chain *sdjwt.Chain) *sdjwt.Chain {
 	again, err := sdjwt.ParseChain(strings.Join(narrowed, "~"))
 	require.NoError(t, err, "removing one disclosure must not change the chain's shape")
 	return again
+}
+
+// chainFrom assembles a chain's wire form from a root, an already-signed
+// delegating JWT and the Disclosures to attach to it, and parses the result.
+//
+// It performs the same join Chain.String() does (root, empty separator,
+// delegating JWT, delegate disclosures, trailing empty component), built by
+// hand out of exported pieces so a test can hand it a delegate_payload and a
+// disclosure set Delegate itself has no way to produce — delegatedChainWithElements
+// needs zero or two disclosed elements, which Delegate's public API always
+// refuses to build.
+func chainFrom(t *testing.T, root *sdjwt.SDJWT, delegateJWT string, disclosures []sdjwt.Disclosure) *sdjwt.Chain {
+	t.Helper()
+
+	parts := []string{root.IssuerJWT()}
+	for _, d := range root.Disclosures() {
+		parts = append(parts, d.String())
+	}
+	parts = append(parts, "", delegateJWT)
+	for _, d := range disclosures {
+		parts = append(parts, d.String())
+	}
+	parts = append(parts, "")
+
+	chain, err := sdjwt.ParseChain(strings.Join(parts, "~"))
+	require.NoError(t, err, "the assembled chain must still be the shape ParseChain accepts")
+	return chain
+}
+
+// delegatedChainWithElements is a delegation over issuedRoot(t) whose
+// delegate_payload array holds exactly elements, each wrapped in its own
+// array disclosure and referenced by digest — the same shape Delegate itself
+// writes for a single element, generalised to however many
+// TestExactlyOneDelegatePayloadElementIsDisclosed needs to put there. Every
+// claim other than delegate_payload is written the way Delegate itself would
+// write it, so a failure here is about the one thing under test.
+func delegatedChainWithElements(t *testing.T, elements []any) *sdjwt.Chain {
+	t.Helper()
+	root := issuedRoot(t)
+
+	sdHash, err := root.SDHash()
+	require.NoError(t, err, "the fixture root has to hash cleanly or nothing below tests what it claims")
+
+	digestElements := make([]any, 0, len(elements))
+	disclosures := make([]sdjwt.Disclosure, 0, len(elements))
+	for i, e := range elements {
+		d, err := sdjwt.NewArrayDisclosure(fmt.Sprintf("salt-elem-%d", i), e)
+		require.NoError(t, err, "the fixture disclosure has to be well-formed or the digest below means nothing")
+		digest, err := d.Digest(sdjwt.SHA256)
+		require.NoError(t, err)
+		digestElements = append(digestElements, map[string]any{"...": digest})
+		disclosures = append(disclosures, d)
+	}
+
+	claims := map[string]any{
+		"nonce":            "n-1",
+		"aud":              "https://merchant.example",
+		"iat":              int64(1_777_326_189),
+		"sd_hash":          sdHash,
+		"_sd_alg":          string(sdjwt.SHA256),
+		"delegate_payload": digestElements,
+	}
+	delegateJWT, err := sdjwt.SignJWT(t.Context(), newHMACKey("delegate", "delegate"), "kb+sd-jwt", claims)
+	require.NoError(t, err)
+
+	return chainFrom(t, root, delegateJWT, disclosures)
+}
+
+// delegatedChainWithStrayDisclosure is delegatedChain("delegate") with one
+// extra Disclosure appended to the delegate hop's wire form, matching no
+// digest anywhere in the delegating JWT.
+//
+// It is appended directly to the serialised chain rather than routed through
+// Delegate, because that is exactly what a party that only relays a chain
+// could do to it without any signer's cooperation — and VerifyChain has to
+// catch the result without any either.
+func delegatedChainWithStrayDisclosure(t *testing.T) *sdjwt.Chain {
+	t.Helper()
+	chain := delegatedChain(t, "delegate")
+
+	stray, err := sdjwt.NewArrayDisclosure("c2FsdC1zdHJheS1kaXNjbG9zdXJl", map[string]any{"vct": "unreferenced"})
+	require.NoError(t, err, "the stray disclosure has to be well-formed or the parser is not being exercised")
+
+	s := chain.String()
+	require.True(t, strings.HasSuffix(s, "~"), "the wire form always ends in the trailing separator")
+	withStray := strings.TrimSuffix(s, "~") + "~" + stray.String() + "~"
+
+	again, err := sdjwt.ParseChain(withStray)
+	require.NoError(t, err, "appending a disclosure must not change the chain's shape")
+	return again
+}
+
+// delegatedChainExpiringAt is delegatedChain("delegate") with an exp claim
+// added to the delegated content itself, so TestAnExpiredDelegatedPayloadIsRejected
+// can drive the closed mandate's own lifetime independently of the root's or
+// the delegating JWT's. checkValidity has to see exp inside the processed
+// delegated payload, which means it has to travel inside the content Delegate
+// blinds and discloses — not bolted onto the delegating JWT's own claims the
+// way delegatedChainWithClaims would add it.
+func delegatedChainExpiringAt(t *testing.T, exp time.Time) *sdjwt.Chain {
+	t.Helper()
+	root := issuedRoot(t)
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err)
+	closed, disclosures, err := blinder.Blind(map[string]any{
+		"vct":           "closed.example",
+		"checkout_hash": "abc",
+		"exp":           exp.Unix(),
+	})
+	require.NoError(t, err)
+
+	chain, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
+		Nonce:    "n-1",
+		Audience: "https://merchant.example",
+		IssuedAt: time.Unix(1_777_326_189, 0),
+	}, closed, disclosures)
+	require.NoError(t, err,
+		"delegation is the mechanism under test; if it cannot be built there is nothing to verify")
+	return chain
 }

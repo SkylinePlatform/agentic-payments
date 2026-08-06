@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -364,8 +365,53 @@ func VerifyChain(c *Chain, opts ChainOptions) ([]map[string]any, error) {
 		return nil, err
 	}
 
-	// Task 5 continues here.
-	return []map[string]any{rootPayload, nil}, nil
+	// Draft §6 step 3.1: the Delegate Payload is the JWT payload for every claim
+	// except _sd_alg, which stays here at the delegating JWT's level.
+	alg, err := hashAlgOf(claims)
+	if err != nil {
+		return nil, err
+	}
+	if len(opts.AllowedHashAlgs) > 0 && !slices.Contains(opts.AllowedHashAlgs, alg) {
+		return nil, fmt.Errorf("%w: %q is not allowed by policy", ErrUnsupportedHashAlg, alg)
+	}
+
+	p, err := newProcessor(alg, c.delegate.disclosures)
+	if err != nil {
+		return nil, err
+	}
+	processed, err := p.process(claims[delegatePayloadClaim])
+	if err != nil {
+		return nil, err
+	}
+	// Every delegated disclosure must have found a home, for the reason
+	// RFC 9901 §7.1 step 5 gives: one that did not is content nobody signed.
+	if err := p.checkAllUsed(); err != nil {
+		return nil, err
+	}
+
+	elements, ok := processed.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%w: %s must be an array, got %T",
+			ErrDelegatePayloadInvalid, delegatePayloadClaim, processed)
+	}
+	if len(elements) != 1 {
+		return nil, fmt.Errorf("%w: %d elements disclosed, draft §6 step 3.2 requires exactly one",
+			ErrDelegatePayloadInvalid, len(elements))
+	}
+	delegated, ok := elements[0].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%w: the delegated element is %T, not an object",
+			ErrDelegatePayloadInvalid, elements[0])
+	}
+
+	// The delegated content carries its own lifetime, and it is not the root's.
+	// An open mandate valid for a day may delegate a closed one valid for a
+	// minute, which is the whole point of the smallest-window guidance.
+	if err := checkValidity(delegated, opts.Clock.Now()); err != nil {
+		return nil, err
+	}
+
+	return []map[string]any{rootPayload, delegated}, nil
 }
 
 // verifyBinding checks that the delegating JWT names the root it was signed
