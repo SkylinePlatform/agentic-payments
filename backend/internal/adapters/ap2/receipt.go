@@ -129,7 +129,7 @@ func VerifyReceipt(token string, verifier authz.Verifier) (generated.Receipt, er
 		return zero, fmt.Errorf("%w: verifying a receipt needs the issuer's key", ErrMisconfigured)
 	}
 
-	claims, err := sdjwt.VerifyJWT(token, joseVerifier{verifier})
+	claims, err := sdjwt.VerifyJWT(token, ReceiptType, joseVerifier{verifier})
 	if err != nil {
 		return zero, err
 	}
@@ -228,12 +228,27 @@ func decodeReceipt(claims map[string]any) (generated.Receipt, error) {
 		}
 	case generated.ReceiptResultError:
 		r.Result = generated.ReceiptResultError
-		code, err := requireString(claims, claimError)
-		if err != nil {
-			return r, fmt.Errorf("%w (a rejection has to name why)", err)
+		if _, ok := claims[claimError]; !ok {
+			return r, fmt.Errorf(
+				"%w: no %s claim, and a rejection that does not name why is not one anybody can act on",
+				ErrMandateMalformed, claimError)
 		}
-		errorCode := generated.ErrorCode(code)
-		r.Error = &errorCode
+		// Through JSON rather than a string cast, so that the enum check the
+		// generator wrote actually runs.
+		//
+		// The receipt's signature says the issuer meant these claims; it says
+		// nothing about whether the issuer's vocabulary is ours. A code outside
+		// the enum reaching the canonical model is the same hole CodeOf was made
+		// total to close, arriving from the other direction — there our mapping
+		// could produce a non-member, here a counterparty hands us one. Either
+		// way #18 assembles a dispute around a reason the vocabulary does not
+		// define, and every consumer switching on ErrorCode falls through
+		// without saying so.
+		var code generated.ErrorCode
+		if err := remarshal(claims, claimError, &code); err != nil {
+			return r, err
+		}
+		r.Error = &code
 	default:
 		return r, fmt.Errorf("%w: %s is %q, which is neither success nor error",
 			ErrMandateMalformed, claimResult, result)

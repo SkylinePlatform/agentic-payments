@@ -37,6 +37,7 @@ func TestEveryFailureHasACode(t *testing.T) {
 		{ap2.ErrWrongMandateType, generated.ErrorCodeMandateVersionUnsupported},
 		{ap2.ErrCheckoutHashMismatch, generated.ErrorCodeCheckoutHashMismatch},
 		{ap2.ErrPaymentBindingMismatch, generated.ErrorCodePaymentBindingMismatch},
+		{ap2.ErrReceiptMismatch, generated.ErrorCodeMandateMalformed},
 		{ap2.ErrBindingUnverifiable, generated.ErrorCodeDisclosureInsufficient},
 	} {
 		t.Run(tc.err.Error(), func(t *testing.T) {
@@ -68,6 +69,7 @@ func TestTheSecuringFormatsFailuresAreNameableToo(t *testing.T) {
 		{sdjwt.ErrUnsupportedHashAlg, generated.ErrorCodeAlgorithmUnsupported},
 		{sdjwt.ErrMalformedSDJWT, generated.ErrorCodeMandateMalformed},
 		{sdjwt.ErrInvalidOptions, generated.ErrorCodeVerifierUnavailable},
+		{sdjwt.ErrUnexpectedType, generated.ErrorCodeRequestMalformed},
 	} {
 		t.Run(tc.err.Error(), func(t *testing.T) {
 			t.Parallel()

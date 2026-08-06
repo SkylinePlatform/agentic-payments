@@ -292,3 +292,69 @@ func decodeSegment(t *testing.T, segment string) string {
 	require.NoError(t, err, "decoding the protected header")
 	return string(raw)
 }
+
+// TestAReceiptMayNotInventAnErrorCode closes the hole from the other side.
+//
+// CodeOf was made total so this adapter could never *produce* a code outside the
+// enum. This is the same hole arriving inwards: a counterparty signs a receipt
+// naming a reason our vocabulary does not define, and a decoder that cast the
+// string straight to ErrorCode would carry it into the canonical model. #18
+// would then assemble a dispute around a reason nothing defines, and every
+// consumer switching on ErrorCode would fall through silently.
+//
+// The signature is genuine in this test. That is the point — the issuer really
+// did mean these claims, and it is the vocabulary that does not match.
+func TestAReceiptMayNotInventAnErrorCode(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	sd := reparse(t, issue(t, f, mandate()))
+	ref, err := sd.SDHash()
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		code any
+	}{
+		{"a reason this vocabulary does not define", "the_agent_seemed_shifty"},
+		{"a plausible near-miss", "checkout_hash_mismatched"},
+		{"not a string at all", 42},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			token, err := sdjwt.SignJWT(t.Context(), ap2.JOSESignerFor(f.signer), ap2.ReceiptType,
+				map[string]any{
+					"iss":          merchantID,
+					"reference":    ref,
+					"mandate_type": "checkout",
+					"result":       "error",
+					"error":        tc.code,
+					"iat":          base.Unix(),
+				})
+			require.NoError(t, err, "signing the receipt")
+
+			_, err = ap2.VerifyReceipt(token, f.verifier)
+			require.ErrorIs(t, err, ap2.ErrMandateMalformed,
+				"a correctly signed receipt is still refused when its reason is not one this vocabulary has")
+		})
+	}
+}
+
+// TestAMandateIsNotAReceipt is the check the typ header exists for, done on the
+// side that matters. Asserting that an issued receipt carries its typ proves
+// nothing on its own — a header nobody reads is decoration.
+//
+// The token below is a real Checkout Mandate, correctly signed by the key doing
+// the verifying. Only the protected header separates it from a receipt.
+func TestAMandateIsNotAReceipt(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	mandateToken := reparse(t, issue(t, f, mandate())).IssuerJWT()
+
+	_, err := ap2.VerifyReceipt(mandateToken, f.verifier)
+	require.Error(t, err, "a mandate presented where a receipt belongs must be refused")
+	assert.Equal(t, generated.ErrorCodeRequestMalformed, ap2.CodeOf(err),
+		"nothing about the securing format failed; the wrong artefact arrived")
+}

@@ -26,7 +26,7 @@ func TestAJWTRoundTripsThroughItsSignature(t *testing.T) {
 	})
 	require.NoError(t, err, "signing")
 
-	claims, err := sdjwt.VerifyJWT(token, key)
+	claims, err := sdjwt.VerifyJWT(token, "receipt+jwt", key)
 	require.NoError(t, err, "verifying a token this key just signed")
 	assert.Equal(t, "air-serbia", claims["iss"])
 	assert.Equal(t, "success", claims["result"])
@@ -80,7 +80,7 @@ func TestAJWTIsRefusedBeforeItsSignatureIsChecked(t *testing.T) {
 		token, err := sdjwt.SignJWT(t.Context(), key, "receipt+jwt", map[string]any{"iss": "x"})
 		require.NoError(t, err)
 
-		_, err = sdjwt.VerifyJWT(token, nil)
+		_, err = sdjwt.VerifyJWT(token, "receipt+jwt", nil)
 		require.ErrorIs(t, err, sdjwt.ErrInvalidOptions,
 			"verifying against no key is a caller mistake, not a bad token")
 	})
@@ -91,7 +91,7 @@ func TestAJWTIsRefusedBeforeItsSignatureIsChecked(t *testing.T) {
 		token, err := sdjwt.SignJWT(t.Context(), key, "receipt+jwt", map[string]any{"iss": "x"})
 		require.NoError(t, err)
 
-		_, err = sdjwt.VerifyJWT(token, otherAlgKey{key})
+		_, err = sdjwt.VerifyJWT(token, "receipt+jwt", otherAlgKey{key})
 		require.ErrorIs(t, err, sdjwt.ErrUnsupportedAlgorithm,
 			"the header's claim about the algorithm is what is being refused")
 	})
@@ -107,7 +107,7 @@ func TestATamperedJWTDoesNotVerify(t *testing.T) {
 	parts := strings.Split(token, ".")
 	require.Len(t, parts, 3, "a compact JWS is three segments")
 
-	_, err = sdjwt.VerifyJWT(parts[0]+"."+parts[1][:len(parts[1])-4]+"AAAA."+parts[2], key)
+	_, err = sdjwt.VerifyJWT(parts[0]+"."+parts[1][:len(parts[1])-4]+"AAAA."+parts[2], "receipt+jwt", key)
 	require.ErrorIs(t, err, sdjwt.ErrSignatureInvalid,
 		"a payload the signature does not cover is the whole thing signatures exist to catch")
 }
@@ -120,4 +120,51 @@ func (otherAlgKey) Algorithm() string { return "ES256" }
 
 func (k otherAlgKey) Verify(signingInput, signature []byte) error {
 	return k.inner.Verify(signingInput, signature)
+}
+
+// TestATokenOfAnotherTypeIsRefused is the check the typ header exists for, and
+// the one that has to happen on the verifying side to be worth anything.
+//
+// Both tokens below are correctly signed by the key doing the verifying. What
+// separates them is a single header field saying which artefact this is — and
+// without that check a caller reading the claims it expected would accept
+// whichever it was handed.
+func TestATokenOfAnotherTypeIsRefused(t *testing.T) {
+	t.Parallel()
+
+	key := newHMACKey("issuer-secret", "issuer-1")
+	claims := map[string]any{"iss": "air-serbia"}
+
+	t.Run("signed as a different artefact", func(t *testing.T) {
+		t.Parallel()
+
+		token, err := sdjwt.SignJWT(t.Context(), key, "mandate+jwt", claims)
+		require.NoError(t, err)
+
+		_, err = sdjwt.VerifyJWT(token, "receipt+jwt", key)
+		require.ErrorIs(t, err, sdjwt.ErrUnexpectedType,
+			"a genuine signature over the wrong artefact is still the wrong artefact")
+	})
+
+	t.Run("signed with no type at all", func(t *testing.T) {
+		t.Parallel()
+
+		token, err := sdjwt.SignJWT(t.Context(), key, "", claims)
+		require.NoError(t, err)
+
+		_, err = sdjwt.VerifyJWT(token, "receipt+jwt", key)
+		require.ErrorIs(t, err, sdjwt.ErrUnexpectedType,
+			"an absent typ says nothing, and saying nothing is not saying the right thing")
+	})
+
+	t.Run("verifying against no type", func(t *testing.T) {
+		t.Parallel()
+
+		token, err := sdjwt.SignJWT(t.Context(), key, "receipt+jwt", claims)
+		require.NoError(t, err)
+
+		_, err = sdjwt.VerifyJWT(token, "", key)
+		require.ErrorIs(t, err, sdjwt.ErrInvalidOptions,
+			"an API where skipping the check looks like not caring is one where the check gets skipped")
+	})
 }

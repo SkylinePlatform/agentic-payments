@@ -33,25 +33,45 @@ func SignJWT(ctx context.Context, signer Signer, typ string, payload any) (strin
 	return signJWT(ctx, signer, typ, payload)
 }
 
-// VerifyJWT checks the signature over a compact JWS and returns its claims.
+// VerifyJWT checks that a compact JWS is the artefact typ names, that its
+// signature holds, and returns its claims.
 //
-// The algorithm in the protected header is checked against the one the key is
-// bound to before the signature is, which is the check rather than an
-// optimisation: a Verifier holding an Ed25519 key handed a header claiming ES256
-// must refuse because the claim is wrong.
+// Two checks, and both are checks rather than courtesies.
+//
+// The algorithm in the protected header is compared against the one the key is
+// bound to before the signature is verified: a Verifier holding an Ed25519 key
+// handed a header claiming ES256 must refuse because the claim is wrong, not
+// because the bytes happen not to verify.
+//
+// typ is required, and it is required rather than optional because an optional
+// one is not a check. Every artefact in a protocol layered on this is a compact
+// JWS signed by the same keys, so what makes a token a receipt rather than a
+// mandate is the header saying so — and a caller that reads the claims it
+// expected and ignores the rest will accept whichever it was handed. Passing an
+// empty typ is refused as a caller mistake for the same reason: an API where
+// skipping the check looks like not caring is one where the check gets skipped.
 //
 // No time claims are examined. There is no Clock parameter because this cannot
 // know what the caller's artefact means by expiry — a receipt has none by
 // design, being a statement about a moment that has already passed, while a
 // token that must not outlive its window is the caller's rule to enforce.
 // Deciding here would be deciding for artefacts this package has never seen.
-func VerifyJWT(token string, v Verifier) (map[string]any, error) {
+func VerifyJWT(token, typ string, v Verifier) (map[string]any, error) {
 	if v == nil {
 		return nil, fmt.Errorf("%w: no verifier", ErrInvalidOptions)
+	}
+	if typ == "" {
+		return nil, fmt.Errorf(
+			"%w: no typ to check the token against, and every artefact here is a JWS signed by the same keys",
+			ErrInvalidOptions)
 	}
 	jwt, err := parseJWT(token)
 	if err != nil {
 		return nil, err
+	}
+	if jwt.header.Typ != typ {
+		return nil, fmt.Errorf("%w: header says %q, expected %q",
+			ErrUnexpectedType, jwt.header.Typ, typ)
 	}
 	if err := jwt.verifyWith(v); err != nil {
 		return nil, err

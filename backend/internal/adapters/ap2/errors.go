@@ -171,6 +171,14 @@ func sdjwtCodeOf(err error) generated.ErrorCode {
 		return ""
 	case is(err, sdjwt.ErrInvalidOptions):
 		return generated.ErrorCodeVerifierUnavailable
+	case is(err, sdjwt.ErrUnexpectedType):
+		// request_malformed rather than mandate_malformed, and the distinction
+		// is the point of having both. A token whose typ names another artefact
+		// parses perfectly and may be correctly signed — nothing about the
+		// securing format failed. What went wrong is that this was sent where
+		// something else was expected, which is the caller getting the call
+		// wrong.
+		return generated.ErrorCodeRequestMalformed
 	case is(err, sdjwt.ErrSignatureInvalid):
 		return generated.ErrorCodeSignatureInvalid
 	case is(err, sdjwt.ErrExpired):

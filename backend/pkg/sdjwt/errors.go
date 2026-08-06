@@ -19,6 +19,16 @@ var (
 	// disclosure that is not base64url.
 	ErrMalformedSDJWT = errors.New("sdjwt: malformed SD-JWT")
 
+	// ErrUnexpectedType means the protected header's typ names a different
+	// artefact from the one being verified.
+	//
+	// Not a malformed token — it may be perfectly well formed and correctly
+	// signed. It is the wrong thing, which is a distinct answer and worth
+	// saying separately: a specification layered on this signs several
+	// artefacts with one key, so "the signature holds" and "this is what I
+	// asked for" are two questions and only typ answers the second.
+	ErrUnexpectedType = errors.New("sdjwt: unexpected token type")
+
 	// ErrMalformedDisclosure means a Disclosure decoded to something that is
 	// not a JSON array of two elements (salt, value) or three (salt, name,
 	// value), or whose salt is not a string.
