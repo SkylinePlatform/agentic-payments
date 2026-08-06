@@ -53,6 +53,14 @@ type Service struct {
 // improve it, summarise it or fill anything in — every field here ends up under
 // the user's signature, so a surface that altered one would be signing something
 // the user was not shown.
+//
+// It also does not check the merchant's signature over Checkout, and that is a
+// deliberate division rather than a gap. The merchant refuses an offer it did
+// not make before any money moves, so a fabricated one cannot become a
+// purchase. What it does mean is that a user can be asked to approve an offer
+// that was never going to be honoured — a wasted decision rather than an
+// exploitable one. Checking it here would be worth doing the moment the surface
+// grows a real screen, and #22 is where that happens.
 type approval struct {
 	// Checkout is the merchant-signed offer this purchase is for.
 	Checkout string `json:"checkout"`

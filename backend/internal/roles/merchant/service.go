@@ -72,9 +72,15 @@ type purchase struct {
 	// Mandate is the closed Checkout Mandate in SD-JWT compact serialisation.
 	Mandate string `json:"mandate"`
 	// Checkout is the merchant's own offer, echoed back. The merchant does not
-	// have to be told this — it could look the offer up — but a mock that
-	// stored every offer it ever made would be modelling a database rather than
-	// a protocol, and the binding is checked by recomputation either way.
+	// have to be told this — it could look the offer up — but a mock that stored
+	// every offer it ever made would be modelling a database rather than a
+	// protocol.
+	//
+	// Echoing it back is safe only because ownOffer checks the merchant's own
+	// signature over it before anything else happens. Recomputing the binding
+	// against whatever arrives here proves the mandate and the document agree;
+	// it says nothing about where the document came from, and on its own would
+	// let a caller name its own price.
 	Checkout string `json:"checkout"`
 }
 

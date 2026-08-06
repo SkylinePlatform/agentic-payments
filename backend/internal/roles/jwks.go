@@ -24,6 +24,15 @@ import (
 // It caches, because a verifier that refetched per request would make its own
 // availability depend on the party it is checking, and would hand anybody who
 // can present a mandate a way to generate traffic.
+//
+// A successful fetch is cached for the life of the process and never
+// invalidated, which is accepted debt rather than an oversight. NewIdentity
+// mints a fresh key on every start, so a counterparty restarted on its own
+// begins signing with a key its peers still hold the predecessor of — and they
+// would reject every legitimate mandate afterwards with a bare
+// signature_invalid, pointing at the mandate rather than at the rotation. It is
+// tolerable here because the demo starts and stops all five roles together;
+// #26 is where a registry replaces this and makes rotation observable.
 type Peer struct {
 	// Base is the counterparty's root, e.g. "http://localhost:8084".
 	Base string

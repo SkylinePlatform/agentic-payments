@@ -47,7 +47,10 @@ func main() {
 
 	failed := false
 	for _, c := range counterparties {
-		if _, err := (&roles.Peer{Base: c.base}).Only(ctx); err != nil {
+		// AwaitPeer rather than a single attempt, for the reason the servers
+		// use it: the roles come up together, so a counterparty that is not
+		// listening yet is the ordinary case and not a verdict.
+		if _, err := roles.AwaitPeer(ctx, c.base); err != nil {
 			fmt.Fprintf(os.Stderr, "  [FAIL] %-13s %s: %v\n", c.role, c.base, err)
 			failed = true
 			continue
