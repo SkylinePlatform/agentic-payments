@@ -9,21 +9,47 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/transport"
 )
 
-// seen captures what the wrapped handler was given.
-type seen struct {
-	id  string
-	ran bool
-}
-
-func (s *seen) ServeHTTP(_ http.ResponseWriter, r *http.Request) {
-	s.ran = true
-	s.id = obs.CorrelationID(r.Context())
+// seenBy returns a mock handler and a reader for the correlation ID the
+// request carried when it arrived.
+//
+// The mock is transport.MockHandler, generated from net/http's Handler — see
+// backend/.mockery.yml. Whether the request reached the handler at all is the
+// question half these tests ask, and it is now testify's call log answering it
+// rather than a bool the double sets and nobody resets.
+//
+// The ID is captured rather than matched on, because mock.MatchedBy would
+// report a mismatch as "unexpected call" — and the useful failure here is the
+// one that prints the ID the handler actually saw.
+//
+// **Every caller must invoke the wrapped handler on the test goroutine**, and
+// two things here depend on it. Once() makes a second call an unexpected one,
+// which testify reports through t.FailNow — legal only from the goroutine
+// running the test, the same rule AGENTS.md states for require. And id is
+// written in Run and read by the returned closure with nothing between them, so
+// a handler called from elsewhere races on it.
+//
+// Neither is a reason to make this concurrency-safe: the middleware under test
+// is synchronous, and a helper that guarded against a caller it does not have
+// would be describing a design nobody chose. It is a reason to say so, because
+// the first test to wrap this in a wg.Go gets both failures at once and neither
+// points here. internal/platform/obs takes the other route, with Maybe() and
+// counts asserted afterwards, because there the collaborator genuinely is
+// called from a background goroutine.
+func seenBy(t *testing.T) (*transport.MockHandler, func() string) {
+	t.Helper()
+	var id string
+	h := transport.NewMockHandler(t)
+	h.EXPECT().ServeHTTP(mock.Anything, mock.Anything).
+		Run(func(_ http.ResponseWriter, r *http.Request) { id = obs.CorrelationID(r.Context()) }).
+		Once()
+	return h, func() string { return id }
 }
 
 func wrapCorrelation(t *testing.T, h http.Handler, opts ...transport.CorrelationOption) http.Handler {
@@ -45,7 +71,7 @@ func fixedEntropy() *bytes.Reader {
 func TestValidHeaderIsAdoptedUnchanged(t *testing.T) {
 	t.Parallel()
 
-	h := &seen{}
+	h, id := seenBy(t)
 	wrapped := wrapCorrelation(t, h, transport.WithEntropy(fixedEntropy()))
 
 	r := httptest.NewRequest(http.MethodPost, "/checkout", nil)
@@ -53,9 +79,7 @@ func TestValidHeaderIsAdoptedUnchanged(t *testing.T) {
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, r)
 
-	if h.id != "upstream-1234" {
-		t.Errorf("handler saw %q, want the inbound value unchanged", h.id)
-	}
+	assert.Equal(t, "upstream-1234", id(), "a hop regenerated the identifier")
 	if got := rec.Header().Get(transport.CorrelationHeader); got != "upstream-1234" {
 		t.Errorf("response echoed %q, want %q", got, "upstream-1234")
 	}
@@ -64,15 +88,13 @@ func TestValidHeaderIsAdoptedUnchanged(t *testing.T) {
 func TestMissingHeaderIsMinted(t *testing.T) {
 	t.Parallel()
 
-	h := &seen{}
+	h, id := seenBy(t)
 	wrapped := wrapCorrelation(t, h, transport.WithEntropy(fixedEntropy()))
 
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/checkout", nil))
 
-	if h.id != "6aQx3Kef" {
-		t.Errorf("handler saw %q, want the minted %q", h.id, "6aQx3Kef")
-	}
+	assert.Equal(t, "6aQx3Kef", id(), "the handler was not given the minted ID")
 	// Echoed, so a caller that sent none learns what it was given — which is
 	// what makes a curl session traceable without reading the collector.
 	if got := rec.Header().Get(transport.CorrelationHeader); got != "6aQx3Kef" {
@@ -99,7 +121,7 @@ func TestInvalidHeaderIsReplacedNotRejected(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			h := &seen{}
+			h, id := seenBy(t)
 			wrapped := wrapCorrelation(t, h, transport.WithEntropy(fixedEntropy()))
 
 			r := httptest.NewRequest(http.MethodPost, "/checkout", nil)
@@ -109,18 +131,10 @@ func TestInvalidHeaderIsReplacedNotRejected(t *testing.T) {
 			rec := httptest.NewRecorder()
 			wrapped.ServeHTTP(rec, r)
 
-			if !h.ran {
-				t.Fatal("the request was rejected; a malformed label must not fail an operation")
-			}
-			if rec.Code != http.StatusOK {
-				t.Errorf("status = %d, want 200", rec.Code)
-			}
-			if h.id != "6aQx3Kef" {
-				t.Errorf("handler saw %q, want a freshly minted ID", h.id)
-			}
-			if h.id == tc.header {
-				t.Error("the invalid value was adopted")
-			}
+			h.AssertNumberOfCalls(t, "ServeHTTP", 1)
+			assert.Equal(t, http.StatusOK, rec.Code,
+				"a malformed label must not fail an operation")
+			assert.Equal(t, "6aQx3Kef", id(), "the invalid value was adopted rather than replaced")
 		})
 	}
 }
@@ -130,20 +144,18 @@ func TestInvalidHeaderIsReplacedNotRejected(t *testing.T) {
 func TestHandlerRunsWhenEntropyFails(t *testing.T) {
 	t.Parallel()
 
-	h := &seen{}
+	h, id := seenBy(t)
 	// An exhausted reader: no bytes available, so minting fails.
 	wrapped := wrapCorrelation(t, h, transport.WithEntropy(bytes.NewReader(nil)))
 
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/checkout", nil))
 
-	if !h.ran {
-		t.Fatal("the request did not reach the handler")
-	}
-	if rec.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200", rec.Code)
-	}
-	assert.Equal(t, "", h.id, "nothing could be minted")
+	// The whole point of the test: an operation must not fail because its
+	// screenshot label could not be generated, so the handler still ran.
+	h.AssertNumberOfCalls(t, "ServeHTTP", 1)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "", id(), "nothing could be minted")
 }
 
 // roundTripFunc lets a test stand in for a transport and observe the request as

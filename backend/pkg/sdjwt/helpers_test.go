@@ -27,10 +27,26 @@ import (
 // The asymmetric half is covered where key material is allowed to live. See
 // internal/platform/crypto, which verifies RFC 9901's own ES256 vector through
 // this package's Verify.
+//
+// None of the doubles in this file is a mock, and none of them is a candidate
+// for one. hmacKey computes a real HMAC-SHA256; a generated mock returning
+// canned bytes would pass every test here while the package computed the wrong
+// signing input, which is the one thing these tests exist to catch.
+// deterministicSalts is the same argument for the golden vectors: the salts are
+// pinned so that blinding the same claims twice produces byte-identical output,
+// and a mock producing "some bytes" makes a golden comparison impossible.
+//
+// The verifiers below are a judgement, not an oversight. They could be
+// expressed as mockery mocks, and they are three lines each that say what they
+// do; nothing about the call site improves by generating them. That mockery is
+// configured in backend/.mockery.yml and names no pkg/ package is deliberate
+// too — pkg/ holds implementations of public standards and has to stay liftable
+// out of this repository, so it takes no dependency on a generator living here.
 
 const testAlg = "HS256"
 
-// hmacKey signs and verifies with one symmetric key.
+// hmacKey signs and verifies with one symmetric key. Real cryptography — see
+// the note above before replacing it with anything.
 type hmacKey struct {
 	secret []byte
 	kid    string

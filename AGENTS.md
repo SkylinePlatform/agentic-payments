@@ -197,8 +197,10 @@ These are enforced, not advisory.
 ```
 contracts/              JSON Schema — single source of truth → Go + TS types
   authz/ identity/ instrument/ evidence/
-  tools/                the generators, in their own Go module
+  tools/                the schema generators, in their own Go module
   codegen.mk
+tools/
+  mockery/              mockery, in a second tool-only module. No Go source
 backend/                ⬅ the Go module root. go.mod lives here, not at the top
   cmd/                  agent, merchant, credprovider, mpp, surface, registry, proxy
                         collector — an eighth binary, and NOT an AP2 role
@@ -318,6 +320,26 @@ The Go generator is pinned in `contracts/tools/go.mod`, deliberately not in
 generates, and keeping it out is what lets `core/` compile against the standard
 library alone.
 
+**Mocks are generated too, and follow the same rules.** `backend/.mockery.yml`
+lists the interfaces mockery generates doubles for; the output is a
+`mocks_test.go` beside each interface, gitignored and rebuilt by `make check`
+like everything else generated here. Nothing new appears in the import graph:
+the file is in the interface's own package and is only compiled for tests, so
+an external test package (`obs_test`, `transport_test`) names it as
+`obs.MockSink` or `transport.MockHandler`, and a shared `internal/mocks`
+package — which would eventually hold a mock of an `internal/collector`
+interface and take `collector-containment` down with it — never has to exist.
+
+mockery is pinned in `tools/mockery/go.mod`, which is a second tool module
+rather than an entry in the first. The precedent's rule is that a generator
+stays out of `backend/go.mod`; where it stops is that `contracts/tools` is the
+module that turns JSON Schema into types, and mockery has nothing to do with
+the schemas. The two also share cobra and pflag, so one build list would let a
+mockery upgrade move the versions the schema generator compiles against.
+`make workspace` does not list it — it holds no Go source, and a workspace
+unifying its build list with `backend/` is exactly what the separate module
+prevents.
+
 ---
 
 ## Conventions
@@ -332,6 +354,20 @@ library alone.
 feat(authz): add open mandate constraint evaluation
 fix(sdjwt): correct disclosure hash ordering
 ```
+
+**Commits are signed.** `main` has `required_signatures` enabled, so one
+unsigned commit anywhere in a branch blocks its pull request — and it blocks it
+as a bare `BLOCKED` status with every check green and no review outstanding,
+which reads like a missing approval or a stale base rather than a missing
+signature. `git log --format='%G? %s'` is what actually answers it: `G` is
+signed, `N` is not, and `E` is a signature made by a key the local keyring does
+not hold, which is what GitHub's own squash-merge commits look like.
+
+`commit.gpgsign` and `user.signingkey` are configured globally and GPG signs
+without prompting, so this only bites work done somewhere that bypasses it — a
+git worktree, a container, a CI runner. **Never work around a signing failure by
+committing unsigned.** It makes the immediate problem disappear and moves the
+cost to whoever tries to merge, who has no signal pointing at the cause.
 
 **Every unit of work has an issue, and every pull request links it.** No
 exceptions, and the small changes are the ones this is for: a documentation
@@ -402,6 +438,31 @@ reconcile against the code for no benefit.
   `assert.Equal` compares types as well as values, so an untyped literal
   against a `uint64` or an `int64` fails where `if got != 1` compiled. Write
   `int64(1)`, or reach for `assert.Zero` when that reads better.
+- **Interaction doubles are generated; doubles that do real work are not.** A
+  double whose job is to record that a collaborator was called, how often and
+  with what belongs in `backend/.mockery.yml` — hand-rolling one produces a
+  different recorder every time, and several of ours needed their own mutex
+  because the emitter and the idempotency middleware call their collaborators
+  from another goroutine.
+
+  A double that *computes* something is a different animal and converting one
+  deletes what its test proves. `pkg/sdjwt`'s `hmacKey` performs real
+  HMAC-SHA256, so it catches a wrong signing input; its `deterministicSalts`
+  pins the salts that make a golden vector reproducible; `clock.Fake` is a
+  clock a test moves. The comments beside all three say so — "finish the
+  conversion" is not a reading anyone should be able to reach.
+
+  Between the two sits the fixture that returns one specific wrong answer, and
+  there uniformity is not the goal: `func (noneSigner) Algorithm() string {
+  return "none" }` is hard to misunderstand and gains nothing from being
+  generated.
+
+  One trap worth knowing before reaching for a stricter expectation: testify's
+  mock calls `t.FailNow()` from whichever goroutine called it, so a `.Once()`
+  that fails inside an HTTP handler is the `require`-off-the-test-goroutine
+  hazard wearing different clothes. Where a test drives the subject from more
+  than one goroutine, make the expectation permissive and assert the call count
+  from the test goroutine instead.
 - Golden test vectors for all mandate construction and verification. `make
   vectors` runs `-run 'TestGolden'` over `internal/adapters/...` and `pkg/...`
   — a golden test named or placed outside those is not in the conformance
@@ -420,7 +481,8 @@ make lint             # golangci-lint including the depguard architecture rules
 make fmt              # apply formatters
 make workspace        # write the untracked go.work an editor at the root needs
 make vectors          # conformance suite against golden vectors
-make generate         # regenerate Go and TS types from contracts/  ⟵ needs Node
+make generate         # regenerate Go and TS types from contracts/, and the mocks ⟵ needs Node
+make generate-mocks   # the mockery half on its own
 make generate-ts      # the TypeScript half on its own              ⟵ needs Node
 make generate-verify  # prove generation is reproducible and touches nothing tracked ⟵ needs Node
 make diagrams         # export inline mermaid from docs/ to SVG     ⟵ needs Node
@@ -432,9 +494,12 @@ make frontend-check   # type-check and build the frontend            ⟵ needs N
 **`make check` needs only Go.** Node is required by `make generate`,
 `make generate-ts`, `make diagrams`, `make demo` and the two frontend targets —
 `diagrams` pulls a headless Chromium, which is exactly why it was kept out of
-`check`. `check` regenerates the *Go* half of the canonical model before linting — testing a tree whose
-generated half came from an older schema checks the wrong thing — but it stops
-there, so work that touches neither the frontend nor a diagram never needs npm.
+`check`. `check` regenerates the *Go* half of the canonical model and the mocks
+before linting — testing a tree whose generated half came from an older schema
+checks the wrong thing, and the mocks are what the tests are written against —
+but it stops there, so work that touches neither the frontend nor a diagram
+never needs npm. mockery is a Go program like the schema generator, so neither
+half of that generation costs a Node toolchain.
 
 **`make check` is no longer the whole of CI.** It is the local gate; the
 *Build and test*, *Lint* and *Contracts* jobs in `.github/workflows/ci.yml`
