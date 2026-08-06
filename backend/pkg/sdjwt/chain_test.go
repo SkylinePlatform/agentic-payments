@@ -3,6 +3,7 @@ package sdjwt_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -141,16 +142,91 @@ func TestAPlainKeyBindingTypeIsRefusedAsADelegation(t *testing.T) {
 	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid)
 }
 
-func TestVerifyChainRefusesOptionsItCannotApply(t *testing.T) {
-	chain := delegatedChain(t, "delegate")
+func TestADelegationValidForAnUnendorsedKeyIsRejected(t *testing.T) {
+	// The other side of TestADelegationSignedByAnUnendorsedKeyIsRejected: here
+	// the delegating JWT is signed correctly by "delegate", a key that is
+	// perfectly able to sign — it simply is not the one this particular root's
+	// cnf names. Endorsement is a property of the root, not of whether a
+	// signature happens to verify against some key.
+	root := issuedRootEndorsing(t, "other-agent", false)
+	chain := delegatedChainFromRoot(t, root, "", "delegate")
 
-	opts := chainOptions(t)
-	opts.Nonce = ""
-
-	_, err := sdjwt.VerifyChain(chain, opts)
+	_, err := sdjwt.VerifyChain(chain, chainOptions(t))
 	require.Error(t, err,
-		`an empty nonce would make the comparison "" == "", so the check would pass while proving nothing`)
-	assert.ErrorIs(t, err, sdjwt.ErrInvalidOptions)
+		"the root's cnf, not the delegate's own ability to produce a valid signature, decides who was endorsed")
+	assert.ErrorIs(t, err, sdjwt.ErrSignatureInvalid)
+}
+
+func TestACnfDisclosedRatherThanClearIsStillResolved(t *testing.T) {
+	// cnf here is not in the Issuer-signed JWT at all — only its digest is,
+	// with the claim itself carried as a Disclosure. resolveHolderKey has to
+	// read it from the *processed* root payload, after Verify puts disclosed
+	// claims back, or this fails exactly like an absent cnf would.
+	root := issuedRootEndorsing(t, "delegate", true)
+	chain := delegatedChainFromRoot(t, root, "", "delegate")
+
+	_, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	require.NoError(t, err,
+		"a selectively disclosed cnf is still the delegate's endorsement and has to resolve the same as a clear one")
+}
+
+func TestVerifyChainRefusesOptionsItCannotApply(t *testing.T) {
+	validChain := delegatedChain(t, "delegate")
+
+	tests := []struct {
+		name     string
+		nilChain bool
+		mutate   func(*sdjwt.ChainOptions)
+		reason   string
+	}{
+		{
+			name:     "no chain",
+			nilChain: true,
+			reason:   "a nil chain has no root and no delegation to check anything against",
+		},
+		{
+			name:   "no issuer verifier",
+			mutate: func(o *sdjwt.ChainOptions) { o.Issuer = nil },
+			reason: "without an issuer verifier the root's signature can never be checked, so proceeding would accept an unverified root",
+		},
+		{
+			name:   "no delegate key resolver",
+			mutate: func(o *sdjwt.ChainOptions) { o.DelegateKey = nil },
+			reason: "the delegation is the key binding, so a policy that could skip it would accept a delegated authority without checking it was delegated to the presenter",
+		},
+		{
+			name:   "no clock",
+			mutate: func(o *sdjwt.ChainOptions) { o.Clock = nil },
+			reason: "exp and nbf in the root's processed payload are only checked when a clock is supplied, so skipping this would silently accept an expired root",
+		},
+		{
+			name:   "no nonce",
+			mutate: func(o *sdjwt.ChainOptions) { o.Nonce = "" },
+			reason: `an empty nonce would make the comparison "" == "", so the check would pass while proving nothing`,
+		},
+		{
+			name:   "no audience",
+			mutate: func(o *sdjwt.ChainOptions) { o.Audience = "" },
+			reason: `an empty audience would make the comparison "" == "", so a delegation made for another verifier would pass here too`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			chain := validChain
+			if tc.nilChain {
+				chain = nil
+			}
+			opts := chainOptions(t)
+			if tc.mutate != nil {
+				tc.mutate(&opts)
+			}
+
+			_, err := sdjwt.VerifyChain(chain, opts)
+			require.Error(t, err, tc.reason)
+			assert.ErrorIs(t, err, sdjwt.ErrInvalidOptions)
+		})
+	}
 }
 
 // delegatedChain is issuedRoot delegated to the named key. The root always
@@ -165,11 +241,20 @@ func delegatedChain(t *testing.T, signingKey string) *sdjwt.Chain {
 // An empty typ means the correct one.
 func delegatedChainWithType(t *testing.T, typ, signingKey string) *sdjwt.Chain {
 	t.Helper()
+	return delegatedChainFromRoot(t, issuedRoot(t), typ, signingKey)
+}
+
+// delegatedChainFromRoot is delegatedChainWithType generalised over the root,
+// so a test can vary what the root's cnf endorses independently of which key
+// signs the delegation — the two are different questions, and
+// TestADelegationValidForAnUnendorsedKeyIsRejected needs to hold one fixed
+// while varying the other.
+func delegatedChainFromRoot(t *testing.T, root *sdjwt.SDJWT, typ, signingKey string) *sdjwt.Chain {
+	t.Helper()
 	// Build with Delegate, then re-sign the delegating JWT with the requested
 	// typ and key. Reaching through the wire format rather than adding a test
 	// hook keeps the production path the only way a chain is built.
 
-	root := issuedRoot(t)
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
 	require.NoError(t, err)
 	closed, disclosures, err := blinder.Blind(map[string]any{
@@ -234,33 +319,72 @@ func delegatedChainWithType(t *testing.T, typ, signingKey string) *sdjwt.Chain {
 func chainOptions(t *testing.T) sdjwt.ChainOptions {
 	t.Helper()
 	return sdjwt.ChainOptions{
-		Issuer:   newHMACKey("issuer", "issuer"),
-		Nonce:    "n-1",
-		Audience: "https://merchant.example",
-		Clock:    fixedClock(time.Unix(1_777_326_200, 0)),
-		DelegateKey: func(json.RawMessage) (sdjwt.Verifier, error) {
-			// Resolving cnf to a key for real is the caller's job and a
-			// different one — see the note on Options.HolderKey. This answers
-			// with the endorsed key regardless of what cnf says, so that the
-			// tests exercise the chain rather than a JWK parser.
-			return newHMACKey("delegate", "delegate"), nil
-		},
+		Issuer:      newHMACKey("issuer", "issuer"),
+		Nonce:       "n-1",
+		Audience:    "https://merchant.example",
+		Clock:       fixedClock(time.Unix(1_777_326_200, 0)),
+		DelegateKey: cnfToHMACKey,
 	}
 }
 
-// issuedRoot is a signed SD-JWT carrying a cnf claim, standing in for the
-// user-signed open mandate that a delegation hangs off.
+// cnfToHMACKey turns a {"jwk":{"kty":"oct","k":...}} cnf into the hmacKey
+// named by k.
+//
+// Resolving cnf to a key for real, from what is actually handed to it, is the
+// point. A resolver that ignored the argument and answered with a constant
+// would pass every test here even if VerifyChain stopped reading the root's
+// cnf entirely — draft §6 step 3.1 is that the cnf of the preceding
+// component *is* the issuer key for the next hop, and a fixture that does not
+// observe cnf cannot prove that step ran.
+func cnfToHMACKey(cnf json.RawMessage) (sdjwt.Verifier, error) {
+	var wrapped struct {
+		JWK struct {
+			K string `json:"k"`
+		} `json:"jwk"`
+	}
+	if err := json.Unmarshal(cnf, &wrapped); err != nil {
+		return nil, fmt.Errorf("cnf: %w", err)
+	}
+	if wrapped.JWK.K == "" {
+		return nil, fmt.Errorf("cnf: no jwk.k")
+	}
+	return newHMACKey(wrapped.JWK.K, wrapped.JWK.K), nil
+}
+
+// issuedRoot is a signed SD-JWT carrying a cnf claim in the clear, endorsing
+// "delegate" — standing in for the user-signed open mandate that a
+// delegation hangs off.
 func issuedRoot(t *testing.T) *sdjwt.SDJWT {
+	t.Helper()
+	return issuedRootEndorsing(t, "delegate", false)
+}
+
+// issuedRootEndorsing is issuedRoot generalised over which key the cnf claim
+// names and whether cnf itself travels as a disclosure rather than in the
+// clear.
+//
+// discloseCnf exists to exercise resolveHolderKey's "processed payload, not
+// raw" half from this side of the package: with it true, cnf is not present
+// in the Issuer-signed JWT at all, only a digest is, so a VerifyChain that
+// resolved the delegate key before disclosures were put back would find no
+// cnf claim and fail — the same reasoning resolveHolderKey's own comment
+// gives.
+func issuedRootEndorsing(t *testing.T, key string, discloseCnf bool) *sdjwt.SDJWT {
 	t.Helper()
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
 	if !assert.NoError(t, err) {
 		return nil
 	}
-	payload, disclosures, err := blinder.Blind(map[string]any{
+	claims := map[string]any{
 		"vct": "open.example",
-		"cnf": map[string]any{"jwk": map[string]any{"kty": "oct", "k": "delegate"}},
-	})
+		"cnf": map[string]any{"jwk": map[string]any{"kty": "oct", "k": key}},
+	}
+	var paths []string
+	if discloseCnf {
+		paths = []string{"cnf"}
+	}
+	payload, disclosures, err := blinder.Blind(claims, paths...)
 	if !assert.NoError(t, err) {
 		return nil
 	}
