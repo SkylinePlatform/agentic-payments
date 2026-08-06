@@ -84,8 +84,11 @@ func newSalts() *strings.Reader {
 	return strings.NewReader(strings.Repeat("0123456789abcdef", 64))
 }
 
-func mandate() generated.CheckoutMandate {
-	checkout := merchantCheckout
+func mandate() generated.CheckoutMandate { return checkoutFor(merchantCheckout) }
+
+// checkoutFor builds a Checkout Mandate for a named document, so that a test
+// can put two different purchases in play at once.
+func checkoutFor(checkout string) generated.CheckoutMandate {
 	return generated.CheckoutMandate{
 		Checkout:  &checkout,
 		IssuedAt:  &issued,
@@ -179,7 +182,7 @@ func TestAMandateMayNotVouchForItsOwnBinding(t *testing.T) {
 		"vct":           ap2.VCTCheckoutClosed,
 		"checkout_jwt":  expensive,  // what the merchant is shown
 		"checkout_hash": honestHash, // what the user authorised
-	})
+	}, "checkout_jwt")
 
 	_, err = ap2.VerifyCheckout(reparse(t, sd), f.options())
 	require.ErrorIs(t, err, ap2.ErrCheckoutHashMismatch,
@@ -309,10 +312,14 @@ func assertMisconfigured(t *testing.T, err error) {
 // correctly refuse to do. Verification has to refuse what a hostile or an older
 // issuer can produce, not only what this package produces — and every
 // interesting failure here is one IssueCheckout cannot be talked into making.
-func issueClaims(t *testing.T, f fixture, claims map[string]any) *sdjwt.SDJWT {
+// blind names the claims to withhold, and is variadic because the two mandates
+// do not agree on what is withholdable: a Checkout Mandate hides checkout_jwt,
+// a Payment Mandate hides risk_data or nothing at all. The Blinder refuses a
+// path it cannot find, so this cannot be hardcoded to either.
+func issueClaims(t *testing.T, f fixture, claims map[string]any, blind ...string) *sdjwt.SDJWT {
 	t.Helper()
 
-	payload, disclosures, err := f.blinder.Blind(claims, "checkout_jwt")
+	payload, disclosures, err := f.blinder.Blind(claims, blind...)
 	require.NoError(t, err, "blinding")
 
 	sd, err := sdjwt.Issue(t.Context(), ap2.JOSESignerFor(f.signer), payload, disclosures)
@@ -332,5 +339,5 @@ func issueWithVCT(t *testing.T, f fixture, vct any) *sdjwt.SDJWT {
 		"vct":           vct,
 		"checkout_jwt":  merchantCheckout,
 		"checkout_hash": hash,
-	})
+	}, "checkout_jwt")
 }

@@ -55,6 +55,17 @@ var (
 	// a different purchase from the one being presented.
 	ErrCheckoutHashMismatch = errors.New("ap2: checkout hash mismatch")
 
+	// ErrPaymentBindingMismatch means a Checkout Mandate and a Payment Mandate
+	// name different checkouts. Authorisation to buy and authorisation to pay
+	// were given for two different purchases, which is the pairing the shared
+	// checkout_hash exists to make detectable.
+	//
+	// Separate from ErrCheckoutHashMismatch, which is what a single mandate
+	// gets when it disagrees with the document it was checked against. This one
+	// says nothing about either mandate on its own — both may be perfectly
+	// valid — only that they do not belong together.
+	ErrPaymentBindingMismatch = errors.New("ap2: payment and checkout mandates name different checkouts")
+
 	// ErrBindingUnverifiable means the binding could be neither confirmed nor
 	// refuted: the Checkout JWT was withheld from the presentation and the
 	// verifier was given no copy of its own.
@@ -69,17 +80,65 @@ var (
 	ErrBindingUnverifiable = errors.New("ap2: checkout binding cannot be verified")
 )
 
+// adapterCodes is the canonical code each of this package's failures carries
+// into a rejection receipt.
+//
+// A table rather than a switch, and directly below the sentinels rather than in
+// another file, because the property worth having is that a failure declared
+// with no code is visible at a glance. A switch in a second file was what this
+// comment used to claim and did not deliver.
+//
+// Order matters only in that the first match wins, and no error here wraps
+// another, so it does not.
+var adapterCodes = []struct {
+	err  error
+	code generated.ErrorCode
+}{
+	{ErrMisconfigured, generated.ErrorCodeVerifierUnavailable},
+	{ErrMandateMalformed, generated.ErrorCodeMandateMalformed},
+	{ErrUnsupportedVersion, generated.ErrorCodeMandateVersionUnsupported},
+	{ErrWrongMandateType, generated.ErrorCodeMandateVersionUnsupported},
+	{ErrCheckoutHashMismatch, generated.ErrorCodeCheckoutHashMismatch},
+	{ErrPaymentBindingMismatch, generated.ErrorCodePaymentBindingMismatch},
+	{ErrBindingUnverifiable, generated.ErrorCodeDisclosureInsufficient},
+}
+
+// codeFor maps this package's own failures.
+func codeFor(err error) generated.ErrorCode {
+	for _, entry := range adapterCodes {
+		if is(err, entry.err) {
+			return entry.code
+		}
+	}
+	return ""
+}
+
 // CodeOf maps a verification failure to the canonical error code a rejection
 // receipt and an RFC 9457 response carry.
 //
 // Failures raised by pkg/sdjwt travel through here too, because a caller
 // verifying an AP2 mandate should not have to know which layer refused it in
 // order to answer with a receipt.
+//
+// A non-nil error never yields the empty string. Empty is not a member of the
+// ErrorCode enum, so it is not a code a receipt or a Problem Details response
+// can carry — it is a hole that reaches the transport and becomes a 500 naming
+// nothing. An unmapped failure is therefore reported as verifier_unavailable,
+// which is both a valid code and the true one: the verifier refused for a reason
+// of its own that it cannot name. The mapping gap is still a bug, and
+// TestEveryFailureHasACode is what fails on it — but it fails in this package's
+// tests rather than in a counterparty's dispute.
 func CodeOf(err error) generated.ErrorCode {
+	if err == nil {
+		return ""
+	}
 	if code := codeFor(err); code != "" {
 		return code
 	}
-	return sdjwtCodeOf(err)
+	if code := sdjwtCodeOf(err); code != "" {
+		return code
+	}
+	return generated.ErrorCodeVerifierUnavailable
 }
 
 // sdjwtCodeOf maps the securing format's failures. The codes are mostly the

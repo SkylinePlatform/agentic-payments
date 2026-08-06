@@ -40,6 +40,20 @@ Concretely, these live in the adapter and never appear here:
 | `_sd`, `_sd_alg`, `~` disclosures | SD-JWT serialisation. |
 | `transaction_id` on the Payment Mandate | AP2's name for what the spec itself defines as the hash of the checkout — the same value the Checkout Mandate calls `checkout_hash`. One domain fact, so one name here: `checkout_hash`. |
 
+The Payment Mandate's other claims were checked against the specification's
+per-mandate page rather than assumed, and the answer is worth recording because
+it is *no* mapping: `payee`, `payment_amount`, `payment_instrument`,
+`execution_date` and `risk_data` are AP2's own names, and its `Merchant`,
+`Amount` and `PaymentInstrument` objects match ours field for field, minor units
+included. `transaction_id` is the only rename in the whole mandate. A table
+listing the others would suggest a translation that does not happen.
+
+Two AP2 claims have no canonical field at all. `pisp` names the regulated
+Payment Initiation Service Provider on an account-to-account leg; there is no
+open-banking leg here, and it is optional, so adding it later is additive.
+`risk_data` **is** carried — see below, where it is also the one place our
+disclosability deliberately departs from AP2's.
+
 ## Selective disclosure
 
 SD-JWT needs to know which fields may be withheld from a verifier that does not
@@ -65,6 +79,25 @@ no selective disclosure and ignores the annotation entirely.
 the list the schema declares rather than a hand-maintained copy. The failure
 mode of that copy drifting is silent: disclose everything, pass every test,
 defeat the point of using SD-JWT at all.
+
+### Where this departs from AP2, and why it may
+
+AP2's schema tables mark **nothing** in the closed Payment Mandate selectively
+disclosable. `payment_mandate.json` marks `risk_data` withholdable anyway.
+
+That is deliberate and it is the reason these annotations are stated as domain
+facts rather than copied from a protocol table. AP2 says what its wire format
+*permits*; `x-disclosable` says what our model considers *nobody else's
+business*. `risk_data` is the only claim in that mandate about the user rather
+than the purchase — device and behavioural signals the Trusted Surface collected
+— and the mandate is read by the Credential Provider, the Network and the
+Merchant Payment Processor. A merchant reconciling a payment has no business
+reading a device fingerprint.
+
+Nothing on the wire is lost by the divergence, which is what makes it safe: a
+verifier that needs the signals is sent the disclosure, and one that does not
+never sees them. A protocol without selective disclosure ignores the annotation
+and carries the field, exactly as it does for every other one.
 
 ## Layout
 

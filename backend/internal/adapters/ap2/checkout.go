@@ -2,62 +2,12 @@ package ap2
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
-
-// AP2's claim names for the closed Checkout Mandate.
-//
-// They are here and nowhere else, because this is the boundary they exist at.
-// The canonical model calls the merchant's document `checkout` and its
-// timestamps `issued_at` and `expires_at`; AP2 calls them `checkout_jwt`, `iat`
-// and `exp`, the last two as epoch seconds. Neither naming is more correct —
-// contracts/README.md records why the difference is an encoding detail and
-// belongs on this side of the line rather than in the schema.
-const (
-	claimCheckoutJWT  = "checkout_jwt"
-	claimCheckoutHash = "checkout_hash"
-	claimIssuedAt     = "iat"
-	claimExpiresAt    = "exp"
-)
-
-// wireName maps a canonical field path to the AP2 claim that carries it.
-//
-// It exists for one job that is easy to miss: generated.Disclosable answers in
-// canonical names, and the Blinder blinds the wire payload. Handing it
-// "checkout" would silently blind nothing at all — there is no such claim on
-// the wire — and the mandate would be issued with the merchant's document fully
-// visible, having declared it withholdable. A missing entry is therefore a
-// privacy failure that no test of the happy path would catch, which is why
-// blindPaths refuses an unmapped path rather than passing it through.
-var wireName = map[string]string{
-	"checkout":      claimCheckoutJWT,
-	"checkout_hash": claimCheckoutHash,
-	"issued_at":     claimIssuedAt,
-	"expires_at":    claimExpiresAt,
-}
-
-// blindPaths translates the canonical withholdable paths of a type into the
-// wire paths the Blinder takes.
-func blindPaths(typeName string) ([]string, error) {
-	canonical := generated.Disclosable(typeName)
-	out := make([]string, 0, len(canonical))
-	for _, path := range canonical {
-		wire, ok := wireName[path]
-		if !ok {
-			return nil, fmt.Errorf(
-				"%w: %s declares %q withholdable and this adapter has no wire name for it",
-				ErrMandateMalformed, typeName, path)
-		}
-		out = append(out, wire)
-	}
-	return out, nil
-}
 
 // IssueCheckout builds a closed Checkout Mandate and signs it as an SD-JWT.
 //
@@ -99,17 +49,9 @@ func IssueCheckout(
 			ErrMandateMalformed)
 	}
 
-	// The digest must use the algorithm the Blinder will write into _sd_alg,
-	// so it is taken from the Blinder rather than chosen here.
-	hash, err := checkoutHash(blinder.HashAlg(), *m.Checkout)
-	if err != nil {
-		return nil, err
-	}
-
 	claims := map[string]any{
-		vctClaim:          closedCheckout.vct,
-		claimCheckoutJWT:  *m.Checkout,
-		claimCheckoutHash: hash,
+		vctClaim:         closedCheckout.vct,
+		claimCheckoutJWT: *m.Checkout,
 	}
 	if m.IssuedAt != nil {
 		claims[claimIssuedAt] = m.IssuedAt.Unix()
@@ -118,10 +60,24 @@ func IssueCheckout(
 		claims[claimExpiresAt] = m.ExpiresAt.Unix()
 	}
 
-	paths, err := blindPaths("CheckoutMandate")
+	declared, err := blindPaths("CheckoutMandate")
 	if err != nil {
 		return nil, err
 	}
+	paths := presentPaths(claims, declared)
+
+	// The digest must use the algorithm a verifier will read out of _sd_alg,
+	// which is the Blinder's only when the payload ends up carrying digests —
+	// see bindingAlg. checkout_jwt is required above and withholdable, so this
+	// mandate always blinds something and always takes the Blinder's algorithm.
+	// It goes through bindingAlg anyway so that stays a fact rather than a
+	// coincidence nobody would notice losing.
+	hash, err := checkoutHash(bindingAlg(blinder, len(paths) > 0), *m.Checkout)
+	if err != nil {
+		return nil, err
+	}
+	claims[claimCheckoutHash] = hash
+
 	payload, disclosures, err := blinder.Blind(claims, paths...)
 	if err != nil {
 		return nil, err
@@ -247,80 +203,17 @@ func decodeCheckout(claims map[string]any) (generated.CheckoutMandate, error) {
 	}
 	m.CheckoutHash = hash
 
-	if raw, ok := claims[claimCheckoutJWT]; ok {
-		jwt, ok := raw.(string)
-		if !ok {
-			return m, fmt.Errorf("%w: %s must be a string, got %T",
-				ErrMandateMalformed, claimCheckoutJWT, raw)
-		}
-		m.Checkout = &jwt
+	// checkout_jwt is withholdable, so its absence is a presentation decision
+	// rather than a malformed mandate. VerifyCheckout decides what to do about
+	// it; decoding only reports what arrived.
+	jwt, err := optionalString(claims, claimCheckoutJWT)
+	if err != nil {
+		return m, err
 	}
+	m.Checkout = jwt
 
-	for claim, dst := range map[string]**time.Time{
-		claimIssuedAt:  &m.IssuedAt,
-		claimExpiresAt: &m.ExpiresAt,
-	} {
-		raw, ok := claims[claim]
-		if !ok {
-			continue
-		}
-		secs, err := epochSeconds(claim, raw)
-		if err != nil {
-			return m, err
-		}
-		t := time.Unix(secs, 0).UTC()
-		*dst = &t
+	if err := timestamps(claims, &m.IssuedAt, &m.ExpiresAt); err != nil {
+		return m, err
 	}
 	return m, nil
-}
-
-func requireString(claims map[string]any, name string) (string, error) {
-	raw, ok := claims[name]
-	if !ok {
-		return "", fmt.Errorf("%w: no %s claim", ErrMandateMalformed, name)
-	}
-	s, ok := raw.(string)
-	if !ok {
-		return "", fmt.Errorf("%w: %s must be a string, got %T", ErrMandateMalformed, name, raw)
-	}
-	if s == "" {
-		return "", fmt.Errorf("%w: %s is empty", ErrMandateMalformed, name)
-	}
-	return s, nil
-}
-
-// epochSeconds reads a NumericDate.
-//
-// pkg/sdjwt decodes with UseNumber, so a JSON number arrives as json.Number
-// and not as a float64 — which matters beyond tidiness. A float64 silently
-// loses precision above 2^53, and an exp that decodes to a different second
-// from the one that was signed is an expiry check answering about a different
-// instant. json.Number.Int64 refuses a fractional or oversized value outright,
-// so the refusal happens here rather than being carried forward as a wrong
-// answer. The other cases are for payloads this package constructs itself,
-// which never pass through a JSON decoder.
-func epochSeconds(name string, raw any) (int64, error) {
-	malformed := func(format string, args ...any) (int64, error) {
-		return 0, fmt.Errorf("%w: %s "+format, append([]any{ErrMandateMalformed, name}, args...)...)
-	}
-	switch v := raw.(type) {
-	case json.Number:
-		secs, err := v.Int64()
-		if err != nil {
-			return malformed("is %s, not a whole number of seconds in range", v.String())
-		}
-		return secs, nil
-	case float64:
-		secs := int64(v)
-		if float64(secs) != v {
-			return malformed("is %v, not a whole number of seconds", v)
-		}
-		return secs, nil
-	case int64:
-		return v, nil
-	case int:
-		return int64(v), nil
-	default:
-		return malformed("must be a number, got %T", raw)
-	}
 }

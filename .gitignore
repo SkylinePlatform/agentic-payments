@@ -58,3 +58,7 @@ site/
 
 # Subagent-driven-development scratch: ledgers, task briefs, review packages.
 .superpowers/
+
+# Worktrees created by background agents. Ephemeral, and each one is its own
+# git repository — committing them would nest a checkout inside the checkout.
+.claude/worktrees/

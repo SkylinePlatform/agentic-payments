@@ -368,6 +368,27 @@ the adapter maps it; `../../contracts/README.md` records the choice.
 A Payment Mandate bound to a different checkout must be rejected. That is the
 binding doing its job, and issue #6 makes it a test.
 
+**A fifth trap sits underneath the first one: `_sd_alg` is often absent.**
+RFC 9901 §4.1.1 makes the claim optional and defines its absence as `sha-256`,
+and an SD-JWT implementation writes it only when the payload actually carries
+digests — correctly, because a payload with no digests says nothing about how
+digests are computed.
+
+That is invisible until something puts a digest in a payload for a reason
+unrelated to selective disclosure, and `checkout_hash` is exactly that. A
+Checkout Mandate never notices, because `checkout_jwt` is withholdable and the
+document is required at issuance, so the mandate always blinds something. A
+closed Payment Mandate notices immediately: nothing in it has to be withheld, so
+the ordinary mandate blinds nothing and publishes no `_sd_alg`.
+
+An issuer that hashed under its own configured algorithm anyway produces a
+mandate that fails its own binding check — hashed with `sha-384`, recomputed by
+the verifier under the `sha-256` default, refused as `checkout_hash_mismatch`.
+The rejection says the agent substituted the purchase. The truth is that the two
+sides disagreed about a default. **Compute `checkout_hash` under the algorithm a
+verifier will observe**, which is the issuer's only when the payload will carry
+digests at all.
+
 ## Constraints
 
 Constraints are an AP2 **extension point**. The specification does not define a

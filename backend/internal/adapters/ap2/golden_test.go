@@ -117,3 +117,37 @@ func TestGoldenIssuedMandateBindsTheVector(t *testing.T) {
 	assert.Equal(t, v.CheckoutHash["sha-256"], got.CheckoutHash,
 		"the issued mandate must bind the same digest the vector publishes")
 }
+
+// TestGoldenBothMandatesBindOneDigest is the fact issue #6 rests on, and the
+// one a second implementation has to reproduce to interoperate at all.
+//
+// The Checkout Mandate says the user authorised this purchase and the Payment
+// Mandate says the agent may pay for it. Nothing structural connects the two
+// documents — they are separately signed, separately verified, and read by
+// different parties. The only thing making them one transaction is that both
+// carry the same digest of the merchant's Checkout JWT, under two different
+// claim names: checkout_hash on one, transaction_id on the other.
+//
+// An implementation that reproduced one mandate and not the other, or that
+// spelled the payment claim checkout_hash on the wire, would pass every test it
+// wrote for itself and pair with nobody.
+func TestGoldenBothMandatesBindOneDigest(t *testing.T) {
+	t.Parallel()
+
+	v := loadVectors(t)
+	f := newFixture(t)
+
+	checkout, err := ap2.VerifyCheckout(reparse(t, issue(t, f, mandate())), f.options())
+	require.NoError(t, err)
+
+	payment, err := ap2.VerifyPayment(
+		reparse(t, issuePayment(t, f, payment(), merchantCheckout)),
+		ap2.PaymentOptions{Issuer: f.verifier, Clock: f.clock},
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, v.CheckoutHash["sha-256"], payment.CheckoutHash,
+		"the Payment Mandate must bind the published digest, not merely a self-consistent one")
+	assert.Equal(t, checkout.CheckoutHash, payment.CheckoutHash,
+		"one purchase, one digest — this equality is the entire binding")
+}

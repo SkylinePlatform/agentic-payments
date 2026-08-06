@@ -1,10 +1,6 @@
 package ap2
 
-import (
-	"fmt"
-
-	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
-)
+import "fmt"
 
 // The vct values AP2 v0.2 defines. These are the SD-JWT credential type strings
 // (RFC 9901 §3.2.2.2), and a verifier MUST match the exact string including the
@@ -86,26 +82,4 @@ func requireVCT(claims map[string]any, want mandateType) error {
 	// suffix exists to make refusable.
 	return fmt.Errorf("%w: %s is %q, this verifier implements %q",
 		ErrUnsupportedVersion, vctClaim, got, want.vct)
-}
-
-// codeFor maps this package's failures to the canonical error code a rejection
-// receipt carries. Kept beside the errors themselves so that adding one
-// without a code is visibly incomplete.
-func codeFor(err error) generated.ErrorCode {
-	switch {
-	case err == nil:
-		return ""
-	case is(err, ErrMisconfigured):
-		return generated.ErrorCodeVerifierUnavailable
-	case is(err, ErrUnsupportedVersion), is(err, ErrWrongMandateType):
-		return generated.ErrorCodeMandateVersionUnsupported
-	case is(err, ErrCheckoutHashMismatch):
-		return generated.ErrorCodeCheckoutHashMismatch
-	case is(err, ErrBindingUnverifiable):
-		return generated.ErrorCodeDisclosureInsufficient
-	case is(err, ErrMandateMalformed):
-		return generated.ErrorCodeMandateMalformed
-	default:
-		return ""
-	}
 }
