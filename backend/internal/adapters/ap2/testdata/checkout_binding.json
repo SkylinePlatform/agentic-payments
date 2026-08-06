@@ -17,6 +17,13 @@
     "sha-256 passes the first row and fails the other two, reporting a hash",
     "mismatch — which reads as tampering rather than as the bug it is.",
     "",
+    "One digest, two claim names. The Checkout Mandate carries it as",
+    "checkout_hash and the Payment Mandate as transaction_id — AP2 names the",
+    "payment claim differently while defining it as the same hash of the same",
+    "checkout. The values below are therefore vectors for both mandates, and",
+    "an implementation that reproduces them under only one name has not",
+    "reproduced the binding that links the two.",
+    "",
     "These are reproducible by anyone: printf the checkout_jwt value into",
     "sha256sum and base64url-encode the raw digest."
   ],

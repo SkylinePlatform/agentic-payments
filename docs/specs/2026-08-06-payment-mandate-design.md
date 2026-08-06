@@ -153,6 +153,36 @@ an algorithm difference separately, with `ErrBindingUnverifiable`
 a message saying the two digests are not comparable and both should be
 recomputed against the document instead.
 
+## The trap this work actually found
+
+`_sd_alg` is written into the payload **only when the payload carries digests**.
+That is correct of RFC 9901 — a payload with no digests says nothing about how
+digests are computed — and it is invisible until something else puts a digest in
+a payload for an unrelated reason. `checkout_hash` is exactly that.
+
+The Checkout Mandate never meets it: `checkout_jwt` is required at issuance and
+withholdable, so that mandate always blinds something and always publishes an
+`_sd_alg`. The Payment Mandate meets it immediately. `risk_data` is its only
+withholdable claim and most mandates will not carry one, so *withholding
+nothing* is its ordinary case — and such a mandate publishes no `_sd_alg` at
+all.
+
+An issuer that hashed under its Blinder's algorithm regardless would mint a
+mandate that **fails its own binding check**: it hashed with sha-512, a verifier
+reads no `_sd_alg`, falls back to the sha-256 that RFC 9901 and AP2 both define
+as the default, recomputes, and reports `checkout_hash_mismatch` — the agent
+swapped the purchase. A disagreement about a default, delivered as an accusation
+of fraud.
+
+So the binding is computed last, against the algorithm a verifier will actually
+observe rather than the one the Blinder holds: the Blinder's when something is
+blinded, `sha-256` when nothing is. `IssueCheckout` routes through the same
+helper even though it cannot currently reach the second case, so that its
+immunity stays a stated fact rather than a coincidence of the claim ordering.
+
+This was found by a test written for a different rule, which is the argument for
+writing the algorithm into `Binding` rather than trusting call sites to carry it.
+
 ## Errors
 
 | Condition | Sentinel | Code |

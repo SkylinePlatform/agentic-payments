@@ -29,6 +29,33 @@ func checkoutHash(alg sdjwt.HashAlg, checkoutJWT string) (string, error) {
 	return alg.Digest(checkoutJWT)
 }
 
+// bindingAlg is the algorithm a verifier will actually use on this mandate's
+// binding, which is not always the one the Blinder is configured with.
+//
+// RFC 9901 §4.1.1 makes _sd_alg optional and defines its absence as sha-256,
+// and AP2 restates that rule for checkout_hash. pkg/sdjwt writes the claim only
+// when the payload ends up carrying digests — correctly, because a payload with
+// no digests says nothing about how digests are computed. The consequence lands
+// here, at the one place that puts a digest in a payload for a different reason.
+//
+// Compute the binding under the Blinder's algorithm when nothing is blinded and
+// the result is a mandate that fails its own binding check: the issuer hashed
+// with sha-384, the verifier reads no _sd_alg and recomputes with sha-256, and
+// the disagreement surfaces as checkout_hash_mismatch — the agent swapped the
+// purchase — for what is a disagreement about a default.
+//
+// It is the closed Payment Mandate that walks into this. risk_data is its only
+// withholdable claim and most mandates will not carry one, so "nothing was
+// blinded" is its ordinary case rather than an edge. The Checkout Mandate is
+// safe today only because checkout_jwt is required at issuance and always
+// blinded; calling this there too means it stays safe if that ever changes.
+func bindingAlg(blinder *sdjwt.Blinder, blinds bool) sdjwt.HashAlg {
+	if blinds {
+		return blinder.HashAlg()
+	}
+	return sdjwt.SHA256
+}
+
 // verifyBinding recomputes the hash of checkout and compares it to claimed.
 //
 // It never compares the claim against itself. The whole reason this function
@@ -48,6 +75,92 @@ func verifyBinding(alg sdjwt.HashAlg, claimed, checkout string) error {
 	if subtle.ConstantTimeCompare([]byte(recomputed), []byte(claimed)) != 1 {
 		return fmt.Errorf("%w: the checkout presented hashes to %s, the mandate authorises %s",
 			ErrCheckoutHashMismatch, abbreviate(recomputed), abbreviate(claimed))
+	}
+	return nil
+}
+
+// Binding is a mandate's checkout_hash together with the algorithm that
+// produced it.
+//
+// The two travel together because a digest alone cannot be compared to another
+// digest. checkout_hash is computed under whatever _sd_alg names, so two
+// mandates covering the *same* checkout hold different values whenever they
+// were issued with different blinders. A comparison that saw only the strings
+// would call that a mismatch — and the code for a mismatch between two mandates
+// is payment_binding_mismatch, which says the agent is trying to pay for
+// something other than what was authorised. Reporting fraud because somebody
+// chose sha-384 is the same failure the hardcoded-sha-256 trap produces, with a
+// worse ending.
+//
+// Pairing them makes that unrepresentable rather than merely documented.
+type Binding struct {
+	hash string
+	alg  sdjwt.HashAlg
+}
+
+// BindingOf reads the binding out of a verified mandate.
+//
+// checkoutHash is passed in rather than dug out of the SD-JWT because the two
+// mandates spell the claim differently — checkout_hash on one, transaction_id
+// on the other — and by this point the caller has already decoded it into the
+// canonical field that has one name.
+//
+// The algorithm comes from the SD-JWT's own _sd_alg. Reading it before the
+// signature has been checked would be unsafe; this takes it from an SD-JWT the
+// caller has already verified.
+func BindingOf(sd *sdjwt.SDJWT, checkoutHash string) (Binding, error) {
+	if sd == nil {
+		return Binding{}, fmt.Errorf("%w: no SD-JWT to read _sd_alg from", ErrMisconfigured)
+	}
+	if checkoutHash == "" {
+		return Binding{}, fmt.Errorf("%w: no checkout hash to bind with", ErrMandateMalformed)
+	}
+	alg, err := sd.HashAlg()
+	if err != nil {
+		return Binding{}, err
+	}
+	return Binding{hash: checkoutHash, alg: alg}, nil
+}
+
+// Covers reports whether this binding is the digest of checkoutJWT.
+//
+// This is the recompute-never-trust rule as a method: the mandate's claim is
+// compared against a digest taken here, over a document the caller supplies.
+func (b Binding) Covers(checkoutJWT string) error {
+	if b.hash == "" {
+		return fmt.Errorf("%w: this binding was never read from a mandate", ErrMisconfigured)
+	}
+	if checkoutJWT == "" {
+		return fmt.Errorf(
+			"%w: no checkout was supplied to recompute the binding against",
+			ErrBindingUnverifiable)
+	}
+	return verifyBinding(b.alg, b.hash, checkoutJWT)
+}
+
+// Same reports whether two mandates are bound to the same checkout.
+//
+// This is the pairing a Checkout Mandate and a Payment Mandate have to survive
+// for the pair to mean anything: one says the user authorised this purchase,
+// the other says the agent may pay for it, and only the shared digest says they
+// are talking about the same purchase.
+//
+// Two digests made by different algorithms are refused as unverifiable rather
+// than reported as a mismatch. Nothing about that situation says the mandates
+// disagree — it says this comparison cannot answer, and the caller should
+// recompute both against the document instead.
+func (b Binding) Same(other Binding) error {
+	if b.hash == "" || other.hash == "" {
+		return fmt.Errorf("%w: a binding was never read from a mandate", ErrMisconfigured)
+	}
+	if b.alg != other.alg {
+		return fmt.Errorf(
+			"%w: these digests are %s and %s, so comparing them answers nothing — recompute both against the checkout",
+			ErrBindingUnverifiable, b.alg, other.alg)
+	}
+	if subtle.ConstantTimeCompare([]byte(b.hash), []byte(other.hash)) != 1 {
+		return fmt.Errorf("%w: one names %s, the other %s",
+			ErrPaymentBindingMismatch, abbreviate(b.hash), abbreviate(other.hash))
 	}
 	return nil
 }

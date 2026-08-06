@@ -55,6 +55,17 @@ var (
 	// a different purchase from the one being presented.
 	ErrCheckoutHashMismatch = errors.New("ap2: checkout hash mismatch")
 
+	// ErrPaymentBindingMismatch means a Checkout Mandate and a Payment Mandate
+	// name different checkouts. Authorisation to buy and authorisation to pay
+	// were given for two different purchases, which is the pairing the shared
+	// checkout_hash exists to make detectable.
+	//
+	// Separate from ErrCheckoutHashMismatch, which is what a single mandate
+	// gets when it disagrees with the document it was checked against. This one
+	// says nothing about either mandate on its own — both may be perfectly
+	// valid — only that they do not belong together.
+	ErrPaymentBindingMismatch = errors.New("ap2: payment and checkout mandates name different checkouts")
+
 	// ErrBindingUnverifiable means the binding could be neither confirmed nor
 	// refuted: the Checkout JWT was withheld from the presentation and the
 	// verifier was given no copy of its own.

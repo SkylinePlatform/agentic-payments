@@ -101,6 +101,8 @@ func codeFor(err error) generated.ErrorCode {
 		return generated.ErrorCodeMandateVersionUnsupported
 	case is(err, ErrCheckoutHashMismatch):
 		return generated.ErrorCodeCheckoutHashMismatch
+	case is(err, ErrPaymentBindingMismatch):
+		return generated.ErrorCodePaymentBindingMismatch
 	case is(err, ErrBindingUnverifiable):
 		return generated.ErrorCodeDisclosureInsufficient
 	case is(err, ErrMandateMalformed):
