@@ -2,6 +2,7 @@ package merchant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -40,6 +41,9 @@ type Service struct {
 	Rules ap2.CheckoutVerifier
 	// Signer holds the merchant's key: it signs offers and receipts.
 	Signer authz.Signer
+	// Own verifies the merchant's own signature, so it can tell an offer it
+	// made from one somebody handed it. Required.
+	Own authz.Verifier
 	// Keys publishes the public half so counterparties can check both.
 	Keys authz.KeySetPublisher
 	// Clock stamps offers and receipts.
@@ -87,8 +91,10 @@ type answer struct {
 // Handler returns the merchant's routes, wrapped in the middleware every role
 // runs behind.
 func (s *Service) Handler() (http.Handler, error) {
-	if s.Inventory == nil || s.Rules == nil || s.Signer == nil || s.Keys == nil || s.Clock == nil {
-		return nil, errors.New("merchant: a Service needs inventory, rules, a signer, a key set and a clock")
+	if s.Inventory == nil || s.Rules == nil || s.Signer == nil ||
+		s.Own == nil || s.Keys == nil || s.Clock == nil {
+		return nil, errors.New(
+			"merchant: a Service needs inventory, rules, a signer, its own verifier, a key set and a clock")
 	}
 
 	mux := http.NewServeMux()
@@ -187,6 +193,21 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := s.ownOffer(req.Checkout); err != nil {
+		// Before anything else, and this is the check the binding is worthless
+		// without. VerifyCheckout proves the mandate names *this* document; it
+		// says nothing about where the document came from. A merchant that
+		// accepted any well-formed offer would let a caller mint its own,
+		// have it approved, present a mandate that binds to it perfectly, and
+		// buy at a price the merchant never quoted.
+		//
+		// Problem Details rather than a receipt: no mandate has been examined
+		// yet, and a receipt for one is a statement this merchant is not in a
+		// position to make.
+		roles.Fail(w, generated.ErrorCodeRequestMalformed, err.Error())
+		return
+	}
+
 	presented, err := sdjwt.Parse(req.Mandate)
 	if err != nil {
 		roles.Fail(w, generated.ErrorCodeMandateMalformed,
@@ -219,4 +240,38 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusUnprocessableEntity
 	}
 	roles.OK(w, status, answer{Receipt: receipt})
+}
+
+// ownOffer establishes that the checkout presented is one this merchant signed,
+// and that it has not expired.
+//
+// The signature answers "did I make this offer"; exp answers "is it still the
+// offer I am making". Both are needed and neither implies the other: a genuine
+// offer from last week is genuinely the merchant's and genuinely stale, and
+// accepting it would sell at whatever the price was then.
+func (s *Service) ownOffer(checkout string) error {
+	claims, err := sdjwt.VerifyJWT(checkout, checkoutType, ap2.JOSEVerifier(s.Own))
+	if err != nil {
+		return fmt.Errorf("this is not an offer this merchant made: %w", err)
+	}
+
+	raw, ok := claims["exp"]
+	if !ok {
+		return errors.New("the offer carries no expiry, so it cannot be known to be current")
+	}
+	// pkg/sdjwt decodes with UseNumber, so the claim arrives as json.Number
+	// rather than as a float64 — which is what keeps a large exp from losing
+	// precision on its way to a comparison.
+	seconds, ok := raw.(json.Number)
+	if !ok {
+		return fmt.Errorf("the offer's expiry is %T, not a number of seconds", raw)
+	}
+	exp, err := seconds.Int64()
+	if err != nil {
+		return fmt.Errorf("the offer's expiry is not a whole number of seconds: %w", err)
+	}
+	if !s.Clock.Now().Before(time.Unix(exp, 0)) {
+		return errors.New("this offer has expired; ask for the current price")
+	}
+	return nil
 }

@@ -33,8 +33,13 @@ import (
 // #26 replaces where a key is looked up rather than the model around it.
 type Identity struct {
 	Signer authz.Signer
-	Keys   authz.KeySetPublisher
-	Clock  authz.Clock
+	// Verifier is this role's own public half, so a role can tell something it
+	// signed from something it was handed. The merchant needs exactly that: an
+	// offer presented back to it is only worth binding against if the merchant
+	// made it.
+	Verifier authz.Verifier
+	Keys     authz.KeySetPublisher
+	Clock    authz.Clock
 }
 
 // NewIdentity mints a role's signing key.
@@ -49,14 +54,19 @@ func NewIdentity(role string) (Identity, error) {
 
 	// The idempotency key is the role name: a process restarting mints a new
 	// key, but a single process cannot accidentally mint two.
-	if _, err := store.Generate(crypto.Slot(role), authz.ES256, role); err != nil {
+	ref, err := store.Generate(crypto.Slot(role), authz.ES256, role)
+	if err != nil {
 		return Identity{}, fmt.Errorf("minting the %s key: %w", role, err)
 	}
 	signer, err := store.Signer(crypto.Slot(role))
 	if err != nil {
 		return Identity{}, fmt.Errorf("obtaining the %s signer: %w", role, err)
 	}
-	return Identity{Signer: signer, Keys: store, Clock: clk}, nil
+	verifier, err := store.Resolve(context.Background(), ref)
+	if err != nil {
+		return Identity{}, fmt.Errorf("resolving the %s verifier: %w", role, err)
+	}
+	return Identity{Signer: signer, Verifier: verifier, Keys: store, Clock: clk}, nil
 }
 
 // Run serves h until the process is asked to stop, then drains.

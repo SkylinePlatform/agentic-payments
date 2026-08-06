@@ -30,7 +30,7 @@ func main() {
 		// signature the merchant is checking.
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		user, err := (&roles.Peer{Base: *surface}).Only(ctx)
+		user, err := roles.AwaitPeer(ctx, *surface)
 		if err != nil {
 			return nil, err
 		}
@@ -48,6 +48,7 @@ func main() {
 			// what makes AP2's delegation allowance reachable: a merchant built
 			// with somebody else's CheckoutVerifier has delegated.
 			Rules:  ap2.MerchantRules{Issuer: user, Clock: identity.Clock},
+			Own:    identity.Verifier,
 			Signer: identity.Signer,
 			Keys:   identity.Keys,
 			Clock:  identity.Clock,

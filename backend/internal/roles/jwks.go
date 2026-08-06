@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
@@ -29,9 +30,8 @@ type Peer struct {
 	// Client is the HTTP client to use. A zero Peer uses http.DefaultClient.
 	Client *http.Client
 
-	once sync.Once
+	mu   sync.Mutex
 	keys *crypto.KeySet
-	err  error
 }
 
 // Compile-time proof that a Peer is the port core declares, so a role holds the
@@ -41,16 +41,36 @@ var _ authz.KeyResolver = (*Peer)(nil)
 // Resolve returns a verifier for ref, fetching the counterparty's key set the
 // first time and reusing it afterwards.
 //
-// A failed fetch is cached too. That looks harsh and is deliberate for a mock:
-// a role whose counterparty was unreachable at startup is misconfigured, and
-// retrying silently would turn a wiring mistake into an intermittent one, which
-// is the harder thing to debug in a demo somebody is watching.
+// Only success is cached. An earlier version cached the failure too, on the
+// reasoning that a counterparty unreachable at startup means a misconfigured
+// role — which is true of a misconfiguration and false of the ordinary case:
+// `make demo` starts every role at once, so whichever comes up first finds the
+// others not yet listening. Caching that would have left roles permanently
+// broken by a race with their own siblings, and the symptom would have been a
+// role that starts cleanly and refuses every request afterwards.
 func (p *Peer) Resolve(ctx context.Context, ref authz.KeyRef) (authz.Verifier, error) {
-	p.once.Do(func() { p.keys, p.err = p.fetch(ctx) })
-	if p.err != nil {
-		return nil, p.err
+	keys, err := p.keySet(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return p.keys.Resolve(ctx, ref)
+	return keys.Resolve(ctx, ref)
+}
+
+// keySet fetches the counterparty's keys once, and again on any attempt that
+// has not yet succeeded.
+func (p *Peer) keySet(ctx context.Context) (*crypto.KeySet, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.keys != nil {
+		return p.keys, nil
+	}
+	keys, err := p.fetch(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p.keys = keys
+	return keys, nil
 }
 
 func (p *Peer) fetch(ctx context.Context) (*crypto.KeySet, error) {
@@ -94,19 +114,51 @@ func (p *Peer) fetch(ctx context.Context) (*crypto.KeySet, error) {
 // failure would look like an invalid signature rather than like the ambiguity
 // it is.
 func (p *Peer) Only(ctx context.Context) (authz.Verifier, error) {
-	p.once.Do(func() { p.keys, p.err = p.fetch(ctx) })
-	if p.err != nil {
-		return nil, p.err
+	keys, err := p.keySet(ctx)
+	if err != nil {
+		return nil, err
 	}
 
-	refs := p.keys.Keys()
+	refs := keys.Keys()
 	switch len(refs) {
 	case 1:
-		return p.keys.Resolve(ctx, refs[0])
+		return keys.Resolve(ctx, refs[0])
 	case 0:
 		return nil, fmt.Errorf("%s publishes no keys", p.Base)
 	default:
 		return nil, fmt.Errorf(
 			"%s publishes %d keys and this caller has no kid to choose with", p.Base, len(refs))
+	}
+}
+
+// AwaitPeer resolves a counterparty's single key, waiting for it to come up.
+//
+// Roles start together — `make demo` launches all of them at once — so whichever
+// wins the race finds its counterparties not yet listening. Without this, that
+// race decides whether a role starts at all, and the loser exits with a
+// connection error that looks like a misconfiguration.
+//
+// Bounded by ctx rather than by a retry count, so the caller's timeout is the
+// whole of the policy: a demo waits a few seconds, and a role whose counterparty
+// is genuinely absent still fails rather than hanging.
+func AwaitPeer(ctx context.Context, base string) (authz.Verifier, error) {
+	const between = 250 * time.Millisecond
+
+	var last error
+	for {
+		verifier, err := (&Peer{Base: base}).Only(ctx)
+		if err == nil {
+			return verifier, nil
+		}
+		last = err
+
+		select {
+		case <-ctx.Done():
+			// last is wrapped rather than ctx.Err(): "deadline exceeded" only
+			// says the wait ran out, and the attempt says why it kept running
+			// out — which is the thing a reader has to act on.
+			return nil, fmt.Errorf("waiting for %s: %w", base, last)
+		case <-time.After(between):
+		}
 	}
 }

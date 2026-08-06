@@ -212,27 +212,37 @@ func TestTheMerchantAnswersARejectionWithAReceipt(t *testing.T) {
 		Inventory: inventory,
 		Rules:     ap2.MerchantRules{Issuer: user.verifier, Clock: shop.clock},
 		Signer:    shop.signer,
+		Own:       shop.verifier,
 		Keys:      shop.keys,
 		Clock:     shop.clock,
 	}
 	handler, err := svc.Handler()
 	srv := serve(t, handler, err)
 
+	// The offer the user approves is one this merchant really made, because the
+	// merchant now refuses anything it did not sign.
+	signed := quoteFrom(t, srv)
+
 	var approved struct {
 		CheckoutMandate string `json:"checkout_mandate"`
 	}
 	require.Equal(t, http.StatusOK, post(t, surfaceSrv.URL+"/approve", map[string]any{
-		"checkout": offerJWT,
+		"checkout": signed,
 		"payment":  paymentBody(),
 	}, &approved))
+
+	// A second offer, genuinely made by this merchant. It has to be the
+	// merchant's own: an offer it never signed is refused earlier and for a
+	// different reason, which would make this a test of that check instead.
+	elsewhere := quoteFrom(t, srv)
 
 	var answer struct {
 		Receipt string `json:"receipt"`
 	}
-	// Presented against a different offer from the one it was signed for.
+	// Presented against a real offer that is not the one it was signed for.
 	status := post(t, srv.URL+"/checkout", map[string]any{
 		"mandate":  approved.CheckoutMandate,
-		"checkout": otherOfferJWT,
+		"checkout": elsewhere,
 	}, &answer)
 
 	require.Equal(t, http.StatusUnprocessableEntity, status)
@@ -344,3 +354,80 @@ const (
 	offerJWT      = "eyJhbGciOiJFUzI1NiJ9.eyJyb3V0ZSI6IkJFRy1QTUkiLCJhbW91bnQiOjE4OTAwfQ.c2ln"
 	otherOfferJWT = "eyJhbGciOiJFUzI1NiJ9.eyJyb3V0ZSI6IkJFRy1DREciLCJhbW91bnQiOjk5OTk5fQ.c2ln"
 )
+
+// quoteFrom asks the merchant for a priced, signed offer.
+//
+// Every call returns a different document — the timestamps differ — which is
+// what lets a test hold two genuine offers and present a mandate against the
+// wrong one.
+func quoteFrom(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		srv.URL+"/checkout?from=BEG&to=PMI", nil)
+	require.NoError(t, err)
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err, "asking the merchant for a price")
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "the merchant would not quote")
+
+	var out struct {
+		Checkout string `json:"checkout"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	require.NotEmpty(t, out.Checkout)
+	return out.Checkout
+}
+
+// TestTheMerchantRefusesAnOfferItNeverMade is the check the binding is worthless
+// without, and the one this pull request was missing.
+//
+// VerifyCheckout proves a mandate names *this* document. It says nothing about
+// where the document came from. A merchant that accepted any well-formed offer
+// would let a caller mint its own at any price, have it approved by a genuine
+// user on a genuine surface, present a mandate that binds to it perfectly — and
+// buy at a number the merchant never quoted. Every signature in that story is
+// valid.
+func TestTheMerchantRefusesAnOfferItNeverMade(t *testing.T) {
+	t.Parallel()
+
+	user := newParty(t, "user")
+	shop := newParty(t, "merchant")
+	surfaceSrv := theSurface(t, user)
+
+	inventory, err := merchant.NewDemoInventory(shop.clock, base, merchant.DefaultStep)
+	require.NoError(t, err)
+
+	svc := &merchant.Service{
+		ID:        "air-serbia",
+		Inventory: inventory,
+		Rules:     ap2.MerchantRules{Issuer: user.verifier, Clock: shop.clock},
+		Signer:    shop.signer,
+		Own:       shop.verifier,
+		Keys:      shop.keys,
+		Clock:     shop.clock,
+	}
+	handler, err := svc.Handler()
+	srv := serve(t, handler, err)
+
+	// offerJWT is a plausible-looking document nobody in this test signed.
+	var approved struct {
+		CheckoutMandate string `json:"checkout_mandate"`
+	}
+	require.Equal(t, http.StatusOK, post(t, surfaceSrv.URL+"/approve", map[string]any{
+		"checkout": offerJWT,
+		"payment":  paymentBody(),
+	}, &approved), "the surface signs what it is shown; catching this is the merchant's job")
+
+	var body map[string]any
+	status := post(t, srv.URL+"/checkout", map[string]any{
+		"mandate":  approved.CheckoutMandate,
+		"checkout": offerJWT,
+	}, &body)
+
+	require.Equal(t, http.StatusBadRequest, status,
+		"a mandate that binds perfectly to a forged offer must still be refused")
+	assert.NotContains(t, body, "receipt",
+		"no mandate has been examined yet, so there is nothing to sign an answer about")
+}

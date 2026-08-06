@@ -28,7 +28,7 @@ func main() {
 	roles.Main("credprovider", *addr, func(identity roles.Identity) (http.Handler, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		user, err := (&roles.Peer{Base: *surface}).Only(ctx)
+		user, err := roles.AwaitPeer(ctx, *surface)
 		if err != nil {
 			return nil, err
 		}
