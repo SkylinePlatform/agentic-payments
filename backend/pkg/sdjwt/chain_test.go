@@ -3,6 +3,7 @@ package sdjwt_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -71,4 +72,70 @@ func TestAPlainSDJWTIsNotAChain(t *testing.T) {
 	_, err := sdjwt.ParseChain(fakeRootJWT + "~")
 	require.Error(t, err, "an SD-JWT with no delegation must not parse as a chain with an absent second hop")
 	assert.ErrorIs(t, err, sdjwt.ErrMalformedChain)
+}
+
+func TestDelegateProducesAParsableChain(t *testing.T) {
+	root := issuedRoot(t) // helper added in Step 3
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err)
+
+	closed, disclosures, err := blinder.Blind(map[string]any{
+		"vct":           "closed.example",
+		"checkout_hash": "abc",
+	})
+	require.NoError(t, err)
+
+	chain, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
+		Nonce:    "n-1",
+		Audience: "https://merchant.example",
+		IssuedAt: time.Unix(1_777_326_189, 0),
+	}, closed, disclosures)
+	require.NoError(t, err, "delegation is the whole mechanism; if it cannot be built there is nothing to verify")
+
+	again, err := sdjwt.ParseChain(chain.String())
+	require.NoError(t, err, "what Delegate builds has to be what ParseChain accepts, or the two halves disagree")
+	assert.Equal(t, chain.String(), again.String(),
+		"a chain has to survive the wire, since every party after the delegate only ever sees the string")
+}
+
+func TestDelegateRefusesToBindAnAlreadyBoundPresentation(t *testing.T) {
+	root := issuedRoot(t)
+	bound, err := root.AttachKeyBinding(t.Context(), newHMACKey("holder", "holder"), sdjwt.KeyBinding{
+		Nonce: "n-1", Audience: "aud", IssuedAt: time.Unix(1, 0),
+	})
+	require.NoError(t, err)
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err)
+
+	_, err = bound.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
+		Nonce: "n-2", Audience: "aud", IssuedAt: time.Unix(2, 0),
+	}, map[string]any{"vct": "x"}, nil)
+	require.Error(t, err,
+		"sd_hash covers the presented disclosures, so delegating a presentation that is already bound would bind the wrong thing")
+	assert.ErrorIs(t, err, sdjwt.ErrUnexpectedKeyBinding)
+}
+
+// issuedRoot is a signed SD-JWT carrying a cnf claim, standing in for the
+// user-signed open mandate that a delegation hangs off.
+func issuedRoot(t *testing.T) *sdjwt.SDJWT {
+	t.Helper()
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	if !assert.NoError(t, err) {
+		return nil
+	}
+	payload, disclosures, err := blinder.Blind(map[string]any{
+		"vct": "open.example",
+		"cnf": map[string]any{"jwk": map[string]any{"kty": "oct", "k": "delegate"}},
+	})
+	if !assert.NoError(t, err) {
+		return nil
+	}
+	sd, err := sdjwt.Issue(t.Context(), newHMACKey("issuer", "issuer"), payload, disclosures)
+	if !assert.NoError(t, err) {
+		return nil
+	}
+	return sd
 }

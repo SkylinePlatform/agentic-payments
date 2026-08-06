@@ -1,8 +1,22 @@
 package sdjwt
 
 import (
+	"context"
 	"fmt"
 	"strings"
+)
+
+// The Delegate SD-JWT claim names and header types (draft-gco-oauth-delegate-sd-jwt-00).
+//
+// delegateType is emphatically not RFC 9901's kbType. The RFC's Key Binding JWT
+// is "kb+jwt"; a delegating one is "kb+sd-jwt", and an intermediate hop of a
+// longer chain is "kb+sd-jwt+kb". Accepting the RFC's value here would let a
+// plain proof of possession be presented as a delegation of authority, which is
+// exactly what explicit typing exists to prevent.
+const (
+	delegateType         = "kb+sd-jwt"
+	delegatePayloadClaim = "delegate_payload"
+	sdHashClaim          = "sd_hash"
 )
 
 // delegation is one hop after the root: a KB-JWT carrying a delegate payload,
@@ -137,3 +151,102 @@ func (c *Chain) String() string {
 // Root returns the Issuer-signed hop on its own, which is what sd_hash is
 // computed over and what a party holding only the open mandate would have.
 func (c *Chain) Root() *SDJWT { return c.root }
+
+// Delegate signs a delegating KB-JWT over this presentation and returns the
+// two-hop chain.
+//
+// signer holds the delegate's key — the one this SD-JWT named in its cnf claim.
+// Passing any other key produces a chain that parses and fails at the Verifier,
+// which is the same trap AttachKeyBinding documents and the same answer: the
+// key is chosen by whoever resolved the Signer, not here.
+//
+// payload and disclosures are the delegated content as Blinder.Blind produced
+// it. They are passed as a pair rather than as raw claims because blinding is a
+// decision about what the delegate is willing to reveal, and this function has
+// no basis for making it.
+//
+// Select the root's own Disclosures first, with Present. sd_hash covers whatever
+// is attached at this moment, so delegating before selecting binds the wrong
+// thing.
+func (s *SDJWT) Delegate(
+	ctx context.Context,
+	signer Signer,
+	blinder *Blinder,
+	kb KeyBinding,
+	payload map[string]any,
+	disclosures []Disclosure,
+) (*Chain, error) {
+	if s.HasKeyBinding() {
+		return nil, fmt.Errorf("%w: already bound, so sd_hash would cover a proof rather than the credential",
+			ErrUnexpectedKeyBinding)
+	}
+	if blinder == nil {
+		return nil, fmt.Errorf("%w: delegating needs a blinder for the delegate payload disclosure",
+			ErrInvalidOptions)
+	}
+	switch {
+	case kb.Nonce == "":
+		return nil, fmt.Errorf("%w: nonce is required", ErrKeyBindingInvalid)
+	case kb.Audience == "":
+		return nil, fmt.Errorf("%w: audience is required", ErrKeyBindingInvalid)
+	case kb.IssuedAt.IsZero():
+		return nil, fmt.Errorf("%w: issued-at is required", ErrKeyBindingInvalid)
+	}
+	if payload == nil {
+		return nil, fmt.Errorf("%w: nothing to delegate", ErrDelegatePayloadInvalid)
+	}
+
+	sdHash, err := s.SDHash()
+	if err != nil {
+		return nil, err
+	}
+
+	// _sd_alg is lifted out of the delegated payload and up to the KB-JWT.
+	// Draft §6 step 3.1 makes it the one claim that does not move into the
+	// Delegate Payload, and leaving a copy inside would put a second, unread
+	// declaration next to the one that governs.
+	content := make(map[string]any, len(payload))
+	for k, v := range payload {
+		if k == sdAlgClaim {
+			continue
+		}
+		content[k] = v
+	}
+
+	// The delegate payload travels as an array disclosure (draft §5.1.3), so
+	// that the array in the signed KB-JWT carries a digest and the content
+	// itself is a disclosure the delegate can be made to produce.
+	wrapper, err := blinder.disclose(func(salt string) (Disclosure, error) {
+		return NewArrayDisclosure(salt, content)
+	})
+	if err != nil {
+		return nil, err
+	}
+	digest, err := wrapper.Digest(blinder.HashAlg())
+	if err != nil {
+		return nil, err
+	}
+
+	claims := map[string]any{
+		"nonce":              kb.Nonce,
+		"aud":                kb.Audience,
+		"iat":                kb.IssuedAt.Unix(),
+		sdHashClaim:          sdHash,
+		sdAlgClaim:           string(blinder.HashAlg()),
+		delegatePayloadClaim: []any{map[string]any{arrayDigestKey: digest}},
+	}
+
+	encoded, err := signJWT(ctx, signer, delegateType, claims)
+	if err != nil {
+		return nil, err
+	}
+
+	all := make([]Disclosure, 0, len(disclosures)+1)
+	all = append(all, wrapper)
+	all = append(all, disclosures...)
+
+	root := &SDJWT{issuerJWT: s.issuerJWT, disclosures: make([]Disclosure, len(s.disclosures))}
+	copy(root.disclosures, s.disclosures)
+
+	return &Chain{root: root, delegate: delegation{jwt: encoded, disclosures: all}}, nil
+}
