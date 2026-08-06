@@ -33,10 +33,12 @@ func IssueCheckout(
 ) (*sdjwt.SDJWT, error) {
 	// signer and blinder are this caller's to supply; m.Checkout is the mandate's
 	// own content. The guards are separated along that line because the errors
-	// name different culprits — and signer is guarded rather than left to fail
-	// inside sdjwt.Issue because joseSigner wraps it before it gets there, so
-	// pkg/sdjwt's own nil check sees a non-nil struct around a nil interface and
-	// the call reaches joseSigner.Algorithm, which panics.
+	// name different culprits: ErrMisconfigured is a verifier stood up wrong,
+	// ErrMandateMalformed is a mandate that cannot be built from what it carries.
+	//
+	// signer is guarded here rather than left to sdjwt.Issue because "no signer"
+	// is a worse sentence than this one, not because it has to be — JOSESigner
+	// preserves nil, so pkg/sdjwt's own check does still run. See jose.go.
 	if signer == nil {
 		return nil, fmt.Errorf("%w: no signer", ErrMisconfigured)
 	}
@@ -82,7 +84,7 @@ func IssueCheckout(
 	if err != nil {
 		return nil, err
 	}
-	return sdjwt.Issue(ctx, joseSigner{signer}, payload, disclosures)
+	return sdjwt.Issue(ctx, JOSESigner(signer), payload, disclosures)
 }
 
 // CheckoutOptions is what a verifier brings to VerifyCheckout.
@@ -99,6 +101,12 @@ type CheckoutOptions struct {
 	// a mandate against a different checkout from the one it was shown is
 	// exactly the substitution this binding exists to prevent.
 	Checkout string
+
+	// KeyBinding is this verifier's stance on proof of possession. Its zero
+	// value ignores a Key Binding JWT that arrives, which is a decision rather
+	// than an omission — see KeyBindingPolicy, which says what the alternatives
+	// are and which flow needs them.
+	KeyBinding KeyBindingPolicy
 }
 
 // VerifyCheckout verifies a closed Checkout Mandate and returns it in canonical
@@ -120,10 +128,10 @@ func VerifyCheckout(sd *sdjwt.SDJWT, opts CheckoutOptions) (generated.CheckoutMa
 	var zero generated.CheckoutMandate
 	// None of these three is a statement about the mandate — a nil *SDJWT means
 	// the caller never parsed one, and a nil Issuer or Clock means this verifier
-	// was stood up without them. The guards on Issuer and Clock also have to be
-	// here rather than left to sdjwt.Verify: joseVerifier and joseClock wrap the
-	// interface values, so a nil one arrives inside a non-nil struct and slips
-	// past pkg/sdjwt's own check.
+	// was stood up without them. All three are ErrMisconfigured for that reason,
+	// which is the sentence sdjwt.Verify's ErrInvalidOptions cannot say in this
+	// package's vocabulary. The bridges preserve nil, so sdjwt.Verify would catch
+	// the last two on its own; saying it here says whose mistake it was.
 	if sd == nil {
 		return zero, fmt.Errorf("%w: no SD-JWT", ErrMisconfigured)
 	}
@@ -142,10 +150,13 @@ func VerifyCheckout(sd *sdjwt.SDJWT, opts CheckoutOptions) (generated.CheckoutMa
 		return zero, err
 	}
 
-	claims, err := sdjwt.Verify(sd, sdjwt.Options{
-		Issuer: joseVerifier{opts.Issuer},
-		Clock:  joseClock{opts.Clock},
-	})
+	verify := sdjwt.Options{
+		Issuer: JOSEVerifier(opts.Issuer),
+		Clock:  joseClockOf(opts.Clock),
+	}
+	opts.KeyBinding.apply(&verify)
+
+	claims, err := sdjwt.Verify(sd, verify)
 	if err != nil {
 		return zero, err
 	}

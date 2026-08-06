@@ -81,7 +81,7 @@ func IssuePayment(
 	if err != nil {
 		return nil, err
 	}
-	return sdjwt.Issue(ctx, joseSigner{signer}, payload, disclosures)
+	return sdjwt.Issue(ctx, JOSESigner(signer), payload, disclosures)
 }
 
 // PaymentOptions is what a verifier brings to VerifyPayment.
@@ -97,6 +97,16 @@ type PaymentOptions struct {
 	Issuer authz.Verifier
 	// Clock decides whether exp has passed. Required.
 	Clock authz.Clock
+
+	// KeyBinding is this verifier's stance on proof of possession.
+	//
+	// It is here as well as on CheckoutOptions because the reasoning that keeps
+	// Checkout off this struct does not apply: that field is about the *document*
+	// a Payment Mandate never carries, whereas key binding is about the key that
+	// presented the mandate, and the Credential Provider is exactly a party that
+	// wants to know. Its zero value ignores an arriving proof — see
+	// KeyBindingPolicy.
+	KeyBinding KeyBindingPolicy
 }
 
 // VerifyPayment verifies a closed Payment Mandate and returns it in canonical
@@ -131,9 +141,10 @@ func VerifyPayment(sd *sdjwt.SDJWT, opts PaymentOptions) (generated.PaymentManda
 
 	// None of these is a statement about the mandate — a nil *SDJWT means the
 	// caller never parsed one, and a nil Issuer or Clock means this verifier was
-	// stood up without them. The guards also have to be here rather than left to
-	// sdjwt.Verify: joseVerifier and joseClock wrap the interface values, so a
-	// nil one arrives inside a non-nil struct and slips past pkg/sdjwt's check.
+	// stood up without them. ErrMisconfigured says whose mistake it was, which is
+	// what sdjwt.Verify's ErrInvalidOptions cannot say from inside a package that
+	// has never heard of a mandate. The bridges preserve nil, so it would refuse
+	// these two anyway rather than panicking on them. See jose.go.
 	if sd == nil {
 		return zero, fmt.Errorf("%w: no SD-JWT", ErrMisconfigured)
 	}
@@ -142,10 +153,13 @@ func VerifyPayment(sd *sdjwt.SDJWT, opts PaymentOptions) (generated.PaymentManda
 			ErrMisconfigured)
 	}
 
-	claims, err := sdjwt.Verify(sd, sdjwt.Options{
-		Issuer: joseVerifier{opts.Issuer},
-		Clock:  joseClock{opts.Clock},
-	})
+	verify := sdjwt.Options{
+		Issuer: JOSEVerifier(opts.Issuer),
+		Clock:  joseClockOf(opts.Clock),
+	}
+	opts.KeyBinding.apply(&verify)
+
+	claims, err := sdjwt.Verify(sd, verify)
 	if err != nil {
 		return zero, err
 	}
