@@ -1,6 +1,8 @@
 package sdjwt_test
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +117,135 @@ func TestDelegateRefusesToBindAnAlreadyBoundPresentation(t *testing.T) {
 	require.Error(t, err,
 		"sd_hash covers the presented disclosures, so delegating a presentation that is already bound would bind the wrong thing")
 	assert.ErrorIs(t, err, sdjwt.ErrUnexpectedKeyBinding)
+}
+
+func TestADelegationSignedByAnUnendorsedKeyIsRejected(t *testing.T) {
+	// The root endorses "delegate"; this chain is signed by "impostor". No
+	// comparison is written anywhere — the cnf key is simply the only key the
+	// second hop is verified with, so a different one cannot produce a
+	// signature that holds.
+	chain := delegatedChain(t, "impostor")
+
+	_, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	require.Error(t, err,
+		"this is the single property the whole open-mandate mechanism exists for")
+	assert.ErrorIs(t, err, sdjwt.ErrSignatureInvalid)
+}
+
+func TestAPlainKeyBindingTypeIsRefusedAsADelegation(t *testing.T) {
+	chain := delegatedChainWithType(t, "kb+jwt", "delegate")
+
+	_, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	require.Error(t, err,
+		"RFC 9901's kb+jwt proves possession of a key; it does not delegate authority, and accepting it here would conflate the two")
+	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid)
+}
+
+func TestVerifyChainRefusesOptionsItCannotApply(t *testing.T) {
+	chain := delegatedChain(t, "delegate")
+
+	opts := chainOptions(t)
+	opts.Nonce = ""
+
+	_, err := sdjwt.VerifyChain(chain, opts)
+	require.Error(t, err,
+		`an empty nonce would make the comparison "" == "", so the check would pass while proving nothing`)
+	assert.ErrorIs(t, err, sdjwt.ErrInvalidOptions)
+}
+
+// delegatedChain is issuedRoot delegated to the named key. The root always
+// endorses "delegate" in its cnf; passing a different name is how the
+// unendorsed-key case is built.
+func delegatedChain(t *testing.T, signingKey string) *sdjwt.Chain {
+	t.Helper()
+	return delegatedChainWithType(t, "", signingKey)
+}
+
+// delegatedChainWithType is the same, with the delegating JWT's typ overridden.
+// An empty typ means the correct one.
+func delegatedChainWithType(t *testing.T, typ, signingKey string) *sdjwt.Chain {
+	t.Helper()
+	// Build with Delegate, then re-sign the delegating JWT with the requested
+	// typ and key. Reaching through the wire format rather than adding a test
+	// hook keeps the production path the only way a chain is built.
+
+	root := issuedRoot(t)
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err)
+	closed, disclosures, err := blinder.Blind(map[string]any{
+		"vct":           "closed.example",
+		"checkout_hash": "abc",
+	})
+	require.NoError(t, err)
+
+	chain, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
+		Nonce:    "n-1",
+		Audience: "https://merchant.example",
+		IssuedAt: time.Unix(1_777_326_189, 0),
+	}, closed, disclosures)
+	require.NoError(t, err,
+		"delegation is the mechanism under test; if it cannot be built there is nothing to re-sign")
+
+	// The empty component between the two hops is where the delegating JWT
+	// starts — the same separator TestTheEmptyComponentBetweenHopsIsRequired
+	// exercises from the other side. Splitting on it and replacing the part
+	// right after it is the inverse of the join String performs.
+	parts := strings.Split(chain.String(), "~")
+	sep := -1
+	for i, p := range parts {
+		if p == "" {
+			sep = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, sep, 0, "Chain.String always separates the hops with an empty component")
+	require.Less(t, sep+1, len(parts), "the delegating JWT follows the separator")
+
+	segments := strings.Split(parts[sep+1], ".")
+	require.Len(t, segments, 3, "the delegating JWT is a compact JWS")
+
+	headerBytes, err := b64.DecodeString(segments[0])
+	require.NoError(t, err)
+	var header struct {
+		Typ string `json:"typ"`
+	}
+	require.NoError(t, json.Unmarshal(headerBytes, &header))
+
+	payloadBytes, err := b64.DecodeString(segments[1])
+	require.NoError(t, err)
+	dec := json.NewDecoder(bytes.NewReader(payloadBytes))
+	dec.UseNumber()
+	var claims map[string]any
+	require.NoError(t, dec.Decode(&claims))
+
+	newTyp := typ
+	if newTyp == "" {
+		newTyp = header.Typ
+	}
+	resigned, err := sdjwt.SignJWT(t.Context(), newHMACKey(signingKey, signingKey), newTyp, claims)
+	require.NoError(t, err)
+
+	parts[sep+1] = resigned
+	again, err := sdjwt.ParseChain(strings.Join(parts, "~"))
+	require.NoError(t, err, "the re-signed chain must still be the shape ParseChain accepts")
+	return again
+}
+
+func chainOptions(t *testing.T) sdjwt.ChainOptions {
+	t.Helper()
+	return sdjwt.ChainOptions{
+		Issuer:   newHMACKey("issuer", "issuer"),
+		Nonce:    "n-1",
+		Audience: "https://merchant.example",
+		Clock:    fixedClock(time.Unix(1_777_326_200, 0)),
+		DelegateKey: func(json.RawMessage) (sdjwt.Verifier, error) {
+			// Resolving cnf to a key for real is the caller's job and a
+			// different one — see the note on Options.HolderKey. This answers
+			// with the endorsed key regardless of what cnf says, so that the
+			// tests exercise the chain rather than a JWK parser.
+			return newHMACKey("delegate", "delegate"), nil
+		},
+	}
 }
 
 // issuedRoot is a signed SD-JWT carrying a cnf claim, standing in for the

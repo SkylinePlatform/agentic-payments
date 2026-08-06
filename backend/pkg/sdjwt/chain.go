@@ -2,8 +2,10 @@ package sdjwt
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // The Delegate SD-JWT claim names and header types (draft-gco-oauth-delegate-sd-jwt-00).
@@ -249,4 +251,108 @@ func (s *SDJWT) Delegate(
 	copy(root.disclosures, s.disclosures)
 
 	return &Chain{root: root, delegate: delegation{jwt: encoded, disclosures: all}}, nil
+}
+
+// ChainOptions is a Verifier's policy for one chain verification.
+//
+// It is a separate type from Options rather than a superset of it, because the
+// two answer different questions. Options describes a Verifier checking a
+// credential presented by its Holder; this describes one checking a credential
+// whose authority was handed on. The field that would have been shared —
+// HolderKey — even means something different here, which is why it is named
+// DelegateKey.
+type ChainOptions struct {
+	// Issuer checks the signature on the root hop. Required.
+	Issuer Verifier
+
+	// DelegateKey turns the root hop's cnf claim into a Verifier for the
+	// delegating JWT. Required.
+	//
+	// It is required rather than optional, and that is the difference from
+	// Options.HolderKey. A chain with no key binding is not a chain: the
+	// delegation *is* the key binding, so a policy that could skip it would be
+	// a policy that accepts a delegated authority without checking it was
+	// delegated to the presenter.
+	DelegateKey func(cnf json.RawMessage) (Verifier, error)
+
+	// Audience and Nonce are what the delegating JWT's aud and nonce must
+	// carry. Both required, on the same terms and for the same reason as on
+	// Options: empty would make the comparison prove nothing.
+	Audience string
+	Nonce    string
+
+	// MaxKeyBindingAge is how far the delegating JWT's iat may sit from now, in
+	// either direction. Zero leaves replay protection to the nonce alone.
+	MaxKeyBindingAge time.Duration
+
+	// AllowedHashAlgs restricts which _sd_alg values are accepted, at both hops.
+	AllowedHashAlgs []HashAlg
+
+	// Clock supplies the current time. Required.
+	Clock Clock
+}
+
+// VerifyChain checks a two-hop Delegate SD-JWT and returns the processed
+// payloads in wire order: the root first, the delegated content second.
+//
+// It implements draft §6 for the dSD-JWT form. The order is the draft's, and
+// each step is only meaningful once the one before it has passed — resolving
+// cnf out of an unverified root would be taking the delegating key from
+// whoever wrote the token.
+func VerifyChain(c *Chain, opts ChainOptions) ([]map[string]any, error) {
+	if c == nil {
+		return nil, fmt.Errorf("%w: no chain", ErrInvalidOptions)
+	}
+	if opts.Issuer == nil {
+		return nil, fmt.Errorf("%w: no issuer verifier", ErrInvalidOptions)
+	}
+	if opts.DelegateKey == nil {
+		return nil, fmt.Errorf("%w: no delegate key resolver; the delegation is the key binding and cannot be skipped",
+			ErrInvalidOptions)
+	}
+	if opts.Clock == nil {
+		return nil, fmt.Errorf("%w: no clock", ErrInvalidOptions)
+	}
+	if opts.Nonce == "" || opts.Audience == "" {
+		return nil, fmt.Errorf("%w: verifying a delegation needs both a nonce and an audience",
+			ErrInvalidOptions)
+	}
+
+	// Draft §6 step 2: the root is an ordinary SD-JWT and is verified as one.
+	// No key binding at this level — the root carries none, and Verify's
+	// opportunistic path is not reachable because HolderKey is left nil.
+	rootPayload, err := Verify(c.root, Options{
+		Issuer:          opts.Issuer,
+		AllowedHashAlgs: opts.AllowedHashAlgs,
+		Clock:           opts.Clock,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Draft §6 step 3.1: the cnf of the preceding component is the issuer key
+	// for this hop. Read from the *processed* payload, so a cnf that arrived as
+	// a disclosure is resolved before it is used — the same reasoning
+	// resolveHolderKey gives for RFC 9901.
+	delegateKey, err := resolveHolderKey(rootPayload, opts.DelegateKey)
+	if err != nil {
+		return nil, err
+	}
+
+	jwt, err := parseJWT(c.delegate.jwt)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrKeyBindingInvalid, err)
+	}
+	if jwt.header.Typ != delegateType {
+		return nil, fmt.Errorf(
+			"%w: typ is %q, want %q — %q proves possession of a key without delegating anything",
+			ErrKeyBindingInvalid, jwt.header.Typ, delegateType, kbType)
+	}
+	if err := jwt.verifyWith(delegateKey); err != nil {
+		return nil, err
+	}
+
+	// Tasks 4 and 5 continue here.
+	_ = jwt
+	return []map[string]any{rootPayload, nil}, nil
 }
