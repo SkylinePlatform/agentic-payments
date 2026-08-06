@@ -1,4 +1,5 @@
 GO             ?= go
+GIT            ?= git
 GOLANGCI_LINT  ?= golangci-lint
 BACKEND        := backend
 
@@ -105,6 +106,15 @@ frontend: generate-ts ## Run the frontend dev server (needs Node)
 .PHONY: frontend-check
 frontend-check: generate-ts ## Type-check and build the frontend (needs Node)
 	cd $(FRONTEND) && npm run build
+
+# core.hooksPath is repository-local rather than per-worktree, so setting it once
+# covers every worktree of this checkout — which is the case that produced the
+# unsigned commit the hook exists for.
+.PHONY: hooks
+hooks: ## Point git at the tracked hooks in .githooks
+	@$(GIT) config core.hooksPath .githooks
+	@chmod +x .githooks/*
+	@echo "hooks: core.hooksPath -> .githooks"
 
 # go.mod sits in backend/, so an editor opened at the repository root finds no
 # module, falls back to a GOPATH view, and reports every intra-module import as
