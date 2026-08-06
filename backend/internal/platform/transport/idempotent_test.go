@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -516,4 +517,85 @@ func TestFlushReachesTheUnderlyingWriter(t *testing.T) {
 	if !rec.Flushed {
 		t.Error("the flush did not reach the underlying writer")
 	}
+}
+
+// TestHijackIsNotRemembered is the test the Hijack/Unwrap pair exists to make
+// pass, and it fails the moment recorder.hijacked stops being consulted.
+//
+// After a hijack nothing the handler sends passes through the recorder, so the
+// recorder still holds the 200 and the empty body it was built with. Recording
+// that would replay an answer nobody gave: the second request below would never
+// reach the handler and would be given that empty 200 instead of the upgrade it
+// asked for. Counting handler runs is therefore the assertion — comparing the
+// two responses would pass even with the bug present, because what a hijacked
+// connection sends is not the recorder's to compare.
+func TestHijackIsNotRemembered(t *testing.T) {
+	t.Parallel()
+
+	var runs atomic.Int64
+	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		runs.Add(1)
+		// assert, not require: this runs on the server's goroutine, where
+		// FailNow is not legal.
+		conn, buf, err := http.NewResponseController(w).Hijack()
+		if !assert.NoError(t, err, "the handler could not hijack through the middleware") {
+			return
+		}
+		defer func() { assert.NoError(t, conn.Close(), "close the hijacked connection") }()
+		// Written on the raw connection, so none of it reaches the recorder.
+		_, err = buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: demo\r\nConnection: Upgrade\r\n\r\n")
+		assert.NoError(t, err, "write the upgrade response")
+		assert.NoError(t, buf.Flush(), "flush the upgrade response")
+	})
+
+	m, err := transport.NewIdempotency(clock.NewFake(base))
+	require.NoError(t, err, "NewIdempotency")
+	srv := httptest.NewServer(m.Wrap(h))
+	defer srv.Close()
+
+	upgrade := func() int {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL,
+			strings.NewReader(`{"amount":100}`))
+		require.NoError(t, err, "build the request")
+		req.Header.Set(transport.KeyHeader, "k1")
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err, "the request failed")
+		require.NoError(t, resp.Body.Close(), "close the response body")
+		return resp.StatusCode
+	}
+
+	assert.Equal(t, http.StatusSwitchingProtocols, upgrade(),
+		"the first upgrade did not reach the handler")
+	assert.Equal(t, http.StatusSwitchingProtocols, upgrade(),
+		"the second upgrade was answered from the store — the empty 200 a hijack leaves behind")
+	assert.Equal(t, int64(2), runs.Load(),
+		"a hijacked response was remembered, so the retry never re-ran the handler")
+}
+
+// TestResponseControllerReachesTheUnderlyingWriter pins what Unwrap buys. The
+// recorder does not implement deadlines and never will; without Unwrap,
+// http.ResponseController cannot find the writer that does, and every such call
+// fails with ErrNotSupported for no reason the handler can see.
+func TestResponseControllerReachesTheUnderlyingWriter(t *testing.T) {
+	t.Parallel()
+
+	deadline := make(chan error, 1)
+	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		deadline <- http.NewResponseController(w).SetWriteDeadline(time.Time{})
+		w.WriteHeader(http.StatusOK)
+	})
+
+	m, err := transport.NewIdempotency(clock.NewFake(base))
+	require.NoError(t, err, "NewIdempotency")
+	srv := httptest.NewServer(m.Wrap(h))
+	defer srv.Close()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL, strings.NewReader(`{}`))
+	require.NoError(t, err, "build the request")
+	req.Header.Set(transport.KeyHeader, "k1")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err, "the request failed")
+	require.NoError(t, resp.Body.Close(), "close the response body")
+
+	assert.NoError(t, <-deadline, "the recorder hid a capability the real writer has")
 }

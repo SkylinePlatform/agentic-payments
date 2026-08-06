@@ -12,12 +12,14 @@
 package transport
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
@@ -162,7 +164,13 @@ func (m *Idempotency) Wrap(h http.Handler) http.Handler {
 		// reasons has not happened once — remembering it would turn a
 		// transient fault into a permanent one for the life of the window,
 		// with the caller holding a key that can now never succeed.
-		if rec.status >= http.StatusInternalServerError || rec.overflowed {
+		//
+		// A hijacked connection is not remembered either, and for a sharper
+		// reason: after a hijack the answer never passes through this writer at
+		// all, so status is still the 200 the recorder was born with and body is
+		// still empty. Remembering that would replay an empty 200 to the next
+		// caller holding the key — an answer nobody ever gave. See recorder.Hijack.
+		if rec.status >= http.StatusInternalServerError || rec.overflowed || rec.hijacked {
 			return
 		}
 		if err := m.records.Complete(key, response{
@@ -242,6 +250,9 @@ type recorder struct {
 	limit      int
 	overflowed bool
 	written    bool
+	// hijacked records that the handler took the connection over, so that
+	// nothing is remembered for this key. See Hijack.
+	hijacked bool
 }
 
 func (r *recorder) WriteHeader(status int) {
@@ -287,3 +298,42 @@ func (r *recorder) Flush() {
 		f.Flush()
 	}
 }
+
+// Hijack hands the connection to the handler and gives up remembering the
+// response.
+//
+// This method is the reason Unwrap below is safe to add, and the two have to
+// arrive together. Unwrap alone would let http.ResponseController walk past the
+// recorder to the real writer and hijack there, invisibly: the handler would
+// then answer on the raw connection while the recorder still held the 200 and
+// the empty body it was constructed with, and the next caller presenting that
+// idempotency key would be replayed an answer nobody ever sent. Suppressing the
+// record is the only correct outcome, because after a hijack there is no
+// response for this middleware to have an opinion about.
+//
+// Releasing the key rather than recording it means a retry re-runs the handler.
+// For the operations a hijack is used for — an upgrade to a streaming protocol —
+// that is right: nothing was completed, so nothing may be replayed as if it had
+// been.
+//
+// The flag is set only when the hijack succeeds. A failed one leaves the writer
+// intact and the handler still owes the caller an ordinary response, which is
+// worth remembering as usual.
+func (r *recorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, buf, err := http.NewResponseController(r.ResponseWriter).Hijack()
+	if err != nil {
+		return nil, nil, err
+	}
+	r.hijacked = true
+	return conn, buf, nil
+}
+
+// Unwrap exposes the writer underneath, which is how http.ResponseController
+// reaches the capabilities this type does not implement itself — read and write
+// deadlines, full-duplex mode, anything net/http adds later.
+//
+// Go 1.20 introduced this convention precisely so that a wrapper does not have
+// to enumerate every optional interface. What it does not do is decide which
+// capabilities are safe to expose: Hijack above is overridden rather than
+// delegated, because that one changes whether a response exists to record.
+func (r *recorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
