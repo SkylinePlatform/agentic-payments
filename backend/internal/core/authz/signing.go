@@ -60,12 +60,30 @@ type Verifier interface {
 // path does not know or care which side of the trust boundary a key came from.
 //
 // A resolver must reject a reference whose algorithm differs from the one the
-// key is registered with, with ErrAlgorithmMismatch, and must refuse to return
-// a Verifier for a key that is past its life, with ErrKeyExpired.
+// key is registered with, with ErrAlgorithmMismatch. That obligation is
+// unconditional: the algorithm is stated by whoever holds the key, so every
+// resolver knows it.
+//
+// Expiry is stated differently on the two sides of the trust boundary, and this
+// contract says so rather than promising a sentinel one implementation cannot
+// produce. A resolver that owns a key's lifecycle — one backed by a key store —
+// must refuse a key that is past its life with ErrKeyExpired. A resolver over a
+// published JWK Set does not own one and cannot invent one: RFC 7517 defines no
+// expiry member, so the only honest statement a key directory makes about a
+// key's life is whether the key is still in the set. Expiry reaches a relying
+// party as the key's absence after a refresh, which surfaces as ErrKeyNotFound,
+// and KeySetPublisher below is the half that has to hold up its end by omitting
+// keys that are done.
+//
+// The consequence for a caller is worth stating plainly: a resolver over a set
+// that is never refreshed will keep verifying signatures under a key the
+// publisher has retired. Refresh policy is the relying party's, and no sentinel
+// returned from here is a substitute for it.
 type KeyResolver interface {
 	// Resolve returns a Verifier for ref, or ErrKeyNotFound,
-	// ErrAlgorithmMismatch or ErrKeyExpired. It takes a context because a
-	// resolver may be backed by a remote key directory.
+	// ErrAlgorithmMismatch or — where the resolver owns the key's lifecycle —
+	// ErrKeyExpired. It takes a context because a resolver may be backed by a
+	// remote key directory.
 	Resolve(ctx context.Context, ref KeyRef) (Verifier, error)
 }
 

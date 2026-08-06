@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -323,4 +324,49 @@ func TestParseEmptyJWKS(t *testing.T) {
 	}
 	_, err = set.Resolve(t.Context(), authz.KeyRef{KeyID: "any", Algorithm: authz.ES256})
 	assert.ErrorIs(t, err, authz.ErrKeyNotFound, "Resolve against an empty set = %v, want ErrKeyNotFound", err)
+}
+
+// TestExpiredKeyLeavesThePublishedSet pins how expiry crosses the trust
+// boundary, which is the one thing authz.KeyResolver's contract cannot state as
+// a single sentinel.
+//
+// The store owns the key's lifecycle and says ErrKeyExpired. A relying party
+// holding only the published document owns nothing, and a JWK has no expiry
+// member to read — so what it gets is the key's absence from the next fetch,
+// and ErrKeyNotFound from resolving against it. Both halves are asserted here
+// because a publisher that kept emitting the key would leave the relying party
+// verifying under it forever, with nothing in either package to notice.
+func TestExpiredKeyLeavesThePublishedSet(t *testing.T) {
+	t.Parallel()
+
+	const lifetime = 30 * 24 * time.Hour
+	store, c, ref := storeWithKey(t, authz.ES256, crypto.WithKeyLifetime(lifetime))
+
+	published, err := store.JWKS(t.Context())
+	require.NoError(t, err, "JWKS while the key is active")
+	set, err := crypto.ParseJWKS(published)
+	require.NoError(t, err, "ParseJWKS")
+	_, err = set.Resolve(t.Context(), ref)
+	require.NoError(t, err, "an active key must resolve from the published set")
+
+	c.Advance(lifetime)
+
+	_, err = store.Resolve(t.Context(), ref)
+	assert.ErrorIs(t, err, authz.ErrKeyExpired,
+		"the store owns the lifecycle, so it is the side that names expiry")
+
+	// The stale set still resolves, which is the caller's refresh policy showing
+	// through rather than a bug: a KeySet is a snapshot and holds no clock.
+	_, err = set.Resolve(t.Context(), ref)
+	assert.NoError(t, err,
+		"a set parsed before the expiry cannot know about it — refreshing is what expires a key here")
+
+	refreshed, err := store.JWKS(t.Context())
+	require.NoError(t, err, "JWKS after the key expired")
+	after, err := crypto.ParseJWKS(refreshed)
+	require.NoError(t, err, "ParseJWKS of the refreshed document")
+	assert.Empty(t, after.Keys(), "the publisher kept emitting a key that is past its life")
+	_, err = after.Resolve(t.Context(), ref)
+	assert.ErrorIs(t, err, authz.ErrKeyNotFound,
+		"after a refresh an expired key is simply not there, which is the only statement a JWK Set can make")
 }
