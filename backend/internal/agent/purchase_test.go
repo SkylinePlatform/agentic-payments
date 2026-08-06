@@ -50,7 +50,8 @@ type party struct {
 func newParty(t *testing.T, name string, clk authz.Clock) party {
 	t.Helper()
 
-	store := crypto.NewStore(clk)
+	store, err := crypto.NewStore(clk)
+	require.NoError(t, err, "standing up the %s key store", name)
 	ref, err := store.Generate(crypto.Slot(name), authz.ES256, name)
 	require.NoError(t, err, "minting the %s key", name)
 
