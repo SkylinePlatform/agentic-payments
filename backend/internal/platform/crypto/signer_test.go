@@ -29,16 +29,25 @@ var allAlgorithms = []authz.Algorithm{authz.ES256, authz.ES384, authz.ES512, aut
 const testSlot = crypto.Slot("checkout")
 
 // newStore returns a store on a fake clock, plus the clock to drive it.
-func newStore(opts ...crypto.Option) (*crypto.Store, *clock.Fake) {
+//
+// It takes t because NewStore can now fail, and require because it cannot
+// usefully return a nil store to a caller that is about to generate a key.
+// Every call site is a test body — none is a goroutine, an HTTP handler or any
+// other callback — which is the condition that makes require legal here.
+func newStore(t *testing.T, opts ...crypto.Option) (*crypto.Store, *clock.Fake) {
+	t.Helper()
+
 	c := clock.NewFake(base)
-	return crypto.NewStore(c, opts...), c
+	store, err := crypto.NewStore(c, opts...)
+	require.NoError(t, err, "NewStore")
+	return store, c
 }
 
 // storeWithKey generates one key in the default test slot.
 func storeWithKey(t *testing.T, alg authz.Algorithm, opts ...crypto.Option) (*crypto.Store, *clock.Fake, authz.KeyRef) {
 	t.Helper()
 
-	store, c := newStore(opts...)
+	store, c := newStore(t, opts...)
 	ref, err := store.Generate(testSlot, alg, "test-generate")
 	require.NoError(t, err, "Generate(%s)", alg)
 	return store, c, ref
@@ -294,7 +303,7 @@ func TestSignAndResolveRespectContextCancellation(t *testing.T) {
 func TestGenerateRejectsUnsupportedAlgorithm(t *testing.T) {
 	t.Parallel()
 
-	store, _ := newStore()
+	store, _ := newStore(t)
 	for _, alg := range []authz.Algorithm{"", "none", "RS256", "HS256", "es256"} {
 		if _, err := store.Generate(testSlot, alg, "k"); !errors.Is(err, authz.ErrUnsupportedAlgorithm) {
 			t.Errorf("Generate(%q) = %v, want ErrUnsupportedAlgorithm", alg, err)

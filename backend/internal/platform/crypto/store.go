@@ -10,11 +10,18 @@ import (
 	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/store"
 )
 
 // Store errors. Key lifecycle failures use the sentinels in core/authz so that
 // a caller can match them without importing this package; the ones here are
 // about operating the store itself.
+//
+// Idempotency has no sentinels of its own here any more. It used to, duplicating
+// the set internal/platform/store already defines, and that package's own
+// documentation named this store as the caller to be moved onto it so that one
+// set survives. Generate and Rotate return store.ErrKeyRequired,
+// store.ErrConflict and store.ErrAtCapacity directly.
 var (
 	// ErrSlotExists means Generate was called for a slot that already holds a
 	// key. Replacing a key is Rotate, which retires the previous one; a second
@@ -22,14 +29,6 @@ var (
 	ErrSlotExists = errors.New("crypto: key slot already in use")
 	// ErrSlotNotFound means no key has been generated for that slot.
 	ErrSlotNotFound = errors.New("crypto: key slot not found")
-	// ErrIdempotencyKeyRequired means a state-changing call arrived without
-	// one.
-	ErrIdempotencyKeyRequired = errors.New("crypto: idempotency key required")
-	// ErrIdempotencyConflict means an idempotency key was replayed with
-	// different arguments. Returning the first result would be wrong and
-	// performing the second operation would defeat the point, so it is an
-	// error.
-	ErrIdempotencyConflict = errors.New("crypto: idempotency key replayed with different arguments")
 )
 
 // Default key lifecycle durations. Both are configurable per store; these are
@@ -130,16 +129,20 @@ type Store struct {
 	clock    authz.Clock
 	lifetime time.Duration
 	overlap  time.Duration
+	idemOpts []store.Option
 
 	mu     sync.RWMutex
 	keys   map[string]*storedKey // by kid
 	active map[Slot]string       // slot -> kid of the signing key
-	idem   map[string]idempotencyRecord
-}
 
-type idempotencyRecord struct {
-	fingerprint string
-	result      authz.KeyRef
+	// idem remembers what a Generate or a Rotate returned, so that a retry does
+	// not mint a second key. It is the shared store rather than a map of this
+	// package's own, and the difference is that it is bounded: the map it
+	// replaced held every idempotency key the process had ever seen, for as long
+	// as the process lived, with nothing that could ever remove one. A key store
+	// is long-lived by definition, which is what made an unbounded map the wrong
+	// shape here specifically.
+	idem *store.Idempotency[authz.KeyRef]
 }
 
 // Option configures a Store.
@@ -158,25 +161,45 @@ func WithRotationOverlap(d time.Duration) Option {
 	return func(s *Store) { s.overlap = d }
 }
 
+// WithIdempotency configures the store's idempotency records — see
+// store.WithWindow and store.WithLimit.
+//
+// The retention window is the one behaviour worth knowing about: past it a key
+// is forgotten and may be claimed again, so a Generate replayed a day later
+// mints rather than replays, and meets ErrSlotExists. That is a truer answer
+// than the one an infinite memory gave, and it is what bounds the store.
+func WithIdempotency(opts ...store.Option) Option {
+	return func(s *Store) { s.idemOpts = append(s.idemOpts, opts...) }
+}
+
 // NewStore returns an empty key store reading time from clk.
 //
 // The clock is a constructor argument rather than a package-level default
 // because key expiry is one of the behaviours this repository insists on being
 // able to test without sleeping. Passing clock.NewFake lets a test move three
 // months forward instantly.
-func NewStore(clk authz.Clock, opts ...Option) *Store {
+//
+// It returns an error rather than a bare Store because the idempotency records
+// need the same clock and refuse to be built without one. A store that accepted
+// a nil clock and panicked at the first Generate would be answering the question
+// later and worse.
+func NewStore(clk authz.Clock, opts ...Option) (*Store, error) {
 	s := &Store{
 		clock:    clk,
 		lifetime: DefaultKeyLifetime,
 		overlap:  DefaultRotationOverlap,
 		keys:     make(map[string]*storedKey),
 		active:   make(map[Slot]string),
-		idem:     make(map[string]idempotencyRecord),
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
-	return s
+	idem, err := store.NewIdempotency[authz.KeyRef](clk, s.idemOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("crypto: idempotency records: %w", err)
+	}
+	s.idem = idem
+	return s, nil
 }
 
 // Generate creates the first key for slot and makes it active.
@@ -195,17 +218,23 @@ func (s *Store) Generate(slot Slot, alg authz.Algorithm, idempotencyKey string) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if ref, replayed, err := s.replay(idempotencyKey, fingerprint); replayed || err != nil {
+	ref, replayed, err := s.idem.Claim(idempotencyKey, fingerprint)
+	if replayed || err != nil {
 		return ref, err
 	}
+	// The claim is ours from here. Release gives it back if the operation does
+	// not finish and does nothing once it has, so a slot that turns out to be
+	// occupied leaves the idempotency key usable rather than stranded.
+	defer s.idem.Release(idempotencyKey)
+
 	if _, ok := s.active[slot]; ok {
 		return authz.KeyRef{}, fmt.Errorf("%w: %q", ErrSlotExists, slot)
 	}
-	ref, err := s.mint(slot, alg)
+	ref, err = s.mint(slot, alg)
 	if err != nil {
 		return authz.KeyRef{}, err
 	}
-	s.idem[idempotencyKey] = idempotencyRecord{fingerprint: fingerprint, result: ref}
+	s.record(idempotencyKey, ref)
 	return ref, nil
 }
 
@@ -226,9 +255,11 @@ func (s *Store) Rotate(slot Slot, idempotencyKey string) (authz.KeyRef, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if ref, replayed, err := s.replay(idempotencyKey, fingerprint); replayed || err != nil {
+	ref, replayed, err := s.idem.Claim(idempotencyKey, fingerprint)
+	if replayed || err != nil {
 		return ref, err
 	}
+	defer s.idem.Release(idempotencyKey)
 
 	kid, ok := s.active[slot]
 	if !ok {
@@ -236,7 +267,7 @@ func (s *Store) Rotate(slot Slot, idempotencyKey string) (authz.KeyRef, error) {
 	}
 	previous := s.keys[kid]
 
-	ref, err := s.mint(slot, previous.ref.Algorithm)
+	ref, err = s.mint(slot, previous.ref.Algorithm)
 	if err != nil {
 		return authz.KeyRef{}, err
 	}
@@ -247,25 +278,22 @@ func (s *Store) Rotate(slot Slot, idempotencyKey string) (authz.KeyRef, error) {
 		previous.notAfter = end
 	}
 
-	s.idem[idempotencyKey] = idempotencyRecord{fingerprint: fingerprint, result: ref}
+	s.record(idempotencyKey, ref)
 	return ref, nil
 }
 
-// replay reports whether idempotencyKey has already been used. It returns the
-// recorded result when the arguments match, and ErrIdempotencyConflict when
-// they do not. Callers hold s.mu.
-func (s *Store) replay(idempotencyKey, fingerprint string) (authz.KeyRef, bool, error) {
-	if idempotencyKey == "" {
-		return authz.KeyRef{}, true, ErrIdempotencyKeyRequired
-	}
-	record, ok := s.idem[idempotencyKey]
-	if !ok {
-		return authz.KeyRef{}, false, nil
-	}
-	if record.fingerprint != fingerprint {
-		return authz.KeyRef{}, true, fmt.Errorf("%w: %q", ErrIdempotencyConflict, idempotencyKey)
-	}
-	return record.result, true, nil
+// record remembers what the claimed operation returned. Callers hold s.mu.
+//
+// The error is discarded, which is worth a sentence because nothing else here
+// discards one. Complete refuses only when the caller does not hold the claim,
+// and this caller took it a few statements earlier under a lock nobody else can
+// hold — the single path to it is the retention window lapsing between the two
+// calls, which is a day of wall time inside one critical section. Returning an
+// error would be worse than losing the record either way: the key has already
+// been minted and installed, so a caller told the call failed would retry and
+// mint a second one, which is the outcome the idempotency key exists to prevent.
+func (s *Store) record(idempotencyKey string, ref authz.KeyRef) {
+	_ = s.idem.Complete(idempotencyKey, ref)
 }
 
 // mint generates a key, names it by thumbprint and installs it as the active
