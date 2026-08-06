@@ -61,13 +61,31 @@ func generate(alg authz.Algorithm) (signingMaterial, error) {
 		if err != nil {
 			return nil, fmt.Errorf("generate %s key: %w", alg, err)
 		}
-		return newECSigningKey(p, priv)
+		// Bound and returned in two steps rather than `return newECSigningKey(…)`
+		// directly, and the same below and in parseECJWK and parseOKPJWK.
+		//
+		// The constructors return a concrete pointer while these functions return
+		// an interface, so returning the call as it stands puts a nil
+		// *ecSigningKey inside a non-nil signingMaterial on the error path. The
+		// result is a value that is not nil and panics on first use, which makes
+		// `material != nil` an invalid guard at every call site — and the note on
+		// signingMaterial above refuses that exact class of bug for the same
+		// reason, one interface up.
+		key, err := newECSigningKey(p, priv)
+		if err != nil {
+			return nil, err
+		}
+		return key, nil
 	case ktyOKP:
 		_, priv, err := ed25519.GenerateKey(rand.Reader)
 		if err != nil {
 			return nil, fmt.Errorf("generate %s key: %w", alg, err)
 		}
-		return newOKPSigningKey(p, priv)
+		key, err := newOKPSigningKey(p, priv)
+		if err != nil {
+			return nil, err
+		}
+		return key, nil
 	default:
 		return nil, fmt.Errorf("%w: %q", authz.ErrUnsupportedAlgorithm, alg)
 	}

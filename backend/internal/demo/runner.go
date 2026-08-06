@@ -50,6 +50,15 @@ const (
 	StateMislabelled State = "mislabelled"
 )
 
+// states is every value State takes, in the same spirit as kinds in
+// manifest.go.
+//
+// It exists so that the presentation table in banner.go can be checked against
+// it at start-up. A state the banner does not know is one the summary line
+// counts as nothing, and a total that silently disagrees with the list above it
+// is worse than no total at all.
+var states = []State{StateRunning, StatePending, StateFailed, StateMislabelled}
+
 // Status is one process's outcome.
 type Status struct {
 	Process Process
