@@ -323,7 +323,7 @@ func TestAReceiptMayNotInventAnErrorCode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			token, err := sdjwt.SignJWT(t.Context(), ap2.JOSESignerFor(f.signer), ap2.ReceiptType,
+			token, err := sdjwt.SignJWT(t.Context(), ap2.JOSESigner(f.signer), ap2.ReceiptType,
 				map[string]any{
 					"iss":          merchantID,
 					"reference":    ref,

@@ -20,8 +20,73 @@
       "implemented": true,
       "dir": "backend",
       "command": "bin/collector",
-      "args": ["-addr", "127.0.0.1:8085"],
+      "args": [
+        "-addr",
+        "127.0.0.1:8085"
+      ],
       "health": "http://127.0.0.1:8085/healthz"
+    },
+    {
+      "name": "surface",
+      "kind": "role",
+      "summary": "Trusted Surface — shows the interpretation and takes the user's signature",
+      "issue": "9",
+      "implemented": true,
+      "dir": "backend",
+      "command": "bin/surface",
+      "args": [
+        "-addr",
+        ":8084"
+      ],
+      "health": "http://localhost:8084/.well-known/jwks.json"
+    },
+    {
+      "name": "merchant",
+      "kind": "role",
+      "summary": "Merchant — prices the route and verifies the Checkout Mandate",
+      "issue": "9",
+      "implemented": true,
+      "dir": "backend",
+      "command": "bin/merchant",
+      "args": [
+        "-addr",
+        ":8081",
+        "-surface",
+        "http://localhost:8084"
+      ],
+      "health": "http://localhost:8081/.well-known/jwks.json"
+    },
+    {
+      "name": "credprovider",
+      "kind": "role",
+      "summary": "Credential Provider — issues a payment credential scoped to one checkout",
+      "issue": "9",
+      "implemented": true,
+      "dir": "backend",
+      "command": "bin/credprovider",
+      "args": [
+        "-addr",
+        ":8082",
+        "-surface",
+        "http://localhost:8084"
+      ],
+      "health": "http://localhost:8082/.well-known/jwks.json"
+    },
+    {
+      "name": "mpp",
+      "kind": "role",
+      "summary": "Merchant Payment Processor — verifies the Payment Mandate",
+      "issue": "9",
+      "implemented": true,
+      "dir": "backend",
+      "command": "bin/mpp",
+      "args": [
+        "-addr",
+        ":8083",
+        "-surface",
+        "http://localhost:8084"
+      ],
+      "health": "http://localhost:8083/.well-known/jwks.json"
     },
     {
       "name": "registry",
@@ -33,33 +98,6 @@
       "command": "bin/registry"
     },
     {
-      "name": "credprovider",
-      "kind": "role",
-      "summary": "Credential Provider — issues a payment credential scoped to one checkout",
-      "issue": "10",
-      "implemented": false,
-      "dir": "backend",
-      "command": "bin/credprovider"
-    },
-    {
-      "name": "merchant",
-      "kind": "role",
-      "summary": "Merchant — prices the route and verifies the Checkout Mandate",
-      "issue": "10",
-      "implemented": false,
-      "dir": "backend",
-      "command": "bin/merchant"
-    },
-    {
-      "name": "mpp",
-      "kind": "role",
-      "summary": "Merchant Payment Processor — verifies the Payment Mandate",
-      "issue": "10",
-      "implemented": false,
-      "dir": "backend",
-      "command": "bin/mpp"
-    },
-    {
       "name": "proxy",
       "kind": "role",
       "summary": "verifying proxy at the merchant edge — checks RFC 9421 signatures",
@@ -69,22 +107,23 @@
       "command": "bin/proxy"
     },
     {
-      "name": "surface",
-      "kind": "role",
-      "summary": "Trusted Surface — shows the interpretation and takes the user's signature",
-      "issue": "22",
-      "implemented": false,
-      "dir": "backend",
-      "command": "bin/surface"
-    },
-    {
       "name": "agent",
       "kind": "role",
       "summary": "Shopping Agent — watches the price and assembles mandates",
-      "issue": "10",
-      "implemented": false,
+      "issue": "9",
+      "implemented": true,
       "dir": "backend",
-      "command": "bin/agent"
+      "command": "bin/agent",
+      "args": [
+        "-surface",
+        "http://localhost:8084",
+        "-merchant",
+        "http://localhost:8081",
+        "-credprovider",
+        "http://localhost:8082",
+        "-mpp",
+        "http://localhost:8083"
+      ]
     },
     {
       "name": "frontend",
@@ -94,7 +133,10 @@
       "implemented": true,
       "dir": "frontend",
       "command": "npm",
-      "args": ["run", "dev"],
+      "args": [
+        "run",
+        "dev"
+      ],
       "health": "http://127.0.0.1:5173/",
       "url": "http://127.0.0.1:5173"
     }

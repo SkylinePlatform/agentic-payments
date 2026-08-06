@@ -328,7 +328,7 @@ func issueClaims(t *testing.T, f fixture, claims map[string]any, blind ...string
 	payload, disclosures, err := f.blinder.Blind(claims, blind...)
 	require.NoError(t, err, "blinding")
 
-	sd, err := sdjwt.Issue(t.Context(), ap2.JOSESignerFor(f.signer), payload, disclosures)
+	sd, err := sdjwt.Issue(t.Context(), ap2.JOSESigner(f.signer), payload, disclosures)
 	require.NoError(t, err, "issuing")
 	return sd
 }

@@ -24,6 +24,21 @@ import (
 // note saying the production version arrives with this issue. This is it, and
 // the test can now use it instead of its own copy.
 
+// JOSESigner adapts an authz.Signer for the JOSE layer.
+//
+// Exported because the roles sign AP2 artefacts this package does not construct
+// for them. The merchant's Checkout JWT is the case: its contents are the
+// merchant's business — AP2 only ever hashes the compact serialisation — but it
+// is a compact JWS signed by a key the rest of the protocol has to verify, so
+// the bridge between the two vocabularies is still this package's to provide.
+//
+// It was test-only until a role needed one. Growing an exported API for a test
+// would have been the wrong order; this is the right one.
+func JOSESigner(s authz.Signer) sdjwt.Signer { return joseSigner{s} }
+
+// JOSEVerifier is the verifying half, for the same reason.
+func JOSEVerifier(v authz.Verifier) sdjwt.Verifier { return joseVerifier{v} }
+
 // joseSigner adapts an authz.Signer to the sdjwt.Signer pkg/sdjwt takes.
 type joseSigner struct{ inner authz.Signer }
 
