@@ -48,6 +48,10 @@ type Service struct {
 	Keys authz.KeySetPublisher
 	// Clock stamps offers and receipts.
 	Clock authz.Clock
+	// Processor is who the merchant asks to move the money. AP2 has the
+	// merchant initiate payment, so this call is the merchant's rather than the
+	// agent's — the agent never talks to the processor at all.
+	Processor Processor
 	// OfferLifetime is how long a quoted checkout stays purchasable.
 	OfferLifetime time.Duration
 }
@@ -71,6 +75,13 @@ type offer struct {
 type purchase struct {
 	// Mandate is the closed Checkout Mandate in SD-JWT compact serialisation.
 	Mandate string `json:"mandate"`
+	// Payment is the Payment Mandate for the same purchase, and Credential is
+	// what the Credential Provider issued against it. Both are here because the
+	// merchant is the party that initiates payment: it presents them to the
+	// processor, which is a leg the agent has no part in.
+	Payment    string                      `json:"payment"`
+	Credential generated.PaymentCredential `json:"credential"`
+
 	// Checkout is the merchant's own offer, echoed back. The merchant does not
 	// have to be told this — it could look the offer up — but a mock that stored
 	// every offer it ever made would be modelling a database rather than a
@@ -91,16 +102,25 @@ type purchase struct {
 // inside the signed document rather than in the shape of the response, and a
 // caller reads both the same way.
 type answer struct {
+	// Receipt is the merchant's own answer about the Checkout Mandate.
 	Receipt string `json:"receipt"`
+	// PaymentReceipt is the processor's, passed through unaltered. The merchant
+	// has no business editing somebody else's signed statement, and a caller
+	// verifies it against the processor's key rather than the merchant's.
+	PaymentReceipt string `json:"payment_receipt,omitempty"`
+	// Settled says whether money moved. Absent from a refusal for the same
+	// reason the payment receipt is: neither exists until the merchant accepted.
+	Settled bool `json:"settled"`
 }
 
 // Handler returns the merchant's routes, wrapped in the middleware every role
 // runs behind.
 func (s *Service) Handler() (http.Handler, error) {
 	if s.Inventory == nil || s.Rules == nil || s.Signer == nil ||
-		s.Own == nil || s.Keys == nil || s.Clock == nil {
+		s.Own == nil || s.Keys == nil || s.Clock == nil || s.Processor == nil {
 		return nil, errors.New(
-			"merchant: a Service needs inventory, rules, a signer, its own verifier, a key set and a clock")
+			"merchant: a Service needs inventory, rules, a signer, its own verifier, " +
+				"a key set, a clock and a payment processor")
 	}
 
 	mux := http.NewServeMux()
@@ -238,14 +258,39 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := http.StatusOK
 	if verdict != nil {
 		// The receipt is the answer either way, so the status says only whether
 		// the purchase happened. A reader that branches on it and one that reads
 		// the receipt reach the same conclusion.
+		//
+		// No payment is initiated: a merchant that asked for money on a mandate
+		// it had just refused would be contradicting its own signed answer.
+		roles.OK(w, http.StatusUnprocessableEntity, answer{Receipt: receipt})
+		return
+	}
+
+	// Only now, and only because verification passed. This is the leg AP2 gives
+	// the merchant rather than the agent — the agent never speaks to the
+	// processor, so nothing it sends can decide whether money moves.
+	paymentReceipt, settled, err := s.Processor.InitiatePayment(
+		r.Context(), req.Payment, req.Credential)
+	if err != nil {
+		roles.Fail(w, generated.ErrorCodeVerifierUnavailable,
+			fmt.Sprintf("initiating payment: %v", err))
+		return
+	}
+
+	status := http.StatusOK
+	if !settled {
+		// The processor refused. The merchant's own receipt still says the
+		// mandate was good, because it was — and the processor's says why the
+		// money did not move. Two signed answers to two different questions,
+		// which is what lets a dispute tell them apart.
 		status = http.StatusUnprocessableEntity
 	}
-	roles.OK(w, status, answer{Receipt: receipt})
+	roles.OK(w, status, answer{
+		Receipt: receipt, PaymentReceipt: paymentReceipt, Settled: settled,
+	})
 }
 
 // ownOffer establishes that the checkout presented is one this merchant signed,

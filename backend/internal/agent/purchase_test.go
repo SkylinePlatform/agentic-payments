@@ -102,10 +102,13 @@ func newWorld(t *testing.T) *world {
 	inventory, err := merchant.NewDemoInventory(clk, base, merchant.DefaultStep)
 	require.NoError(t, err, "seeding the inventory")
 
+	// Built with a placeholder processor and pointed at the real one below,
+	// because the two need each other's addresses and only one can be first.
 	merchantSvc := &merchant.Service{
 		ID: "air-serbia", Inventory: inventory,
 		Rules:  ap2.MerchantRules{Issuer: w.user.verifier, Clock: clk},
 		Signer: w.shop.signer, Own: w.shop.verifier, Keys: w.shop.keys, Clock: clk,
+		Processor: &merchant.HTTPProcessor{},
 	}
 	w.endpoints.Merchant = serve(t, merchantSvc.Handler)
 
@@ -123,6 +126,11 @@ func newWorld(t *testing.T) *world {
 		Signer:   w.processor.signer, Keys: w.processor.keys, Clock: clk,
 	}
 	w.endpoints.MPP = serve(t, mppSvc.Handler)
+
+	// The merchant is stood up last because it needs the processor's address:
+	// AP2 gives the merchant the payment leg, so it is the merchant that calls
+	// the processor and the agent never does.
+	merchantSvc.Processor = &merchant.HTTPProcessor{Base: w.endpoints.MPP}
 
 	return w
 }
@@ -155,10 +163,12 @@ func TestTheHumanPresentFlowRunsEndToEnd(t *testing.T) {
 	require.NotNil(t, bought.Credential)
 	assert.NotEmpty(t, bought.Credential.Token)
 
-	// Two receipts, from the two verifiers that were asked to decide. Each
+	assert.True(t, bought.Settled, "the processor should have moved the money")
+
+	// Three receipts, from the three parties that were asked to decide. Each
 	// verifiable by the key that role publishes — a receipt only its issuer can
 	// check is not evidence anybody else can use.
-	require.Len(t, bought.Receipts, 2, "every verifier answers with a receipt")
+	require.Len(t, bought.Receipts, 3, "every verifier answers with a receipt")
 
 	for _, tc := range []struct {
 		from     string
@@ -167,6 +177,7 @@ func TestTheHumanPresentFlowRunsEndToEnd(t *testing.T) {
 	}{
 		{"credprovider", w.provider.verifier, generated.ReceiptMandateTypePayment},
 		{"merchant", w.shop.verifier, generated.ReceiptMandateTypeCheckout},
+		{"mpp", w.processor.verifier, generated.ReceiptMandateTypePayment},
 	} {
 		token := receiptFrom(t, bought, tc.from)
 		receipt, err := ap2.VerifyReceipt(token, tc.verifier)
@@ -253,6 +264,41 @@ func TestEveryRejectionPointAnswersWithAReceipt(t *testing.T) {
 		receipt := verifyReceipt(t, p, "merchant", w.shop.verifier)
 		require.NotNil(t, receipt.Error)
 		assert.Equal(t, generated.ErrorCodeCheckoutHashMismatch, *receipt.Error)
+	})
+
+	t.Run("the mandate is good and the money is not", func(t *testing.T) {
+		t.Parallel()
+
+		w := newWorld(t)
+		c := w.client()
+
+		var p agent.Purchase
+		require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &p))
+		require.NoError(t, c.Approve(t.Context(), paymentContent(), &p))
+		require.NoError(t, c.Fund(t.Context(), &p))
+
+		// A credential for somebody else's purchase, swapped in after the
+		// Credential Provider issued a correct one. Everything the merchant
+		// checks is still perfect.
+		elsewhere, err := sdjwt.SHA256.Digest("a different offer entirely")
+		require.NoError(t, err)
+		p.Credential.CheckoutHash = elsewhere
+
+		require.ErrorIs(t, c.Settle(t.Context(), &p), agent.ErrRefused)
+		assert.False(t, p.Settled, "money must not move for a purchase this credential does not cover")
+
+		// Two receipts, disagreeing on purpose. The merchant's says the mandate
+		// was good, because it was; the processor's says the money was not. A
+		// dispute needs both to tell those apart, and a flow that kept only the
+		// last one would lose the distinction.
+		merchantReceipt, err := ap2.VerifyReceipt(receiptFrom(t, p, "merchant"), w.shop.verifier)
+		require.NoError(t, err)
+		assert.Equal(t, generated.ReceiptResultSuccess, merchantReceipt.Result,
+			"the merchant verified the mandate and it held; that answer stands")
+
+		processorReceipt := verifyReceipt(t, p, "mpp", w.processor.verifier)
+		require.NotNil(t, processorReceipt.Error)
+		assert.Equal(t, generated.ErrorCodeCredentialScopeMismatch, *processorReceipt.Error)
 	})
 
 	t.Run("the route is one the merchant does not sell", func(t *testing.T) {

@@ -54,6 +54,11 @@ type Purchase struct {
 	// Credential is what the Credential Provider returned.
 	Credential *generated.PaymentCredential
 
+	// Settled says whether money actually moved. A purchase can have a merchant
+	// receipt saying the mandate was good and still not be settled, which is
+	// why this is not implied by the absence of an error.
+	Settled bool
+
 	// Receipts, in the order they were collected. Every verifier answers with
 	// one — including the ones that refused — so this is the evidence trail
 	// whether or not the purchase completed.
@@ -183,16 +188,35 @@ func (c *Client) Fund(ctx context.Context, p *Purchase) error {
 	return nil
 }
 
-// settle presents the Checkout Mandate and the credential to the merchant.
+// Settle presents the Checkout Mandate, the Payment Mandate and the credential
+// to the merchant.
+//
+// All three, because the merchant is the party that initiates payment — AP2
+// gives that leg to the merchant rather than the agent, so the agent never
+// speaks to the processor and hands over what the merchant will need to.
+//
+// Two receipts can come back: the merchant's, about the mandate, and the
+// processor's, about the money. They answer different questions and are signed
+// by different parties, which is what lets a dispute tell "the mandate was bad"
+// from "the mandate was fine and the money did not move".
 func (c *Client) Settle(ctx context.Context, p *Purchase) error {
 	var out struct {
-		Receipt string `json:"receipt"`
+		Receipt        string `json:"receipt"`
+		PaymentReceipt string `json:"payment_receipt"`
+		Settled        bool   `json:"settled"`
 	}
-	body := map[string]any{"mandate": p.CheckoutMandate, "checkout": p.Offer}
+	body := map[string]any{
+		"mandate":    p.CheckoutMandate,
+		"checkout":   p.Offer,
+		"payment":    p.PaymentMandate,
+		"credential": p.Credential,
+	}
 	err := c.call(ctx, http.MethodPost,
 		strings.TrimSuffix(c.Endpoints.Merchant, "/")+"/checkout", body, &out)
 
 	p.keep("merchant", out.Receipt)
+	p.keep("mpp", out.PaymentReceipt)
+	p.Settled = out.Settled
 
 	if err != nil {
 		return fmt.Errorf("presenting the purchase to the merchant: %w", err)

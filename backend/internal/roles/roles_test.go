@@ -1,6 +1,7 @@
 package roles_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -213,6 +214,10 @@ func TestTheMerchantAnswersARejectionWithAReceipt(t *testing.T) {
 		Rules:     ap2.MerchantRules{Issuer: user.verifier, Clock: shop.clock},
 		Signer:    shop.signer,
 		Own:       shop.verifier,
+		// These tests are about the merchant's own decision, so the processor
+		// is a stub that records nothing. The leg where it matters is exercised
+		// end to end in internal/agent.
+		Processor: refusingProcessor{},
 		Keys:      shop.keys,
 		Clock:     shop.clock,
 	}
@@ -405,6 +410,10 @@ func TestTheMerchantRefusesAnOfferItNeverMade(t *testing.T) {
 		Rules:     ap2.MerchantRules{Issuer: user.verifier, Clock: shop.clock},
 		Signer:    shop.signer,
 		Own:       shop.verifier,
+		// These tests are about the merchant's own decision, so the processor
+		// is a stub that records nothing. The leg where it matters is exercised
+		// end to end in internal/agent.
+		Processor: refusingProcessor{},
 		Keys:      shop.keys,
 		Clock:     shop.clock,
 	}
@@ -430,4 +439,18 @@ func TestTheMerchantRefusesAnOfferItNeverMade(t *testing.T) {
 		"a mandate that binds perfectly to a forged offer must still be refused")
 	assert.NotContains(t, body, "receipt",
 		"no mandate has been examined yet, so there is nothing to sign an answer about")
+}
+
+// refusingProcessor stands in for the Merchant Payment Processor where a test is
+// about something else.
+//
+// It refuses rather than settling, and returns no receipt, so a test that
+// accidentally depended on the payment leg fails loudly instead of passing on a
+// silent success it never asked for.
+type refusingProcessor struct{}
+
+func (refusingProcessor) InitiatePayment(
+	context.Context, string, generated.PaymentCredential,
+) (string, bool, error) {
+	return "", false, nil
 }
