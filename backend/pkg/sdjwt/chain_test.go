@@ -357,6 +357,36 @@ func TestAnExpiredDelegatedPayloadIsRejected(t *testing.T) {
 	assert.ErrorIs(t, err, sdjwt.ErrExpired)
 }
 
+func TestTheDelegateHopReadsItsOwnHashAlgorithm(t *testing.T) {
+	// The root stays at its default, sha-256; the delegate hop is signed with
+	// sha-384. Every other fixture in this file has both hops agree, which
+	// would let VerifyChain read _sd_alg from either one and still pass.
+	chain := delegatedChainWithDelegateHashAlg(t, sdjwt.SHA384) // helper below
+
+	payloads, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	require.NoError(t, err,
+		"_sd_alg lives on the delegating JWT; reading it from the root would silently select sha-256 and the delegate's own sha-384 disclosure would never match its digest")
+
+	require.Len(t, payloads, 2, "a two-hop chain yields both payloads once the right algorithm is used to check them")
+	assert.Equal(t, "closed.example", payloads[1]["vct"],
+		"the delegated content only comes back once its sha-384 digest has been matched under sha-384, not sha-256")
+}
+
+func TestAllowedHashAlgsAppliesToTheDelegateHopToo(t *testing.T) {
+	// Same fixture as above: root at sha-256, delegate hop at sha-384. A
+	// policy that only allows sha-256 must refuse the delegate hop even
+	// though the root alone would satisfy it.
+	chain := delegatedChainWithDelegateHashAlg(t, sdjwt.SHA384)
+
+	opts := chainOptions(t)
+	opts.AllowedHashAlgs = []sdjwt.HashAlg{sdjwt.SHA256}
+
+	_, err := sdjwt.VerifyChain(chain, opts)
+	require.Error(t, err,
+		"AllowedHashAlgs documents itself as applying at both hops, so a verifier that refuses sha-384 must refuse it on the delegated content too, not only on the root")
+	assert.ErrorIs(t, err, sdjwt.ErrUnsupportedHashAlg)
+}
+
 // delegatedChain is issuedRoot delegated to the named key. The root always
 // endorses "delegate" in its cnf; passing a different name is how the
 // unendorsed-key case is built.
@@ -788,6 +818,35 @@ func delegatedChainExpiringAt(t *testing.T, exp time.Time) *sdjwt.Chain {
 		"vct":           "closed.example",
 		"checkout_hash": "abc",
 		"exp":           exp.Unix(),
+	})
+	require.NoError(t, err)
+
+	chain, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
+		Nonce:    "n-1",
+		Audience: "https://merchant.example",
+		IssuedAt: time.Unix(1_777_326_189, 0),
+	}, closed, disclosures)
+	require.NoError(t, err,
+		"delegation is the mechanism under test; if it cannot be built there is nothing to verify")
+	return chain
+}
+
+// delegatedChainWithDelegateHashAlg is delegatedChain("delegate") built with
+// the delegate hop's own _sd_alg set to alg via WithHashAlg, while the root
+// stays at its default (sha-256) — the two hops genuinely disagreeing about
+// which digest function they use. No other fixture in this file does this:
+// every one of them lets both hops default to the same algorithm, which is
+// exactly what would let VerifyChain read _sd_alg from the wrong hop and
+// still pass every existing test.
+func delegatedChainWithDelegateHashAlg(t *testing.T, alg sdjwt.HashAlg) *sdjwt.Chain {
+	t.Helper()
+	root := issuedRoot(t)
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()), sdjwt.WithHashAlg(alg))
+	require.NoError(t, err)
+	closed, disclosures, err := blinder.Blind(map[string]any{
+		"vct":           "closed.example",
+		"checkout_hash": "abc",
 	})
 	require.NoError(t, err)
 
