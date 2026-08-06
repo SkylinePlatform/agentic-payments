@@ -22,6 +22,7 @@ func main() {
 	addr := flag.String("addr", ":8081", "address to listen on")
 	id := flag.String("id", "air-serbia", "merchant identifier, as it appears in receipts")
 	surface := flag.String("surface", "http://localhost:8084", "Trusted Surface base URL")
+	processor := flag.String("mpp", "http://localhost:8083", "Merchant Payment Processor base URL")
 	flag.Parse()
 
 	roles.Main("merchant", *addr, func(identity roles.Identity) (http.Handler, error) {
@@ -52,6 +53,8 @@ func main() {
 			Signer: identity.Signer,
 			Keys:   identity.Keys,
 			Clock:  identity.Clock,
+			// The merchant initiates payment, not the agent.
+			Processor: &merchant.HTTPProcessor{Base: *processor},
 		}
 		return service.Handler()
 	})

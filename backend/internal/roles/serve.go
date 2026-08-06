@@ -1,6 +1,8 @@
 package roles
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -117,4 +119,14 @@ func Middleware(clk authz.Clock, h http.Handler) (http.Handler, error) {
 		return nil, fmt.Errorf("correlation middleware: %w", err)
 	}
 	return correlation.Wrap(idempotency.Wrap(h)), nil
+}
+
+// Fingerprint names a value stably, for use as an idempotency key.
+//
+// Not a hash of anything secret and not a security boundary — the point is only
+// that the same step of the same purchase produces the same key, so that a retry
+// is recognised as one rather than treated as a second purchase.
+func Fingerprint(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
