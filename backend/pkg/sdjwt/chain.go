@@ -11,13 +11,23 @@ import (
 
 // The Delegate SD-JWT claim names and header types (draft-gco-oauth-delegate-sd-jwt-00).
 //
-// delegateType is emphatically not RFC 9901's kbType. The RFC's Key Binding JWT
-// is "kb+jwt"; a delegating one is "kb+sd-jwt", and an intermediate hop of a
-// longer chain is "kb+sd-jwt+kb". Accepting the RFC's value here would let a
+// DelegateType is emphatically not RFC 9901's kbType. The RFC's Key Binding
+// JWT is "kb+jwt"; a delegating one is "kb+sd-jwt", and an intermediate hop of
+// a longer chain is "kb+sd-jwt+kb". Accepting the RFC's value here would let a
 // plain proof of possession be presented as a delegation of authority, which is
 // exactly what explicit typing exists to prevent.
+//
+// DelegateTypeKB is exported and pinned even though nothing in this package
+// emits it: this implementation is two hops only (see Chain), so a longer
+// chain's intermediate hop — which carries this typ instead of DelegateType —
+// never gets built here. Leaving it undeclared would mean a reader who has
+// only ever seen DelegateType has no way to learn that a longer chain's
+// interior hops are typed differently, and would be left to guess at the
+// wrong rule — that every non-final hop reuses "kb+sd-jwt" — instead of being
+// told the actual one.
 const (
-	delegateType         = "kb+sd-jwt"
+	DelegateType         = "kb+sd-jwt"
+	DelegateTypeKB       = "kb+sd-jwt+kb"
 	delegatePayloadClaim = "delegate_payload"
 	sdHashClaim          = "sd_hash"
 	issuerJWTHashClaim   = "issuer_jwt_hash"
@@ -240,7 +250,7 @@ func (s *SDJWT) Delegate(
 		delegatePayloadClaim: []any{map[string]any{arrayDigestKey: digest}},
 	}
 
-	encoded, err := signJWT(ctx, signer, delegateType, claims)
+	encoded, err := signJWT(ctx, signer, DelegateType, claims)
 	if err != nil {
 		return nil, err
 	}
@@ -345,10 +355,10 @@ func VerifyChain(c *Chain, opts ChainOptions) ([]map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrKeyBindingInvalid, err)
 	}
-	if jwt.header.Typ != delegateType {
+	if jwt.header.Typ != DelegateType {
 		return nil, fmt.Errorf(
 			"%w: typ is %q, want %q — %q proves possession of a key without delegating anything",
-			ErrKeyBindingInvalid, jwt.header.Typ, delegateType, kbType)
+			ErrKeyBindingInvalid, jwt.header.Typ, DelegateType, kbType)
 	}
 	if err := jwt.verifyWith(delegateKey); err != nil {
 		return nil, err
