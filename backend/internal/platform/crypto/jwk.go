@@ -191,7 +191,14 @@ func parseECJWK(p params, j jwk) (keyMaterial, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s key: %w", ErrMalformedJWK, p.crv, err)
 	}
-	return newECKey(p, pub)
+	// Two steps, not `return newECKey(p, pub)` — see the note in generate. The
+	// constructor's concrete pointer would otherwise arrive inside a non-nil
+	// keyMaterial on the error path.
+	key, err := newECKey(p, pub)
+	if err != nil {
+		return nil, err
+	}
+	return key, nil
 }
 
 func parseOKPJWK(p params, j jwk) (keyMaterial, error) {
@@ -202,5 +209,9 @@ func parseOKPJWK(p params, j jwk) (keyMaterial, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newOKPKey(p, ed25519.PublicKey(x))
+	key, err := newOKPKey(p, ed25519.PublicKey(x))
+	if err != nil {
+		return nil, err
+	}
+	return key, nil
 }
