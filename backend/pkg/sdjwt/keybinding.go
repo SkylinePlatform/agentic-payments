@@ -161,16 +161,9 @@ func (s *SDJWT) verifyKeyBinding(holder Verifier, opts Options) error {
 		return fmt.Errorf("%w: payload: %w", ErrKeyBindingInvalid, err)
 	}
 
-	// The nonce and the audience are compared to what the Verifier asked for,
-	// not merely checked for presence. A KB-JWT that proves possession of the
-	// right key but was made for a different Verifier, or for a different
-	// transaction with the same Verifier, is a replay.
-	if claims.Nonce != opts.Nonce {
-		return fmt.Errorf("%w: nonce does not match", ErrKeyBindingInvalid)
-	}
-	if claims.Audience != opts.Audience {
-		return fmt.Errorf("%w: audience is %q, want %q",
-			ErrKeyBindingInvalid, claims.Audience, opts.Audience)
+	if err := checkFreshness(freshness{claims.Nonce, claims.Audience, claims.IssuedAt},
+		opts.Nonce, opts.Audience, opts.MaxKeyBindingAge, opts.Clock); err != nil {
+		return err
 	}
 
 	// sd_hash is computed over what actually arrived, so a Disclosure added or
@@ -182,19 +175,53 @@ func (s *SDJWT) verifyKeyBinding(holder Verifier, opts Options) error {
 	if claims.SDHash != sdHash {
 		return fmt.Errorf("%w: sd_hash does not cover the presented disclosures", ErrKeyBindingInvalid)
 	}
+	return nil
+}
 
-	if opts.MaxKeyBindingAge > 0 {
-		issuedAt := time.Unix(claims.IssuedAt, 0)
-		skew := opts.Clock.Now().Sub(issuedAt)
-		if skew < 0 {
-			skew = -skew
-		}
-		// The window is symmetric: a proof from the future is as suspect as a
-		// stale one, and clock skew moves in both directions.
-		if skew > opts.MaxKeyBindingAge {
-			return fmt.Errorf("%w: issued at %s, outside the %s window",
-				ErrKeyBindingInvalid, issuedAt.UTC().Format(time.RFC3339), opts.MaxKeyBindingAge)
-		}
+// freshness is the part of a proof that answers "made for me, for this
+// transaction, recently".
+type freshness struct {
+	nonce    string
+	audience string
+	// issuedAt is epoch seconds, and is only read when maxAge is positive.
+	issuedAt int64
+}
+
+// checkFreshness compares a proof's nonce, audience and age against what the
+// Verifier asked for.
+//
+// Shared by RFC 9901's Key Binding JWT and Delegate SD-JWT's delegating JWT,
+// which ask the same three questions of payloads that are otherwise different
+// objects. **If the draft ever moves one of these three without the RFC moving
+// it, split this back apart rather than adding a flag** — a shared check with a
+// per-caller exception is how one specification's rule silently starts governing
+// the other.
+//
+// The nonce and the audience are compared to what the Verifier asked for, not
+// merely checked for presence. A proof of the right key made for a different
+// Verifier, or for a different transaction with the same one, is a replay.
+func checkFreshness(got freshness, wantNonce, wantAudience string, maxAge time.Duration, clk Clock) error {
+	if got.nonce != wantNonce {
+		return fmt.Errorf("%w: nonce does not match", ErrKeyBindingInvalid)
+	}
+	if got.audience != wantAudience {
+		return fmt.Errorf("%w: audience is %q, want %q",
+			ErrKeyBindingInvalid, got.audience, wantAudience)
+	}
+	if maxAge <= 0 {
+		return nil
+	}
+
+	issuedAt := time.Unix(got.issuedAt, 0)
+	skew := clk.Now().Sub(issuedAt)
+	if skew < 0 {
+		skew = -skew
+	}
+	// The window is symmetric: a proof from the future is as suspect as a stale
+	// one, and clock skew moves in both directions.
+	if skew > maxAge {
+		return fmt.Errorf("%w: issued at %s, outside the %s window",
+			ErrKeyBindingInvalid, issuedAt.UTC().Format(time.RFC3339), maxAge)
 	}
 	return nil
 }

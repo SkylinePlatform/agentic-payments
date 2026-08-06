@@ -170,6 +170,57 @@ func TestACnfDisclosedRatherThanClearIsStillResolved(t *testing.T) {
 		"a selectively disclosed cnf is still the delegate's endorsement and has to resolve the same as a clear one")
 }
 
+func TestExactlyOneOfSDHashAndIssuerJWTHashIsRequired(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		claim map[string]any
+		why   string
+	}{
+		{
+			name:  "neither",
+			claim: map[string]any{},
+			why:   "with no hash at all the delegation is not bound to the root and could be lifted onto another",
+		},
+		{
+			name:  "both",
+			claim: map[string]any{"sd_hash": "x", "issuer_jwt_hash": "y"},
+			why:   "two hashes means a verifier chooses which one binds, and a verifier that chooses is one an attacker can steer",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chain := delegatedChainWithHashClaims(t, tc.claim) // helper below
+
+			_, err := sdjwt.VerifyChain(chain, chainOptions(t))
+			require.Error(t, err, tc.why)
+			assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid)
+		})
+	}
+}
+
+func TestTheDelegationIsBoundToTheDisclosuresTheRootPresented(t *testing.T) {
+	chain := delegatedChainFromRoot(t, issuedRootWithExtraDisclosure(t), "", "delegate")
+
+	// Drop a disclosure from the root after the delegation was signed. sd_hash
+	// covered it, so this must fail — otherwise a relaying party could quietly
+	// narrow what the verifier sees while keeping the signature.
+	narrowed := dropOneRootDisclosure(t, chain) // helper below
+
+	_, err := sdjwt.VerifyChain(narrowed, chainOptions(t))
+	require.Error(t, err, "sd_hash covers the selection; a delegation must not survive its root being edited")
+	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid)
+}
+
+func TestIssuerJWTHashBindsWithoutCoveringDisclosures(t *testing.T) {
+	// A chain built with issuer_jwt_hash instead of sd_hash verifies, and keeps
+	// verifying when a root disclosure is dropped — which is exactly the
+	// weaker guarantee the draft offers, written down so nobody reaches for it
+	// by accident.
+	chain := delegatedChainWithIssuerJWTHash(t) // helper below
+
+	_, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	require.NoError(t, err, "the draft permits issuer_jwt_hash, so a chain that uses it must verify")
+}
+
 func TestVerifyChainRefusesOptionsItCannotApply(t *testing.T) {
 	validChain := delegatedChain(t, "delegate")
 
@@ -393,4 +444,158 @@ func issuedRootEndorsing(t *testing.T, key string, discloseCnf bool) *sdjwt.SDJW
 		return nil
 	}
 	return sd
+}
+
+// issuedRootWithExtraDisclosure is issuedRoot with one additional claim
+// disclosed alongside cnf, which stays in the clear.
+//
+// TestTheDelegationIsBoundToTheDisclosuresTheRootPresented needs a root that
+// has a disclosure to drop. issuedRoot itself has none — Blind with no paths
+// discloses nothing — and cnf is not a candidate either: dropping it would
+// make resolveHolderKey fail one step earlier, at "no cnf claim to bind to",
+// which would pass the test for the wrong reason and prove nothing about the
+// sd_hash check this exercises.
+func issuedRootWithExtraDisclosure(t *testing.T) *sdjwt.SDJWT {
+	t.Helper()
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err)
+	claims := map[string]any{
+		"vct":  "open.example",
+		"cnf":  map[string]any{"jwk": map[string]any{"kty": "oct", "k": "delegate"}},
+		"note": "present when the delegation was signed",
+	}
+	payload, disclosures, err := blinder.Blind(claims, "note")
+	require.NoError(t, err)
+	sd, err := sdjwt.Issue(t.Context(), newHMACKey("issuer", "issuer"), payload, disclosures)
+	require.NoError(t, err)
+	return sd
+}
+
+// delegatedChainWithClaims delegates root, then re-signs the delegating JWT
+// after mutate has changed its claims — the same reach-through-the-wire-format
+// technique delegatedChainFromRoot uses to override typ, generalised to any
+// claim. It exists for the hash-binding tests, which need to write sd_hash and
+// issuer_jwt_hash combinations Delegate itself never produces.
+func delegatedChainWithClaims(t *testing.T, root *sdjwt.SDJWT, mutate func(map[string]any)) *sdjwt.Chain {
+	t.Helper()
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err)
+	closed, disclosures, err := blinder.Blind(map[string]any{
+		"vct":           "closed.example",
+		"checkout_hash": "abc",
+	})
+	require.NoError(t, err)
+
+	chain, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
+		Nonce:    "n-1",
+		Audience: "https://merchant.example",
+		IssuedAt: time.Unix(1_777_326_189, 0),
+	}, closed, disclosures)
+	require.NoError(t, err,
+		"delegation is the mechanism under test; if it cannot be built there is nothing to re-sign")
+
+	// The empty component between the two hops is where the delegating JWT
+	// starts, the same separator delegatedChainFromRoot splits on.
+	parts := strings.Split(chain.String(), "~")
+	sep := -1
+	for i, p := range parts {
+		if p == "" {
+			sep = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, sep, 0, "Chain.String always separates the hops with an empty component")
+	require.Less(t, sep+1, len(parts), "the delegating JWT follows the separator")
+
+	segments := strings.Split(parts[sep+1], ".")
+	require.Len(t, segments, 3, "the delegating JWT is a compact JWS")
+
+	headerBytes, err := b64.DecodeString(segments[0])
+	require.NoError(t, err)
+	var header struct {
+		Typ string `json:"typ"`
+	}
+	require.NoError(t, json.Unmarshal(headerBytes, &header))
+
+	payloadBytes, err := b64.DecodeString(segments[1])
+	require.NoError(t, err)
+	dec := json.NewDecoder(bytes.NewReader(payloadBytes))
+	dec.UseNumber()
+	var claims map[string]any
+	require.NoError(t, dec.Decode(&claims))
+
+	mutate(claims)
+
+	resigned, err := sdjwt.SignJWT(t.Context(), newHMACKey("delegate", "delegate"), header.Typ, claims)
+	require.NoError(t, err)
+
+	parts[sep+1] = resigned
+	again, err := sdjwt.ParseChain(strings.Join(parts, "~"))
+	require.NoError(t, err, "the re-signed chain must still be the shape ParseChain accepts")
+	return again
+}
+
+// delegatedChainWithHashClaims is a delegation whose sd_hash claim is replaced
+// by claim, a fresh set of hash-binding claims rather than a patch on top of
+// the correct one — so "neither" and "both" in
+// TestExactlyOneOfSDHashAndIssuerJWTHashIsRequired state exactly what the
+// delegating JWT carries instead of what Delegate would have written.
+func delegatedChainWithHashClaims(t *testing.T, claim map[string]any) *sdjwt.Chain {
+	t.Helper()
+	return delegatedChainWithClaims(t, issuedRoot(t), func(claims map[string]any) {
+		delete(claims, "sd_hash")
+		for k, v := range claim {
+			claims[k] = v
+		}
+	})
+}
+
+// delegatedChainWithIssuerJWTHash is a delegation bound by issuer_jwt_hash
+// instead of sd_hash: the digest of the Issuer-signed JWT alone, computed the
+// same way c.verifyBinding computes it, not the digest of the JWT and its
+// presented Disclosures that SDHash returns.
+func delegatedChainWithIssuerJWTHash(t *testing.T) *sdjwt.Chain {
+	t.Helper()
+	root := issuedRoot(t)
+	alg, err := root.HashAlg()
+	require.NoError(t, err)
+	issuerHash, err := alg.Digest(root.IssuerJWT())
+	require.NoError(t, err)
+
+	return delegatedChainWithClaims(t, root, func(claims map[string]any) {
+		delete(claims, "sd_hash")
+		claims["issuer_jwt_hash"] = issuerHash
+	})
+}
+
+// dropOneRootDisclosure removes one Disclosure from the root hop of chain's
+// wire form and re-parses it, without re-signing anything — which is the
+// point. This is exactly what a relaying party that only forwards a chain
+// could do to it, and VerifyChain has to catch the result without any
+// cooperation from a signer.
+func dropOneRootDisclosure(t *testing.T, chain *sdjwt.Chain) *sdjwt.Chain {
+	t.Helper()
+
+	parts := strings.Split(chain.String(), "~")
+
+	// The root's disclosures are parts[1:sep], where sep is the empty
+	// component separating the two hops.
+	sep := -1
+	for i := 1; i < len(parts); i++ {
+		if parts[i] == "" {
+			sep = i
+			break
+		}
+	}
+	require.Greater(t, sep, 1, "the root needs at least one disclosure for this test to drop")
+
+	narrowed := make([]string, 0, len(parts)-1)
+	narrowed = append(narrowed, parts[0])
+	narrowed = append(narrowed, parts[2:]...)
+
+	again, err := sdjwt.ParseChain(strings.Join(narrowed, "~"))
+	require.NoError(t, err, "removing one disclosure must not change the chain's shape")
+	return again
 }

@@ -19,6 +19,7 @@ const (
 	delegateType         = "kb+sd-jwt"
 	delegatePayloadClaim = "delegate_payload"
 	sdHashClaim          = "sd_hash"
+	issuerJWTHashClaim   = "issuer_jwt_hash"
 )
 
 // delegation is one hop after the root: a KB-JWT carrying a delegate payload,
@@ -352,7 +353,126 @@ func VerifyChain(c *Chain, opts ChainOptions) ([]map[string]any, error) {
 		return nil, err
 	}
 
-	// Tasks 4 and 5 continue here.
-	_ = jwt
+	claims, err := jwt.claims()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrKeyBindingInvalid, err)
+	}
+	if err := c.verifyBinding(claims); err != nil {
+		return nil, err
+	}
+	if err := verifyDelegateFreshness(claims, opts); err != nil {
+		return nil, err
+	}
+
+	// Task 5 continues here.
 	return []map[string]any{rootPayload, nil}, nil
+}
+
+// verifyBinding checks that the delegating JWT names the root it was signed
+// over, by exactly one of the two hashes the draft allows.
+//
+// The two differ in what they cover, and the difference is the reason both
+// exist. sd_hash covers the Issuer-signed JWT *and the disclosures presented
+// with it*, so a delegation cannot survive its root being narrowed after the
+// fact. issuer_jwt_hash covers only the JWT, which lets an intermediate party
+// withhold a disclosure without invalidating the delegation — useful, and
+// weaker. This implementation emits the stronger one and accepts either,
+// because a chain it did not build may legitimately use the other.
+func (c *Chain) verifyBinding(claims map[string]any) error {
+	sdHash, hasSD := claims[sdHashClaim]
+	issuerHash, hasIssuer := claims[issuerJWTHashClaim]
+
+	switch {
+	case hasSD && hasIssuer:
+		return fmt.Errorf(
+			"%w: both %s and %s are present, and a verifier that picked one would decide silently which binding it checked",
+			ErrKeyBindingInvalid, sdHashClaim, issuerJWTHashClaim)
+	case !hasSD && !hasIssuer:
+		return fmt.Errorf(
+			"%w: neither %s nor %s is present, so the delegation names no root and could be lifted onto another",
+			ErrKeyBindingInvalid, sdHashClaim, issuerJWTHashClaim)
+	case hasSD:
+		want, err := c.root.SDHash()
+		if err != nil {
+			return err
+		}
+		return compareBinding(sdHashClaim, sdHash, want)
+	default:
+		alg, err := c.root.HashAlg()
+		if err != nil {
+			return err
+		}
+		want, err := alg.Digest(c.root.issuerJWT)
+		if err != nil {
+			return err
+		}
+		return compareBinding(issuerJWTHashClaim, issuerHash, want)
+	}
+}
+
+func compareBinding(name string, got any, want string) error {
+	s, ok := got.(string)
+	if !ok {
+		return fmt.Errorf("%w: %s must be a string, got %T", ErrKeyBindingInvalid, name, got)
+	}
+	if s != want {
+		return fmt.Errorf("%w: %s does not cover the root as presented", ErrKeyBindingInvalid, name)
+	}
+	return nil
+}
+
+// verifyDelegateFreshness checks nonce, audience and — when policy sets a
+// window — iat, against what this Verifier asked for.
+//
+// The comparisons themselves are shared with RFC 9901's Key Binding JWT, in
+// checkFreshness below. Only the extraction differs: a KB-JWT's four claims
+// decode into a struct, and a delegating JWT's arrive in the map its payload
+// was processed into.
+func verifyDelegateFreshness(claims map[string]any, opts ChainOptions) error {
+	nonce, _ := claims["nonce"].(string)
+	audience, _ := claims["aud"].(string)
+
+	var issuedAt int64
+	if opts.MaxKeyBindingAge > 0 {
+		secs, err := numericDate(claims["iat"])
+		if err != nil {
+			return fmt.Errorf("%w: iat: %w", ErrKeyBindingInvalid, err)
+		}
+		issuedAt = secs
+	}
+	return checkFreshness(freshness{
+		nonce:    nonce,
+		audience: audience,
+		issuedAt: issuedAt,
+	}, opts.Nonce, opts.Audience, opts.MaxKeyBindingAge, opts.Clock)
+}
+
+// numericDate reads a NumericDate claim into epoch seconds.
+//
+// jwt.claims() decodes with UseNumber, so a JSON number arrives as
+// json.Number in practice — the same precision trap epochSeconds in the AP2
+// adapter documents, where a float64 silently loses precision above 2^53 and
+// an exp that decodes to a different second from the one that was signed is
+// an expiry check answering about a different instant. float64 and int64 are
+// accepted too, for a caller that built the claims itself rather than
+// decoding them off the wire.
+func numericDate(raw any) (int64, error) {
+	switch v := raw.(type) {
+	case json.Number:
+		secs, err := v.Int64()
+		if err != nil {
+			return 0, fmt.Errorf("%s is not a whole number of seconds in range", v.String())
+		}
+		return secs, nil
+	case float64:
+		secs := int64(v)
+		if float64(secs) != v {
+			return 0, fmt.Errorf("%v is not a whole number of seconds", v)
+		}
+		return secs, nil
+	case int64:
+		return v, nil
+	default:
+		return 0, fmt.Errorf("must be a number, got %T", raw)
+	}
 }
