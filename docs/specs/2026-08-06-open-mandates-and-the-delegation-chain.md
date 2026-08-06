@@ -209,6 +209,28 @@ What stays:
 The signatures become `AuthoriseCheckout(open, subject, now)` and
 `AuthorisePayment(open, closed, subject, now)`.
 
+### The role boundary moves too, and that is the wider change
+
+`MerchantRules.VerifyCheckout(sd, checkoutJWT)` and
+`CredentialProviderRules.VerifyPayment(sd)` both take a single presented
+mandate. Under Human Not Present a verifier is handed a *chain*, and neither
+signature has a parameter an open mandate could arrive through. Issue #8's body
+already describes the merchant as verifying constraints from open mandates when
+they are present, so this is a gap between that issue's text and the code rather
+than a new requirement.
+
+It is a signature change, not an added branch, and it is worth naming as one.
+The shape to avoid is an optional `open` field that a caller may leave nil,
+because that reads as "constraints are checked when you supply this" — the same
+ambiguity `PaymentOptions` was deliberately shaped to avoid by refusing to carry
+a `Checkout` field at all. The rule sets should instead say which mode they are
+verifying, so that a Human Not Present presentation cannot be verified by a
+code path that only knows about Human Present and quietly checks no constraints.
+
+The delegation interface stays intact either way: whatever the shape, it is
+still a value a role can be handed, which is what makes AP2's allowance that a
+role may delegate its verification expressible.
+
 ## Human Present is unchanged
 
 In Human Present mode the user signs the closed mandate directly, and this
