@@ -171,6 +171,10 @@ func TestACnfDisclosedRatherThanClearIsStillResolved(t *testing.T) {
 }
 
 func TestExactlyOneOfSDHashAndIssuerJWTHashIsRequired(t *testing.T) {
+	root := issuedRoot(t)
+	correctSDHash, err := root.SDHash()
+	require.NoError(t, err, "the fixture root has to hash cleanly or nothing below tests what it claims")
+
 	for _, tc := range []struct {
 		name  string
 		claim map[string]any
@@ -182,17 +186,31 @@ func TestExactlyOneOfSDHashAndIssuerJWTHashIsRequired(t *testing.T) {
 			why:   "with no hash at all the delegation is not bound to the root and could be lifted onto another",
 		},
 		{
-			name:  "both",
-			claim: map[string]any{"sd_hash": "x", "issuer_jwt_hash": "y"},
+			name: "both",
+			// sd_hash is the correct value for root, not a placeholder. A bogus
+			// one would make this fail for an unrelated reason — the wrong
+			// sd_hash alone is enough to reject — and the test would keep
+			// passing even if the "both present" guard were deleted and the
+			// switch collapsed to hasSD/else. Only a genuinely correct sd_hash
+			// sitting next to a bogus issuer_jwt_hash proves the rejection
+			// comes from two hashes being present, not from either being wrong.
+			claim: map[string]any{"sd_hash": correctSDHash, "issuer_jwt_hash": "y"},
 			why:   "two hashes means a verifier chooses which one binds, and a verifier that chooses is one an attacker can steer",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			chain := delegatedChainWithHashClaims(t, tc.claim) // helper below
+			chain := delegatedChainWithHashClaims(t, root, tc.claim) // helper below
 
 			_, err := sdjwt.VerifyChain(chain, chainOptions(t))
 			require.Error(t, err, tc.why)
 			assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid)
+			// The sentinel alone is not enough: compareBinding's own failures
+			// also wrap ErrKeyBindingInvalid, so a switch collapsed to
+			// hasSD/else could still satisfy ErrorIs while rejecting for the
+			// wrong reason. tc.name is the word verifyBinding's "both" and
+			// "neither" branches each put in their own message, so this checks
+			// the rejection actually came from the exactly-one rule.
+			assert.ErrorContains(t, err, tc.name)
 		})
 	}
 }
@@ -537,14 +555,18 @@ func delegatedChainWithClaims(t *testing.T, root *sdjwt.SDJWT, mutate func(map[s
 	return again
 }
 
-// delegatedChainWithHashClaims is a delegation whose sd_hash claim is replaced
-// by claim, a fresh set of hash-binding claims rather than a patch on top of
-// the correct one — so "neither" and "both" in
+// delegatedChainWithHashClaims is a delegation over root whose sd_hash claim
+// is replaced by claim, a fresh set of hash-binding claims rather than a patch
+// on top of the correct one — so "neither" and "both" in
 // TestExactlyOneOfSDHashAndIssuerJWTHashIsRequired state exactly what the
 // delegating JWT carries instead of what Delegate would have written.
-func delegatedChainWithHashClaims(t *testing.T, claim map[string]any) *sdjwt.Chain {
+//
+// root is a parameter rather than built here so a caller can hash it first —
+// TestExactlyOneOfSDHashAndIssuerJWTHashIsRequired's "both" case needs the
+// correct sd_hash for the very root the chain is built over, not a fresh one.
+func delegatedChainWithHashClaims(t *testing.T, root *sdjwt.SDJWT, claim map[string]any) *sdjwt.Chain {
 	t.Helper()
-	return delegatedChainWithClaims(t, issuedRoot(t), func(claims map[string]any) {
+	return delegatedChainWithClaims(t, root, func(claims map[string]any) {
 		delete(claims, "sd_hash")
 		for k, v := range claim {
 			claims[k] = v
