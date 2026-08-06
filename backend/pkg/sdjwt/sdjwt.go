@@ -29,9 +29,10 @@ type SDJWT struct {
 
 // Parse reads the compact serialisation.
 //
-// It decodes the Disclosures, so a presentation with an unreadable one fails
-// here rather than at verification. It does not check any signature, resolve
-// any digest or look at the payload: everything it can tell you is structural.
+// It decodes the Disclosures and checks that a Key Binding JWT, if one is
+// present, is a JWT — so a presentation with an unreadable part fails here
+// rather than at verification. It does not check any signature, resolve any
+// digest or look at the payload: everything it can tell you is structural.
 func Parse(s string) (*SDJWT, error) {
 	parts := strings.Split(s, separator)
 	if len(parts) < 2 {
@@ -48,6 +49,21 @@ func Parse(s string) (*SDJWT, error) {
 	// Verifier expecting one form must check for it.
 	last := len(parts) - 1
 	sd := &SDJWT{issuerJWT: parts[0], keyBinding: parts[last]}
+
+	// A non-empty final part claims to be a KB-JWT, so it has to look like one
+	// here. Taking it on trust is not the harmless deferral it appears to be:
+	// an SD-JWT whose trailing tilde was lost in transit has a *Disclosure* in
+	// that position, and accepting it silently moves that Disclosure out of the
+	// list. The digest it would have matched then goes unclaimed, which §7.1
+	// step 3.c.i reads as a claim the Holder withheld — so verification succeeds
+	// and the claim is simply gone from the payload, with nothing anywhere
+	// reporting a problem. A truncated mandate must be a rejection, not a
+	// quietly shorter one.
+	if sd.keyBinding != "" {
+		if _, err := parseJWT(sd.keyBinding); err != nil {
+			return nil, fmt.Errorf("key binding JWT: %w", err)
+		}
+	}
 
 	middle := parts[1:last]
 	sd.disclosures = make([]Disclosure, 0, len(middle))
