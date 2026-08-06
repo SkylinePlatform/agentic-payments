@@ -35,7 +35,7 @@ Payment Mandate is where it would have been easiest to fall.
 | `iat` | `issued_at` | no | epoch seconds |
 | `exp` | `expires_at` | no | epoch seconds |
 | `pisp` | — | no | not modelled |
-| `risk_data` | — | no | not modelled |
+| `risk_data` | `risk_data` | no | modelled, and the one withholdable claim |
 
 Three findings worth recording, because each one saved a decision:
 
@@ -50,18 +50,39 @@ per-field mapping to maintain for them.
 which the contracts documentation already recorded before this work started.
 Everything else keeps its canonical name.
 
-**`pisp` and `risk_data` are deliberately absent.** Both are optional in AP2.
-The canonical model does not carry a PISP because this proof of concept has no
-open-banking leg, and does not carry risk signals because the Trusted Surface
-that would collect them is mocked. This is the same class of scope decision the
-amount schema records about stablecoin rails: written down so that the cost of
-changing our mind is visible rather than discovered.
+**`pisp` is deliberately absent.** It identifies the regulated Payment
+Initiation Service Provider on an account-to-account leg — a PSD2 concept,
+carrying the TPP's eIDAS QWAC domain. This proof of concept has no open-banking
+leg, no issue in the roadmap covers one, and the Credential Provider is mocked.
+The field is optional in AP2, so adding it later is additive. This is the same
+class of scope decision the amount schema records about stablecoin rails:
+written down so the cost of changing our mind is visible rather than
+discovered.
 
-**Nothing in the closed Payment Mandate is selectively disclosable.** The
-specification's disclosability column is empty for every claim in the base
-schema, and the generated disclosure table already agrees. Blinding therefore
-produces no disclosures for this mandate, and the Blinder is still required
-because it is what writes `_sd_alg`.
+**`risk_data` is modelled, and is the one claim this mandate may withhold.**
+It is the signals the Trusted Surface collected when the approval was given —
+evidence that the user was really there. It is modelled rather than dropped
+because both ends of it are in scope: the Trusted Surface that produces it is a
+real role here, and the dispute path that would consume it is not mocked. A
+verifier that discards signed content it does not understand has thrown away
+evidence, and this is the one field where that would matter.
+
+It is deliberately unstructured — `map[string]any`. The useful signal set is a
+fraud-detection concern that moves faster than a protocol schema, and closing
+it here would date the model rather than describe it.
+
+**This is where our model diverges from AP2's disclosability table, on
+purpose.** AP2 marks nothing in the closed Payment Mandate selectively
+disclosable. We mark `risk_data` withholdable, because `x-disclosable` is a
+privacy statement about *our* domain rather than a restatement of AP2's table —
+the generated disclosure list says as much at the top. This mandate is verified
+by the Credential Provider, the Network and the Merchant Payment Processor, and
+a merchant reconciling a payment has no business reading a device fingerprint.
+Nothing on the wire is lost: a verifier that needs the signals is sent the
+disclosure, and one that does not never sees them.
+
+Every other claim is disclosed always, so the Blinder is still required for the
+claim it does blind and for writing `_sd_alg`.
 
 ## The decision that shapes the API: the document never arrives
 
@@ -148,20 +169,22 @@ already exists in the canonical error vocabulary, which was written from the
 protocol documentation ahead of the code that needed it — this is that
 vocabulary paying off rather than a schema change.
 
-## One hardening change to existing code
+## One required change to existing code
 
 `wireName` maps a canonical field path to the AP2 claim carrying it, and it is
 flat. `checkout_hash` maps to `checkout_hash` on the Checkout Mandate and to
 `transaction_id` on the Payment Mandate: the same key, two answers.
 
-Nothing breaks today, because `wireName` is only read by `blindPaths` and the
-Payment Mandate declares nothing withholdable. It would break silently the
-moment a payment field became disclosable, and the failure mode is the one the
-existing comment on `wireName` already describes — a field declared
-withholdable that is issued fully visible, which no happy-path test notices.
+That was harmless while the Payment Mandate declared nothing withholdable,
+because `blindPaths` is the only reader. Modelling `risk_data` as disclosable
+removes the reprieve — `blindPaths("PaymentMandate")` now resolves real paths,
+so the map is read for both mandate types and cannot answer for both.
 
-The map is therefore scoped per mandate type as part of this work, rather than
-left as a trap for the disclosure-minimisation issue to walk into.
+The map is therefore scoped per mandate type. This is not a precaution: the
+failure it prevents is the one the existing comment on `wireName` already
+describes — a field declared withholdable that is issued fully visible, which
+no happy-path test notices, because the mandate verifies perfectly either way.
+Here that field would be the device fingerprint.
 
 ## Tests
 
@@ -176,6 +199,9 @@ left as a trap for the disclosure-minimisation issue to walk into.
 - `Same` refuses two digests made by different algorithms as unverifiable
   rather than as a mismatch
 - the binding tracks `_sd_alg` across `sha-256`, `sha-384` and `sha-512`
+- `risk_data` survives a round trip when disclosed, and a presentation that
+  withholds it still verifies and still binds — the mandate must not depend on
+  the one claim it is allowed to drop
 - wrong and unversioned `vct`
 - misconfiguration: nil signer, blinder, issuer key, clock
 - golden vectors extended with `mandate.payment.1` and the `transaction_id`
@@ -184,7 +210,9 @@ left as a trap for the disclosure-minimisation issue to walk into.
 The mutation set the implementation has to fail: trust the claim instead of
 recomputing; compare the two mandates by a value one of them supplies rather
 than by both digests; hardcode `sha-256` for the payment binding; let `Same`
-pass on differing algorithms; match `vct` by prefix.
+pass on differing algorithms; match `vct` by prefix; and resolve `checkout_hash`
+through the Checkout Mandate's wire name while issuing a Payment Mandate, which
+would blind nothing and publish the risk signals it declared withholdable.
 
 ## What this does not do
 

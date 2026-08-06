@@ -23,6 +23,12 @@
       "description": "Date on which the payment is to be executed, ISO 8601 calendar date. Absent means immediately.",
       "$comment": "A calendar date, not an instant: 'the 3rd' is a different thing from 'the 3rd at 00:00:00Z' once a payer and a payee sit in different time zones. Expressed as a pattern rather than format: date so that the generated Go type stays on the standard library."
     },
+    "risk_data": {
+      "type": "object",
+      "x-disclosable": true,
+      "description": "Risk signals the Trusted Surface collected when the mandate was created — device and behavioural evidence that the approval came from the user it claims to. Deliberately unstructured: the set of useful signals is a fraud-detection concern that changes faster than a protocol schema, and closing it here would date the model rather than describe it.",
+      "$comment": "The only field in this mandate that is about the user rather than the purchase, which is why it is the only one marked withholdable. AP2 marks nothing in the closed Payment Mandate selectively disclosable; this is a deliberate divergence, and the divergence is ours to make because x-disclosable is a privacy statement about our domain rather than a restatement of AP2's table — see the note at the top of the generated disclosure list. The Payment Mandate is verified by the Credential Provider, the Network and the Merchant Payment Processor, and a merchant reconciling a payment has no business reading a device fingerprint. Withholding it costs nothing on the wire, since a verifier that needs the signals is sent the disclosure and one that does not never sees them. Issue #14 is where per-audience minimisation is decided; this only makes the choice available to it."
+    },
     "issued_at": {
       "type": "string",
       "format": "date-time",
