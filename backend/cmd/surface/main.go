@@ -1,14 +1,40 @@
-// Command surface runs the trusted surface.
+// Command surface runs the mock Trusted Surface.
 //
-// AP2 requires the trusted surface to be non-agentic: no model may sit in the consent or signing path.
+// AP2 requires this role to be non-agentic: no LLM, ever, in the thing that
+// shows a user what they are about to authorise and takes their signature. A
+// surface that could be talked into misdescribing a purchase is a surface whose
+// signature means nothing.
+//
+// It is a separate binary for that reason and no other. This main imports
+// nothing that reaches internal/agent, and a test walks the transitive import
+// graph to keep it that way — the compiler is what refuses the mistake, rather
+// than a reviewer noticing it.
 package main
 
 import (
-	"fmt"
-	"os"
+	"flag"
+	"net/http"
+
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/surface"
+	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
 
 func main() {
-	fmt.Fprintln(os.Stderr, "surface: not implemented yet")
-	os.Exit(1)
+	addr := flag.String("addr", ":8084", "address to listen on")
+	flag.Parse()
+
+	roles.Main("surface", *addr, func(identity roles.Identity) (http.Handler, error) {
+		blinder, err := sdjwt.NewBlinder()
+		if err != nil {
+			return nil, err
+		}
+		service := &surface.Service{
+			Signer:  identity.Signer,
+			Keys:    identity.Keys,
+			Clock:   identity.Clock,
+			Blinder: blinder,
+		}
+		return service.Handler()
+	})
 }
