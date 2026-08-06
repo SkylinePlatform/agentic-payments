@@ -113,4 +113,25 @@ var (
 	// whose digest is not reachable from the Issuer-signed JWT without another
 	// Disclosure that was not kept. RFC 9901 §4.2.6 and §7.2 step 2.
 	ErrDisclosureUnreachable = errors.New("sdjwt: disclosure unreachable without its parent")
+
+	// ErrMalformedChain means a Delegate SD-JWT could not be read as one: the
+	// empty component between hops is missing, the trailing component is not
+	// empty, or there is more than one delegation.
+	//
+	// It is separate from ErrMalformedSDJWT because the two send a reader to
+	// different places. A malformed SD-JWT is a broken token; a malformed chain
+	// is usually a well-formed token of the wrong shape — an SD-JWT presented
+	// where a delegation was required, or a dSD-JWT+KB this implementation does
+	// not accept. Reporting the second as the first would send whoever reads it
+	// looking for corruption that is not there.
+	ErrMalformedChain = errors.New("sdjwt: malformed delegate SD-JWT chain")
+
+	// ErrDelegatePayloadInvalid means the delegating KB-JWT's delegate_payload
+	// is not one disclosed JSON object.
+	//
+	// Draft §6 step 3.2 requires exactly one. Zero means the delegate withheld
+	// the very content it is delegating; more than one means the Verifier would
+	// have to choose which authorisation it was being shown, and a Verifier that
+	// picks is a Verifier an attacker can steer.
+	ErrDelegatePayloadInvalid = errors.New("sdjwt: delegate payload is not exactly one disclosed object")
 )
