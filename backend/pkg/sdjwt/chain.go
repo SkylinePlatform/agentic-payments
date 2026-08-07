@@ -88,8 +88,16 @@ func ParseChain(s string) (*Chain, error) {
 			continue
 		}
 		if sep >= 0 {
+			// Everything after the first empty component belongs to the
+			// delegating hop, so a second one is either a further separator —
+			// a second delegation — or an empty component among that hop's own
+			// parts: an empty delegating JWT if it sits immediately after the
+			// separator, an empty disclosure if it sits further along. The wire
+			// form does not distinguish the three, and all three are refused, so
+			// a message naming only the first reading would be a guess written
+			// as a diagnosis.
 			return nil, fmt.Errorf(
-				"%w: two delegation hops; this implementation verifies exactly one",
+				"%w: a second empty component: either two delegation hops, which this implementation does not verify, or an empty component among the delegating hop's own parts",
 				ErrMalformedChain)
 		}
 		sep = i
@@ -99,7 +107,13 @@ func ParseChain(s string) (*Chain, error) {
 			"%w: no empty component between the hops, so the delegating JWT is indistinguishable from a disclosure",
 			ErrMalformedChain)
 	}
-	if sep+1 >= len(interior) || interior[sep+1] == "" {
+	// Only the separator being the last interior component is checked here. An
+	// *empty* component in the delegating JWT's place cannot reach this line:
+	// the loop above walks the same slice, sees that component as a second
+	// empty one and returns before this runs. There is no such component to see
+	// when the separator is last, which is why this check is still needed and
+	// why it is only this half of it.
+	if sep+1 >= len(interior) {
 		return nil, fmt.Errorf("%w: nothing follows the hop separator", ErrMalformedChain)
 	}
 
@@ -107,7 +121,7 @@ func ParseChain(s string) (*Chain, error) {
 	if err != nil {
 		return nil, err
 	}
-	delegated, err := parseDisclosures(interior[sep+2:])
+	delegated, err := parseDisclosures("delegating", interior[sep+2:])
 	if err != nil {
 		return nil, err
 	}
@@ -128,19 +142,27 @@ func ParseChain(s string) (*Chain, error) {
 
 // parseDisclosureRun builds the root SD-JWT from its JWT and its disclosures.
 func parseDisclosureRun(jwt string, encoded []string) (*SDJWT, error) {
-	disclosures, err := parseDisclosures(encoded)
+	disclosures, err := parseDisclosures("root", encoded)
 	if err != nil {
 		return nil, err
 	}
 	return &SDJWT{issuerJWT: jwt, disclosures: disclosures}, nil
 }
 
-func parseDisclosures(encoded []string) ([]Disclosure, error) {
+// parseDisclosures decodes one hop's run of Disclosures.
+//
+// hop names which of the two the run belongs to, and it is an argument rather
+// than something a caller wraps on afterwards because the two call sites are
+// otherwise indistinguishable: either produces ErrMalformedChain and a position
+// counted from that hop's own first disclosure, so a reader told only "position
+// 2" has to count tildes to learn which 2 it is.
+func parseDisclosures(hop string, encoded []string) ([]Disclosure, error) {
 	out := make([]Disclosure, 0, len(encoded))
 	for i, e := range encoded {
 		d, err := ParseDisclosure(e)
 		if err != nil {
-			return nil, fmt.Errorf("%w: disclosure at position %d: %w", ErrMalformedChain, i+1, err)
+			return nil, fmt.Errorf("%w: %s hop: disclosure at position %d: %w",
+				ErrMalformedChain, hop, i+1, err)
 		}
 		out = append(out, d)
 	}

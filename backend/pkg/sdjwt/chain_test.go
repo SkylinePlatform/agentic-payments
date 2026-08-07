@@ -82,6 +82,80 @@ func TestAPlainSDJWTIsNotAChain(t *testing.T) {
 	assert.ErrorIs(t, err, sdjwt.ErrMalformedChain)
 }
 
+func TestAHopSeparatorWithNothingAfterItIsRefused(t *testing.T) {
+	// The separator is the last interior component: a root and its disclosure,
+	// then the empty component, then the trailing one. Nothing occupies the
+	// delegating JWT's place — not an empty component, no component at all —
+	// which is the one shape the second-empty rule above cannot see, because
+	// there is nothing there for it to look at.
+	d0, err := sdjwt.NewObjectDisclosure("c2FsdDAwMDAwMDAwMDAwMDAwMA", "hop0", "value")
+	require.NoError(t, err, "the fixture has to be a real disclosure or the root run is not being parsed at all")
+
+	_, err = sdjwt.ParseChain(strings.Join([]string{fakeRootJWT, d0.String(), "", ""}, "~"))
+	require.Error(t, err,
+		"a chain that separates two hops and then supplies only one is not a chain, and reading past the separator would index a slice that ends at it")
+	assert.ErrorIs(t, err, sdjwt.ErrMalformedChain)
+	assert.ErrorContains(t, err, "nothing follows the hop separator",
+		"the sentinel is shared with every other parse failure, so only the message says the separator was the end of the input")
+}
+
+func TestAnEmptyComponentInTheDelegatingJWTsPlaceIsRefused(t *testing.T) {
+	// Two empty components in a row: the hop separator, then nothing where the
+	// delegating JWT belongs. ParseChain once carried a guard of its own for
+	// this and could never reach it — the loop looking for a second separator
+	// walks the same components and claims this one first. That guard is gone;
+	// the loop is what refuses this input, and this test is what says so.
+	d0, err := sdjwt.NewObjectDisclosure("c2FsdDAwMDAwMDAwMDAwMDAwMA", "hop0", "value")
+	require.NoError(t, err, "the fixture has to be a real disclosure or the root run is not being parsed at all")
+
+	_, err = sdjwt.ParseChain(strings.Join([]string{fakeRootJWT, d0.String(), "", "", fakeKBJWT, ""}, "~"))
+	require.Error(t, err,
+		"an empty delegating JWT would leave the hop this implementation exists to verify with no signature to check")
+	assert.ErrorIs(t, err, sdjwt.ErrMalformedChain)
+	assert.ErrorContains(t, err, "second empty component",
+		"the message has to describe what was seen rather than assert one of the three readings it admits")
+}
+
+func TestAMalformedDisclosureNamesTheHopItWasIn(t *testing.T) {
+	// Both hops number their disclosures from their own first one, so the
+	// position alone is ambiguous: "position 1" is the root's first disclosure
+	// and the delegating hop's first disclosure equally. Whoever reads the
+	// error is holding a chain and needs to know which run to look in.
+	d0, err := sdjwt.NewObjectDisclosure("c2FsdDAwMDAwMDAwMDAwMDAwMA", "hop0", "value")
+	require.NoError(t, err, "the intact disclosure has to parse, or both cases below fail on the wrong hop")
+	d1, err := sdjwt.NewArrayDisclosure("c2FsdDExMTExMTExMTExMTExMQ", map[string]any{"vct": "x"})
+	require.NoError(t, err, "the intact disclosure has to parse, or both cases below fail on the wrong hop")
+
+	// Not base64url, so ParseDisclosure refuses it before it decodes to
+	// anything — the same failure at whichever position it is put.
+	const corrupt = "!!!"
+
+	for _, tc := range []struct {
+		name    string
+		chain   string
+		wantHop string
+	}{
+		{
+			name:    "root hop",
+			chain:   strings.Join([]string{fakeRootJWT, corrupt, "", fakeKBJWT, d1.String(), ""}, "~"),
+			wantHop: "root hop",
+		},
+		{
+			name:    "delegating hop",
+			chain:   strings.Join([]string{fakeRootJWT, d0.String(), "", fakeKBJWT, corrupt, ""}, "~"),
+			wantHop: "delegating hop",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := sdjwt.ParseChain(tc.chain)
+			require.Error(t, err, "a disclosure that is not base64url is not a disclosure, in either hop")
+			assert.ErrorIs(t, err, sdjwt.ErrMalformedChain)
+			assert.ErrorContains(t, err, tc.wantHop,
+				"both hops produce the same sentinel and the same position, so the hop name is the only thing that sends a reader to the right run")
+		})
+	}
+}
+
 func TestDelegateProducesAParsableChain(t *testing.T) {
 	root := issuedRoot(t) // helper added in Step 3
 
