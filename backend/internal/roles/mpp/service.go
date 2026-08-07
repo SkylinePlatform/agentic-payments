@@ -15,6 +15,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
@@ -35,6 +36,10 @@ type Service struct {
 	Keys authz.KeySetPublisher
 	// Clock stamps receipts.
 	Clock authz.Clock
+	// Events records the moments this role owns: its verdict on the payment
+	// side of a purchase, and the receipt carrying it. Optional — a nil Emitter
+	// records nothing.
+	Events *obs.Emitter
 }
 
 // settlement is what POST /payment takes.
@@ -92,6 +97,16 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	verdict := s.verdict(presented, req.Credential)
+	// Two questions were asked — is the mandate good, and is this credential
+	// scoped to it — and one verdict comes back, so one event says so. The code
+	// is what distinguishes them, and it is the same code the receipt carries.
+	if verdict != nil {
+		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(verdict)),
+			"payment refused: "+verdict.Error())
+	} else {
+		s.Events.Emit(r.Context(), obs.KindMandateVerified,
+			"Payment Mandate verified and the credential is scoped to it")
+	}
 
 	receipt, err := ap2.IssueReceipt(r.Context(), presented, verdict, ap2.ReceiptOptions{
 		Issuer:      s.ID,
@@ -104,6 +119,7 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("issuing the receipt: %v", err))
 		return
 	}
+	s.Events.Emit(r.Context(), obs.KindReceiptIssued, "receipt issued for the payment")
 
 	status := http.StatusOK
 	if verdict != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 )
 
 // The process plumbing every role binary repeats.
@@ -72,6 +73,33 @@ func NewIdentity(role string) (Identity, error) {
 	return Identity{Signer: signer, Verifier: verifier, Keys: store, Clock: clk}, nil
 }
 
+// Role is everything a role binary is handed: the identity it signs with, and
+// the emitter it records protocol events on.
+//
+// The emitter is a second field rather than a sixth member of Identity because
+// it is not identity — nothing about it is signed, nothing depends on it, and a
+// role whose event log is off is unchanged as a protocol participant. Keeping
+// the two apart is what lets Events be nil in a test without that reading as a
+// role with no key.
+type Role struct {
+	Identity
+
+	// Events is where the five moments in ADR 0003 Decision 2 go. Never nil
+	// here — Main always builds one — but a Service field holding it may be,
+	// and a nil *obs.Emitter records nothing rather than panicking.
+	Events *obs.Emitter
+}
+
+// flushGrace is how long a stopping role waits for its buffered events to reach
+// the collector.
+//
+// Short, and deliberately shorter than the server's own drain: the events are
+// never evidence, so a process that has finished serving must not be held open
+// for them. What this buys is the last few events of a demonstration arriving
+// instead of dying with the process, which is most of the value of emitting at
+// all when the thing being watched is a shutdown.
+const flushGrace = 2 * time.Second
+
 // Run serves h until the process is asked to stop, then drains.
 //
 // The drain matters more here than the line count suggests. A role that is
@@ -117,21 +145,49 @@ func Run(role, addr string, h http.Handler) error {
 
 // Main is the whole of a role binary: build the handler, serve it, report.
 //
-// build receives the role's Identity and returns its handler. Taking a function
-// rather than a handler means the key is minted inside the error path — a role
-// that cannot mint a key exits with a message rather than serving without one.
-func Main(role, addr string, build func(Identity) (http.Handler, error)) {
+// build receives the role's key material and its emitter, and returns its
+// handler. Taking a function rather than a handler means both are minted inside
+// the error path — a role that cannot mint a key exits with a message rather
+// than serving without one.
+//
+// collector is where events go; see CollectorFlag. It is a parameter rather
+// than something read here because a flag has to be declared before parsing,
+// and this runs after.
+func Main(role, addr, collector string, build func(Role) (http.Handler, error)) {
+	if err := start(role, addr, collector, build); err != nil {
+		fail(role, err)
+	}
+}
+
+// start is Main with the exit taken out, so that the emitter's flush is a defer
+// rather than something every error path has to remember. os.Exit does not run
+// deferred functions, which is exactly the bug this shape avoids.
+func start(role, addr, collector string, build func(Role) (http.Handler, error)) error {
 	identity, err := NewIdentity(role)
 	if err != nil {
-		fail(role, err)
+		return err
 	}
-	handler, err := build(identity)
+
+	events, err := Events(identity.Clock, role, collector)
 	if err != nil {
-		fail(role, err)
+		return err
 	}
-	if err := Run(role, addr, handler); err != nil {
-		fail(role, err)
+	defer func() {
+		flush, cancel := context.WithTimeout(context.Background(), flushGrace)
+		defer cancel()
+		if err := events.Close(flush); err != nil {
+			// Worth a line and nothing more. Events that did not make it out are
+			// a thinner screenshot, never a failed operation, so this cannot
+			// change what the process reports.
+			slog.Warn("flushing events", "role", role, "err", err)
+		}
+	}()
+
+	handler, err := build(Role{Identity: identity, Events: events})
+	if err != nil {
+		return err
 	}
+	return Run(role, addr, handler)
 }
 
 func fail(role string, err error) {
