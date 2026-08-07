@@ -173,6 +173,7 @@ var renderings = map[generated.ErrorCode]rendering{
 	generated.ErrorCodeDisclosureInsufficient:  {http.StatusForbidden, "Required disclosure withheld"},
 	generated.ErrorCodeCheckoutHashMismatch:    {http.StatusForbidden, "Checkout hash does not match"},
 	generated.ErrorCodePaymentBindingMismatch:  {http.StatusForbidden, "Payment mandate bound to a different checkout"},
+	generated.ErrorCodePaymentAmountMismatch:   {http.StatusForbidden, "Payment mandate pays a different amount from the checkout"},
 	generated.ErrorCodeConstraintViolated:      {http.StatusForbidden, "Constraint violated"},
 	generated.ErrorCodeConstraintTypeUnknown:   {http.StatusForbidden, "Constraint type unknown"},
 	generated.ErrorCodeAgentKeyMismatch:        {http.StatusForbidden, "Closed mandate signed by an unendorsed key"},
