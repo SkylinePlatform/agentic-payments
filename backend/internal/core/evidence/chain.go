@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"strconv"
+	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 )
@@ -144,9 +145,35 @@ func (r Report) Holds() bool { return r.Err == nil }
 // Verifier is the port a protocol adapter implements to decide a bundle.
 //
 // It is here, and Bundle is here, because a dispute is a domain question: four
-// signed artefacts, one transaction, does the picture hold. Which securing
-// format those artefacts arrived in is the adapter's business — see
+// signed artefacts, one document, does the picture hold. Which securing format
+// those artefacts arrived in is the adapter's business — see
 // internal/adapters/ap2.Dispute, the implementation that exists today.
+//
+// # The arbiter brings the instant
+//
+// at is the moment the transaction happened, and every expiry in the bundle is
+// judged against it rather than against now.
+//
+// **The bundle cannot supply it.** Every artefact in a bundle is a claim by a
+// party to the dispute, so a transaction time read out of one would be a
+// timestamp chosen by somebody with a stake in which side of an expiry it falls.
+// That is the same reasoning that keeps the receipt keys out of the tokens: the
+// party being judged does not get to pick what it is judged against. A real
+// dispute arrives with a claimed transaction date from the cardholder's
+// statement, which is where this comes from.
+//
+// Judging as of now instead would make the whole feature useless rather than
+// merely imprecise. Mandates are short-lived on purpose — the Trusted Surface
+// signs closed mandates with a fifteen-minute life — so no dispute in the world
+// is heard inside the window, and an arbiter reading the wall clock would answer
+// every genuine bundle with "expired" against counterparties who did nothing
+// wrong. Reporting that as a broken link puts a finding against whoever
+// presented the mandate for nothing but the passage of time.
+//
+// So at is required. An implementation must **refuse rather than guess** when it
+// is not given one: a missing instant is a misconfiguration of the arbiter, in
+// the same class as a missing key, and not a fact about any artefact — which
+// means StepNone rather than a named broken link.
 type Verifier interface {
-	Verify(b Bundle) Report
+	Verify(b Bundle, at time.Time) Report
 }

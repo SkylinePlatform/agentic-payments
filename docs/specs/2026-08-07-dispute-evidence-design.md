@@ -31,6 +31,99 @@ nothing here reads the event log — that is [ADR
 0003](../architecture/adr/0003-correlation-and-event-log.md)'s rule and
 `depguard`'s `collector-containment` makes it a property rather than a promise.
 
+## What an arbiter has to supply, and why the bundle cannot
+
+Two things, and neither of them is in the bundle.
+
+**The keys.** A receipt carries `iss`, and resolving a key from it would let the
+party being judged pick the key it is judged against.
+
+**The instant the transaction happened.** `Verify` takes it as a parameter and
+judges every expiry in the bundle against it, rather than reading a clock.
+
+The second follows from the first. Every artefact in a bundle is a claim by a
+party to the dispute, so a transaction time read out of one would be a timestamp
+chosen by somebody with a stake in which side of an expiry it falls — and two
+receipts can disagree about it. A real dispute arrives with a claimed transaction
+date from the cardholder's statement, which is where the instant comes from.
+Cross-checking that date against the receipts' `iat` is a reasonable thing to
+layer on later; it is a corroboration, not a source, and it is not built.
+
+**Judging as of now would not be an approximation, it would break the feature
+outright.** Closed mandates are short-lived on purpose — the Trusted Surface
+signs them with a fifteen-minute life — so no dispute in the world is heard
+inside the window. An arbiter reading the wall clock answers every genuine bundle
+with `mandate_expired`, and answers it as a **named broken link**, which per
+`Report.Broke` is what names the counterparty. The result is a finding against
+whoever presented the mandate for nothing but the passage of time, and a report
+saying none of the five links was established.
+
+So the instant is **required and never defaulted**. A zero one is refused as
+`ErrMisconfigured` / `verifier_unavailable` at `StepNone`, in the same list as a
+missing key: the arbiter was not given what it judges with, and nobody has been
+shown to have done anything wrong. There is no safe default to fall back to —
+now refuses everything, the epoch accepts mandates that had not been issued yet.
+
+### How that reaches a delegated rule set
+
+The awkward part is that `MerchantRules` and `CredentialProviderRules` carry
+their own `Clock`, and `Dispute` holds them behind interfaces it cannot reach
+into. Passing the instant to `Verify` alone would have changed nothing about what
+a delegate did with it.
+
+So the rule sets gained a second entry point each — `VerifyCheckoutAsOf` and
+`VerifyPaymentAsOf` — behind two new interfaces, `CheckoutVerifierAsOf` and
+`PaymentVerifierAsOf`. They take the instant as a parameter, replace the rule
+set's `Clock` with it outright, and refuse a zero one. `Dispute` holds *those*
+two, not the plain pair.
+
+| | Verifies as of | Clock comes from | Held by |
+|---|---|---|---|
+| `VerifyCheckout` / `VerifyPayment` | now | the rule set's field | `merchant.Service`, `credprovider.Service`, `mpp.Service` |
+| `VerifyCheckoutAsOf` / `VerifyPaymentAsOf` | a stated instant | the parameter | `ap2.Dispute` |
+
+Three properties fall out, and they are the reason this shape was taken over the
+alternatives:
+
+- **Delegation survives untouched.** A delegate implements the `AsOf` method and
+  is handed the instant like anybody else. `Dispute` still never constructs a
+  rule set from raw keys, which is #8's second criterion.
+- **Nothing outside `internal/adapters/ap2` changed.** `merchant.Service` still
+  calls `VerifyCheckout`, and `credprovider.Service` and `mpp.Service` still call
+  `VerifyPayment`, with the signatures they always had. A role verifies as it
+  goes; only the arbiter looks backwards.
+- **The bug is unexpressible rather than documented.** The alternative — a
+  required field on `Dispute` plus an obligation on the caller to pin its rule
+  sets' clocks — is a rule nobody enforces, which is how this defect arrived. A
+  `Dispute` cannot now be built from a rule set that judges as of today.
+
+Separate methods rather than a nullable instant on the existing ones, for the
+reason `CheckoutChainVerifier` gives for the same choice: an optional argument
+would read as *"expiry is checked against the transaction when you supply one"*,
+and there would be a single entry point a caller could hand a dispute to by
+mistake and have it silently judged as of now.
+
+The instant is a parameter rather than a field for the reason `MerchantRules`'
+nonce is a parameter. `Issuer` and `Clock` are fixed for a rule set's lifetime and
+production wiring builds one at role startup; the instant belongs to one dispute,
+and a field could only ever express one of them.
+
+### What "expired" means once this holds
+
+Expiry stops being reachable through the passage of time and becomes reachable
+only when a mandate expired **before it was presented** — which is a genuine
+finding against a real counterparty, because the verifier that answered it should
+have refused. That is what `testdata/dispute.json` publishes, under
+`payment_mandate_expired_before_presentation`.
+
+A mandate that lapsed between the purchase and the hearing is not a finding
+against anybody, and must not read as one.
+`TestATransactionIsJudgedAsOfWhenItHappened` holds both halves: the bundle
+verifies as of the transaction, and the same bundle judged a week later breaks at
+link 1 with `mandate_expired` — which is simultaneously the old behaviour and the
+proof that the instant is genuinely threaded through rather than accepted and
+ignored.
+
 ## The five links
 
 ```mermaid

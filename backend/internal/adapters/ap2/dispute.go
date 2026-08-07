@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/evidence"
@@ -30,10 +31,27 @@ import (
 // fields, named by the party they belong to, and nothing in this file reads a
 // key reference out of an artefact.
 //
+// **The arbiter brings the instant too**, on exactly the same reasoning, and
+// Verify takes it rather than reading a clock. Every artefact in a bundle is a
+// claim by a party to the dispute, so a transaction time taken from one would be
+// a timestamp chosen by somebody with a stake in which side of an expiry it
+// falls. Deriving it from the receipts' iat as a cross-check is a thing a later
+// change could add on top; it is not a source, and two receipts can disagree.
+//
 // Every field is an interface, which is what makes delegation expressible here
 // the way it is for a role: an arbiter that is not itself the merchant holds the
 // merchant's rules, or a party the merchant delegated to. Nothing in this file
 // resolves any of them — they arrive already chosen.
+//
+// The two rule-set fields are the AsOf interfaces rather than the plain
+// CheckoutVerifier and PaymentVerifier a role holds, and that is the whole of
+// what stops a dispute being judged against today. A rule set carries its own
+// clock, and Dispute holds it behind an interface it cannot reach into, so a
+// Dispute over the plain pair could not have pinned the instant however carefully
+// it was documented — the obligation would have sat on whoever built the rule
+// sets, which is a rule nobody enforces. MerchantRules and CredentialProviderRules
+// satisfy both pairs, so delegation is untouched: a delegate implements the AsOf
+// method and is handed the instant like anybody else.
 //
 // This is Human Present evidence only. Under Human Not Present a closed mandate
 // is a Key Binding JWT inside a ~~-joined sdjwt.Chain, verified through
@@ -47,7 +65,7 @@ import (
 // deliberately not written ahead of a caller.
 type Dispute struct {
 	// CheckoutMandates is the Merchant's rule set, or its delegate's.
-	CheckoutMandates CheckoutVerifier
+	CheckoutMandates CheckoutVerifierAsOf
 	// PaymentMandates is the Credential Provider's rule set.
 	//
 	// The Credential Provider's rather than the Merchant Payment Processor's,
@@ -56,10 +74,11 @@ type Dispute struct {
 	// — whether a payment credential is scoped to this purchase — and takes a
 	// generated.PaymentCredential rather than a mandate. The processor does
 	// re-verify the Payment Mandate, and it does so through this same rule set:
-	// mpp.Service holds a PaymentVerifier field, and the credential is not in
+	// mpp.Service holds a PaymentVerifier field — the as-of-now half of the same
+	// rules — and the credential is not in
 	// the bundle at all, because the processor's verdict on it is already here
 	// as the Payment Receipt's result and error.
-	PaymentMandates PaymentVerifier
+	PaymentMandates PaymentVerifierAsOf
 	// CheckoutReceipts is the merchant's key.
 	CheckoutReceipts authz.Verifier
 	// PaymentReceipts is the key of whoever answered the Payment Mandate.
@@ -71,7 +90,15 @@ type Dispute struct {
 var _ evidence.Verifier = Dispute{}
 
 // VerifyCheckoutMandate is the first link: the Checkout Mandate is genuine,
-// live, of the right credential type, and binds the document in the bundle.
+// live **as of at**, of the right credential type, and binds the document in the
+// bundle.
+//
+// at is the moment the transaction happened, not the moment the dispute is being
+// heard. Every closed mandate in a real bundle has expired by the time anybody
+// disputes it — the Trusted Surface signs them with a fifteen-minute life — so an
+// arbiter reading a wall clock would refuse every genuine bundle it was ever
+// shown, and would report it as a broken link against whoever presented the
+// mandate.
 //
 // checkoutJWT is the arbiter's copy of the merchant's offer, and passing it is
 // what makes the binding recomputable rather than taken on the word of whoever
@@ -80,6 +107,7 @@ var _ evidence.Verifier = Dispute{}
 // refuses one outright as well. A delegate is free to do neither, which is what
 // VerifySamePurchase's own Covers anchor exists for.
 func (d Dispute) VerifyCheckoutMandate(
+	at time.Time,
 	sd *sdjwt.SDJWT,
 	checkoutJWT string,
 ) (generated.CheckoutMandate, error) {
@@ -87,7 +115,7 @@ func (d Dispute) VerifyCheckoutMandate(
 		return generated.CheckoutMandate{}, fmt.Errorf(
 			"%w: no rules to judge the Checkout Mandate under", ErrMisconfigured)
 	}
-	return d.CheckoutMandates.VerifyCheckout(sd, checkoutJWT)
+	return d.CheckoutMandates.VerifyCheckoutAsOf(at, sd, checkoutJWT)
 }
 
 // VerifyCheckoutReceipt is the second link: the Checkout Receipt is the
@@ -101,18 +129,22 @@ func (d Dispute) VerifyCheckoutReceipt(token string, sd *sdjwt.SDJWT) (generated
 }
 
 // VerifyPaymentMandate is the third link: the Payment Mandate is genuine, live
-// and of the right credential type.
+// as of at, and of the right credential type. See VerifyCheckoutMandate for what
+// at is and why it is not now.
 //
 // It settles nothing about which purchase is being paid for. VerifyPayment takes
 // no checkout and does not claim to check the binding; that is VerifySamePurchase
 // below, and keeping them apart is what stops a caller mistaking its own
 // inaction for a passed check.
-func (d Dispute) VerifyPaymentMandate(sd *sdjwt.SDJWT) (generated.PaymentMandate, error) {
+func (d Dispute) VerifyPaymentMandate(
+	at time.Time,
+	sd *sdjwt.SDJWT,
+) (generated.PaymentMandate, error) {
 	if d.PaymentMandates == nil {
 		return generated.PaymentMandate{}, fmt.Errorf(
 			"%w: no rules to judge the Payment Mandate under", ErrMisconfigured)
 	}
-	return d.PaymentMandates.VerifyPayment(sd)
+	return d.PaymentMandates.VerifyPaymentAsOf(at, sd)
 }
 
 // VerifySamePurchase is the fourth link: the two mandates name one purchase, and
@@ -170,6 +202,21 @@ func (d Dispute) VerifyPaymentReceipt(token string, sd *sdjwt.SDJWT) (generated.
 // failure to answer, and evidence.Report says the same thing a second return
 // value would through Holds.
 //
+// at is when the transaction happened, and it is required: a zero one is refused
+// as ErrMisconfigured at StepNone, alongside a missing key or a missing rule set,
+// rather than defaulted to anything. There is no safe default. Judging as of now
+// would answer "expired" for every real bundle, because closed mandates are
+// short-lived by design and no dispute is heard inside the window — and it would
+// deliver that answer as a *named broken link*, which is a finding against
+// whoever presented the mandate for nothing but the passage of time. Refusing to
+// guess is the only reading that does not manufacture a counterparty at fault.
+//
+// What survives this is the finding that is real: a mandate which had already
+// expired **when it was presented** still breaks its link, because at is the
+// moment of the transaction and the mandate was dead before it. That is a
+// genuine finding — the verifier that answered should have refused — and it is
+// what testdata/dispute.json publishes.
+//
 // The five links run in order and stop at the first failure. Anything else would
 // name the wrong counterparty: a receipt's reference is a digest over the whole
 // presentation it answers, so a forged mandate breaks the receipt link too, and
@@ -190,7 +237,7 @@ func (d Dispute) VerifyPaymentReceipt(token string, sd *sdjwt.SDJWT) (generated.
 // its own — but that is a property of one implementation which the arbiter
 // cannot see and a delegate need not have. Reading a holding chain as evidence
 // that the merchant made the offer is reading in a link that is not there.
-func (d Dispute) Verify(b evidence.Bundle) evidence.Report {
+func (d Dispute) Verify(b evidence.Bundle, at time.Time) evidence.Report {
 	var rep evidence.Report
 
 	// Both of these leave Broke at StepNone, and that is the honest answer
@@ -198,7 +245,7 @@ func (d Dispute) Verify(b evidence.Bundle) evidence.Report {
 	// artefact to be wrong, and neither has one handed three artefacts out of
 	// five — reporting either as "the first link failed" would put a finding
 	// against a counterparty who has not been checked.
-	if err := d.usable(); err != nil {
+	if err := d.usable(at); err != nil {
 		return broken(rep, evidence.StepNone, err)
 	}
 	if err := b.Validate(); err != nil {
@@ -209,7 +256,7 @@ func (d Dispute) Verify(b evidence.Bundle) evidence.Report {
 	if err != nil {
 		return broken(rep, evidence.StepCheckoutAuthorised, err)
 	}
-	checkout, err := d.VerifyCheckoutMandate(checkoutSD, b.Checkout)
+	checkout, err := d.VerifyCheckoutMandate(at, checkoutSD, b.Checkout)
 	if err != nil {
 		return broken(rep, evidence.StepCheckoutAuthorised, err)
 	}
@@ -226,7 +273,7 @@ func (d Dispute) Verify(b evidence.Bundle) evidence.Report {
 	if err != nil {
 		return broken(rep, evidence.StepPaymentAuthorised, err)
 	}
-	payment, err := d.VerifyPaymentMandate(paymentSD)
+	payment, err := d.VerifyPaymentMandate(at, paymentSD)
 	if err != nil {
 		return broken(rep, evidence.StepPaymentAuthorised, err)
 	}
@@ -272,7 +319,7 @@ func (d Dispute) Verify(b evidence.Bundle) evidence.Report {
 // All of them at once for the reason Bundle.Validate lists every gap at once:
 // the reader is wiring an arbiter up, and one name per attempt is one attempt
 // per name.
-func (d Dispute) usable() error {
+func (d Dispute) usable(at time.Time) error {
 	var missing []string
 	for _, collaborator := range []struct {
 		name    string
@@ -282,6 +329,10 @@ func (d Dispute) usable() error {
 		{"rules for the Payment Mandate", d.PaymentMandates != nil},
 		{"the merchant's key", d.CheckoutReceipts != nil},
 		{"the key of whoever answered the Payment Mandate", d.PaymentReceipts != nil},
+		// The instant belongs in this list rather than in a check of its own:
+		// it is something the arbiter brings, exactly as the keys are, and a
+		// dispute heard without one has not been shown a bad artefact either.
+		{"the instant the transaction is judged as of", !at.IsZero()},
 	} {
 		if !collaborator.present {
 			missing = append(missing, collaborator.name)

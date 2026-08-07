@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/evidence"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
-	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
 
@@ -33,10 +33,16 @@ type disputeFx struct {
 	merchant  fixture
 	processor fixture
 
-	// arbiterClock is the clock the rule sets read, held separately from the
-	// three fixtures' own so that a test can move the moment the dispute is
-	// heard without moving the moment anything was issued.
-	arbiterClock *clock.Fake
+	// at is the moment the transaction happened, which is what an arbiter judges
+	// as of and what Verify is handed.
+	//
+	// It is not "the moment the dispute is heard", and the difference is the
+	// whole of the seventh review finding: a dispute is heard long after every
+	// mandate in it has expired, so an arbiter that judged as of the hearing
+	// would refuse every genuine bundle and would report it as a broken link
+	// against whoever presented the mandate. A fixture that framed this instant
+	// as the hearing would be teaching that behaviour rather than testing it.
+	at time.Time
 
 	checkout        string
 	checkoutMandate *sdjwt.SDJWT
@@ -53,11 +59,11 @@ func newDisputeFixture(t *testing.T) disputeFx {
 	t.Helper()
 
 	fx := disputeFx{
-		user:         newFixture(t),
-		merchant:     newFixture(t),
-		processor:    newFixture(t),
-		arbiterClock: clock.NewFake(base),
-		checkout:     merchantCheckout,
+		user:      newFixture(t),
+		merchant:  newFixture(t),
+		processor: newFixture(t),
+		at:        base,
+		checkout:  merchantCheckout,
 	}
 	fx.checkoutMandate = reparse(t, issue(t, fx.user, mandate()))
 	fx.paymentMandate = reparse(t, issuePayment(t, fx.user, payment(), merchantCheckout))
@@ -67,10 +73,15 @@ func newDisputeFixture(t *testing.T) disputeFx {
 // arbiter is the rule set somebody adjudicating this purchase would hold: the
 // merchant's rules for the Checkout Mandate, the Credential Provider's for the
 // Payment Mandate, and one key per answering party.
+//
+// The rule sets are built with no Clock, deliberately. VerifyCheckoutAsOf and
+// VerifyPaymentAsOf do not read one — the instant replaces it — so a fixture
+// that supplied a clock could not show that, and would leave a reader unable to
+// tell whether the dispute path was using the instant or the clock.
 func (fx disputeFx) arbiter() ap2.Dispute {
 	return ap2.Dispute{
-		CheckoutMandates: ap2.MerchantRules{Issuer: fx.user.verifier, Clock: fx.arbiterClock},
-		PaymentMandates:  ap2.CredentialProviderRules{Issuer: fx.user.verifier, Clock: fx.arbiterClock},
+		CheckoutMandates: ap2.MerchantRules{Issuer: fx.user.verifier},
+		PaymentMandates:  ap2.CredentialProviderRules{Issuer: fx.user.verifier},
 		CheckoutReceipts: fx.merchant.verifier,
 		PaymentReceipts:  fx.processor.verifier,
 	}
@@ -145,7 +156,7 @@ func TestAFaithfulBundleHoldsLinkByLink(t *testing.T) {
 	t.Parallel()
 
 	fx := newDisputeFixture(t)
-	rep := fx.arbiter().Verify(fx.bundle(t))
+	rep := fx.arbiter().Verify(fx.bundle(t), fx.at)
 
 	require.True(t, rep.Holds(), "a faithfully assembled purchase was called into question: %v", rep.Err)
 	assert.Equal(t, evidence.StepNone, rep.Broke, "a chain that held names no broken link")
@@ -182,7 +193,7 @@ func TestARefusedPurchaseStillHasAnIntactChain(t *testing.T) {
 	b.PaymentReceipt = receiptOver(t, fx.processor, processorID, fx.paymentMandate, paymentKind,
 		ap2.ErrCredentialScopeMismatch)
 
-	rep := fx.arbiter().Verify(b)
+	rep := fx.arbiter().Verify(b, fx.at)
 
 	require.True(t, rep.Holds(),
 		"a signed refusal is evidence, and evidence that verifies is not a broken chain: %v", rep.Err)
@@ -204,13 +215,20 @@ func TestARefusedPurchaseStillHasAnIntactChain(t *testing.T) {
 // this exists to prove is that the chain does not inherit a delegate's
 // shortcuts: without VerifySamePurchase's own Covers anchor, two mandates
 // agreeing on a digest of a different document would carry the whole chain.
-type laxCheckoutVerifier struct{ opts ap2.CheckoutOptions }
+type laxCheckoutVerifier struct{ issuer authz.Verifier }
 
-func (l laxCheckoutVerifier) VerifyCheckout(
-	sd *sdjwt.SDJWT, _ string,
+func (l laxCheckoutVerifier) VerifyCheckoutAsOf(
+	at time.Time, sd *sdjwt.SDJWT, _ string,
 ) (generated.CheckoutMandate, error) {
-	return ap2.VerifyCheckout(sd, l.opts)
+	return ap2.VerifyCheckout(sd, ap2.CheckoutOptions{Issuer: l.issuer, Clock: instant(at)})
 }
+
+// instant is authz.Clock stopped where a caller put it — the test-side twin of
+// the adapter's own unexported fixedClock, needed because a delegate has to turn
+// the instant it is handed into the Clock the verification path takes.
+type instant time.Time
+
+func (i instant) Now() time.Time { return time.Time(i) }
 
 // tamperCase is one broken bundle and the link that has to name it.
 type tamperCase struct {
@@ -325,21 +343,32 @@ func tamperCases() []tamperCase {
 			code:  generated.ErrorCodeMandateMalformed,
 		},
 		{
-			// Nobody misbehaved: the user approved, and then the world moved on.
-			// The Payment Mandate is short-lived and the dispute is heard after
-			// it lapsed; the Checkout Mandate is still live, so this is the third
-			// link and not the first.
-			name:   "the Payment Mandate had expired by the time the dispute was heard",
-			vector: "payment_mandate_expired",
+			// Expiry as a finding against somebody, which is the only form of it
+			// that survives an arbiter judging as of the transaction.
+			//
+			// This mandate was signed two hours before the purchase with a
+			// one-hour life, so it was already dead when it was presented — and
+			// the Credential Provider answered it anyway. Judged as of the
+			// transaction instant it is expired, and that is a real fault: the
+			// verifier that signed the receipt should have refused.
+			//
+			// The case this is emphatically *not* is a mandate that lapsed
+			// between the purchase and the hearing. Every mandate in every real
+			// bundle has done that, nobody misbehaved by letting it, and
+			// TestATransactionIsJudgedAsOfWhenItHappened is where that is held
+			// to holding rather than breaking.
+			name:   "the Payment Mandate had already expired when it was presented",
+			vector: "payment_mandate_expired_before_presentation",
 			tamper: func(t *testing.T, fx disputeFx, _ *ap2.Dispute, b *evidence.Bundle) {
-				short := payment()
-				lapses := base.Add(time.Hour)
-				short.ExpiresAt = &lapses
-				pm := reparse(t, issuePayment(t, fx.user, short, merchantCheckout))
+				dead := payment()
+				signed := fx.at.Add(-2 * time.Hour)
+				lapsed := fx.at.Add(-time.Hour)
+				dead.IssuedAt = &signed
+				dead.ExpiresAt = &lapsed
+				pm := reparse(t, issuePayment(t, fx.user, dead, merchantCheckout))
 
 				b.PaymentMandate = pm.String()
 				b.PaymentReceipt = receiptOver(t, fx.processor, processorID, pm, paymentKind, nil)
-				fx.arbiterClock.Advance(2 * time.Hour)
 			},
 			broke: evidence.StepPaymentAuthorised,
 			is:    sdjwt.ErrExpired,
@@ -369,9 +398,7 @@ func tamperCases() []tamperCase {
 			name:   "the two mandates agree on a digest of another document",
 			vector: "both_mandates_bound_to_another_document",
 			tamper: func(t *testing.T, fx disputeFx, d *ap2.Dispute, b *evidence.Bundle) {
-				d.CheckoutMandates = laxCheckoutVerifier{opts: ap2.CheckoutOptions{
-					Issuer: fx.user.verifier, Clock: fx.arbiterClock,
-				}}
+				d.CheckoutMandates = laxCheckoutVerifier{issuer: fx.user.verifier}
 
 				cm := reparse(t, issue(t, fx.user, checkoutFor(otherCheckout)))
 				pm := reparse(t, issuePayment(t, fx.user, payment(), otherCheckout))
@@ -414,9 +441,7 @@ func tamperCases() []tamperCase {
 			name:   "the digests cannot be compared, and the Checkout Mandate is for another purchase",
 			vector: "unequal_algorithms_checkout_bound_elsewhere",
 			tamper: func(t *testing.T, fx disputeFx, d *ap2.Dispute, b *evidence.Bundle) {
-				d.CheckoutMandates = laxCheckoutVerifier{opts: ap2.CheckoutOptions{
-					Issuer: fx.user.verifier, Clock: fx.arbiterClock,
-				}}
+				d.CheckoutMandates = laxCheckoutVerifier{issuer: fx.user.verifier}
 
 				cm := wideCheckout(t, fx.user, checkoutFor(otherCheckout))
 				b.CheckoutMandate = cm.String()
@@ -493,7 +518,7 @@ func (tc tamperCase) run(t *testing.T) evidence.Report {
 	d := fx.arbiter()
 	b := fx.bundle(t)
 	tc.tamper(t, fx, &d, &b)
-	return d.Verify(b)
+	return d.Verify(b, fx.at)
 }
 
 // TestTamperingAtAnyLinkIsCaughtAtThatLink is issue #18's third box.
@@ -545,7 +570,7 @@ func TestTheFirstBrokenLinkIsTheOneReported(t *testing.T) {
 	forged := reparse(t, issue(t, impostor, mandate()))
 	b.CheckoutMandate = forged.String()
 
-	rep := d.Verify(b)
+	rep := d.Verify(b, fx.at)
 	require.False(t, rep.Holds())
 	assert.Equal(t, evidence.StepCheckoutAuthorised, rep.Broke,
 		"the forgery is the finding, and it belongs against whoever presented the mandate")
@@ -576,7 +601,7 @@ func TestEveryLinkIsIndependentlyTestable(t *testing.T) {
 	elsewhere := reparse(t, issuePayment(t, fx.user, payment(), otherCheckout))
 	paymentReceipt := receiptOver(t, fx.processor, processorID, elsewhere, paymentKind, nil)
 
-	checkout, err := d.VerifyCheckoutMandate(fx.checkoutMandate, fx.checkout)
+	checkout, err := d.VerifyCheckoutMandate(fx.at, fx.checkoutMandate, fx.checkout)
 	require.NoError(t, err, "the first link is untouched by any of this")
 
 	_, err = d.VerifyCheckoutReceipt(
@@ -584,7 +609,7 @@ func TestEveryLinkIsIndependentlyTestable(t *testing.T) {
 		fx.checkoutMandate)
 	assert.NoError(t, err, "the merchant answered the mandate it was shown")
 
-	pay, err := d.VerifyPaymentMandate(elsewhere)
+	pay, err := d.VerifyPaymentMandate(fx.at, elsewhere)
 	require.NoError(t, err,
 		"a Payment Mandate for another purchase is still a perfectly valid Payment Mandate")
 
@@ -618,7 +643,7 @@ func TestTwoDigestsUnderDifferentAlgorithmsStillPair(t *testing.T) {
 	fx := newDisputeFixture(t)
 	fx.checkoutMandate = wideCheckout(t, fx.user, mandate())
 
-	rep := fx.arbiter().Verify(fx.bundle(t))
+	rep := fx.arbiter().Verify(fx.bundle(t), fx.at)
 
 	require.True(t, rep.Holds(),
 		"two digests of one document under two algorithms are not two purchases: %v", rep.Err)
@@ -626,15 +651,97 @@ func TestTwoDigestsUnderDifferentAlgorithmsStillPair(t *testing.T) {
 	// The premise, asserted rather than assumed: if these agreed, the fallback
 	// this test exists for would never have run.
 	checkout, err := ap2.VerifyCheckout(fx.checkoutMandate, ap2.CheckoutOptions{
-		Issuer: fx.user.verifier, Clock: fx.arbiterClock, Checkout: fx.checkout,
+		Issuer: fx.user.verifier, Clock: instant(fx.at), Checkout: fx.checkout,
 	})
 	require.NoError(t, err)
 	pay, err := ap2.VerifyPayment(fx.paymentMandate, ap2.PaymentOptions{
-		Issuer: fx.user.verifier, Clock: fx.arbiterClock,
+		Issuer: fx.user.verifier, Clock: instant(fx.at),
 	})
 	require.NoError(t, err)
 	assert.NotEqual(t, checkout.CheckoutHash, pay.CheckoutHash,
 		"the two mandates have to actually disagree on the digest, or the direct comparison would have answered")
+}
+
+// TestATransactionIsJudgedAsOfWhenItHappened is the seventh review finding as a
+// test, and the property the whole feature rests on.
+//
+// Closed mandates are short-lived on purpose — the Trusted Surface signs them
+// with a fifteen-minute life — so by the time anybody disputes a purchase, every
+// mandate in the bundle has expired. An arbiter that judged as of the hearing
+// would therefore refuse every genuine bundle it was ever shown, and would
+// deliver that refusal as a *named broken link* against whoever presented the
+// mandate: a finding against a counterparty for nothing but the passage of time.
+//
+// The second half is what makes the first half load-bearing. Judged as of a week
+// later, this same faithful bundle breaks at the first link with mandate_expired
+// and zero links held — which is both the old behaviour and the proof that the
+// instant is genuinely threaded through rather than accepted and ignored.
+//
+// A week rather than the fifteen minutes a real mandate lives, because these
+// fixtures carry checkout_test.go's 48-hour expiry. The gap between issuance and
+// hearing is what matters and not its size; in production it is minutes.
+func TestATransactionIsJudgedAsOfWhenItHappened(t *testing.T) {
+	t.Parallel()
+
+	fx := newDisputeFixture(t)
+	d := fx.arbiter()
+	b := fx.bundle(t)
+
+	rep := d.Verify(b, fx.at)
+	require.True(t, rep.Holds(),
+		"a purchase is judged as of when it happened, and it was live then: %v", rep.Err)
+	assert.Len(t, rep.Held, 5)
+
+	// A week later the mandates have lapsed, which is what mandates do. Nobody
+	// misbehaved, and this is the answer the arbiter must not be giving.
+	late := d.Verify(b, fx.at.Add(7*24*time.Hour))
+	require.False(t, late.Holds(),
+		"if this held, the instant is not reaching the rule sets and the test above proves nothing")
+	assert.Equal(t, evidence.StepCheckoutAuthorised, late.Broke)
+	assert.Equal(t, generated.ErrorCodeMandateExpired, late.Code,
+		"this is the finding against a blameless counterparty that judging as of now would produce for every real dispute")
+}
+
+// TestAnArbiterWithNoInstantRefusesToGuess is the other half of the same
+// finding: there is no safe default, so there is no default.
+//
+// Now would refuse every genuine bundle. The epoch would accept mandates that
+// had not been issued yet. Either would be an answer to a question nobody asked,
+// delivered with the confidence of one that was — so a zero instant is refused
+// as a misconfiguration of the arbiter, at StepNone, in the same breath as a
+// missing key.
+func TestAnArbiterWithNoInstantRefusesToGuess(t *testing.T) {
+	t.Parallel()
+
+	fx := newDisputeFixture(t)
+
+	rep := fx.arbiter().Verify(fx.bundle(t), time.Time{})
+
+	require.False(t, rep.Holds())
+	assert.Equal(t, evidence.StepNone, rep.Broke,
+		"an arbiter that was not told when has not found against anybody")
+	assert.Empty(t, rep.Held)
+	assert.ErrorIs(t, rep.Err, ap2.ErrMisconfigured)
+	assert.Equal(t, generated.ErrorCodeVerifierUnavailable, rep.Code)
+	assert.Contains(t, rep.Err.Error(), "the instant the transaction is judged as of")
+}
+
+// TestEachRuleSetRefusesAZeroInstantOnItsOwn covers the AsOf entry points
+// directly, for a caller composing its own chain rather than going through
+// Verify — which checks once, up front, and would otherwise be the only thing
+// standing between a zero instant and a mandate judged as of the epoch.
+func TestEachRuleSetRefusesAZeroInstantOnItsOwn(t *testing.T) {
+	t.Parallel()
+
+	fx := newDisputeFixture(t)
+
+	_, err := ap2.MerchantRules{Issuer: fx.user.verifier}.
+		VerifyCheckoutAsOf(time.Time{}, fx.checkoutMandate, fx.checkout)
+	assertMisconfigured(t, err)
+
+	_, err = ap2.CredentialProviderRules{Issuer: fx.user.verifier}.
+		VerifyPaymentAsOf(time.Time{}, fx.paymentMandate)
+	assertMisconfigured(t, err)
 }
 
 // TestAHoldingChainSaysNothingAboutWhoIssuedTheOffer states the limit of having
@@ -663,7 +770,7 @@ func TestAHoldingChainSaysNothingAboutWhoIssuedTheOffer(t *testing.T) {
 	fx.checkoutMandate = reparse(t, issue(t, fx.user, checkoutFor(unsigned)))
 	fx.paymentMandate = reparse(t, issuePayment(t, fx.user, payment(), unsigned))
 
-	rep := fx.arbiter().Verify(fx.bundle(t))
+	rep := fx.arbiter().Verify(fx.bundle(t), fx.at)
 
 	require.True(t, rep.Holds(),
 		"the chain has no link over the offer's provenance, and must not appear to: %v", rep.Err)
@@ -698,7 +805,7 @@ func TestTwoPairsOverOneOfferCrossVerify(t *testing.T) {
 		PaymentReceipt:  receiptOver(t, fx.processor, processorID, otherPaymentMandate, paymentKind, nil),
 	}
 
-	rep := fx.arbiter().Verify(crossed)
+	rep := fx.arbiter().Verify(crossed, fx.at)
 	require.True(t, rep.Holds(),
 		"a mandate from one pair and a mandate from another name the same purchase, and the chain says so: %v", rep.Err)
 	assert.Len(t, rep.Held, 5,
@@ -717,7 +824,7 @@ func TestAnIncompleteBundleIsNotAFinding(t *testing.T) {
 	b.PaymentReceipt = ""
 	b.Checkout = ""
 
-	rep := fx.arbiter().Verify(b)
+	rep := fx.arbiter().Verify(b, fx.at)
 
 	require.False(t, rep.Holds())
 	assert.Equal(t, evidence.StepNone, rep.Broke,
@@ -757,7 +864,7 @@ func TestAnArbiterWithoutItsKeysRefusesWithoutJudging(t *testing.T) {
 			d := fx.arbiter()
 			tc.strip(&d)
 
-			rep := d.Verify(b)
+			rep := d.Verify(b, fx.at)
 			require.False(t, rep.Holds())
 			assert.Equal(t, evidence.StepNone, rep.Broke,
 				"a verifier that could not reach a conclusion has not found against anybody")
@@ -780,10 +887,10 @@ func TestEachLinkRefusesOnItsOwnWhenMisconfigured(t *testing.T) {
 	fx := newDisputeFixture(t)
 	var d ap2.Dispute
 
-	_, err := d.VerifyCheckoutMandate(fx.checkoutMandate, fx.checkout)
+	_, err := d.VerifyCheckoutMandate(fx.at, fx.checkoutMandate, fx.checkout)
 	assertMisconfigured(t, err)
 
-	_, err = d.VerifyPaymentMandate(fx.paymentMandate)
+	_, err = d.VerifyPaymentMandate(fx.at, fx.paymentMandate)
 	assertMisconfigured(t, err)
 
 	_, err = d.VerifyCheckoutReceipt("irrelevant, nothing can check it", fx.checkoutMandate)
@@ -818,7 +925,7 @@ func TestAMandateThatIsNotReadableBreaksItsOwnLink(t *testing.T) {
 			b := fx.bundle(t)
 			tc.spoil(&b)
 
-			rep := fx.arbiter().Verify(b)
+			rep := fx.arbiter().Verify(b, fx.at)
 			require.False(t, rep.Holds())
 			assert.Equal(t, tc.broke, rep.Broke)
 			assert.Equal(t, generated.ErrorCodeMandateMalformed, rep.Code)

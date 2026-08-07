@@ -376,10 +376,14 @@ func TestEveryRejectionPointAnswersWithAReceipt(t *testing.T) {
 // key from it would let the party being judged choose the key it is judged
 // against — so the keys are brought, by name, from the parties this test stood
 // up.
+// The rule sets carry no Clock: the dispute path takes the instant instead, and
+// leaving the field nil is what shows that. w.clock is the world's, and using it
+// here would leave a reader unable to tell whether the arbiter judged as of the
+// transaction or as of whenever the test had wound the world to.
 func (w *world) arbiter() ap2.Dispute {
 	return ap2.Dispute{
-		CheckoutMandates: ap2.MerchantRules{Issuer: w.user.verifier, Clock: w.clock},
-		PaymentMandates:  ap2.CredentialProviderRules{Issuer: w.user.verifier, Clock: w.clock},
+		CheckoutMandates: ap2.MerchantRules{Issuer: w.user.verifier},
+		PaymentMandates:  ap2.CredentialProviderRules{Issuer: w.user.verifier},
 		CheckoutReceipts: w.shop.verifier,
 		PaymentReceipts:  w.processor.verifier,
 	}
@@ -402,13 +406,29 @@ func TestARealPurchaseIsDisputable(t *testing.T) {
 	require.NoError(t, b.Validate(),
 		"a completed purchase has to leave behind every artefact a dispute is decided from")
 
-	rep := w.arbiter().Verify(b)
+	rep := w.arbiter().Verify(b, base)
 	require.True(t, rep.Holds(), "a purchase every party approved was called into question: %v", rep.Err)
 	assert.Len(t, rep.Held, 5, "all five links, or the picture has a gap somewhere in it")
 
 	assert.Equal(t, "air-serbia", rep.CheckoutReceipt.Issuer)
 	assert.Equal(t, "mock-payment-processor", rep.PaymentReceipt.Issuer,
 		"the Payment Receipt in a bundle is the processor's, and this is where that choice is visible")
+
+	// A day passes and the dispute is heard. The Trusted Surface signs closed
+	// mandates with a fifteen-minute life, so everything in this bundle lapsed
+	// within the hour — which is the ordinary case, not an edge one, and is why
+	// the arbiter judges as of the transaction rather than as of now.
+	w.clock.Advance(24 * time.Hour)
+
+	late := w.arbiter().Verify(b, base)
+	require.True(t, late.Holds(),
+		"a dispute is always heard after the mandates lapsed; if that broke the chain the feature would work nowhere: %v", late.Err)
+	assert.Len(t, late.Held, 5)
+
+	// And the answer an arbiter reading a wall clock would have given instead.
+	assert.Equal(t, generated.ErrorCodeMandateExpired,
+		w.arbiter().Verify(b, w.clock.Now()).Code,
+		"mandate_expired against a blameless counterparty is what judging as of now produces for every real purchase")
 }
 
 // TestARefusedPurchaseIsStillDisputable is the half a happy-path test cannot
@@ -435,7 +455,7 @@ func TestARefusedPurchaseIsStillDisputable(t *testing.T) {
 	p.Credential.CheckoutHash = elsewhere
 	require.ErrorIs(t, c.Settle(t.Context(), &p), agent.ErrRefused)
 
-	rep := w.arbiter().Verify(p.Evidence())
+	rep := w.arbiter().Verify(p.Evidence(), base)
 	require.True(t, rep.Holds(),
 		"a purchase that was refused is exactly what a dispute is about, and its evidence has to verify: %v", rep.Err)
 
@@ -500,7 +520,7 @@ func TestARetriedPurchaseIsDisputedOnItsLatestAnswer(t *testing.T) {
 		"if these matched, the bundle would be evidence of the attempt that was abandoned")
 	assert.Equal(t, p.Receipts[3].Token, b.CheckoutReceipt)
 
-	rep := w.arbiter().Verify(b)
+	rep := w.arbiter().Verify(b, base)
 	require.True(t, rep.Holds(), "the retried purchase's own evidence must verify: %v", rep.Err)
 	assert.Equal(t, generated.ReceiptResultSuccess, rep.PaymentReceipt.Result,
 		"Settled says the money moved, so the signed answer in the bundle has to say so too")
