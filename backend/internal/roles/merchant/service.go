@@ -10,6 +10,7 @@ import (
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
@@ -37,6 +38,13 @@ type Service struct {
 	ID string
 	// Inventory prices the routes.
 	Inventory *Inventory
+	// Catalogue is what POST /search searches. Optional: a merchant selling a
+	// route an agent already knows the name of needs no catalogue, and the
+	// Human Present flow is exactly that. When it is absent the route is not
+	// registered at all rather than answering nothing — a caller cannot tell
+	// "nothing matched" from "this merchant does not do search", and a 404 says
+	// which.
+	Catalogue *Catalogue
 	// Rules decide whether a presented Checkout Mandate is acceptable.
 	Rules ap2.CheckoutVerifier
 	// Signer holds the merchant's key: it signs offers and receipts.
@@ -56,14 +64,19 @@ type Service struct {
 	OfferLifetime time.Duration
 }
 
-// offer is what GET /checkout returns: the merchant-signed document and the
-// price in a form a caller can read without verifying anything.
+// signedOffer is what GET /checkout returns: the merchant-signed document and
+// the price in a form a caller can read without verifying anything.
+//
+// Named for the signature to keep it apart from Offer, the catalogue entry.
+// They are two layers of one word: an Offer is a thing this merchant sells, and
+// a signedOffer is this merchant committing to sell one of them at a price, for
+// as long as the exp inside it says.
 //
 // The price appears twice on purpose — inside the signed JWT, where it is what
 // the mandate will bind to, and beside it as plain JSON so an agent's watcher
 // can compare quotes without unpacking a JWS on every poll. The signed copy is
 // the one that counts, and the merchant recomputes the binding against it.
-type offer struct {
+type signedOffer struct {
 	Checkout   string           `json:"checkout"`
 	Price      generated.Amount `json:"price"`
 	Step       int              `json:"step"`
@@ -127,6 +140,9 @@ func (s *Service) Handler() (http.Handler, error) {
 	mux.Handle("GET "+roles.JWKSPath, roles.JWKS(s.Keys))
 	mux.HandleFunc("GET /checkout", s.quote)
 	mux.HandleFunc("POST /checkout", s.settle)
+	if s.Catalogue != nil {
+		mux.HandleFunc("POST /search", s.search)
+	}
 	return roles.Middleware(s.Clock, mux)
 }
 
@@ -159,13 +175,72 @@ func (s *Service) quote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	roles.OK(w, http.StatusOK, offer{
+	roles.OK(w, http.StatusOK, signedOffer{
 		Checkout:   checkout,
 		Price:      quoted.Price,
 		Step:       quoted.Step,
 		Final:      quoted.Final,
 		ObservedAt: quoted.ObservedAt,
 	})
+}
+
+// searchRequest is what POST /search takes: the constraints a mandate would
+// carry, and nothing else.
+//
+// generated.Constraint rather than a shape of this package's own, because the
+// point of the endpoint is that these are the same bytes a mandate carries. A
+// merchant-specific query language here would be a second thing to keep in step
+// with the field registry, and the first divergence would be a search returning
+// something the verifier then refuses.
+type searchRequest struct {
+	Constraints []generated.Constraint `json:"constraints"`
+}
+
+// search returns the catalogue offers a constraint set authorises.
+//
+// # Why this is a POST, and why it carries an idempotency key
+//
+// A constraint set is a tree — `within` carries an object, `in` carries an
+// array, `all` carries children — and a query string is not where a tree goes.
+// So it is a POST, and the idempotency middleware every role runs behind
+// requires a key on anything that is not a safe method.
+//
+// By the letter of the standing rule that is wrong: a search changes nothing,
+// so there is no second execution to prevent and the key buys no safety. It
+// takes one anyway, because the alternative is a route-specific exemption
+// inside shared middleware — and an exemption is inherited by whatever POST is
+// added beside it later, where the failure is a purchase that runs twice
+// against a header nobody noticed had stopped being required. A key on a read
+// costs one header; getting that wrong once costs money.
+//
+// The other half is what a caller has to know: a repeat with the same key is
+// answered from the store rather than re-run, so an agent polling a moving
+// price must vary its key per poll or it will read its first answer for the
+// whole retention window. That is the middleware working exactly as designed —
+// one key means one operation — and it is only surprising here because this
+// operation's answer depends on the clock.
+func (s *Service) search(w http.ResponseWriter, r *http.Request) {
+	var req searchRequest
+	if !roles.DecodeJSON(w, r, &req) {
+		return
+	}
+
+	results, err := s.Catalogue.Search(req.Constraints)
+	switch {
+	case errors.Is(err, ErrNoConstraints):
+		roles.Fail(w, generated.ErrorCodeRequestMalformed, err.Error())
+		return
+	case err != nil:
+		// constraint.CodeOf rather than a code chosen here, so that a
+		// constraint this verifier cannot read is named the same thing whether
+		// it arrived on a search or on a mandate. An unknown field is
+		// constraint_type_unknown on both — which is the whole claim this
+		// endpoint makes, and it would be quietly false if search reported its
+		// own rejections differently.
+		roles.Fail(w, constraint.CodeOf(err), err.Error())
+		return
+	}
+	roles.OK(w, http.StatusOK, results)
 }
 
 // sign produces the merchant-signed Checkout JWT.

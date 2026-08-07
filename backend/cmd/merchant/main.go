@@ -36,8 +36,20 @@ func main() {
 			return nil, err
 		}
 
+		// One instant seeds both, so the flight the catalogue lists and the
+		// route the inventory quotes step through their prices together. Read
+		// twice they would be a schedule apart, and a search and a checkout
+		// taken a moment later would disagree about what one flight costs.
+		start := identity.Clock.Now()
+
 		inventory, err := merchant.NewDemoInventory(
-			identity.Clock, identity.Clock.Now(), merchant.DefaultStep)
+			identity.Clock, start, merchant.DefaultStep)
+		if err != nil {
+			return nil, err
+		}
+
+		catalogue, err := merchant.NewDemoCatalogue(
+			identity.Clock, *id, start, merchant.DefaultStep)
 		if err != nil {
 			return nil, err
 		}
@@ -45,6 +57,7 @@ func main() {
 		service := &merchant.Service{
 			ID:        *id,
 			Inventory: inventory,
+			Catalogue: catalogue,
 			// Handed in rather than constructed inside the service, which is
 			// what makes AP2's delegation allowance reachable: a merchant built
 			// with somebody else's CheckoutVerifier has delegated.

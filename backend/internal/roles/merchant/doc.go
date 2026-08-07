@@ -1,5 +1,14 @@
-// Package merchant holds the mocked Merchant's inventory: the routes it sells
-// and what they cost at a given moment.
+// Package merchant holds the mocked Merchant: what it sells, what that costs at
+// a given moment, and what it will accept as authorisation to sell it.
+//
+// It sells the same stock through two doors, and they are two because they
+// answer different questions. The Inventory prices a Route, which is what a
+// caller that already knows what it wants asks for — the Human Present flow
+// names BEG→PMI and never browses. The Catalogue answers the other question:
+// given the limits a user placed, what is there. Search there runs the same
+// evaluator the verifier runs at the moment of purchase, so an offer appears in
+// the results exactly when a mandate carrying those constraints would authorise
+// buying it.
 //
 // # Why the price has to move
 //
