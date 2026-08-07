@@ -20,15 +20,26 @@ var (
 	// ErrAgentKeyMismatch means the closed mandate was signed by a key the
 	// open mandate does not endorse.
 	//
-	// This is the single check the whole open-mandate mechanism exists for. An
-	// open mandate is not bound to a transaction, so it must be bound to an
-	// agent — otherwise a stolen one authorises anybody who holds it, which is
-	// the failure the mechanism was designed to prevent.
+	// The check this error names no longer runs in this package. It lives one
+	// layer down, in the delegation chain: a closed mandate is a Key Binding
+	// JWT verified with the key the open mandate endorsed in cnf and no
+	// other, so a signature from any other key fails to verify at all rather
+	// than verifying and then failing this comparison here. A mismatch is
+	// unrepresentable now, not merely caught.
+	//
+	// The error survives for the one case the chain cannot express that way:
+	// a cnf naming no usable key at all, which is not "the wrong key" but no
+	// key to verify against in the first place. internal/adapters/ap2 returns
+	// it there, when it cannot resolve cnf to a usable key before a chain
+	// verification is even attempted. CodeOf still maps it to
+	// agent_key_mismatch, which is why it stays exported rather than being
+	// deleted along with the check that used to return it.
 	ErrAgentKeyMismatch = errors.New("authz: closed mandate signed by an unendorsed key")
 
 	// ErrNoEndorsedKey means the open mandate carries no usable agent key. A
-	// mandate that endorses nobody cannot endorse this agent, and treating an
-	// absent key as "any key will do" would invert the rule above.
+	// mandate that endorses nobody cannot authorise anybody, and treating an
+	// absent key as "any key will do" would make an open mandate naming no
+	// agent the most permissive one there is.
 	ErrNoEndorsedKey = errors.New("authz: open mandate endorses no agent key")
 
 	// ErrExpired means the open mandate's own lifetime has run out.
@@ -96,82 +107,20 @@ type Endorsement struct {
 	ExpiresAt *time.Time
 }
 
-// Verify checks that this endorsement covers the given signing key at the given
-// instant.
-//
-// now comes from the caller's injected clock. This package never reads one:
-// a mandate check that consulted the wall time directly would be untestable at
-// exactly the boundaries that matter.
-func (e Endorsement) Verify(signedBy generated.PublicKey, now time.Time) error {
-	if err := e.endorses(signedBy); err != nil {
-		return err
-	}
-	return e.live(now)
-}
-
-// endorses reports whether the key that verified the closed mandate is the one
-// the user approved.
-//
-// # It compares the key, not its name
-//
-// An open mandate carries a whole JWK rather than a key reference, and that is
-// deliberate: AP2 puts the key itself in the cnf claim so a verifier does not
-// have to trust a directory to say which key a name belongs to.
-//
-// Comparing kid alone would throw that away. A key identifier is a label chosen
-// by whoever minted the key, and nothing stops two keys carrying the same one —
-// so a verifier that resolved the label through a registry and then checked
-// only that the labels agreed would accept any signature that registry vouched
-// for. The user signed a key. This compares that key.
-//
-// kid and alg are still checked where the endorsement states them, because a
-// mismatch means something is wrong even when the material agrees — but they
-// are checked in addition to the material, never instead of it.
-func (e Endorsement) endorses(signedBy generated.PublicKey) error {
-	if e.AgentKey == nil || !UsableKey(*e.AgentKey) {
-		return ErrNoEndorsedKey
-	}
-	endorsed := *e.AgentKey
-
-	if !sameKey(endorsed, signedBy) {
-		return fmt.Errorf("%w: the signing key is not the endorsed one", ErrAgentKeyMismatch)
-	}
-
-	if endorsed.Kid != nil && *endorsed.Kid != "" {
-		if signedBy.Kid == nil || *signedBy.Kid != *endorsed.Kid {
-			return fmt.Errorf("%w: key identifier does not match the endorsed %q",
-				ErrAgentKeyMismatch, *endorsed.Kid)
-		}
-	}
-
-	// The algorithm too, where the endorsement states one. A key alone does not
-	// say what may be done with it, and a signature verified under an algorithm
-	// the user did not approve is checked against a different assumption from
-	// the one they signed under.
-	if endorsed.Alg != nil && *endorsed.Alg != "" {
-		if signedBy.Alg == nil || *signedBy.Alg != *endorsed.Alg {
-			return fmt.Errorf("%w: signed under a different algorithm from the endorsed %s",
-				ErrAgentKeyMismatch, *endorsed.Alg)
-		}
-	}
-	return nil
-}
-
 // UsableKey reports whether a key carries enough material to identify
 // anybody at all. A key naming a type and nothing else — a Kty with no
 // Crv/X/Y, say — endorses nobody, and treating it as a match would invert the
 // rule this package exists for.
 //
 // Exported because it answers the same question at two different moments of
-// a mandate's life, in two different packages: Endorsement.endorses calls it
-// here, at verification, to decide whether the key a closed mandate was
-// signed with is one the open mandate could possibly have endorsed;
-// internal/adapters/ap2.IssueOpenCheckout calls it at issuance, before an
-// open mandate naming that key is ever signed. Both have to reach the same
-// verdict on the same key, so there is exactly one implementation rather than
-// two that could drift — a mandate accepted at issuance and refused at
-// verification for the same reason would just move the failure to whichever
-// party is least placed to act on it.
+// a mandate's life, in two different packages: Endorsement.Live calls it
+// here, at verification, to decide whether the open mandate endorses anybody
+// at all; internal/adapters/ap2.IssueOpenCheckout calls it at issuance,
+// before an open mandate naming that key is ever signed. Both have to reach
+// the same verdict on the same key, so there is exactly one implementation
+// rather than two that could drift — a mandate accepted at issuance and
+// refused at verification for the same reason would just move the failure to
+// whichever party is least placed to act on it.
 func UsableKey(k generated.PublicKey) bool {
 	switch k.Kty {
 	case "EC":
@@ -185,33 +134,26 @@ func UsableKey(k generated.PublicKey) bool {
 	}
 }
 
-// sameKey compares two JWKs by the fields that decide which key they are.
-//
-// Only the material: the key type, the curve, and the coordinates or modulus.
-// kid and alg are metadata about a key rather than part of it, and comparing
-// them here would let a relabelled copy of the same key read as a different one.
-func sameKey(a, b generated.PublicKey) bool {
-	if a.Kty != b.Kty {
-		return false
-	}
-	switch a.Kty {
-	case "EC":
-		return same(a.Crv, b.Crv) && same(a.X, b.X) && same(a.Y, b.Y)
-	case "OKP":
-		return same(a.Crv, b.Crv) && same(a.X, b.X)
-	case "RSA":
-		return same(a.N, b.N) && same(a.E, b.E)
-	default:
-		return false
-	}
-}
-
 func nonEmpty(s *string) bool { return s != nil && *s != "" }
 
-func same(a, b *string) bool { return a != nil && b != nil && *a == *b }
+// Live reports whether this endorsement can authorise anybody right now: it
+// must name a usable agent key at all, and now must fall inside the
+// mandate's own window.
+//
+// The key check is not the comparison Verify used to make against a closed
+// mandate's signer — that comparison is gone, along with Verify. This is the
+// one part of it that was never about signedBy in the first place: an open
+// mandate whose cnf carries no usable material cannot authorise anybody,
+// whoever signs the closed mandate and however that signature is verified.
+//
+// now comes from the caller's injected clock. This package never reads one:
+// a mandate check that consulted the wall time directly would be untestable at
+// exactly the boundaries that matter.
+func (e Endorsement) Live(now time.Time) error {
+	if e.AgentKey == nil || !UsableKey(*e.AgentKey) {
+		return ErrNoEndorsedKey
+	}
 
-// live reports whether the mandate's own window covers now.
-func (e Endorsement) live(now time.Time) error {
 	// Inclusive at the near end: a mandate used at the instant it was issued is
 	// being used inside its life, not before it.
 	if e.IssuedAt != nil && now.Before(*e.IssuedAt) {
@@ -248,23 +190,22 @@ func PaymentEndorsementOf(open generated.OpenPaymentMandate) Endorsement {
 }
 
 // AuthoriseCheckout is the verifier's decision about a closed Checkout Mandate
-// presented alongside the open one that endorses it.
+// once it is established to delegate from the open one that endorses it.
 //
 // subject is the purchase, as the adapter read it out of the checkout the
 // closed mandate commits to. now comes from the caller's clock.
 //
-// The order is deliberate. Who signed it and whether the authority was live are
-// settled before any constraint is evaluated, because a mandate signed by the
-// wrong agent should be refused as that rather than as a violated limit — the
-// two are different facts and a receipt naming the wrong one sends whoever
-// reads it looking in the wrong place.
+// Who signed the closed mandate is not decided here. The caller has already
+// established that by verifying the delegation chain before ever reaching
+// this function — a chain that fails to verify never gets this far. What
+// this decides is whether the authority the chain traces back to was still
+// live at now, and whether the purchase fell inside what it approved.
 func AuthoriseCheckout(
 	open generated.OpenCheckoutMandate,
-	signedBy generated.PublicKey,
 	subject constraint.Subject,
 	now time.Time,
 ) (constraint.Report, error) {
-	if err := EndorsementOf(open).Verify(signedBy, now); err != nil {
+	if err := EndorsementOf(open).Live(now); err != nil {
 		return constraint.Report{}, err
 	}
 	return constraint.Evaluate(open.Constraints, subject)
@@ -281,11 +222,10 @@ func AuthoriseCheckout(
 func AuthorisePayment(
 	open generated.OpenPaymentMandate,
 	closed generated.PaymentMandate,
-	signedBy generated.PublicKey,
 	subject constraint.Subject,
 	now time.Time,
 ) (constraint.Report, error) {
-	if err := PaymentEndorsementOf(open).Verify(signedBy, now); err != nil {
+	if err := PaymentEndorsementOf(open).Live(now); err != nil {
 		return constraint.Report{}, err
 	}
 	if err := checkPinned(open, closed); err != nil {
