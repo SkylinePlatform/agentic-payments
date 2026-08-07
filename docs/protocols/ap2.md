@@ -305,14 +305,24 @@ Delegate SD-JWT chain (`draft-gco-oauth-delegate-sd-jwt-00`):
 <open SD-JWT>~~<KB-JWT>~<disclosure>~…~
 ```
 
-`cnf` is the only key the second hop is **ever** verified against: the
-verifier reads it straight out of the open mandate's own claims and checks the
-KB-JWT's signature with it, so there is no separate key lookup, directory or
-hand-written comparison to get wrong. That turns the requirement to reject a
-closed mandate signed by a key other than the one in `cnf` from a check
-somebody has to remember to write into a property of the chain itself: a
-closed mandate signed by any other key simply fails to verify, because there
-was never a second key in play to compare against.
+There is exactly **one** key resolution in the whole exchange, not two
+independent ones to remember to compare. The obvious reading needed a verifier
+to resolve the signing key of the second SD-JWT *and* resolve `cnf`, then
+check the two agree — two lookups and a hand-written comparison, any of which
+can be skipped. Under the chain, `cnf` is read once, resolved once, to the one
+verifier the KB-JWT's signature is ever checked with — so there is no second
+key for that comparison to be *about*, and the class of bug where somebody
+forgets to write it is closed off structurally rather than by review.
+
+**That resolution is still a real lookup, and it is still the caller's to
+get right.** `pkg/sdjwt` holds no key material by design (`pkg-purity`), so it
+cannot verify that whatever a resolver hands back for a given `cnf` actually
+corresponds to the JWK bytes inside it — turning `cnf` into a `Verifier` is
+`ChainOptions.AgentKey` / `sdjwt.ChainOptions.DelegateKey`, supplied by
+whichever role is verifying, on the same split RFC 9901 key binding already
+draws for a standalone presentation's `HolderKey`. What the chain removes is
+the *second*, independent key and the comparison against it — not the
+resolution itself, which was never a place this package could stand in.
 
 ### The rejection-receipt rule
 

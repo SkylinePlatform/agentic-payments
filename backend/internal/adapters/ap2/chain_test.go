@@ -1,6 +1,7 @@
 package ap2_test
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -324,6 +325,55 @@ func TestADigestUnderTheWrongAlgorithmIsRejected(t *testing.T) {
 		"the wrong-algorithm case must be reported as the same sentinel as any other tampered checkout, so a caller does not need a second branch to catch it")
 }
 
+// TestAnHonestChainUnderSHA384IsAuthorised is TestADigestUnderTheWrongAlgorithmIsRejected's
+// positive counterpart, and the one that actually pins verified.DelegatedHashAlg
+// being read rather than assumed. A hardcoded sha-256 at the binding check
+// would pass every existing test in this file — every one of them uses
+// f.blinder's default — and would refuse this one: checkout_hash here is
+// honestly computed under sha-384, because f.blinder was built with
+// sdjwt.WithHashAlg(sdjwt.SHA384), and the delegate hop's own _sd_alg
+// declares sha-384 too. A verifier that checked under a fixed sha-256 would
+// report ErrCheckoutHashMismatch for a mandate that lied about nothing.
+func TestAnHonestChainUnderSHA384IsAuthorised(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, sdjwt.WithHashAlg(sdjwt.SHA384))
+	agentSigner, agentVerifier := agentKeys(t, f.clock)
+
+	open := generated.OpenCheckoutMandate{
+		AgentKey:    agentJWK(t),
+		Constraints: demoConstraints(t),
+	}
+	root, err := ap2.IssueOpenCheckout(t.Context(), f.signer, open, f.blinder)
+	require.NoError(t, err, "issuing the open Checkout Mandate")
+
+	hash, err := f.blinder.HashAlg().Digest(merchantCheckout)
+	require.NoError(t, err, "computing checkout_hash under the delegate hop's own declared algorithm, sha-384")
+
+	payload, disclosures, err := f.blinder.Blind(map[string]any{
+		"vct":           ap2.VCTCheckoutClosed,
+		"checkout_jwt":  merchantCheckout,
+		"checkout_hash": hash,
+	})
+	require.NoError(t, err, "blinding the closed mandate's content")
+
+	chain, err := root.Delegate(t.Context(), ap2.JOSESigner(agentSigner), f.blinder, sdjwt.KeyBinding{
+		Nonce: chainNonce, Audience: chainAudience, IssuedAt: f.clock.Now(),
+	}, payload, disclosures)
+	require.NoError(t, err, "delegating to the closed mandate")
+
+	got, err := ap2.AuthoriseCheckoutChain(chain, purchaseAt(18900), merchantCheckout, ap2.ChainOptions{
+		Issuer:   f.verifier,
+		AgentKey: resolveTo(agentVerifier),
+		Clock:    f.clock,
+		Audience: chainAudience,
+		Nonce:    chainNonce,
+	})
+	require.NoError(t, err,
+		"a checkout_hash computed under the delegate hop's own declared algorithm must authorise; a verifier reading a hardcoded algorithm instead of verified.DelegatedHashAlg would refuse this as a hash mismatch that never happened")
+	assert.True(t, got.Report.Satisfied())
+}
+
 func TestTheOpenHopMustBeAnOpenMandate(t *testing.T) {
 	t.Parallel()
 
@@ -345,12 +395,146 @@ func TestTheOpenHopMustBeAnOpenMandate(t *testing.T) {
 		"the root specifically must have been checked against the open type; a message naming a different want would mean some other check produced this error")
 }
 
-// TestAnOpenMandateWhoseCnfNamesNoUsableKeyIsRefused is the obligation Task 4
-// left for this task to make true: authz.ErrAgentKeyMismatch used to have no
-// producer anywhere in this module. sdjwt.VerifyChain binds to whatever cnf
-// holds and has no basis to judge it — the adapter is the layer that can, and
-// this is the case it exists for: a cnf that decodes cleanly (so this is not
-// a malformed mandate) but names material that identifies nobody (so it
+// TestTheDelegatedHopMustBeAClosedCheckoutMandate is TestTheOpenHopMustBeAnOpenMandate's
+// counterpart for the other end of the chain: chain.go's requireVCT(verified.Delegated,
+// closedCheckout) had no test of its own before this one. An open Checkout
+// Mandate at the delegated position would skip the binding check entirely —
+// an open mandate carries no checkout_hash to recompute — so accepting one
+// there is not a smaller gap than accepting a closed root, it is the same
+// class of gap at the other hop.
+func TestTheDelegatedHopMustBeAClosedCheckoutMandate(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	agentSigner, agentVerifier := agentKeys(t, f.clock)
+
+	open := generated.OpenCheckoutMandate{
+		AgentKey:    agentJWK(t),
+		Constraints: demoConstraints(t),
+	}
+	root, err := ap2.IssueOpenCheckout(t.Context(), f.signer, open, f.blinder)
+	require.NoError(t, err, "issuing the open Checkout Mandate")
+
+	hash, err := f.blinder.HashAlg().Digest(merchantCheckout)
+	require.NoError(t, err, "computing checkout_hash")
+
+	payload, disclosures, err := f.blinder.Blind(map[string]any{
+		"vct":           ap2.VCTCheckoutOpen, // an open mandate where a closed one belongs
+		"checkout_jwt":  merchantCheckout,
+		"checkout_hash": hash,
+	})
+	require.NoError(t, err, "blinding the delegated content")
+
+	chain, err := root.Delegate(t.Context(), ap2.JOSESigner(agentSigner), f.blinder, sdjwt.KeyBinding{
+		Nonce: chainNonce, Audience: chainAudience, IssuedAt: f.clock.Now(),
+	}, payload, disclosures)
+	require.NoError(t, err, "delegating")
+
+	_, err = ap2.AuthoriseCheckoutChain(chain, purchaseAt(18900), merchantCheckout, ap2.ChainOptions{
+		Issuer:   f.verifier,
+		AgentKey: resolveTo(agentVerifier),
+		Clock:    f.clock,
+		Audience: chainAudience,
+		Nonce:    chainNonce,
+	})
+	require.Error(t, err,
+		"the delegated hop specifically must be a closed Checkout Mandate — an open one there has no checkout_hash for the binding check to recompute against")
+	assert.ErrorIs(t, err, ap2.ErrWrongMandateType,
+		"the sentinel names the delegated-hop check, mirroring TestTheOpenHopMustBeAnOpenMandate's own reasoning for the root")
+	assert.ErrorContains(t, err, "not a closed Checkout Mandate",
+		"pins the check to the delegated hop; a message naming the root's want would mean some other check produced this error")
+}
+
+// TestADelegatingHopSignedByAKeyTheOpenMandateDoesNotEndorseIsRejected is the
+// adapter-side rejection case the branch's own spec names as a deliverable
+// and no test in this file exercised: every other test here wires
+// ChainOptions.AgentKey through resolveTo, which answers every cnf with the
+// same fixed Verifier regardless of what cnf actually names. That is a
+// convenient fixture for tests about something else, and it is exactly the
+// shape of double that cannot prove this property — a resolver that ignores
+// its argument cannot tell an endorsed key from an unendorsed one, so a
+// mismatch here would pass silently.
+//
+// This test wires a resolver that behaves like a real one would: it decodes
+// the JWK cnf actually carries and resolves it through crypto.ParseJWKS, the
+// same mechanism a counterparty's published key set uses. Two real key pairs
+// are in play — the one the open mandate's cnf endorses, and a second one
+// that actually signs the delegating hop — so the rejection is a genuine
+// signature mismatch against a resolver that would have accepted the right
+// key, not an artefact of a resolver that accepts nothing.
+func TestADelegatingHopSignedByAKeyTheOpenMandateDoesNotEndorseIsRejected(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	endorsedStore, err := crypto.NewStore(f.clock)
+	require.NoError(t, err, "standing up the endorsed key's own store")
+	_, err = endorsedStore.Generate(crypto.Slot("f3-endorsed-key"), authz.ES256, "test-generate-endorsed")
+	require.NoError(t, err, "generating the key the open mandate will endorse")
+
+	published, err := endorsedStore.JWKS(t.Context())
+	require.NoError(t, err, "publishing the endorsed key's own store, the way a counterparty would fetch it")
+	var doc struct {
+		Keys []generated.PublicKey `json:"keys"`
+	}
+	require.NoError(t, json.Unmarshal(published, &doc), "decoding the published JWK Set")
+	require.Len(t, doc.Keys, 1, "one key generated, one key published")
+	endorsedKey := doc.Keys[0]
+
+	set, err := crypto.ParseJWKS(published)
+	require.NoError(t, err, "parsing the published set back")
+
+	// realResolver reads cnf instead of ignoring it, the way resolveTo does
+	// everywhere else in this file.
+	realResolver := func(cnf json.RawMessage) (authz.Verifier, error) {
+		var raw struct {
+			JWK generated.PublicKey `json:"jwk"`
+		}
+		if err := json.Unmarshal(cnf, &raw); err != nil {
+			return nil, err
+		}
+		var kid, alg string
+		if raw.JWK.Kid != nil {
+			kid = *raw.JWK.Kid
+		}
+		if raw.JWK.Alg != nil {
+			alg = *raw.JWK.Alg
+		}
+		return set.Resolve(t.Context(), authz.KeyRef{KeyID: kid, Algorithm: authz.Algorithm(alg)})
+	}
+
+	// unendorsedSigner is a second, entirely real key — not the one cnf below
+	// will name — standing in for an agent that holds a key of its own but was
+	// never handed this particular delegation.
+	unendorsedSigner, _ := agentKeys(t, f.clock)
+
+	open := generated.OpenCheckoutMandate{
+		AgentKey:    endorsedKey,
+		Constraints: demoConstraints(t),
+	}
+	root, err := ap2.IssueOpenCheckout(t.Context(), f.signer, open, f.blinder)
+	require.NoError(t, err, "issuing the open Checkout Mandate")
+
+	chain := buildClosedCheckoutChain(t, f, root, unendorsedSigner, merchantCheckout)
+
+	_, err = ap2.AuthoriseCheckoutChain(chain, purchaseAt(18900), merchantCheckout, ap2.ChainOptions{
+		Issuer:   f.verifier,
+		AgentKey: realResolver,
+		Clock:    f.clock,
+		Audience: chainAudience,
+		Nonce:    chainNonce,
+	})
+	require.Error(t, err,
+		"the delegating hop is signed by a real key, just not the one the open mandate's cnf endorses, and a resolver that actually reads cnf must refuse it")
+	assert.ErrorIs(t, err, sdjwt.ErrSignatureInvalid,
+		"this is a signature check failing, not a malformed chain or a misconfigured verifier")
+}
+
+// TestAnOpenMandateWhoseCnfNamesNoUsableKeyIsRefused pins the reachability of
+// authz.ErrAgentKeyMismatch's producer: sdjwt.VerifyChain binds to whatever
+// cnf holds and has no basis to judge it — the adapter is the layer that can,
+// and this is the case it exists for: a cnf that decodes cleanly (so this is
+// not a malformed mandate) but names material that identifies nobody (so it
 // cannot be who the agent's signature is checked against).
 //
 // This cannot be built through IssueOpenCheckout either — it runs the same
@@ -383,7 +567,7 @@ func TestAnOpenMandateWhoseCnfNamesNoUsableKeyIsRefused(t *testing.T) {
 	})
 	require.Error(t, err, "a cnf naming no usable material endorses nobody, the same fact authz.UsableKey enforces everywhere else")
 	assert.ErrorIs(t, err, authz.ErrAgentKeyMismatch,
-		"this is the case Task 4 built ErrAgentKeyMismatch's producer for — the sentinel has to actually be reachable here, not just documented as eventually true")
+		"the sentinel has to actually be reachable here, not just documented as eventually true")
 	assert.NotErrorIs(t, err, ap2.ErrMandateMalformed,
 		"the mandate is well formed; the key is the problem, and the two must not be reported the same way")
 	assert.Equal(t, generated.ErrorCodeAgentKeyMismatch, authz.CodeOf(err),
@@ -475,6 +659,109 @@ func (fx *paymentChainFx) repin(t *testing.T, payeeID string) {
 	fx.chain = fx.buildClosedPaymentChain(t, payeeID)
 }
 
+// swapRootForAClosedMandate rebuilds fx.chain over a root whose vct claims a
+// closed Checkout Mandate — not a closed Payment Mandate, so it matches
+// neither openPayment nor closedPayment, on the same grounds
+// checkoutChainFx.swapRootForAClosedMandate documents for its own choice of
+// family: a root that shared a mandate family with the delegated hop could
+// let the two requireVCT calls satisfy each other if their order, or which
+// want each receives, were ever swapped.
+func (fx *paymentChainFx) swapRootForAClosedMandate(t *testing.T) {
+	t.Helper()
+
+	key := agentJWK(t)
+	jwk := map[string]any{"kty": key.Kty}
+	if key.Crv != nil {
+		jwk["crv"] = *key.Crv
+	}
+	if key.X != nil {
+		jwk["x"] = *key.X
+	}
+	if key.Y != nil {
+		jwk["y"] = *key.Y
+	}
+
+	impostorRoot := issueClaims(t, fx.f, map[string]any{
+		"vct": ap2.VCTCheckoutClosed,
+		"cnf": map[string]any{"jwk": jwk},
+	})
+	fx.root = impostorRoot
+	fx.chain = fx.buildClosedPaymentChain(t, pinnedPayee)
+}
+
+// TestTheOpenHopMustBeAnOpenPaymentMandate is TestTheOpenHopMustBeAnOpenMandate's
+// counterpart for a Payment Mandate chain: chain.go's requireVCT(verified.Root,
+// openPayment) had no test of its own before this one, only the checkout
+// side did. A closed mandate at the root would let an agent re-delegate an
+// authority that was already spent, on the payment side exactly as much as
+// the checkout one.
+func TestTheOpenHopMustBeAnOpenPaymentMandate(t *testing.T) {
+	t.Parallel()
+
+	fx := paymentChainFixture(t)
+	fx.swapRootForAClosedMandate(t)
+
+	_, err := ap2.AuthorisePaymentChain(fx.chain, fx.subject, fx.opts)
+	require.Error(t, err,
+		"a closed mandate at the root would let an agent delegate an authority that was already spent, the payment side of TestTheOpenHopMustBeAnOpenMandate")
+	assert.ErrorIs(t, err, ap2.ErrWrongMandateType,
+		"the sentinel names the root check specifically")
+	assert.ErrorContains(t, err, "not a open Payment Mandate",
+		"the root specifically must have been checked against the open type; a message naming a different want would mean some other check produced this error")
+}
+
+// TestTheDelegatedHopMustBeAClosedPaymentMandate is
+// TestTheDelegatedHopMustBeAClosedCheckoutMandate's counterpart: chain.go's
+// requireVCT(verified.Delegated, closedPayment) had no test either. An open
+// Payment Mandate at the delegated position would be read as though it were
+// the transaction-bound instruction the constraints are meant to check.
+func TestTheDelegatedHopMustBeAClosedPaymentMandate(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	agentSigner, agentVerifier := agentKeys(t, f.clock)
+
+	payee := generated.Merchant{ID: pinnedPayee, Name: "Demo Merchant"}
+	open := generated.OpenPaymentMandate{
+		AgentKey:    agentJWK(t),
+		Constraints: demoConstraints(t),
+		Payee:       &payee,
+	}
+	root, err := ap2.IssueOpenPayment(t.Context(), f.signer, open, f.blinder)
+	require.NoError(t, err, "issuing the open Payment Mandate")
+
+	hash, err := f.blinder.HashAlg().Digest(merchantCheckout)
+	require.NoError(t, err, "computing a stand-in transaction_id")
+
+	payload, disclosures, err := f.blinder.Blind(map[string]any{
+		"vct":                ap2.VCTPaymentOpen, // an open mandate where a closed one belongs
+		"transaction_id":     hash,
+		"payee":              map[string]any{"id": pinnedPayee, "name": "Some Merchant"},
+		"payment_amount":     map[string]any{"amount": 18900, "currency": "USD"},
+		"payment_instrument": map[string]any{"id": "card-tok-1", "type": "card"},
+	})
+	require.NoError(t, err, "blinding the delegated content")
+
+	chain, err := root.Delegate(t.Context(), ap2.JOSESigner(agentSigner), f.blinder, sdjwt.KeyBinding{
+		Nonce: chainNonce, Audience: chainAudience, IssuedAt: f.clock.Now(),
+	}, payload, disclosures)
+	require.NoError(t, err, "delegating")
+
+	_, err = ap2.AuthorisePaymentChain(chain, purchaseAt(18900), ap2.ChainOptions{
+		Issuer:   f.verifier,
+		AgentKey: resolveTo(agentVerifier),
+		Clock:    f.clock,
+		Audience: chainAudience,
+		Nonce:    chainNonce,
+	})
+	require.Error(t, err,
+		"the delegated hop specifically must be a closed Payment Mandate — the payment side of TestTheDelegatedHopMustBeAClosedCheckoutMandate")
+	assert.ErrorIs(t, err, ap2.ErrWrongMandateType,
+		"the sentinel names the delegated-hop check")
+	assert.ErrorContains(t, err, "not a closed Payment Mandate",
+		"pins the check to the delegated hop rather than the root")
+}
+
 func TestAClosedMandateThatChangedAPinnedValueIsRefusedAsThat(t *testing.T) {
 	t.Parallel()
 
@@ -502,6 +789,28 @@ func TestAPaymentChainWithinItsConstraintsIsAuthorised(t *testing.T) {
 		"the Payment Mandate chain's mirror of TestAChainWithinItsConstraintsIsAuthorised: the Report itself has to record success, not just the absence of an error")
 	assert.Equal(t, pinnedPayee, got.Closed.Payee.ID,
 		"the closed mandate returned has to be the one actually verified")
+}
+
+// TestAPaymentChainOutsideItsConstraintsIsRefusedByTheVerifier is
+// TestAChainOutsideItsConstraintsIsRefusedByTheVerifier's counterpart for a
+// Payment Mandate chain: chain.go:291's report.Err() had no Payment-chain
+// test evaluating a violating purchase before this one. Without it, a
+// Credential Provider branching on err != nil after an unsatisfied Report
+// would read the purchase as authorised.
+func TestAPaymentChainOutsideItsConstraintsIsRefusedByTheVerifier(t *testing.T) {
+	t.Parallel()
+
+	fx := paymentChainFixture(t) // the open mandate still pins merchant_1; only the amount moves
+
+	got, err := ap2.AuthorisePaymentChain(fx.chain, purchaseAt(21000), fx.opts) // above the USD 20000 cap
+	require.Error(t, err,
+		"a purchase outside the constraints the user approved must be refused, even though the pinned payee is unchanged and checkPinned has nothing to say")
+	assert.False(t, got.Report.Satisfied(),
+		"the returned Report has to record the violation itself, not just the error")
+	assert.ErrorIs(t, err, constraint.ErrViolated,
+		"the sentinel CodeOf keys on to answer constraint_violated, distinct from ErrPinnedFieldChanged")
+	assert.Equal(t, generated.ErrorCodeConstraintViolated, authz.CodeOf(err),
+		"the receipt has to name which rule was broken")
 }
 
 // TestAMisconfiguredChainVerifierIsNotTheMandatesFault mirrors

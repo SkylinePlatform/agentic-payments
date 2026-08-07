@@ -23,9 +23,9 @@ import (
 // visibility is per-package, not per-file), and the alternative — a second,
 // near-identical set of helpers with no shared source of truth — is how two
 // tests end up proving different things under one name. The wire-vocabulary
-// internals Task 1 added (encodeConstraints, decodeConstraints, encodeCnf,
-// decodeCnf) stay covered from inside the package, in open_internal_test.go,
-// because they are deliberately unexported and this file cannot reach them.
+// internals (encodeConstraints, decodeConstraints, encodeCnf, decodeCnf) stay
+// covered from inside the package, in open_internal_test.go, because they are
+// deliberately unexported and this file cannot reach them.
 
 // ptr is a one-line generic helper for the pointer fields generated.PublicKey
 // carries. A third copy — internal/core/authz/mandate_test.go and
@@ -48,9 +48,9 @@ func demoConstraints(t *testing.T) []generated.Constraint {
 
 // agentJWK is a fixed EC public key standing in for an agent's. Nothing in
 // this file ever verifies a signature against it — that arrives with the
-// delegation chain (#12 Task 5) — so a literal is enough; only its shape (a
-// usable EC key, per authz.UsableKey) and its round trip through cnf matter
-// here.
+// delegation chain, in chain_test.go — so a literal is enough; only its shape
+// (a usable EC key, per authz.UsableKey) and its round trip through cnf
+// matter here.
 func agentJWK(t *testing.T) generated.PublicKey {
 	t.Helper()
 	return generated.PublicKey{
@@ -96,8 +96,8 @@ func TestAnOpenCheckoutMandateRoundTrips(t *testing.T) {
 // silently drift apart. A table that lists the issuing functions as rows
 // makes a third one landing without a row a visible gap in the table rather
 // than a silent one in the suite; two near-identical top-level tests, one per
-// mandate, do not have that property, and Task 3 shipped with exactly that
-// gap once for IssueOpenPayment's "no key at all" case.
+// mandate, do not have that property, and this package shipped with exactly
+// that gap once for IssueOpenPayment's "no key at all" case.
 //
 // Two key shapes are covered for each mandate, and the second is the one
 // that matters more than the first reads. "No key at all" is refused by

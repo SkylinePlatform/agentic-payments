@@ -63,14 +63,21 @@ expressed wrongly, which is the same reasoning that keeps a `KeyID` method off
 ## The chain, concretely
 
 ```
-<open SD-JWT>~~<KB-JWT>~<Delegated Disclosure 1>~…~<Delegated Disclosure M>~
-└──────┬─────┘   └────────────────────┬───────────────────────────────────┘
-   user-signed                  agent-signed
-   vct: mandate.checkout.open.1  typ: kb+sd-jwt
-   cnf: {jwk: …}                 delegate_payload: [ closed mandate content ]
-   constraints: […]              sd_hash: <over the open SD-JWT>
-   iat, exp
+<Issuer-signed JWT>~<Open Disclosure 1>~…~<Open Disclosure N>~~<KB-JWT>~<Delegated Disclosure 1>~…~<Delegated Disclosure M>~
+└──────────────────────────┬──────────────────────────────┘   └────────────────────────┬───────────────────────────────────┘
+                the open SD-JWT — user-signed                                the delegating hop — agent-signed
+             vct: mandate.checkout.open.1                                    typ: kb+sd-jwt
+             cnf: {jwk: …}                                                   delegate_payload: [ closed mandate content ]
+             constraints: […] — never empty, so N ≥ 1                        sd_hash: <over the open SD-JWT, disclosures included>
+             iat, exp
 ```
+
+The open SD-JWT is not one opaque token. `constraints` is what an open mandate
+is *for*, `contracts/authz/checkout_mandate_open.json` marks the array
+element-wise disclosable, and a mandate with none would be a standing
+authorisation with nothing to check a purchase against — so `N` is never zero
+in practice, and the run of Open Disclosures above is not a corner case the
+diagram can round off.
 
 The trailing `~` distinguishes dSD-JWT from dSD-JWT+KB. Splitting on `~` must
 yield an **empty component** between the last disclosure of the first SD-JWT and
@@ -208,10 +215,10 @@ reader budgets trust for it.
 
 What stays:
 
-- `Endorsement{AgentKey, IssuedAt, ExpiresAt}` and `live` — the lifetime window
-  is still ours to enforce, and it is still the thing that must not read the
-  wall clock directly.
-- `usableKey` and `ErrNoEndorsedKey` — an open mandate whose `cnf` carries no
+- `Endorsement{AgentKey, IssuedAt, ExpiresAt}` and `CanAuthorise` — the
+  lifetime window is still ours to enforce, and it is still the thing that
+  must not read the wall clock directly.
+- `UsableKey` and `ErrNoEndorsedKey` — an open mandate whose `cnf` carries no
   usable material endorses nobody. `platform/crypto` would refuse to build a
   verifier from it anyway, but as `ErrMalformedJWK`, and "this mandate endorses
   nobody" and "this JWK is broken" send a reader to different places.

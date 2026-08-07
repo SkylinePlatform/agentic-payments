@@ -375,7 +375,8 @@ type Verified struct {
 	// nowhere else to get it correctly. Draft §6 step 3.1 keeps _sd_alg at the
 	// delegating JWT's level, never inside the Delegate Payload, so it cannot
 	// appear in Delegated — and this package deletes a same-named claim found
-	// inside the payload for exactly that reason, see the delete call above.
+	// inside the payload for exactly that reason; see delete(delegated,
+	// sdAlgClaim) in VerifyChain, below.
 	// A caller that needs to hash something of its own the way AP2's
 	// checkout_hash does (Digest's own doc comment names that case) would
 	// otherwise have no unverified equivalent of SDJWT.HashAlg to read it
