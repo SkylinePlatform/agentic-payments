@@ -48,8 +48,17 @@
 // # Nothing here calls a model yet
 //
 // ScriptedInterpreter maps fixed prompts to fixed constraint sets. It is what
-// every test uses and what the demo runs, because no test may depend on a live
-// model or on an external network call. A model-backed implementation satisfies
-// the same interface, calls Validate on what came back, and lives beside it
-// rather than replacing it.
+// every test uses, and what the demo will use once the agent leg of #15 gives
+// it a caller, because no test may depend on a live model or on an external
+// network call. A model-backed implementation satisfies the same interface,
+// calls Validate on what came back, and lives beside it rather than replacing
+// it.
+//
+// One honest note about that last obligation. ScriptedInterpreter does call
+// Validate before returning, and for this implementation the call cannot fail:
+// NewScripted validated the same text and decoding is deterministic. So the
+// call is the interface's contract written down rather than a check that earns
+// its keep here — and nothing yet forces a second implementation to make it.
+// The place to fix that is when there is a second implementation to hold to it:
+// a shared conformance test the model-backed one has to pass, which is #17.
 package interpret
