@@ -227,6 +227,22 @@ func (s *SDJWT) Delegate(
 		content[k] = v
 	}
 
+	// payload, disclosures and blinder are three arguments that have to agree,
+	// and nothing in the signature says so: the digests inside payload were
+	// computed by whichever Blinder produced it, while _sd_alg below announces
+	// this one. Hand in a pair from a sha-384 Blinder and delegate with a
+	// sha-256 one and the chain is built happily, then fails at the verifier as
+	// ErrDisclosureUnmatched — a mistake made by the issuer, reported to the
+	// party least able to fix it.
+	//
+	// This is the same check Present runs for the same reason, against the same
+	// sentinel. Withholding is untouched: an absent disclosure is a decision
+	// the delegate is entitled to make, and checkReachable only requires that
+	// every disclosure supplied has somewhere to attach.
+	if err := checkReachable(disclosures, content, blinder.HashAlg()); err != nil {
+		return nil, fmt.Errorf("%w: the delegated payload and its disclosures do not agree", err)
+	}
+
 	// The delegate payload travels as an array disclosure (draft §5.1.3), so
 	// that the array in the signed KB-JWT carries a digest and the content
 	// itself is a disclosure the delegate can be made to produce.

@@ -925,6 +925,62 @@ func delegatedChainExpiringAt(t *testing.T, exp time.Time) *sdjwt.Chain {
 // every one of them lets both hops default to the same algorithm, which is
 // exactly what would let VerifyChain read _sd_alg from the wrong hop and
 // still pass every existing test.
+func TestDelegateRefusesAPayloadItsDisclosuresDoNotBelongTo(t *testing.T) {
+	root := issuedRoot(t)
+
+	// The payload is blinded under sha-384 and the delegation is made with a
+	// sha-256 blinder. Nothing about the two arguments says they have to agree,
+	// which is precisely why this is worth refusing: the digests inside the
+	// payload were computed under one algorithm and _sd_alg would announce the
+	// other.
+	blinded, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()), sdjwt.WithHashAlg(sdjwt.SHA384))
+	require.NoError(t, err)
+	closed, disclosures, err := blinded.Blind(map[string]any{
+		"vct":           "closed.example",
+		"checkout_hash": "abc",
+	}, "checkout_hash")
+	require.NoError(t, err)
+	require.NotEmpty(t, disclosures, "the fixture only tests anything if something was actually blinded")
+
+	delegating, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err)
+
+	_, err = root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), delegating, sdjwt.KeyBinding{
+		Nonce:    "n-1",
+		Audience: "https://merchant.example",
+		IssuedAt: time.Unix(1_777_326_189, 0),
+	}, closed, disclosures)
+
+	require.Error(t, err,
+		"a mistake made at the issuer must be reported at the issuer; deferring it produces a chain that only fails at the verifier, where the party holding it cannot fix it")
+	assert.ErrorIs(t, err, sdjwt.ErrDisclosureUnreachable)
+}
+
+func TestDelegateAcceptsAPayloadThatWithholdsEverything(t *testing.T) {
+	root := issuedRoot(t)
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err)
+	closed, disclosures, err := blinder.Blind(map[string]any{
+		"vct":           "closed.example",
+		"checkout_hash": "abc",
+	}, "checkout_hash")
+	require.NoError(t, err)
+
+	// Every disclosure dropped. The payload still carries the digests, which is
+	// what withholding looks like — so the consistency check must not read an
+	// absent disclosure as a mismatched one.
+	_, err = root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
+		Nonce:    "n-1",
+		Audience: "https://merchant.example",
+		IssuedAt: time.Unix(1_777_326_189, 0),
+	}, closed, nil)
+
+	require.NoError(t, err,
+		"withholding a claim is a delegate's decision to make, and refusing it here would forbid the selective disclosure this whole format exists for")
+	_ = disclosures
+}
+
 func delegatedChainWithDelegateHashAlg(t *testing.T, alg sdjwt.HashAlg) *sdjwt.Chain {
 	t.Helper()
 	root := issuedRoot(t)
