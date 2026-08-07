@@ -73,7 +73,19 @@ func TestTwoDelegationHopsAreRefused(t *testing.T) {
 	// The sentinel alone is not enough: dropping the sep >= 0 guard still
 	// rejects, via parseDisclosures choking on the empty component that would
 	// otherwise start a second hop, and that failure wraps the same sentinel.
-	// Only the message pins the rejection to the two-hops rule specifically.
+	// The substring is what does not survive that reroute, so it is what makes
+	// this test about the second-empty-component rule rather than about the
+	// input being refused somehow.
+	//
+	// It pins the rule and not the reading, and the difference is worth being
+	// exact about. ParseChain cannot tell a second delegation from an empty
+	// delegating JWT or an empty delegated disclosure — the wire form does not
+	// distinguish them, which is why the message names all three — so the error
+	// here is byte-identical to the one
+	// TestAnEmptyComponentInTheDelegatingJWTsPlaceIsRefused gets, and that
+	// test's input satisfies this assertion in full. What separates the two
+	// tests is the input each drives, not a message only one of them can
+	// produce.
 	assert.ErrorContains(t, err, "two delegation hops")
 }
 
@@ -155,6 +167,41 @@ func TestAMalformedDisclosureNamesTheHopItWasIn(t *testing.T) {
 				"both hops produce the same sentinel and the same position, so the hop name is the only thing that sends a reader to the right run")
 		})
 	}
+}
+
+func TestAChainWithNoIssuerSignedJWTIsRefused(t *testing.T) {
+	// The first component is empty, so the chain opens on the hop separator.
+	// Everything downstream still lines up — one delegating JWT, no
+	// disclosures, the trailing component present — which is why this has to be
+	// refused where it is read rather than left to be noticed later. Without
+	// the guard ParseChain returns a Chain whose root hop is the empty string,
+	// and nothing about that value says it was never supplied: it reaches
+	// Verify as a JWT that fails to parse, reported against a root the caller
+	// never had.
+	_, err := sdjwt.ParseChain("~~" + fakeKBJWT + "~")
+	require.Error(t, err,
+		"a chain with no root has no issuer signature to check and no cnf to resolve the delegate key from, so there is nothing for the second hop to hang off")
+	assert.ErrorIs(t, err, sdjwt.ErrMalformedChain)
+	assert.ErrorContains(t, err, "no issuer-signed JWT",
+		"the sentinel is shared with every other parse failure, so only the message says the component that was missing is the one everything else is measured against")
+}
+
+func TestADelegatingComponentThatIsNotAJWTIsRefused(t *testing.T) {
+	// ParseChain checks that the delegating component is a JWT even though it
+	// verifies no signature, for the reason Parse gives about a KB-JWT: a
+	// component that is not one has been misread, and discovering that at
+	// verification time means the error names the wrong thing. Without the
+	// check this chain parses, and the failure surfaces inside VerifyChain as
+	// ErrKeyBindingInvalid — a key binding reported as broken when what is
+	// actually broken is the serialisation, which is precisely the outcome the
+	// guard's own doc comment says it exists to prevent.
+	_, err := sdjwt.ParseChain(fakeRootJWT + "~~not-a-jwt~")
+	require.Error(t, err,
+		"a component in the delegating JWT's place that is not a JWT means the chain was misread, and a misreading has to be reported as one")
+	assert.ErrorIs(t, err, sdjwt.ErrMalformedChain,
+		"the answer has to be that the chain is malformed; ErrKeyBindingInvalid here would send whoever reads it looking at a key binding that was never reached")
+	assert.ErrorContains(t, err, "delegating JWT",
+		"a chain carries two JWTs, the root's Issuer-signed one and this, so the message has to say which of them could not be read")
 }
 
 func TestDelegateProducesAParsableChain(t *testing.T) {
@@ -470,8 +517,13 @@ func TestAnExpiredDelegatedPayloadIsRejected(t *testing.T) {
 
 func TestTheDelegateHopReadsItsOwnHashAlgorithm(t *testing.T) {
 	// The root stays at its default, sha-256; the delegate hop is signed with
-	// sha-384. Every other fixture in this file has both hops agree, which
-	// would let VerifyChain read _sd_alg from either one and still pass.
+	// sha-384. One other fixture makes the two hops disagree, and it is this
+	// one's mirror rather than a second copy of it:
+	// issuedRootWithExtraDisclosureUnder moves the *root* to sha-384 and
+	// leaves the delegate hop at sha-256, which is what
+	// TestAllowedHashAlgsAppliesToTheRootHopToo needs. Apart from those two,
+	// every chain in this file has both hops at sha-256, and under one of
+	// those a VerifyChain reading _sd_alg from either hop would pass.
 	chain := delegatedChainWithDelegateHashAlg(t, sdjwt.SHA384) // helper below
 
 	verified, err := sdjwt.VerifyChain(chain, chainOptions(t))
@@ -646,8 +698,11 @@ func delegatedChainFromRoot(t *testing.T, root *sdjwt.SDJWT, typ, signingKey str
 // production path the only way a chain is built, which is what lets these
 // fixtures stand in for a chain that arrived from somewhere else. An empty typ
 // means the one Delegate wrote and a nil mutate means the claims it wrote, so
-// delegatedChainFromRoot is this with only the header varied and
-// delegatedChainWithClaims is this with only the payload varied. Those two were
+// delegatedChainFromRoot is this without a claims mutation — it varies the typ
+// and the signing key, and the key is the whole mechanism behind
+// delegatedChain(t, "impostor"), which signs with a key the root never
+// endorsed — while delegatedChainWithClaims is this with the typ and the key
+// left as Delegate wrote them. Those two were
 // written separately, and some thirty lines of building, splitting, decoding
 // and rejoining were identical between them; a change to how a chain is taken
 // apart and put back together belongs in one place rather than in whichever of
@@ -823,8 +878,10 @@ func issuedRootWithExtraDisclosure(t *testing.T) *sdjwt.SDJWT {
 }
 
 // issuedRootWithExtraDisclosureUnder is issuedRootWithExtraDisclosure with the
-// root's own digest algorithm chosen, so that its _sd_alg claim says something
-// other than sha-256.
+// root's own digest algorithm supplied rather than left at the default.
+// issuedRootWithExtraDisclosure passes DefaultHashAlg and is therefore
+// unchanged by the generalisation; TestAllowedHashAlgsAppliesToTheRootHopToo is
+// the one caller that passes anything else.
 //
 // It is this fixture rather than issuedRoot that generalises, because a root
 // that blinds nothing declares no algorithm at all: Blind writes _sd_alg only
@@ -1231,10 +1288,20 @@ func TestDelegateAcceptsAPayloadThatWithholdsEverything(t *testing.T) {
 // delegatedChainWithDelegateHashAlg is delegatedChain("delegate") built with
 // the delegate hop's own _sd_alg set to alg via WithHashAlg, while the root
 // stays at its default (sha-256) — the two hops genuinely disagreeing about
-// which digest function they use. No other fixture in this file does this:
-// every one of them lets both hops default to the same algorithm, which is
-// exactly what would let VerifyChain read _sd_alg from the wrong hop and
-// still pass every existing test.
+// which digest function they use.
+//
+// issuedRootWithExtraDisclosureUnder is the mirror of this rather than a
+// replacement for it, and the two are easy to mistake for duplicates: that one
+// moves the *root* and leaves the delegate hop at sha-256, this one moves the
+// *delegate hop* and leaves the root at its default. Deleting either because
+// the other exists would take the disagreement off one hop entirely, and they
+// are not interchangeable: this fixture is what
+// TestAllowedHashAlgsAppliesToTheDelegateHopToo refuses on and the mirror is
+// what TestAllowedHashAlgsAppliesToTheRootHopToo refuses on, and removing
+// either hop's policy check leaves the other of those two tests green. Anyone
+// adding a third such fixture is not adding the first.
+//
+// Apart from those two, every chain in this file has both hops at sha-256.
 func delegatedChainWithDelegateHashAlg(t *testing.T, alg sdjwt.HashAlg) *sdjwt.Chain {
 	t.Helper()
 	root := issuedRoot(t)
