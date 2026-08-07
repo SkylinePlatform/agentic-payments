@@ -178,9 +178,27 @@ These are enforced, not advisory.
    the protocol is fine; reproducing its code is not. See CONTRIBUTING.md.
 
 4. **No test may depend on a live LLM or an external network call.** Tests use
-   `ScriptedInterpreter`, which maps fixed prompts to fixed constraint sets. It
-   does not exist yet — it arrives with #16. Until then the rule still binds:
-   nothing reaches for a live model in the meantime.
+   `ScriptedInterpreter` in `internal/agent/interpret/`, which maps fixed
+   prompts to fixed constraint sets. It is not a mock and not in a `_test.go`
+   file: it computes an interpretation rather than recording a call, and the
+   agent leg of #15 has to be able to name it — a type declared in a `_test.go`
+   file is reachable only from its own package's test binary, so `cmd/agent`
+   could not construct one.
+
+   **Nothing imports the package yet**, and that is worth saying rather than
+   leaving a reader to discover it: the only occurrence of its import path
+   outside itself is in `roles/surface/nonagentic_test.go`, which names it to
+   prove the Trusted Surface does *not* reach it. The caller arrives with the
+   Human Not Present flow. Until then this rule binds by forbidding the
+   alternative, not by pointing at a live call site.
+
+   Whatever ends up behind `IntentInterpreter` calls `interpret.Validate` on
+   what it is about to return. A constraint naming a field the verifier does
+   not know would otherwise render on the approval screen, get signed, and be
+   rejected as `constraint_type_unknown` at the moment of purchase — having
+   looked like a limit the whole way. The check runs the *verifier's* parser
+   rather than a second list of field names, because a copy would drift in the
+   direction that accepts what the verifier cannot read.
 
 5. **Time goes through the injected clock.** Never call `time.Now()` directly, or
    signature expiry becomes untestable. Enforced by `forbidigo`;
