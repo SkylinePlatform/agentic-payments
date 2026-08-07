@@ -309,14 +309,13 @@ func TestVerifyChainRefusesOptionsItCannotApply(t *testing.T) {
 func TestAChainVerifiesAgainstTheKeyTheRootEndorsed(t *testing.T) {
 	chain := delegatedChain(t, "delegate")
 
-	payloads, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	verified, err := sdjwt.VerifyChain(chain, chainOptions(t))
 	require.NoError(t, err, "the happy path is what every rejection is measured against")
 
-	require.Len(t, payloads, 2, "a two-hop chain yields the root payload and the delegated one, in that order")
-	assert.Equal(t, "open.example", payloads[0]["vct"],
-		"index 0 is the root, which is what carries the constraints a verifier evaluates")
-	assert.Equal(t, "closed.example", payloads[1]["vct"],
-		"index 1 is the delegated content, which is what those constraints are evaluated against")
+	assert.Equal(t, "open.example", verified.Root["vct"],
+		"the root is what carries the constraints a verifier evaluates")
+	assert.Equal(t, "closed.example", verified.Delegated["vct"],
+		"the delegated content is what those constraints are evaluated against, and reading one for the other would check a purchase against itself")
 }
 
 func TestExactlyOneDelegatePayloadElementIsDisclosed(t *testing.T) {
@@ -371,12 +370,11 @@ func TestTheDelegateHopReadsItsOwnHashAlgorithm(t *testing.T) {
 	// would let VerifyChain read _sd_alg from either one and still pass.
 	chain := delegatedChainWithDelegateHashAlg(t, sdjwt.SHA384) // helper below
 
-	payloads, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	verified, err := sdjwt.VerifyChain(chain, chainOptions(t))
 	require.NoError(t, err,
 		"_sd_alg lives on the delegating JWT; reading it from the root would silently select sha-256 and the delegate's own sha-384 disclosure would never match its digest")
 
-	require.Len(t, payloads, 2, "a two-hop chain yields both payloads once the right algorithm is used to check them")
-	assert.Equal(t, "closed.example", payloads[1]["vct"],
+	assert.Equal(t, "closed.example", verified.Delegated["vct"],
 		"the delegated content only comes back once its sha-384 digest has been matched under sha-384, not sha-256")
 }
 
@@ -462,11 +460,11 @@ func TestDelegatedSDAlgDoesNotSurviveIntoThePayload(t *testing.T) {
 		map[string]any{"vct": "closed.example", "_sd_alg": "sha-512"},
 	})
 
-	payloads, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	verified, err := sdjwt.VerifyChain(chain, chainOptions(t))
 	require.NoError(t, err,
 		"the digest matches under the delegating JWT's real _sd_alg (sha-256); a claim of the same name smuggled inside the content must not stop verification")
 
-	_, ok := payloads[1]["_sd_alg"]
+	_, ok := verified.Delegated["_sd_alg"]
 	assert.False(t, ok,
 		"a caller reading the algorithm off the returned payload — the pattern HashAlg's own doc comment invites — must not see a delegate-chosen value the digest was never verified under")
 }

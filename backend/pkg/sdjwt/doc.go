@@ -12,8 +12,16 @@
 //
 // A Chain is exactly two hops: an Issuer-signed SD-JWT and one delegating
 // KB-SD-JWT. That is the whole of what this package implements, and it is
-// what AP2 needs — its chain is always [open mandate, closed mandate]. Three
-// things the draft allows are deliberately left out rather than half-built:
+// what AP2 needs — its chain is always [open mandate, closed mandate].
+//
+// Two hops is a decision the types carry rather than a fact the documentation
+// asserts. Chain names its hops, ParseChain refuses a third, and VerifyChain
+// answers with a Verified rather than a list — so the difference between the
+// root and the delegated payload is a field name at every point a caller
+// touches it, never an index to remember.
+//
+// Three things the draft allows are deliberately left out rather than
+// half-built:
 //
 //   - dSD-JWT+KB, a chain whose final component is a further Key Binding JWT
 //     proving possession on top of the last delegation. ParseChain refuses one

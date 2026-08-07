@@ -304,29 +304,55 @@ type ChainOptions struct {
 	Clock Clock
 }
 
-// VerifyChain checks a two-hop Delegate SD-JWT and returns the processed
-// payloads in wire order: the root first, the delegated content second.
+// Verified is what a chain verifies to: the processed payload of each hop,
+// named rather than positional.
 //
-// It implements draft §6 for the dSD-JWT form. The order is the draft's, and
-// each step is only meaningful once the one before it has passed — resolving
-// cnf out of an unverified root would be taking the delegating key from
-// whoever wrote the token.
-func VerifyChain(c *Chain, opts ChainOptions) ([]map[string]any, error) {
+// The draft describes the result of verification as a list, and for an
+// implementation that accepts chains of any length a list is the honest shape.
+// This one accepts exactly two hops and refuses a third at parse time, so a
+// list here would model a length ParseChain will not produce — and would make
+// the difference between the two hops a matter of remembering which index is
+// which. Chain itself names its hops; this is the same decision at the only
+// point a caller touches.
+//
+// The distinction is not cosmetic for the caller this package was built for. In
+// AP2 the root is the open mandate — the constraints and the endorsed key — and
+// the delegated payload is the closed mandate those constraints are evaluated
+// against. Reading one for the other checks a purchase against itself, which is
+// a verification that passes while proving nothing, and is exactly the class of
+// bug an index makes expressible and a field name does not.
+type Verified struct {
+	// Root is the processed payload of the Issuer-signed hop.
+	Root map[string]any
+
+	// Delegated is the processed Delegate Payload — the single disclosed
+	// element of the delegating JWT's delegate_payload array.
+	Delegated map[string]any
+}
+
+// VerifyChain checks a two-hop Delegate SD-JWT and returns the processed
+// payload of each hop.
+//
+// It implements draft §6 for the dSD-JWT form. The order of the checks is the
+// draft's, and each step is only meaningful once the one before it has passed —
+// resolving cnf out of an unverified root would be taking the delegating key
+// from whoever wrote the token.
+func VerifyChain(c *Chain, opts ChainOptions) (Verified, error) {
 	if c == nil {
-		return nil, fmt.Errorf("%w: no chain", ErrInvalidOptions)
+		return Verified{}, fmt.Errorf("%w: no chain", ErrInvalidOptions)
 	}
 	if opts.Issuer == nil {
-		return nil, fmt.Errorf("%w: no issuer verifier", ErrInvalidOptions)
+		return Verified{}, fmt.Errorf("%w: no issuer verifier", ErrInvalidOptions)
 	}
 	if opts.DelegateKey == nil {
-		return nil, fmt.Errorf("%w: no delegate key resolver; the delegation is the key binding and cannot be skipped",
+		return Verified{}, fmt.Errorf("%w: no delegate key resolver; the delegation is the key binding and cannot be skipped",
 			ErrInvalidOptions)
 	}
 	if opts.Clock == nil {
-		return nil, fmt.Errorf("%w: no clock", ErrInvalidOptions)
+		return Verified{}, fmt.Errorf("%w: no clock", ErrInvalidOptions)
 	}
 	if opts.Nonce == "" || opts.Audience == "" {
-		return nil, fmt.Errorf("%w: verifying a delegation needs both a nonce and an audience",
+		return Verified{}, fmt.Errorf("%w: verifying a delegation needs both a nonce and an audience",
 			ErrInvalidOptions)
 	}
 
@@ -339,7 +365,7 @@ func VerifyChain(c *Chain, opts ChainOptions) ([]map[string]any, error) {
 		Clock:           opts.Clock,
 	})
 	if err != nil {
-		return nil, err
+		return Verified{}, err
 	}
 
 	// Draft §6 step 3.1: the cnf of the preceding component is the issuer key
@@ -348,69 +374,69 @@ func VerifyChain(c *Chain, opts ChainOptions) ([]map[string]any, error) {
 	// resolveHolderKey gives for RFC 9901.
 	delegateKey, err := resolveHolderKey(rootPayload, opts.DelegateKey)
 	if err != nil {
-		return nil, err
+		return Verified{}, err
 	}
 
 	jwt, err := parseJWT(c.delegate.jwt)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrKeyBindingInvalid, err)
+		return Verified{}, fmt.Errorf("%w: %w", ErrKeyBindingInvalid, err)
 	}
 	if jwt.header.Typ != DelegateType {
-		return nil, fmt.Errorf(
+		return Verified{}, fmt.Errorf(
 			"%w: typ is %q, want %q — %q proves possession of a key without delegating anything",
 			ErrKeyBindingInvalid, jwt.header.Typ, DelegateType, kbType)
 	}
 	if err := jwt.verifyWith(delegateKey); err != nil {
-		return nil, err
+		return Verified{}, err
 	}
 
 	claims, err := jwt.claims()
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrKeyBindingInvalid, err)
+		return Verified{}, fmt.Errorf("%w: %w", ErrKeyBindingInvalid, err)
 	}
 	if err := c.verifyBinding(claims); err != nil {
-		return nil, err
+		return Verified{}, err
 	}
 	if err := verifyDelegateFreshness(claims, opts); err != nil {
-		return nil, err
+		return Verified{}, err
 	}
 
 	// Draft §6 step 3.1: the Delegate Payload is the JWT payload for every claim
 	// except _sd_alg, which stays here at the delegating JWT's level.
 	alg, err := hashAlgOf(claims)
 	if err != nil {
-		return nil, err
+		return Verified{}, err
 	}
 	if len(opts.AllowedHashAlgs) > 0 && !slices.Contains(opts.AllowedHashAlgs, alg) {
-		return nil, fmt.Errorf("%w: %q is not allowed by policy", ErrUnsupportedHashAlg, alg)
+		return Verified{}, fmt.Errorf("%w: %q is not allowed by policy", ErrUnsupportedHashAlg, alg)
 	}
 
 	p, err := newProcessor(alg, c.delegate.disclosures)
 	if err != nil {
-		return nil, err
+		return Verified{}, err
 	}
 	processed, err := p.process(claims[delegatePayloadClaim])
 	if err != nil {
-		return nil, err
+		return Verified{}, err
 	}
 	// Every delegated disclosure must have found a home, for the reason
 	// RFC 9901 §7.1 step 5 gives: one that did not is content nobody signed.
 	if err := p.checkAllUsed(); err != nil {
-		return nil, err
+		return Verified{}, err
 	}
 
 	elements, ok := processed.([]any)
 	if !ok {
-		return nil, fmt.Errorf("%w: %s must be an array, got %T",
+		return Verified{}, fmt.Errorf("%w: %s must be an array, got %T",
 			ErrDelegatePayloadInvalid, delegatePayloadClaim, processed)
 	}
 	if len(elements) != 1 {
-		return nil, fmt.Errorf("%w: %d elements disclosed, draft §6 step 3.2 requires exactly one",
+		return Verified{}, fmt.Errorf("%w: %d elements disclosed, draft §6 step 3.2 requires exactly one",
 			ErrDelegatePayloadInvalid, len(elements))
 	}
 	delegated, ok := elements[0].(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("%w: the delegated element is %T, not an object",
+		return Verified{}, fmt.Errorf("%w: the delegated element is %T, not an object",
 			ErrDelegatePayloadInvalid, elements[0])
 	}
 	// Draft §6 step 3.1 names _sd_alg as the one claim that does not travel
@@ -426,10 +452,10 @@ func VerifyChain(c *Chain, opts ChainOptions) ([]map[string]any, error) {
 	// An open mandate valid for a day may delegate a closed one valid for a
 	// minute, which is the whole point of the smallest-window guidance.
 	if err := checkValidity(delegated, opts.Clock.Now()); err != nil {
-		return nil, err
+		return Verified{}, err
 	}
 
-	return []map[string]any{rootPayload, delegated}, nil
+	return Verified{Root: rootPayload, Delegated: delegated}, nil
 }
 
 // verifyBinding checks that the delegating JWT names the root it was signed
