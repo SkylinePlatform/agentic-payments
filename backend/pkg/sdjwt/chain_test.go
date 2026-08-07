@@ -961,15 +961,14 @@ func TestDelegateAcceptsAPayloadThatWithholdsEverything(t *testing.T) {
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
 	require.NoError(t, err)
-	closed, disclosures, err := blinder.Blind(map[string]any{
+	// The disclosures are discarded rather than kept: the payload still carries
+	// their digests, which is exactly what withholding looks like on the wire.
+	closed, _, err := blinder.Blind(map[string]any{
 		"vct":           "closed.example",
 		"checkout_hash": "abc",
 	}, "checkout_hash")
 	require.NoError(t, err)
 
-	// Every disclosure dropped. The payload still carries the digests, which is
-	// what withholding looks like — so the consistency check must not read an
-	// absent disclosure as a mismatched one.
 	_, err = root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
 		Nonce:    "n-1",
 		Audience: "https://merchant.example",
@@ -978,7 +977,6 @@ func TestDelegateAcceptsAPayloadThatWithholdsEverything(t *testing.T) {
 
 	require.NoError(t, err,
 		"withholding a claim is a delegate's decision to make, and refusing it here would forbid the selective disclosure this whole format exists for")
-	_ = disclosures
 }
 
 func delegatedChainWithDelegateHashAlg(t *testing.T, alg sdjwt.HashAlg) *sdjwt.Chain {
