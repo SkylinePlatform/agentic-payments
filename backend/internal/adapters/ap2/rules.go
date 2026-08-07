@@ -71,7 +71,7 @@ type CredentialVerifier interface {
 // single entry point a caller could hand a chain to by mistake and have it
 // silently evaluate no constraints.
 type CheckoutChainVerifier interface {
-	AuthoriseCheckoutChain(c *sdjwt.Chain, subject constraint.Subject, checkoutJWT string) (CheckoutAuthorisation, error)
+	AuthoriseCheckoutChain(c *sdjwt.Chain, subject constraint.Subject, checkoutJWT string, nonce string) (CheckoutAuthorisation, error)
 }
 
 // PaymentChainVerifier is CheckoutChainVerifier's counterpart for the
@@ -79,7 +79,7 @@ type CheckoutChainVerifier interface {
 // against the open one that endorsed it. See CheckoutChainVerifier for why
 // this is a distinct interface rather than a parameter on PaymentVerifier.
 type PaymentChainVerifier interface {
-	AuthorisePaymentChain(c *sdjwt.Chain, subject constraint.Subject) (PaymentAuthorisation, error)
+	AuthorisePaymentChain(c *sdjwt.Chain, subject constraint.Subject, nonce string) (PaymentAuthorisation, error)
 }
 
 // MerchantRules is what a Merchant checks before it accepts a purchase.
@@ -93,19 +93,30 @@ type MerchantRules struct {
 	// Clock decides whether the mandate has expired. Required.
 	Clock authz.Clock
 
-	// AgentKey, Audience and Nonce are AuthoriseCheckoutChain's half of this
-	// rule set; VerifyCheckout never reads them, because a directly-signed
-	// Checkout Mandate carries no delegation to check freshness against. All
-	// three are copied into a ChainOptions unchanged — see that type for what
-	// each does. AuthoriseCheckoutChain checks Audience and Nonce itself
-	// before delegating, rather than letting either arrive at sdjwt.VerifyChain
-	// empty and be refused there: that refusal is real, but it carries
-	// sdjwt.ErrInvalidOptions, a sentinel this package's own ErrMisconfigured
-	// does not wrap, so a caller checking errors.Is(err, ErrMisconfigured)
-	// would see this role's own misconfiguration reported as somebody else's.
-	// A nil AgentKey needs no matching guard: the package-level
-	// AuthoriseCheckoutChain already refuses that under ap2.ErrMisconfigured
-	// on its own.
+	// AgentKey and Audience are AuthoriseCheckoutChain's half of this rule
+	// set; VerifyCheckout never reads them, because a directly-signed Checkout
+	// Mandate carries no delegation to check freshness against. Both are
+	// copied into a ChainOptions unchanged — see that type for what each
+	// does. AuthoriseCheckoutChain checks Audience itself before delegating,
+	// rather than letting it arrive at sdjwt.VerifyChain empty and be refused
+	// there: that refusal is real, but it carries sdjwt.ErrInvalidOptions, a
+	// sentinel this package's own ErrMisconfigured does not wrap, so a caller
+	// checking errors.Is(err, ErrMisconfigured) would see this role's own
+	// misconfiguration reported as somebody else's. A nil AgentKey needs no
+	// matching guard: the package-level AuthoriseCheckoutChain already
+	// refuses that under ap2.ErrMisconfigured on its own.
+	//
+	// The nonce is deliberately not a third field here. Audience is this
+	// merchant's own identifier — fixed for the rule set's lifetime, the same
+	// as Issuer or Clock. A nonce is not: it is a value this merchant issued
+	// for one transaction and must remember, the same kind of call-specific
+	// fact checkoutJWT already is on both VerifyCheckout and
+	// AuthoriseCheckoutChain. A field shaped like AgentKey — a closure with no
+	// argument — cannot express "the nonce for whichever chain is being
+	// verified right now" once a MerchantRules is built once at role startup,
+	// which is what production wiring does; it can only express one nonce,
+	// which reused across verifications is replay protection that does not
+	// protect. So it is AuthoriseCheckoutChain's parameter instead.
 
 	// AgentKey turns the open mandate's cnf claim into the Verifier the
 	// delegating hop is checked against. Required for AuthoriseCheckoutChain.
@@ -113,17 +124,6 @@ type MerchantRules struct {
 	// Audience is the value the delegating hop's aud claim must carry — this
 	// merchant's own identifier. Required for AuthoriseCheckoutChain.
 	Audience string
-	// Nonce supplies the value the delegating hop's nonce claim must carry, as
-	// issued to the agent for this transaction. It is a function rather than a
-	// fixed string so a Merchant can hand this whatever it uses to issue and
-	// remember one, on the same grounds AgentKey is a resolver rather than a
-	// key: this package holds no nonce store either. For this proof of
-	// concept a closure over a caller-supplied value is enough to make the
-	// field real; issue #27 is the replay store that would make reuse of that
-	// value detectable. Required for AuthoriseCheckoutChain, and an empty
-	// result is treated the same as a nil field — a nonce nobody checks is the
-	// same gap as a nonce nobody supplied.
-	Nonce func() string
 }
 
 // VerifyCheckout runs the Merchant's rules against a presented Checkout Mandate.
@@ -167,21 +167,28 @@ func (r MerchantRules) VerifyCheckout(
 // what it offered, required for the same reason VerifyCheckout requires it —
 // there is no other document to recompute the binding against.
 //
-// Audience and Nonce are also required, and refused here rather than left to
-// fail inside the package-level AuthoriseCheckoutChain: that function forwards
-// an empty Audience or Nonce straight into sdjwt.VerifyChain, which refuses
-// them too, but as sdjwt.ErrInvalidOptions — a sentinel this package's own
-// ErrMisconfigured does not wrap. Refusing them here instead means a Merchant
-// handed nothing to check freshness with gets ap2.ErrMisconfigured, not the
-// chain library's own vocabulary. A nonce that resolves to the empty string is
-// refused on the same terms as a nil Nonce field: a value nobody actually
-// supplied is not a nonce, whatever the type checker thinks of it. AgentKey
-// needs no matching guard here — a nil one is already caught by
-// AuthoriseCheckoutChain's own check, under the same ap2.ErrMisconfigured.
+// nonce is the value this merchant issued to the agent for this exchange and
+// has to have remembered — it is not minted here, and a verifier that made
+// one up at verification time would be comparing a value to itself, the same
+// shape of nothing-check an empty audience would be. This proof of concept
+// takes the nonce as given and checks nothing about whether it was reused;
+// issue #27 is the replay store that would make remembering it real.
+//
+// Both checkoutJWT and nonce are required, and refused here rather than left
+// to fail inside the package-level AuthoriseCheckoutChain: that function
+// forwards an empty Audience or Nonce straight into sdjwt.VerifyChain, which
+// refuses them too, but as sdjwt.ErrInvalidOptions — a sentinel this
+// package's own ErrMisconfigured does not wrap. Refusing them here instead
+// means a Merchant handed nothing to check freshness with gets
+// ap2.ErrMisconfigured, not the chain library's own vocabulary. AgentKey
+// needs no matching guard here — a nil one is already caught by the
+// package-level AuthoriseCheckoutChain's own check, under the same
+// ap2.ErrMisconfigured.
 func (r MerchantRules) AuthoriseCheckoutChain(
 	c *sdjwt.Chain,
 	subject constraint.Subject,
 	checkoutJWT string,
+	nonce string,
 ) (CheckoutAuthorisation, error) {
 	var zero CheckoutAuthorisation
 	if checkoutJWT == "" {
@@ -189,15 +196,9 @@ func (r MerchantRules) AuthoriseCheckoutChain(
 			"%w: a merchant verifies against the checkout it issued, and none was supplied",
 			ErrMisconfigured)
 	}
-	if r.Audience == "" || r.Nonce == nil {
+	if r.Audience == "" || nonce == "" {
 		return zero, fmt.Errorf(
 			"%w: a delegation is a key binding, and a key binding with no audience or no nonce is a proof that can be replayed against this merchant tomorrow",
-			ErrMisconfigured)
-	}
-	nonce := r.Nonce()
-	if nonce == "" {
-		return zero, fmt.Errorf(
-			"%w: the nonce this verification was supplied is empty, which checks nothing",
 			ErrMisconfigured)
 	}
 
@@ -221,14 +222,13 @@ type CredentialProviderRules struct {
 	// Clock decides whether the mandate has expired. Required.
 	Clock authz.Clock
 
-	// AgentKey, Audience and Nonce are AuthorisePaymentChain's half of this
-	// rule set. See MerchantRules' identical trio for what each does and why
-	// each is a function or a required string rather than a plain default —
-	// the reasoning is the role's proof-of-possession question, not the
+	// AgentKey and Audience are AuthorisePaymentChain's half of this rule set.
+	// See MerchantRules' identical pair for what each does and why the nonce
+	// is that method's parameter rather than a third field here — the
+	// reasoning is the role's proof-of-possession question, not the
 	// Merchant's, but it does not change between the two roles.
 	AgentKey func(cnf json.RawMessage) (authz.Verifier, error)
 	Audience string
-	Nonce    func() string
 }
 
 // VerifyPayment runs the Credential Provider's rules against a directly
@@ -274,39 +274,42 @@ func (r CredentialProviderRules) VerifyPayment(sd *sdjwt.SDJWT) (generated.Payme
 // delegation chain — a closed Payment Mandate authorised by the open one
 // that endorsed it — the Human Not Present counterpart to VerifyPayment.
 //
-// Unlike VerifyPayment it requires an AgentKey, an Audience and a Nonce. The
+// Unlike VerifyPayment it requires an AgentKey, an Audience and a nonce. The
 // requirement is not optional the way key binding is optional on a standalone
 // presentation: sdjwt.VerifyChain binds the delegating hop to the open
 // mandate's cnf key unconditionally, so a delegation chain is a key binding
 // by construction, and a key binding with no nonce is a proof that can be
-// replayed against this verifier tomorrow. Audience and Nonce are checked
-// here, before the package-level AuthorisePaymentChain is ever called, for
-// the reason MerchantRules.AuthoriseCheckoutChain's identical guard gives:
-// left unchecked, an empty one of either would still be refused, but as
+// replayed against this verifier tomorrow.
+//
+// nonce is a parameter rather than a field on CredentialProviderRules for the
+// reason MerchantRules.AuthoriseCheckoutChain's identical parameter is: it is
+// a value this role issued to the agent for this exchange and must remember,
+// not one it generates on the spot — a Credential Provider that minted a
+// fresh nonce at verification time would be comparing a value to itself,
+// which checks nothing. A field shaped like AgentKey (a zero-argument
+// closure) cannot carry "the nonce for whichever chain is being verified
+// right now" once the rules are built once at role startup, which is what
+// production wiring does; only a per-call parameter can. This proof of
+// concept goes only as far as accepting the caller-supplied value and
+// checking it matches; it checks nothing about reuse. Issue #27 is the
+// replay store that would make remembering it real.
+//
+// Audience and nonce are checked here, before the package-level
+// AuthorisePaymentChain is ever called, for the reason
+// MerchantRules.AuthoriseCheckoutChain's identical guard gives: left
+// unchecked, an empty one of either would still be refused, but as
 // sdjwt.ErrInvalidOptions rather than this package's own ErrMisconfigured. A
 // nil AgentKey needs no matching guard here — the package-level
 // AuthorisePaymentChain already refuses that under ap2.ErrMisconfigured.
-//
-// Where the nonce comes from is this role's business — a Credential Provider
-// issues one and remembers it, so a second presentation carrying the same
-// value is refused as a replay rather than accepted again. This proof of
-// concept goes only as far as accepting a caller-supplied nonce and checking
-// it matches; it checks nothing about reuse. Issue #27 is the replay store
-// that would make that real.
 func (r CredentialProviderRules) AuthorisePaymentChain(
 	c *sdjwt.Chain,
 	subject constraint.Subject,
+	nonce string,
 ) (PaymentAuthorisation, error) {
 	var zero PaymentAuthorisation
-	if r.Audience == "" || r.Nonce == nil {
+	if r.Audience == "" || nonce == "" {
 		return zero, fmt.Errorf(
 			"%w: a delegation is a key binding, and a key binding with no audience or no nonce is a proof that can be replayed against the same verifier tomorrow",
-			ErrMisconfigured)
-	}
-	nonce := r.Nonce()
-	if nonce == "" {
-		return zero, fmt.Errorf(
-			"%w: the nonce this verification was supplied is empty, which checks nothing",
 			ErrMisconfigured)
 	}
 
