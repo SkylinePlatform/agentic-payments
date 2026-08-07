@@ -94,22 +94,40 @@ func TestAWellFormedMandateAuthorisesAPurchaseInsideItsLimits(t *testing.T) {
 // (TestTheEndorsedAlgorithmIsChecked), and the ordering that put an
 // unendorsed signer ahead of a constraint violation
 // (TestIdentityIsSettledBeforeLimits) — are gone, along with the signedBy
-// parameter and Endorsement.endorses they exercised.
+// parameter and Endorsement.endorses they exercised. Three different things
+// happened to the three properties, and they are not interchangeable:
 //
-// Under the delegation chain (pkg/sdjwt) a closed mandate is a Key Binding
-// JWT verified with the key the open mandate endorsed in cnf and no other, so
-// a signature from any other key, any borrowed or relabelled kid, or any
-// mismatched alg fails that verification outright rather than reaching this
-// package as a signedBy to compare. The comparison these tests protected is
-// not weakened, it is unrepresentable — there is nothing left here to test.
-// The property survives as pkg/sdjwt's
+// A different key, or the same key wearing a borrowed kid, fails chain
+// verification outright: sdjwt.VerifyChain resolves cnf to the endorsed key's
+// actual material and verifies the delegating JWT with that and nothing
+// else, so a signature made by a different key does not hold regardless of
+// what kid its header claims. That property is pkg/sdjwt's
 // TestADelegationSignedByAnUnendorsedKeyIsRejected; a reader looking for
-// where it went should find it there, not conclude it was dropped.
+// where the first two tests went should find it there.
+//
+// A mismatched algorithm is also still checked, just one layer further down
+// than this package ever reached: jwt.verifyWith (pkg/sdjwt/jose.go:152)
+// refuses a JWS whose protected header names an algorithm other than the
+// resolved key's own before the signature is even attempted, and that check
+// is what TestTheEndorsedAlgorithmIsChecked's property became. It is
+// exercised by pkg/sdjwt/jwt_test.go's
+// TestAJWTIsRefusedBeforeItsSignatureIsChecked, subtest "the header names
+// another algorithm", and more broadly by verify_test.go.
+//
+// A relabelled kid is different from both: it is not caught elsewhere
+// because there is nothing left to catch. Verification resolves the key
+// material itself out of cnf and checks the signature against that material;
+// it never reads the delegating JWT's own kid back out and compares it to
+// anything. TestRelabellingTheEndorsedKeyDoesNotDefeatIt's property — that a
+// relabelled copy of the endorsed key must still be accepted — held for the
+// reason it always held, that kid is a label rather than part of the key, and
+// under the chain that reason no longer needs a test to say so: the
+// mechanism was never given a kid to compare in the first place.
 
 // TestAnEndorsementOfNobodyEndorsesNobody covers the degenerate mandate. An
 // absent key must not read as "any key will do", which would invert the rule
 // the mechanism exists for rather than merely weaken it. This check still
-// runs in this package — Endorsement.Live returns ErrNoEndorsedKey for it —
+// runs in this package — Endorsement.CanAuthorise returns ErrNoEndorsedKey for it —
 // because it is independent of who signed the closed mandate: an open
 // mandate naming no usable key cannot authorise anybody, delegation chain or
 // not.
@@ -164,7 +182,7 @@ func TestExpiryIsTheBlastRadius(t *testing.T) {
 			// The window constraint would refuse most of these on its own, so
 			// the endorsement is checked directly — this test is about the
 			// mandate's life, not the purchase's.
-			err := authz.EndorsementOf(openCheckout(t)).Live(tc.now)
+			err := authz.EndorsementOf(openCheckout(t)).CanAuthorise(tc.now)
 			if tc.wantErr == nil {
 				require.NoError(t, err)
 				return
@@ -185,7 +203,7 @@ func TestAMandateWithNoExpiryNeverLapses(t *testing.T) {
 	open := openCheckout(t)
 	open.ExpiresAt = nil
 
-	err := authz.EndorsementOf(open).Live(expires.AddDate(10, 0, 0))
+	err := authz.EndorsementOf(open).CanAuthorise(expires.AddDate(10, 0, 0))
 	require.NoError(t, err, "an open-ended mandate lapsed anyway")
 }
 

@@ -29,11 +29,17 @@ var (
 	//
 	// The error survives for the one case the chain cannot express that way:
 	// a cnf naming no usable key at all, which is not "the wrong key" but no
-	// key to verify against in the first place. internal/adapters/ap2 returns
-	// it there, when it cannot resolve cnf to a usable key before a chain
-	// verification is even attempted. CodeOf still maps it to
-	// agent_key_mismatch, which is why it stays exported rather than being
-	// deleted along with the check that used to return it.
+	// key to verify against in the first place. Nothing in this module returns
+	// it yet — internal/adapters/ap2's two UsableKey guards both report its own
+	// ErrMandateMalformed today, at issuance, because a cnf that never becomes
+	// a signed open mandate is malformed rather than mismatched. It becomes
+	// reachable in Task 5, which builds chain authorisation in the adapter:
+	// that is where a cnf resolving to unusable material can be refused as
+	// agent_key_mismatch, a check VerifyChain itself cannot make, since it
+	// binds to whatever cnf holds rather than judging it. CodeOf already maps
+	// it to agent_key_mismatch so that mapping is in place before the producer
+	// is, which is why it stays exported now rather than being deleted along
+	// with the check that used to return it.
 	ErrAgentKeyMismatch = errors.New("authz: closed mandate signed by an unendorsed key")
 
 	// ErrNoEndorsedKey means the open mandate carries no usable agent key. A
@@ -113,8 +119,8 @@ type Endorsement struct {
 // rule this package exists for.
 //
 // Exported because it answers the same question at two different moments of
-// a mandate's life, in two different packages: Endorsement.Live calls it
-// here, at verification, to decide whether the open mandate endorses anybody
+// a mandate's life, in two different packages: Endorsement.CanAuthorise calls
+// it here, at verification, to decide whether the open mandate endorses anybody
 // at all; internal/adapters/ap2.IssueOpenCheckout calls it at issuance,
 // before an open mandate naming that key is ever signed. Both have to reach
 // the same verdict on the same key, so there is exactly one implementation
@@ -136,8 +142,8 @@ func UsableKey(k generated.PublicKey) bool {
 
 func nonEmpty(s *string) bool { return s != nil && *s != "" }
 
-// Live reports whether this endorsement can authorise anybody right now: it
-// must name a usable agent key at all, and now must fall inside the
+// CanAuthorise reports whether this endorsement can authorise anybody right
+// now: it must name a usable agent key at all, and now must fall inside the
 // mandate's own window.
 //
 // The key check is not the comparison Verify used to make against a closed
@@ -149,7 +155,7 @@ func nonEmpty(s *string) bool { return s != nil && *s != "" }
 // now comes from the caller's injected clock. This package never reads one:
 // a mandate check that consulted the wall time directly would be untestable at
 // exactly the boundaries that matter.
-func (e Endorsement) Live(now time.Time) error {
+func (e Endorsement) CanAuthorise(now time.Time) error {
 	if e.AgentKey == nil || !UsableKey(*e.AgentKey) {
 		return ErrNoEndorsedKey
 	}
@@ -205,7 +211,7 @@ func AuthoriseCheckout(
 	subject constraint.Subject,
 	now time.Time,
 ) (constraint.Report, error) {
-	if err := EndorsementOf(open).Live(now); err != nil {
+	if err := EndorsementOf(open).CanAuthorise(now); err != nil {
 		return constraint.Report{}, err
 	}
 	return constraint.Evaluate(open.Constraints, subject)
@@ -225,7 +231,7 @@ func AuthorisePayment(
 	subject constraint.Subject,
 	now time.Time,
 ) (constraint.Report, error) {
-	if err := PaymentEndorsementOf(open).Live(now); err != nil {
+	if err := PaymentEndorsementOf(open).CanAuthorise(now); err != nil {
 		return constraint.Report{}, err
 	}
 	if err := checkPinned(open, closed); err != nil {
