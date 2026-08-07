@@ -25,10 +25,21 @@ import (
 // Verifier has nothing to conclude from a proof it did not ask for — but it is
 // only safe as a decision, which is what naming the type makes it.
 //
-// Whether the AP2 flows should refuse an unasked-for proof outright is not
-// settled here. It is a question about the Human Not Present flow, which is #12
-// and #15, and answering it in the option struct before the flow exists would be
-// guessing.
+// Whether the AP2 flows should refuse an unasked-for proof outright is
+// answered now, and the answer is not a policy on this type at all. #12
+// modelled Human Not Present as a delegation chain rather than as a
+// standalone presentation carrying an optional KB-JWT: the agent signs the
+// delegating hop with the key the open mandate endorsed in cnf, so
+// sdjwt.VerifyChain's own key-binding check already ties the presentation to
+// that key, and a KeyBindingPolicy layered on top would ask for proof of the
+// same fact twice. That is why CredentialProviderRules.VerifyPayment in
+// rules.go leaves this policy at its zero value rather than filling it in —
+// there is no agent key in Human Present mode for a KB-JWT to prove
+// possession of, so the zero value is what a standalone presentation was
+// always going to need. AuthorisePaymentChain (chain.go, and
+// CredentialProviderRules' wrapper in rules.go) is where the Human Not
+// Present half of the question actually lives: the chain's own key binding
+// is the proof, checked there, never here.
 type KeyBindingPolicy struct {
 	// HolderKey turns the cnf claim of the verified payload into the Verifier
 	// for the Key Binding JWT. The argument is the cnf value re-encoded as JSON,

@@ -25,7 +25,13 @@
     "reproduced the binding that links the two.",
     "",
     "These are reproducible by anyone: printf the checkout_jwt value into",
-    "sha256sum and base64url-encode the raw digest."
+    "sha256sum and base64url-encode the raw digest.",
+    "",
+    "constraint_type is open.go's ConstraintType: the collision-resistant name",
+    "this implementation registers under AP2's constraint extension point.",
+    "Fixed with the repository owner on 2026-08-06 and not expected to change —",
+    "see ConstraintType's own comment for why a second name would break a",
+    "verifier that has already seen a mandate carrying this one."
   ],
   "checkout_jwt": "eyJhbGciOiJFUzI1NiJ9.eyJyb3V0ZSI6IkJFRy1QTUkiLCJhbW91bnQiOjE4OTAwfQ.c2ln",
   "checkout_hash": {
@@ -38,5 +44,6 @@
     "checkout_open": "mandate.checkout.open.1",
     "payment_closed": "mandate.payment.1",
     "payment_open": "mandate.payment.open.1"
-  }
+  },
+  "constraint_type": "tech.ethernal.ap2.expression.1"
 }

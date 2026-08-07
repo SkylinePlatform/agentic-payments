@@ -560,6 +560,43 @@ func TestEveryViolationIsReported(t *testing.T) {
 	}
 }
 
+// TestReportErrIsASatisfiedGate is Report.Err's own test. Every current
+// caller reaches this conversion through a verifier — internal/adapters/ap2's
+// chain.go calls report.Err() on its way to a rejection receipt — so until
+// now ErrViolated and CodeOf's constraint_violated arm were only ever
+// exercised through ap2, never against the package that defines them.
+func TestReportErrIsASatisfiedGate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a satisfied report is not an error", func(t *testing.T) {
+		t.Parallel()
+
+		report, err := constraint.Evaluate(nil, flight())
+		require.NoError(t, err, "Evaluate")
+		assert.NoError(t, report.Err(),
+			"a mandate with nothing to violate must not be reported as violated")
+	})
+
+	t.Run("an unsatisfied report wraps ErrViolated with the first violation's reason", func(t *testing.T) {
+		t.Parallel()
+
+		cs := []generated.Constraint{
+			node(t, `{"op":"lte","field":"amount","value":{"amount":100,"currency":"USD"}}`),
+			node(t, `{"op":"eq","field":"item.category","value":"hotels"}`),
+		}
+		report, err := constraint.Evaluate(cs, flight())
+		require.NoError(t, err, "Evaluate")
+
+		got := report.Err()
+		require.Error(t, got,
+			"a Report that failed to satisfy has to become an error a caller can turn into a rejection")
+		assert.ErrorIs(t, got, constraint.ErrViolated,
+			"CodeOf keys on exactly this sentinel to answer constraint_violated rather than mandate_malformed")
+		assert.Contains(t, got.Error(), report.Violations()[0].Reason,
+			"the reason is the first violation's in mandate order, not a summary that loses which limit was hit")
+	})
+}
+
 // TestAmountsPastTheCeilingAreRefused pins a loud refusal in place of a silent
 // change.
 //

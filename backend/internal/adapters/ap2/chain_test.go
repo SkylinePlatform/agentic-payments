@@ -200,7 +200,7 @@ func TestAChainWithinItsConstraintsIsAuthorised(t *testing.T) {
 	fx := chainFixture(t, 18900) // price inside the USD 20000 cap
 
 	got, err := ap2.AuthoriseCheckoutChain(fx.chain, fx.subject, fx.checkoutJWT, fx.opts)
-	require.NoError(t, err)
+	require.NoError(t, err, "a chain within the constraints the user approved must authorise outright, not merely fail to error")
 	assert.True(t, got.Report.Satisfied(),
 		"beat 8 of the built scenario: the third price is the one the merchant accepts")
 }
@@ -213,7 +213,8 @@ func TestAChainOutsideItsConstraintsIsRefusedByTheVerifier(t *testing.T) {
 	got, err := ap2.AuthoriseCheckoutChain(fx.chain, fx.subject, fx.checkoutJWT, fx.opts)
 	require.Error(t, err,
 		"the constraint has to be evaluated by the verifier, never by the agent — an agent that refuses its own purchase proves nothing to anybody")
-	assert.False(t, got.Report.Satisfied())
+	assert.False(t, got.Report.Satisfied(),
+		"the returned Report has to record the violation itself, not just the error — a rejection receipt reads Report.Violations(), not the error string")
 	assert.Equal(t, generated.ErrorCodeConstraintViolated, authz.CodeOf(err),
 		"the receipt has to name which rule was broken, since that is what the agent acts on when it comes back with a lower price")
 }
@@ -265,7 +266,8 @@ func TestAChainMayNotVouchForItsOwnBinding(t *testing.T) {
 	})
 	require.Error(t, err,
 		"a checkout_hash that does not describe the checkout disclosed beside it must be refused, however honestly the rest of the chain verifies")
-	assert.ErrorIs(t, err, ap2.ErrCheckoutHashMismatch)
+	assert.ErrorIs(t, err, ap2.ErrCheckoutHashMismatch,
+		"the sentinel is what a caller branches on; the message above is only what a person reads")
 	assert.Equal(t, generated.ErrorCodeCheckoutHashMismatch, ap2.CodeOf(err),
 		"the rejection receipt has to name a reason the reader can act on")
 }
@@ -318,7 +320,8 @@ func TestADigestUnderTheWrongAlgorithmIsRejected(t *testing.T) {
 	})
 	require.Error(t, err,
 		"the delegate hop declared sha-256; a checkout_hash that only matches under sha-512 must be refused, not accepted because some other algorithm this package trusts happens to fit")
-	assert.ErrorIs(t, err, ap2.ErrCheckoutHashMismatch)
+	assert.ErrorIs(t, err, ap2.ErrCheckoutHashMismatch,
+		"the wrong-algorithm case must be reported as the same sentinel as any other tampered checkout, so a caller does not need a second branch to catch it")
 }
 
 func TestTheOpenHopMustBeAnOpenMandate(t *testing.T) {
@@ -330,7 +333,8 @@ func TestTheOpenHopMustBeAnOpenMandate(t *testing.T) {
 	_, err := ap2.AuthoriseCheckoutChain(fx.chain, fx.subject, fx.checkoutJWT, fx.opts)
 	require.Error(t, err,
 		"a closed mandate at the root would let an agent delegate an authority that was already spent")
-	assert.ErrorIs(t, err, ap2.ErrWrongMandateType)
+	assert.ErrorIs(t, err, ap2.ErrWrongMandateType,
+		"the sentinel names the root check specifically — a closed root failing for some other reason would still pass require.Error and hide a different bug")
 	// The root is a closed Payment Mandate, which matches neither openCheckout
 	// nor closedCheckout — see swapRootForAClosedMandate's own comment on why
 	// that specifically is what pins this to the root check rather than to
@@ -378,7 +382,8 @@ func TestAnOpenMandateWhoseCnfNamesNoUsableKeyIsRefused(t *testing.T) {
 		Nonce:    chainNonce,
 	})
 	require.Error(t, err, "a cnf naming no usable material endorses nobody, the same fact authz.UsableKey enforces everywhere else")
-	assert.ErrorIs(t, err, authz.ErrAgentKeyMismatch)
+	assert.ErrorIs(t, err, authz.ErrAgentKeyMismatch,
+		"this is the case Task 4 built ErrAgentKeyMismatch's producer for — the sentinel has to actually be reachable here, not just documented as eventually true")
 	assert.NotErrorIs(t, err, ap2.ErrMandateMalformed,
 		"the mandate is well formed; the key is the problem, and the two must not be reported the same way")
 	assert.Equal(t, generated.ErrorCodeAgentKeyMismatch, authz.CodeOf(err),
@@ -477,7 +482,7 @@ func TestAClosedMandateThatChangedAPinnedValueIsRefusedAsThat(t *testing.T) {
 	fx.repin(t, "merchant_2") // the open mandate pinned merchant_1
 
 	_, err := ap2.AuthorisePaymentChain(fx.chain, fx.subject, fx.opts)
-	require.Error(t, err)
+	require.Error(t, err, "a closed mandate paying a different merchant than the open mandate pinned must be refused outright")
 	assert.ErrorIs(t, err, authz.ErrPinnedFieldChanged,
 		"a rewritten instruction is a different failure from an exceeded limit, and a receipt naming the wrong one sends the reader looking in the wrong place")
 }
@@ -492,8 +497,9 @@ func TestAPaymentChainWithinItsConstraintsIsAuthorised(t *testing.T) {
 	fx := paymentChainFixture(t)
 
 	got, err := ap2.AuthorisePaymentChain(fx.chain, fx.subject, fx.opts)
-	require.NoError(t, err)
-	assert.True(t, got.Report.Satisfied())
+	require.NoError(t, err, "a faithful closed mandate reproducing the pinned payee must authorise outright, not merely fail to error")
+	assert.True(t, got.Report.Satisfied(),
+		"the Payment Mandate chain's mirror of TestAChainWithinItsConstraintsIsAuthorised: the Report itself has to record success, not just the absence of an error")
 	assert.Equal(t, pinnedPayee, got.Closed.Payee.ID,
 		"the closed mandate returned has to be the one actually verified")
 }

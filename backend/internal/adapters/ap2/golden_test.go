@@ -1,16 +1,22 @@
 package ap2_test
 
 import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
 
@@ -35,9 +41,10 @@ import (
 // signature is therefore the only option here, and also the better one.
 
 type bindingVectors struct {
-	CheckoutJWT  string            `json:"checkout_jwt"`
-	CheckoutHash map[string]string `json:"checkout_hash"`
-	VCT          map[string]string `json:"vct"`
+	CheckoutJWT    string            `json:"checkout_jwt"`
+	CheckoutHash   map[string]string `json:"checkout_hash"`
+	VCT            map[string]string `json:"vct"`
+	ConstraintType string            `json:"constraint_type"`
 }
 
 func loadVectors(t *testing.T) bindingVectors {
@@ -84,12 +91,18 @@ func TestGoldenCheckoutHashIsUnprefixed(t *testing.T) {
 	}
 }
 
-// TestGoldenVCTStrings pins all four credential types.
+// TestGoldenVCTStrings pins all four credential types, and the constraint
+// type this implementation registers under AP2's extension point.
 //
 // The version suffix is the point. AP2's overview page prints exactly two
 // examples — one open Checkout Mandate and one closed Payment Mandate — and a
 // reader who generalises from those two infers the wrong rule for the other
 // two. Both of the ones that page does not print are here.
+//
+// ConstraintType sits in this test rather than a second one because it is the
+// same fact about the four vct strings: a collision-resistant identifier a
+// second implementation has to reproduce exactly, or fail to recognise a
+// mandate this one issued.
 func TestGoldenVCTStrings(t *testing.T) {
 	t.Parallel()
 
@@ -103,6 +116,8 @@ func TestGoldenVCTStrings(t *testing.T) {
 		assert.Equal(t, v.VCT[name], got,
 			"%s must match the specification exactly, suffix included", name)
 	}
+	assert.Equal(t, v.ConstraintType, ap2.ConstraintType,
+		"a verifier that has already seen a mandate carrying this string has committed it to memory; a second name for the same expression tree would make that verifier unable to recognise its own earlier mandates")
 }
 
 // TestGoldenIssuedMandateBindsTheVector closes the loop: the vectors above are
@@ -205,4 +220,111 @@ func TestGoldenReceiptEncoding(t *testing.T) {
 	}
 	assert.Equal(t, v.MandateType["checkout"], onWire["mandate_type"])
 	assert.Equal(t, v.Result["error"], onWire["result"])
+}
+
+// hmacAuthzKey signs and verifies the vector below with a fixed HMAC-SHA256
+// key, standing in for the authz.Signer/authz.Verifier pair issuance actually
+// uses.
+//
+// It is not the ES256 newFixture builds, and that substitution is the whole
+// point rather than a shortcut. crypto.Store draws a fresh private key from
+// crypto/rand every time a test calls store.Generate, and ecdsa.Sign draws a
+// fresh nonce on top of that — so even the golden salts this package already
+// has (newSalts, built for exactly this) cannot make a *signed* mandate
+// reproduce: two runs over identical input hold identical claims and
+// identical Disclosures and still end in two different signatures, from two
+// different keys. Nothing in AP2 ties the mandate envelope to a particular
+// algorithm — checkout_test.go's newFixture comment records that for the
+// closed mandate, and it holds here for the same reason — so standing in a
+// fixed symmetric key changes which algorithm produced the signature and
+// nothing about what is being proven: that this package's encoding of an
+// open Checkout Mandate is exactly reproducible, claim for claim and
+// Disclosure for Disclosure. pkg/sdjwt/helpers_test.go's hmacKey makes the
+// identical trade for RFC 9901's own vectors, for the identical reason.
+type hmacAuthzKey struct {
+	secret []byte
+	kid    string
+}
+
+func (k hmacAuthzKey) Key() authz.KeyRef {
+	return authz.KeyRef{KeyID: k.kid, Algorithm: "HS256"}
+}
+
+func (k hmacAuthzKey) Sign(_ context.Context, payload []byte) ([]byte, error) {
+	mac := hmac.New(sha256.New, k.secret)
+	mac.Write(payload)
+	return mac.Sum(nil), nil
+}
+
+func (k hmacAuthzKey) Verify(payload, signature []byte) error {
+	mac := hmac.New(sha256.New, k.secret)
+	mac.Write(payload)
+	if !hmac.Equal(mac.Sum(nil), signature) {
+		return authz.ErrSignatureInvalid
+	}
+	return nil
+}
+
+var (
+	_ authz.Signer   = hmacAuthzKey{}
+	_ authz.Verifier = hmacAuthzKey{}
+)
+
+type serialisationVector struct {
+	Serialization string `json:"serialization"`
+}
+
+// TestGoldenOpenCheckoutMandateSerialisation pins the one thing this file's
+// own package comment says is normally out of reach: a whole signed mandate,
+// reproduced byte for byte. It is reachable here only because the signer is
+// hmacAuthzKey rather than the ECDSA key issuance actually uses — see that
+// type's comment for why swapping it changes nothing this vector is meant to
+// prove.
+//
+// The mandate is #12's own scenario: interpret.Demo()'s "buy a flight to
+// Palma when it drops below $200, this summer" constraints (demoConstraints,
+// open_test.go), endorsing agentJWK, issued and expiring at fixed instants.
+// Salts come from newSalts(), checkout_test.go's deterministic source, built
+// for this. A second implementation that reproduces this exact input through
+// this package's own encoding — sorted _sd digests, RFC 9901 Disclosures,
+// AP2's cnf and constraints wire form — lands on this exact compact
+// serialisation; the reverse also holds; that agreement is what "reproduces
+// the binding" means for an open mandate, the way TestGoldenBothMandatesBindOneDigest
+// means it for a closed one.
+func TestGoldenOpenCheckoutMandateSerialisation(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile("testdata/open_checkout_mandate.json")
+	require.NoError(t, err, "reading the golden serialisation vector")
+	var vector serialisationVector
+	require.NoError(t, json.Unmarshal(raw, &vector), "decoding the golden serialisation vector")
+
+	key := hmacAuthzKey{secret: []byte("golden-open-checkout-mandate-secret"), kid: "golden-open-checkout"}
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err, "building a deterministic blinder")
+
+	issuedAt := time.Unix(1_777_326_189, 0).UTC()
+	expires := time.Unix(1_777_329_789, 0).UTC()
+	m := generated.OpenCheckoutMandate{
+		AgentKey:    agentJWK(t),
+		Constraints: demoConstraints(t),
+		IssuedAt:    &issuedAt,
+		ExpiresAt:   &expires,
+	}
+
+	sd, err := ap2.IssueOpenCheckout(t.Context(), key, m, blinder)
+	require.NoError(t, err, "issuing the golden vector")
+
+	assert.Equal(t, vector.Serialization, sd.String(),
+		"a second implementation reproducing this exact input through this package's own encoding must land on this exact wire form; a mismatch here is either a non-deterministic encoding step or a genuine drift in the wire vocabulary")
+
+	// Closes the loop TestGoldenIssuedMandateBindsTheVector closes for the
+	// closed mandate: the pinned string is not merely well-formed, it is what
+	// this package's own verifier accepts and decodes back to the input.
+	got, err := ap2.VerifyOpenCheckout(reparse(t, sd), ap2.OpenOptions{
+		Issuer: key, Clock: clock.NewFake(issuedAt),
+	})
+	require.NoError(t, err, "the pinned vector must itself verify")
+	assert.Equal(t, m.AgentKey, got.AgentKey)
+	assert.Equal(t, m.Constraints, got.Constraints)
 }
