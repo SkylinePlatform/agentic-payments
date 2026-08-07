@@ -153,15 +153,25 @@ func buildClosedCheckoutChain(
 }
 
 // swapRootForAClosedMandate rebuilds fx.chain over a root whose vct claims a
-// closed Checkout Mandate rather than an open one, while still carrying a
-// usable cnf — so the chain verifies structurally (there is a key to resolve
-// the delegation against) and only requireVCT has anything to say about it.
+// closed Payment Mandate — not a closed Checkout Mandate, and the difference
+// is load-bearing rather than arbitrary. requireVCT runs twice,
+// root-against-open then delegated-against-closed, and a root of the *same*
+// mandate family the delegated hop actually is (closed Checkout, since
+// buildClosedCheckoutChain always builds a real one) lets the two checks
+// satisfy each other if their order — or which want each receives — is ever
+// swapped: the root then coincidentally matches whichever closed target the
+// mutated first check asks for. A closed Payment root matches neither
+// openCheckout nor closedCheckout, so requireVCT's own error names which want
+// value the root was actually checked against regardless of ordering, and the
+// test below pins that name rather than only the sentinel.
 //
-// This cannot be built through IssueOpenCheckout, which only ever writes
-// openCheckout's own vct — precisely the guard that makes this scenario
-// unreachable through this package's own issuer. What is being tested is
-// what a verifier does with a chain it did not mint, the same reasoning
-// checkout_test.go's issueClaims and issueWithVCT exist for.
+// The root still carries a usable cnf, so the chain verifies structurally —
+// there is a key to resolve the delegation against — and only requireVCT has
+// anything to say about it. This cannot be built through IssueOpenCheckout,
+// which only ever writes openCheckout's own vct — precisely the guard that
+// makes this scenario unreachable through this package's own issuer. What is
+// being tested is what a verifier does with a chain it did not mint, the same
+// reasoning checkout_test.go's issueClaims and issueWithVCT exist for.
 func (fx *checkoutChainFx) swapRootForAClosedMandate(t *testing.T) {
 	t.Helper()
 
@@ -178,7 +188,7 @@ func (fx *checkoutChainFx) swapRootForAClosedMandate(t *testing.T) {
 	}
 
 	impostorRoot := issueClaims(t, fx.f, map[string]any{
-		"vct": ap2.VCTCheckoutClosed,
+		"vct": ap2.VCTPaymentClosed,
 		"cnf": map[string]any{"jwk": jwk},
 	})
 	fx.chain = buildClosedCheckoutChain(t, fx.f, impostorRoot, fx.agentSigner, fx.checkoutJWT)
@@ -215,8 +225,8 @@ func TestAChainOutsideItsConstraintsIsRefusedByTheVerifier(t *testing.T) {
 // the delegation is good, checkout_jwt is disclosed and equals what the
 // verifier is shown — so bindingSubject's disclosed-vs-held comparison has
 // nothing to catch, unlike TestAClosedMandateThatChangedAPinnedValueIsRefusedAsThat's
-// sibling scenarios. Only recomputing the digest catches a mandate lying
-// about its own binding, which is what verifyDelegatedBinding exists to do.
+// sibling scenarios. Only recomputing the digest — verifyBinding, under
+// verified.DelegatedHashAlg — catches a mandate lying about its own binding.
 func TestAChainMayNotVouchForItsOwnBinding(t *testing.T) {
 	t.Parallel()
 
@@ -260,6 +270,57 @@ func TestAChainMayNotVouchForItsOwnBinding(t *testing.T) {
 		"the rejection receipt has to name a reason the reader can act on")
 }
 
+// TestADigestUnderTheWrongAlgorithmIsRejected is the fix for the class of bug
+// a three-algorithm search over verifyBinding would have hidden: a delegate
+// hop that declares sha-256 (f.blinder's default) but whose checkout_hash was
+// computed under sha-512. A verifier that tried every algorithm it trusted and
+// accepted whichever one matched would accept this — a mandate is not
+// entitled to declare one algorithm and be checked under another, any more
+// than it is entitled to declare one checkout and be checked against another.
+// verified.DelegatedHashAlg is what makes "whichever" impossible: there is
+// exactly one algorithm to check under, the one the delegate hop actually
+// declared, read the same way VerifyCheckout reads sd.HashAlg() off a
+// standalone closed mandate.
+func TestADigestUnderTheWrongAlgorithmIsRejected(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t) // f.blinder defaults to sha-256
+	agentSigner, agentVerifier := agentKeys(t, f.clock)
+
+	open := generated.OpenCheckoutMandate{
+		AgentKey:    agentJWK(t),
+		Constraints: demoConstraints(t),
+	}
+	root, err := ap2.IssueOpenCheckout(t.Context(), f.signer, open, f.blinder)
+	require.NoError(t, err, "issuing the open Checkout Mandate")
+
+	wrongAlgHash, err := sdjwt.SHA512.Digest(merchantCheckout)
+	require.NoError(t, err, "computing a checkout_hash under an algorithm the delegate hop never declares")
+
+	payload, disclosures, err := f.blinder.Blind(map[string]any{
+		"vct":           ap2.VCTCheckoutClosed,
+		"checkout_jwt":  merchantCheckout,
+		"checkout_hash": wrongAlgHash, // sha-512, while the delegate hop's own _sd_alg will be sha-256
+	})
+	require.NoError(t, err, "blinding the closed mandate's content")
+
+	chain, err := root.Delegate(t.Context(), ap2.JOSESigner(agentSigner), f.blinder, sdjwt.KeyBinding{
+		Nonce: chainNonce, Audience: chainAudience, IssuedAt: f.clock.Now(),
+	}, payload, disclosures)
+	require.NoError(t, err, "delegating to the closed mandate")
+
+	_, err = ap2.AuthoriseCheckoutChain(chain, purchaseAt(18900), merchantCheckout, ap2.ChainOptions{
+		Issuer:   f.verifier,
+		AgentKey: resolveTo(agentVerifier),
+		Clock:    f.clock,
+		Audience: chainAudience,
+		Nonce:    chainNonce,
+	})
+	require.Error(t, err,
+		"the delegate hop declared sha-256; a checkout_hash that only matches under sha-512 must be refused, not accepted because some other algorithm this package trusts happens to fit")
+	assert.ErrorIs(t, err, ap2.ErrCheckoutHashMismatch)
+}
+
 func TestTheOpenHopMustBeAnOpenMandate(t *testing.T) {
 	t.Parallel()
 
@@ -270,6 +331,14 @@ func TestTheOpenHopMustBeAnOpenMandate(t *testing.T) {
 	require.Error(t, err,
 		"a closed mandate at the root would let an agent delegate an authority that was already spent")
 	assert.ErrorIs(t, err, ap2.ErrWrongMandateType)
+	// The root is a closed Payment Mandate, which matches neither openCheckout
+	// nor closedCheckout — see swapRootForAClosedMandate's own comment on why
+	// that specifically is what pins this to the root check rather than to
+	// requireVCT firing on the delegated hop instead, which would also produce
+	// ErrWrongMandateType and pass this test for the wrong reason if the root
+	// and the delegated hop shared a mandate family.
+	assert.ErrorContains(t, err, "not a open Checkout Mandate",
+		"the root specifically must have been checked against the open type; a message naming a different want would mean some other check produced this error")
 }
 
 // TestAnOpenMandateWhoseCnfNamesNoUsableKeyIsRefused is the obligation Task 4

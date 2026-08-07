@@ -29,17 +29,15 @@ var (
 	//
 	// The error survives for the one case the chain cannot express that way:
 	// a cnf naming no usable key at all, which is not "the wrong key" but no
-	// key to verify against in the first place. Nothing in this module returns
-	// it yet — internal/adapters/ap2's two UsableKey guards both report its own
-	// ErrMandateMalformed today, at issuance, because a cnf that never becomes
-	// a signed open mandate is malformed rather than mismatched. It becomes
-	// reachable in Task 5, which builds chain authorisation in the adapter:
-	// that is where a cnf resolving to unusable material can be refused as
-	// agent_key_mismatch, a check VerifyChain itself cannot make, since it
-	// binds to whatever cnf holds rather than judging it. CodeOf already maps
-	// it to agent_key_mismatch so that mapping is in place before the producer
-	// is, which is why it stays exported now rather than being deleted along
-	// with the check that used to return it.
+	// key to verify against in the first place. internal/adapters/ap2's two
+	// UsableKey guards at issuance (IssueOpenCheckout, IssueOpenPayment) both
+	// report ErrMandateMalformed instead, because a cnf that never becomes a
+	// signed open mandate is malformed rather than mismatched. The producer at
+	// verification is ap2.wrapAgentKey: it is what sdjwt.VerifyChain's
+	// DelegateKey resolver is wrapped in, and it runs the same UsableKey check
+	// against the decoded cnf before the caller's own resolver is ever
+	// invoked, refusing here what VerifyChain has no basis to judge — it binds
+	// to whatever cnf holds rather than judging it.
 	ErrAgentKeyMismatch = errors.New("authz: closed mandate signed by an unendorsed key")
 
 	// ErrNoEndorsedKey means the open mandate carries no usable agent key. A
@@ -57,21 +55,6 @@ var (
 	// ErrPinnedFieldChanged means the closed mandate altered a value the user
 	// fixed outright rather than constrained.
 	ErrPinnedFieldChanged = errors.New("authz: closed mandate changed a pinned value")
-
-	// ErrConstraintViolated means the purchase was evaluated against the open
-	// mandate's constraints and did not meet them.
-	//
-	// constraint.Evaluate itself never returns this: it deliberately answers an
-	// unsatisfied Report with a nil error, so that "this constraint could not be
-	// read" and "this purchase does not meet it" stay two different outcomes
-	// rather than collapsing into one kind of failure — see Evaluate's own doc
-	// comment. A caller that has to turn a verdict into a rejection receipt
-	// still needs a code to put in it, though, and this is the sentinel that
-	// gives one: distinct from ErrPinnedFieldChanged, because a value the user
-	// fixed outright being rewritten is a different failure from a value the
-	// user bounded being exceeded, and a receipt naming the wrong one sends the
-	// reader looking in the wrong place.
-	ErrConstraintViolated = errors.New("authz: purchase falls outside the open mandate's constraints")
 
 	// ErrMalformedMandate means a timestamp or a required field could not be
 	// read at all.
@@ -93,7 +76,7 @@ func CodeOf(err error) generated.ErrorCode {
 		return generated.ErrorCodeMandateExpired
 	case errors.Is(err, ErrNotYetValid):
 		return generated.ErrorCodeMandateNotYetValid
-	case errors.Is(err, ErrPinnedFieldChanged), errors.Is(err, ErrConstraintViolated):
+	case errors.Is(err, ErrPinnedFieldChanged):
 		return generated.ErrorCodeConstraintViolated
 	case errors.Is(err, ErrMalformedMandate):
 		return generated.ErrorCodeMandateMalformed

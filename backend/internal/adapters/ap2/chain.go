@@ -152,57 +152,6 @@ func verifyDelegationChain(c *sdjwt.Chain, opts ChainOptions) (sdjwt.Verified, e
 	})
 }
 
-// verifyDelegatedBinding recomputes checkout_hash the way verifyBinding
-// always has — never trusting the claim, only what is recomputed from the
-// checkout itself — under whichever of the three algorithms this package
-// trusts actually produced the claimed digest.
-//
-// The "whichever" is forced, not chosen. VerifyCheckout reads the algorithm
-// straight off the closed mandate's own SD-JWT, with sd.HashAlg(), before
-// Verify ever strips _sd_alg out of the processed payload. A delegated closed
-// mandate has no equivalent to ask: draft §6 step 3.1 keeps _sd_alg at the
-// delegating hop's level, and sdjwt.Verified carries only the two hops'
-// processed content, deliberately nothing about how either was secured — see
-// Verified's own doc comment on why folding hop-level detail into the
-// returned claims is exactly the kind of thing that type exists to keep out.
-// So this recomputes the digest under each of the three algorithms HashAlg's
-// own doc calls "the set this package is willing to compute and to trust",
-// and accepts whichever one verifyBinding actually confirms. That is a
-// bounded search over a closed set, not a guess: at most three digests are
-// computed, over a value that carries no secret, and a checkout_hash
-// matching none of the three is refused exactly as an unrecognised algorithm
-// would be.
-func verifyDelegatedBinding(claimed, checkout string) error {
-	var last error
-	for _, alg := range []sdjwt.HashAlg{sdjwt.SHA256, sdjwt.SHA384, sdjwt.SHA512} {
-		if err := verifyBinding(alg, claimed, checkout); err != nil {
-			last = err
-			continue
-		}
-		return nil
-	}
-	return last
-}
-
-// checkSatisfied turns an unsatisfied Report into a rejection.
-//
-// constraint.Evaluate deliberately answers a false Report with a nil error —
-// see its own doc comment — so that "this constraint could not be read" and
-// "this purchase does not meet it" stay two different outcomes. A caller that
-// has to answer with a rejection receipt still needs a code to put in it,
-// though, and this is where "not satisfied" becomes authz.ErrConstraintViolated,
-// which authz.CodeOf maps to constraint_violated.
-func checkSatisfied(report constraint.Report) error {
-	if report.Satisfied() {
-		return nil
-	}
-	reason := "the purchase did not satisfy every constraint the open mandate placed"
-	if violations := report.Violations(); len(violations) > 0 && violations[0].Reason != "" {
-		reason = violations[0].Reason
-	}
-	return fmt.Errorf("%w: %s", authz.ErrConstraintViolated, reason)
-}
-
 // CheckoutAuthorisation is the outcome of reading a verified chain as a
 // Checkout Mandate: both mandates in canonical form, and the report the
 // verifier evaluated the purchase against.
@@ -235,7 +184,7 @@ type CheckoutAuthorisation struct {
 //  5. Verify the closed hop's binding against checkoutJWT, the same
 //     recompute-never-trust check VerifyCheckout runs.
 //  6. authz.AuthoriseCheckout(open, subject, opts.Clock.Now()), and turn an
-//     unsatisfied report into a rejection — see checkSatisfied.
+//     unsatisfied report into a rejection with report.Err().
 func AuthoriseCheckoutChain(
 	c *sdjwt.Chain,
 	subject constraint.Subject,
@@ -269,7 +218,7 @@ func AuthoriseCheckoutChain(
 	if err != nil {
 		return CheckoutAuthorisation{Open: open, Closed: closed}, err
 	}
-	if err := verifyDelegatedBinding(closed.CheckoutHash, checkout); err != nil {
+	if err := verifyBinding(verified.DelegatedHashAlg, closed.CheckoutHash, checkout); err != nil {
 		return CheckoutAuthorisation{Open: open, Closed: closed}, err
 	}
 
@@ -278,7 +227,7 @@ func AuthoriseCheckoutChain(
 	if err != nil {
 		return result, err
 	}
-	if err := checkSatisfied(report); err != nil {
+	if err := report.Err(); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -339,7 +288,7 @@ func AuthorisePaymentChain(
 	if err != nil {
 		return result, err
 	}
-	if err := checkSatisfied(report); err != nil {
+	if err := report.Err(); err != nil {
 		return result, err
 	}
 	return result, nil

@@ -353,6 +353,12 @@ type ChainOptions struct {
 // against. Reading one for the other checks a purchase against itself, which is
 // a verification that passes while proving nothing, and is exactly the class of
 // bug an index makes expressible and a field name does not.
+//
+// It carries a payload and an algorithm rather than only the payload, and that
+// is deliberate too: DelegatedHashAlg exists because a caller needing to hash
+// something else the delegate hop's way — AP2's checkout_hash is exactly this —
+// has no other correct source for the algorithm those digests were verified
+// under. See DelegatedHashAlg's own comment for why nowhere else will do.
 type Verified struct {
 	// Root is the processed payload of the Issuer-signed hop.
 	Root map[string]any
@@ -360,6 +366,22 @@ type Verified struct {
 	// Delegated is the processed Delegate Payload — the single disclosed
 	// element of the delegating JWT's delegate_payload array.
 	Delegated map[string]any
+
+	// DelegatedHashAlg is the _sd_alg the delegating JWT declared — the
+	// algorithm Delegated's own digests, and anything a caller derives one
+	// from, were verified under.
+	//
+	// It is here rather than left for a caller to work out because there is
+	// nowhere else to get it correctly. Draft §6 step 3.1 keeps _sd_alg at the
+	// delegating JWT's level, never inside the Delegate Payload, so it cannot
+	// appear in Delegated — and this package deletes a same-named claim found
+	// inside the payload for exactly that reason, see the delete call above.
+	// A caller that needs to hash something of its own the way AP2's
+	// checkout_hash does (Digest's own doc comment names that case) would
+	// otherwise have no unverified equivalent of SDJWT.HashAlg to read it
+	// from, and guessing defeats the entire reason _sd_alg is a declared value
+	// rather than a fixed one.
+	DelegatedHashAlg HashAlg
 }
 
 // VerifyChain checks a two-hop Delegate SD-JWT and returns the processed
@@ -487,7 +509,7 @@ func VerifyChain(c *Chain, opts ChainOptions) (Verified, error) {
 		return Verified{}, err
 	}
 
-	return Verified{Root: rootPayload, Delegated: delegated}, nil
+	return Verified{Root: rootPayload, Delegated: delegated, DelegatedHashAlg: alg}, nil
 }
 
 // verifyBinding checks that the delegating JWT names the root it was signed
