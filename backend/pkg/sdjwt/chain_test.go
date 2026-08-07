@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -160,13 +161,13 @@ func TestDelegateProducesAParsableChain(t *testing.T) {
 	root := issuedRoot(t) // helper added in Step 3
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	require.NoError(t, err)
+	require.NoError(t, err, "NewBlinder refuses a hash this package cannot compute, and nothing here passes one, so a failure is the fixture's and not the subject's")
 
 	closed, disclosures, err := blinder.Blind(map[string]any{
 		"vct":           "closed.example",
 		"checkout_hash": "abc",
 	})
-	require.NoError(t, err)
+	require.NoError(t, err, "no path is blinded here and no claim name is reserved, so a failure means the fixture stopped producing a payload there is anything to delegate")
 
 	chain, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
 		Nonce:    "n-1",
@@ -186,10 +187,10 @@ func TestDelegateRefusesToBindAnAlreadyBoundPresentation(t *testing.T) {
 	bound, err := root.AttachKeyBinding(t.Context(), newHMACKey("holder", "holder"), sdjwt.KeyBinding{
 		Nonce: "n-1", Audience: "aud", IssuedAt: time.Unix(1, 0),
 	})
-	require.NoError(t, err)
+	require.NoError(t, err, "an already-bound presentation is the precondition of this test; without one there is nothing here to refuse")
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	require.NoError(t, err)
+	require.NoError(t, err, "NewBlinder refuses a hash this package cannot compute, and nothing here passes one, so a failure is the fixture's and not the subject's")
 
 	_, err = bound.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
 		Nonce: "n-2", Audience: "aud", IssuedAt: time.Unix(2, 0),
@@ -219,6 +220,15 @@ func TestAPlainKeyBindingTypeIsRefusedAsADelegation(t *testing.T) {
 	require.Error(t, err,
 		"RFC 9901's kb+jwt proves possession of a key; it does not delegate authority, and accepting it here would conflate the two")
 	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid)
+	// ErrKeyBindingInvalid is the sentinel for every check on this hop — the
+	// binding hashes, the freshness comparisons, an unreadable payload — so on
+	// its own it says only that the delegating hop was refused somewhere. The
+	// fixture re-signs with the endorsed key over claims Delegate wrote, which
+	// is what makes typ the only thing wrong with it today, and a later change
+	// to the fixture that broke something else would satisfy the sentinel just
+	// as well. The message is what keeps this test about typ.
+	assert.ErrorContains(t, err, `typ is "kb+jwt", want "kb+sd-jwt"`,
+		"naming both types is what makes the error actionable, and pinning them here is what keeps the rejection this test reports the one it is named for")
 }
 
 func TestADelegationValidForAnUnendorsedKeyIsRejected(t *testing.T) {
@@ -487,6 +497,30 @@ func TestAllowedHashAlgsAppliesToTheDelegateHopToo(t *testing.T) {
 	assert.ErrorIs(t, err, sdjwt.ErrUnsupportedHashAlg)
 }
 
+func TestAllowedHashAlgsAppliesToTheRootHopToo(t *testing.T) {
+	// The mirror of the test above, over the hop it does not reach. Here the
+	// root declares sha-384 and the delegating hop stays at sha-256, so a
+	// policy allowing only sha-256 is satisfied by the delegating hop on its
+	// own — and the refusal can only come from the root's own check. Without
+	// this, VerifyChain could stop handing AllowedHashAlgs to the root
+	// entirely and the suite would stay green while a verifier that refuses a
+	// weak digest silently accepted one.
+	root := issuedRootWithExtraDisclosureUnder(t, sdjwt.SHA384)
+	chain := delegatedChainFromRoot(t, root, "", "delegate")
+
+	_, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	require.NoError(t, err,
+		"the fixture has to verify under a policy that names no algorithms, or the refusal below could be coming from anywhere")
+
+	opts := chainOptions(t)
+	opts.AllowedHashAlgs = []sdjwt.HashAlg{sdjwt.SHA256}
+
+	_, err = sdjwt.VerifyChain(chain, opts)
+	require.Error(t, err,
+		"the digest the root's own claims are hidden behind is as much this verifier's policy as the delegated content's is")
+	assert.ErrorIs(t, err, sdjwt.ErrUnsupportedHashAlg)
+}
+
 func TestVerifyChainRejectsAReplayedOrStaleDelegation(t *testing.T) {
 	// verifyDelegateFreshness is the delegating JWT's replay protection: the
 	// nonce and audience it was signed for have to match what this Verifier
@@ -494,26 +528,39 @@ func TestVerifyChainRejectsAReplayedOrStaleDelegation(t *testing.T) {
 	// No other test in this file drives a mismatch through any of the three,
 	// so nothing else here would catch the call being deleted, or rewritten to
 	// compare the claims against themselves.
+	//
+	// wantMessage is what keeps each subtest about the claim it names. All four
+	// wrap ErrKeyBindingInvalid, which every other check on this hop wraps too,
+	// so the sentinel says only that the delegating hop was refused somewhere.
+	// Swap the two extractions in verifyDelegateFreshness and three of these
+	// four fail on the nonce instead of on what they are named for — a
+	// difference the message sees and the sentinel cannot. The nonce case is
+	// the one the swap leaves looking correct, which is why it is the message
+	// and not the case that is doing the work here.
 	for _, tc := range []struct {
 		name         string
 		mutateOpts   func(*sdjwt.ChainOptions)
 		mutateClaims func(map[string]any)
+		wantMessage  string
 		why          string
 	}{
 		{
-			name:       "nonce mismatch",
-			mutateOpts: func(o *sdjwt.ChainOptions) { o.Nonce = "different-nonce" },
-			why:        "a delegation signed for nonce n-1 must not verify against a different one asked for here, or the nonce constrains nothing",
+			name:        "nonce mismatch",
+			mutateOpts:  func(o *sdjwt.ChainOptions) { o.Nonce = "different-nonce" },
+			wantMessage: "nonce does not match",
+			why:         "a delegation signed for nonce n-1 must not verify against a different one asked for here, or the nonce constrains nothing",
 		},
 		{
-			name:       "audience mismatch",
-			mutateOpts: func(o *sdjwt.ChainOptions) { o.Audience = "https://not-the-merchant.example" },
-			why:        "a delegation signed for https://merchant.example must not verify at a different audience, or the audience constrains nothing",
+			name:        "audience mismatch",
+			mutateOpts:  func(o *sdjwt.ChainOptions) { o.Audience = "https://not-the-merchant.example" },
+			wantMessage: `audience is "https://merchant.example"`,
+			why:         "a delegation signed for https://merchant.example must not verify at a different audience, or the audience constrains nothing",
 		},
 		{
-			name:       "iat before the window",
-			mutateOpts: func(o *sdjwt.ChainOptions) { o.MaxKeyBindingAge = 5 * time.Second },
-			why:        "chainOptions' clock reads 1_777_326_200; delegatedChain's default iat of 1_777_326_189 is 11 seconds earlier, outside a 5-second window",
+			name:        "iat before the window",
+			mutateOpts:  func(o *sdjwt.ChainOptions) { o.MaxKeyBindingAge = 5 * time.Second },
+			wantMessage: "outside the 5s window",
+			why:         "chainOptions' clock reads 1_777_326_200; delegatedChain's default iat of 1_777_326_189 is 11 seconds earlier, outside a 5-second window",
 		},
 		{
 			name:       "iat after the window",
@@ -521,7 +568,8 @@ func TestVerifyChainRejectsAReplayedOrStaleDelegation(t *testing.T) {
 			mutateClaims: func(c map[string]any) {
 				c["iat"] = int64(1_777_326_400) // 200s ahead of chainOptions' clock
 			},
-			why: "a proof from the future is as suspect as a stale one: iat 200 seconds ahead of chainOptions' clock is outside a 5-second window in either direction",
+			wantMessage: "outside the 5s window",
+			why:         "a proof from the future is as suspect as a stale one: iat 200 seconds ahead of chainOptions' clock is outside a 5-second window in either direction",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -538,6 +586,8 @@ func TestVerifyChainRejectsAReplayedOrStaleDelegation(t *testing.T) {
 			_, err := sdjwt.VerifyChain(chain, opts)
 			require.Error(t, err, tc.why)
 			assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid)
+			assert.ErrorContains(t, err, tc.wantMessage,
+				"all three comparisons answer with the same sentinel, so only the message says which of them was the one that refused")
 		})
 	}
 }
@@ -585,17 +635,38 @@ func delegatedChainWithType(t *testing.T, typ, signingKey string) *sdjwt.Chain {
 // while varying the other.
 func delegatedChainFromRoot(t *testing.T, root *sdjwt.SDJWT, typ, signingKey string) *sdjwt.Chain {
 	t.Helper()
-	// Build with Delegate, then re-sign the delegating JWT with the requested
-	// typ and key. Reaching through the wire format rather than adding a test
-	// hook keeps the production path the only way a chain is built.
+	return resignDelegation(t, root, typ, signingKey, nil)
+}
+
+// resignDelegation builds a delegation over root with Delegate and then
+// re-signs the delegating JWT, with the typ and the signing key requested and
+// after mutate has changed its claims.
+//
+// Reaching through the wire format rather than adding a test hook keeps the
+// production path the only way a chain is built, which is what lets these
+// fixtures stand in for a chain that arrived from somewhere else. An empty typ
+// means the one Delegate wrote and a nil mutate means the claims it wrote, so
+// delegatedChainFromRoot is this with only the header varied and
+// delegatedChainWithClaims is this with only the payload varied. Those two were
+// written separately, and some thirty lines of building, splitting, decoding
+// and rejoining were identical between them; a change to how a chain is taken
+// apart and put back together belongs in one place rather than in whichever of
+// the two the next reader happens to find.
+func resignDelegation(
+	t *testing.T,
+	root *sdjwt.SDJWT,
+	typ, signingKey string,
+	mutate func(map[string]any),
+) *sdjwt.Chain {
+	t.Helper()
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	require.NoError(t, err)
+	require.NoError(t, err, "every salt below comes from this blinder, and the golden vector over this chain is pinned to the sequence it produces")
 	closed, disclosures, err := blinder.Blind(map[string]any{
 		"vct":           "closed.example",
 		"checkout_hash": "abc",
 	})
-	require.NoError(t, err)
+	require.NoError(t, err, "the delegated content stands in for the closed mandate; nothing here is testable without it")
 
 	chain, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
 		Nonce:    "n-1",
@@ -624,25 +695,30 @@ func delegatedChainFromRoot(t *testing.T, root *sdjwt.SDJWT, typ, signingKey str
 	require.Len(t, segments, 3, "the delegating JWT is a compact JWS")
 
 	headerBytes, err := b64.DecodeString(segments[0])
-	require.NoError(t, err)
+	require.NoError(t, err, "Delegate encoded this header a moment ago, so a decode failure means the package cannot read back what it just wrote")
 	var header struct {
 		Typ string `json:"typ"`
 	}
-	require.NoError(t, json.Unmarshal(headerBytes, &header))
+	require.NoError(t, json.Unmarshal(headerBytes, &header),
+		"the typ read here is what an empty typ argument falls back to, so an unreadable header would silently re-sign as an untyped JWT")
 
 	payloadBytes, err := b64.DecodeString(segments[1])
-	require.NoError(t, err)
+	require.NoError(t, err, "Delegate encoded this payload a moment ago, so a decode failure means the package cannot read back what it just wrote")
 	dec := json.NewDecoder(bytes.NewReader(payloadBytes))
 	dec.UseNumber()
 	var claims map[string]any
-	require.NoError(t, dec.Decode(&claims))
+	require.NoError(t, dec.Decode(&claims),
+		"these claims are re-signed below, so decoding them wrongly would put a different delegation under test from the one named")
 
+	if mutate != nil {
+		mutate(claims)
+	}
 	newTyp := typ
 	if newTyp == "" {
 		newTyp = header.Typ
 	}
 	resigned, err := sdjwt.SignJWT(t.Context(), newHMACKey(signingKey, signingKey), newTyp, claims)
-	require.NoError(t, err)
+	require.NoError(t, err, "re-signing is how these fixtures reach shapes Delegate's own API refuses to produce")
 
 	parts[sep+1] = resigned
 	again, err := sdjwt.ParseChain(strings.Join(parts, "~"))
@@ -703,13 +779,20 @@ func issuedRoot(t *testing.T) *sdjwt.SDJWT {
 // resolved the delegate key before disclosures were put back would find no
 // cnf claim and fail — the same reasoning resolveHolderKey's own comment
 // gives.
+//
+// It asserts with require, and the alternative it was written with is the
+// reason to say so. assert followed by `return nil` reports the real failure
+// and then lets the test carry on to dereference the nil it just returned, so
+// what a reader sees is a panic at the caller with the cause several lines
+// above it. require stops on the spot. The rule that a helper must not use
+// require guards a helper called off the test goroutine, where FailNow is
+// illegal; nothing in this package's tests starts one, and every other fixture
+// here is built the same way.
 func issuedRootEndorsing(t *testing.T, key string, discloseCnf bool) *sdjwt.SDJWT {
 	t.Helper()
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	if !assert.NoError(t, err) {
-		return nil
-	}
+	require.NoError(t, err, "every salt below comes from this blinder, and both golden vectors are pinned to the sequence it produces")
 	claims := map[string]any{
 		"vct": "open.example",
 		"cnf": map[string]any{"jwk": map[string]any{"kty": "oct", "k": key}},
@@ -719,13 +802,9 @@ func issuedRootEndorsing(t *testing.T, key string, discloseCnf bool) *sdjwt.SDJW
 		paths = []string{"cnf"}
 	}
 	payload, disclosures, err := blinder.Blind(claims, paths...)
-	if !assert.NoError(t, err) {
-		return nil
-	}
+	require.NoError(t, err, "cnf is the only path this ever blinds and these claims always carry it")
 	sd, err := sdjwt.Issue(t.Context(), newHMACKey("issuer", "issuer"), payload, disclosures)
-	if !assert.NoError(t, err) {
-		return nil
-	}
+	require.NoError(t, err, "the root stands in for the user-signed open mandate; nothing below has anything to hang off if it cannot be issued")
 	return sd
 }
 
@@ -740,84 +819,45 @@ func issuedRootEndorsing(t *testing.T, key string, discloseCnf bool) *sdjwt.SDJW
 // sd_hash check this exercises.
 func issuedRootWithExtraDisclosure(t *testing.T) *sdjwt.SDJWT {
 	t.Helper()
+	return issuedRootWithExtraDisclosureUnder(t, sdjwt.DefaultHashAlg)
+}
 
-	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	require.NoError(t, err)
+// issuedRootWithExtraDisclosureUnder is issuedRootWithExtraDisclosure with the
+// root's own digest algorithm chosen, so that its _sd_alg claim says something
+// other than sha-256.
+//
+// It is this fixture rather than issuedRoot that generalises, because a root
+// that blinds nothing declares no algorithm at all: Blind writes _sd_alg only
+// when there is a digest for it to describe, and hashAlgOf then falls back to
+// the RFC's default. A root that has a disclosure is therefore the only kind
+// whose declared algorithm a test can vary, which is what
+// TestAllowedHashAlgsAppliesToTheRootHopToo needs to make the two hops
+// genuinely disagree with the disagreement on the root's side.
+func issuedRootWithExtraDisclosureUnder(t *testing.T, alg sdjwt.HashAlg) *sdjwt.SDJWT {
+	t.Helper()
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()), sdjwt.WithHashAlg(alg))
+	require.NoError(t, err, "every algorithm a test passes here has to be one the package computes, or the fixture is testing the option parser")
 	claims := map[string]any{
 		"vct":  "open.example",
 		"cnf":  map[string]any{"jwk": map[string]any{"kty": "oct", "k": "delegate"}},
 		"note": "present when the delegation was signed",
 	}
 	payload, disclosures, err := blinder.Blind(claims, "note")
-	require.NoError(t, err)
+	require.NoError(t, err, `"note" is a claim these fixture claims carry, and a path naming nothing is the one way Blind fails here`)
 	sd, err := sdjwt.Issue(t.Context(), newHMACKey("issuer", "issuer"), payload, disclosures)
-	require.NoError(t, err)
+	require.NoError(t, err, "the root stands in for the user-signed open mandate; nothing below has anything to hang off if it cannot be issued")
 	return sd
 }
 
 // delegatedChainWithClaims delegates root, then re-signs the delegating JWT
-// after mutate has changed its claims — the same reach-through-the-wire-format
-// technique delegatedChainFromRoot uses to override typ, generalised to any
-// claim. It exists for the hash-binding tests, which need to write sd_hash and
-// issuer_jwt_hash combinations Delegate itself never produces.
+// after mutate has changed its claims — resignDelegation with the typ and the
+// signing key left as Delegate wrote them. It exists for the hash-binding
+// tests, which need to write sd_hash and issuer_jwt_hash combinations Delegate
+// itself never produces.
 func delegatedChainWithClaims(t *testing.T, root *sdjwt.SDJWT, mutate func(map[string]any)) *sdjwt.Chain {
 	t.Helper()
-
-	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	require.NoError(t, err)
-	closed, disclosures, err := blinder.Blind(map[string]any{
-		"vct":           "closed.example",
-		"checkout_hash": "abc",
-	})
-	require.NoError(t, err)
-
-	chain, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
-		Nonce:    "n-1",
-		Audience: "https://merchant.example",
-		IssuedAt: time.Unix(1_777_326_189, 0),
-	}, closed, disclosures)
-	require.NoError(t, err,
-		"delegation is the mechanism under test; if it cannot be built there is nothing to re-sign")
-
-	// The empty component between the two hops is where the delegating JWT
-	// starts, the same separator delegatedChainFromRoot splits on.
-	parts := strings.Split(chain.String(), "~")
-	sep := -1
-	for i, p := range parts {
-		if p == "" {
-			sep = i
-			break
-		}
-	}
-	require.GreaterOrEqual(t, sep, 0, "Chain.String always separates the hops with an empty component")
-	require.Less(t, sep+1, len(parts), "the delegating JWT follows the separator")
-
-	segments := strings.Split(parts[sep+1], ".")
-	require.Len(t, segments, 3, "the delegating JWT is a compact JWS")
-
-	headerBytes, err := b64.DecodeString(segments[0])
-	require.NoError(t, err)
-	var header struct {
-		Typ string `json:"typ"`
-	}
-	require.NoError(t, json.Unmarshal(headerBytes, &header))
-
-	payloadBytes, err := b64.DecodeString(segments[1])
-	require.NoError(t, err)
-	dec := json.NewDecoder(bytes.NewReader(payloadBytes))
-	dec.UseNumber()
-	var claims map[string]any
-	require.NoError(t, dec.Decode(&claims))
-
-	mutate(claims)
-
-	resigned, err := sdjwt.SignJWT(t.Context(), newHMACKey("delegate", "delegate"), header.Typ, claims)
-	require.NoError(t, err)
-
-	parts[sep+1] = resigned
-	again, err := sdjwt.ParseChain(strings.Join(parts, "~"))
-	require.NoError(t, err, "the re-signed chain must still be the shape ParseChain accepts")
-	return again
+	return resignDelegation(t, root, "", "delegate", mutate)
 }
 
 // delegatedChainWithHashClaims is a delegation over root whose sd_hash claim
@@ -833,9 +873,7 @@ func delegatedChainWithHashClaims(t *testing.T, root *sdjwt.SDJWT, claim map[str
 	t.Helper()
 	return delegatedChainWithClaims(t, root, func(claims map[string]any) {
 		delete(claims, "sd_hash")
-		for k, v := range claim {
-			claims[k] = v
-		}
+		maps.Copy(claims, claim)
 	})
 }
 
@@ -852,9 +890,9 @@ func delegatedChainWithHashClaims(t *testing.T, root *sdjwt.SDJWT, claim map[str
 func delegatedChainWithIssuerJWTHash(t *testing.T, root *sdjwt.SDJWT) *sdjwt.Chain {
 	t.Helper()
 	alg, err := root.HashAlg()
-	require.NoError(t, err)
+	require.NoError(t, err, "the binding below has to be computed under the root's own declared algorithm, the same one verifyBinding will read")
 	issuerHash, err := alg.Digest(root.IssuerJWT())
-	require.NoError(t, err)
+	require.NoError(t, err, "a fixture that could not compute the hash it binds with would produce a chain that fails for the reason the test is trying to rule out")
 
 	return delegatedChainWithClaims(t, root, func(claims map[string]any) {
 		delete(claims, "sd_hash")
@@ -969,7 +1007,7 @@ func delegatedChainWithElements(t *testing.T, elements []any) *sdjwt.Chain {
 		d, err := sdjwt.NewArrayDisclosure(fmt.Sprintf("salt-elem-%d", i), e)
 		require.NoError(t, err, "the fixture disclosure has to be well-formed or the digest below means nothing")
 		digest, err := d.Digest(sdjwt.SHA256)
-		require.NoError(t, err)
+		require.NoError(t, err, "sha-256 is required of every implementation, so a failure here means the algorithm table moved under this fixture")
 		digestElements = append(digestElements, map[string]any{"...": digest})
 		disclosures = append(disclosures, d)
 	}
@@ -983,7 +1021,7 @@ func delegatedChainWithElements(t *testing.T, elements []any) *sdjwt.Chain {
 		"delegate_payload": digestElements,
 	}
 	delegateJWT, err := sdjwt.SignJWT(t.Context(), newHMACKey("delegate", "delegate"), "kb+sd-jwt", claims)
-	require.NoError(t, err)
+	require.NoError(t, err, "signing by hand is how this fixture reaches a delegate_payload Delegate's own API refuses to build")
 
 	return chainFrom(t, root, delegateJWT, disclosures)
 }
@@ -1024,13 +1062,13 @@ func delegatedChainExpiringAt(t *testing.T, exp time.Time) *sdjwt.Chain {
 	root := issuedRoot(t)
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	require.NoError(t, err)
+	require.NoError(t, err, "NewBlinder refuses a hash this package cannot compute, and nothing here passes one, so a failure is the fixture's and not the subject's")
 	closed, disclosures, err := blinder.Blind(map[string]any{
 		"vct":           "closed.example",
 		"checkout_hash": "abc",
 		"exp":           exp.Unix(),
 	})
-	require.NoError(t, err)
+	require.NoError(t, err, "exp has to travel inside the delegated content, so a failure here leaves the closed mandate with no lifetime to enforce")
 
 	chain, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
 		Nonce:    "n-1",
@@ -1042,13 +1080,6 @@ func delegatedChainExpiringAt(t *testing.T, exp time.Time) *sdjwt.Chain {
 	return chain
 }
 
-// delegatedChainWithDelegateHashAlg is delegatedChain("delegate") built with
-// the delegate hop's own _sd_alg set to alg via WithHashAlg, while the root
-// stays at its default (sha-256) — the two hops genuinely disagreeing about
-// which digest function they use. No other fixture in this file does this:
-// every one of them lets both hops default to the same algorithm, which is
-// exactly what would let VerifyChain read _sd_alg from the wrong hop and
-// still pass every existing test.
 func TestDelegateRefusesAPayloadItsDisclosuresDoNotBelongTo(t *testing.T) {
 	root := issuedRoot(t)
 
@@ -1058,16 +1089,16 @@ func TestDelegateRefusesAPayloadItsDisclosuresDoNotBelongTo(t *testing.T) {
 	// payload were computed under one algorithm and _sd_alg would announce the
 	// other.
 	blinded, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()), sdjwt.WithHashAlg(sdjwt.SHA384))
-	require.NoError(t, err)
+	require.NoError(t, err, "sha-384 has to be one the package computes, or the two blinders below would disagree for the wrong reason")
 	closed, disclosures, err := blinded.Blind(map[string]any{
 		"vct":           "closed.example",
 		"checkout_hash": "abc",
 	}, "checkout_hash")
-	require.NoError(t, err)
+	require.NoError(t, err, `"checkout_hash" is a claim these fixture claims carry, and a path naming nothing is the one way Blind fails here`)
 	require.NotEmpty(t, disclosures, "the fixture only tests anything if something was actually blinded")
 
 	delegating, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	require.NoError(t, err)
+	require.NoError(t, err, "the second blinder is what disagrees with the first; without it there is no mismatch under test")
 
 	_, err = root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), delegating, sdjwt.KeyBinding{
 		Nonce:    "n-1",
@@ -1080,10 +1111,78 @@ func TestDelegateRefusesAPayloadItsDisclosuresDoNotBelongTo(t *testing.T) {
 	assert.ErrorIs(t, err, sdjwt.ErrDisclosureUnreachable)
 }
 
+func TestDelegateRefusesArgumentsItCannotDelegateWith(t *testing.T) {
+	// The four guards Delegate runs before it has done any work, none of which
+	// had a test. Each is checked by its message as well as its sentinel:
+	// three of the four share ErrKeyBindingInvalid, so the sentinel alone
+	// cannot tell a deleted nonce check from a deleted audience one.
+	root := issuedRoot(t)
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err, "the valid cases below need a blinder that works, or every subtest fails for the reason one of them is testing")
+
+	const (
+		nonce    = "n-1"
+		audience = "https://merchant.example"
+	)
+	issuedAt := time.Unix(1_777_326_189, 0)
+
+	for _, tc := range []struct {
+		name        string
+		blinder     *sdjwt.Blinder
+		kb          sdjwt.KeyBinding
+		sentinel    error
+		wantMessage string
+		why         string
+	}{
+		{
+			name:        "no blinder",
+			blinder:     nil,
+			kb:          sdjwt.KeyBinding{Nonce: nonce, Audience: audience, IssuedAt: issuedAt},
+			sentinel:    sdjwt.ErrInvalidOptions,
+			wantMessage: "needs a blinder",
+			why:         "the delegate payload travels as an array disclosure, so with no blinder there is no salt to hide it behind and no algorithm to digest it under",
+		},
+		{
+			name:        "no nonce",
+			blinder:     blinder,
+			kb:          sdjwt.KeyBinding{Audience: audience, IssuedAt: issuedAt},
+			sentinel:    sdjwt.ErrKeyBindingInvalid,
+			wantMessage: "nonce is required",
+			why:         `a delegation carrying an empty nonce is one the verifier compares against "", so it is accepted for whichever transaction it is presented in`,
+		},
+		{
+			name:        "no audience",
+			blinder:     blinder,
+			kb:          sdjwt.KeyBinding{Nonce: nonce, IssuedAt: issuedAt},
+			sentinel:    sdjwt.ErrKeyBindingInvalid,
+			wantMessage: "audience is required",
+			why:         "a delegation carrying an empty audience names no verifier, so it is replayable at every one of them",
+		},
+		{
+			name:        "no issued-at",
+			blinder:     blinder,
+			kb:          sdjwt.KeyBinding{Nonce: nonce, Audience: audience},
+			sentinel:    sdjwt.ErrKeyBindingInvalid,
+			wantMessage: "issued-at is required",
+			why:         "a zero time reaches the wire as an iat far outside any freshness window, so the delegate would learn at the verifier what it could have been told here",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), tc.blinder, tc.kb,
+				map[string]any{"vct": "closed.example"}, nil)
+
+			require.Error(t, err, tc.why)
+			assert.ErrorIs(t, err, tc.sentinel)
+			assert.ErrorContains(t, err, tc.wantMessage,
+				"three of these four share a sentinel, so only the message says which of the arguments was the one refused")
+		})
+	}
+}
+
 func TestDelegateRefusesAnEmptyPayloadAndNotOnlyANilOne(t *testing.T) {
 	root := issuedRoot(t)
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	require.NoError(t, err)
+	require.NoError(t, err, "the blinder has to be valid, or both cases below would be refused for the argument the test is holding correct")
 
 	for _, tc := range []struct {
 		name    string
@@ -1110,14 +1209,14 @@ func TestDelegateAcceptsAPayloadThatWithholdsEverything(t *testing.T) {
 	root := issuedRoot(t)
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	require.NoError(t, err)
+	require.NoError(t, err, "NewBlinder refuses a hash this package cannot compute, and nothing here passes one, so a failure is the fixture's and not the subject's")
 	// The disclosures are discarded rather than kept: the payload still carries
 	// their digests, which is exactly what withholding looks like on the wire.
 	closed, _, err := blinder.Blind(map[string]any{
 		"vct":           "closed.example",
 		"checkout_hash": "abc",
 	}, "checkout_hash")
-	require.NoError(t, err)
+	require.NoError(t, err, "something has to be blinded for there to be anything to withhold, and this is the path that does it")
 
 	_, err = root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
 		Nonce:    "n-1",
@@ -1129,17 +1228,24 @@ func TestDelegateAcceptsAPayloadThatWithholdsEverything(t *testing.T) {
 		"withholding a claim is a delegate's decision to make, and refusing it here would forbid the selective disclosure this whole format exists for")
 }
 
+// delegatedChainWithDelegateHashAlg is delegatedChain("delegate") built with
+// the delegate hop's own _sd_alg set to alg via WithHashAlg, while the root
+// stays at its default (sha-256) — the two hops genuinely disagreeing about
+// which digest function they use. No other fixture in this file does this:
+// every one of them lets both hops default to the same algorithm, which is
+// exactly what would let VerifyChain read _sd_alg from the wrong hop and
+// still pass every existing test.
 func delegatedChainWithDelegateHashAlg(t *testing.T, alg sdjwt.HashAlg) *sdjwt.Chain {
 	t.Helper()
 	root := issuedRoot(t)
 
 	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()), sdjwt.WithHashAlg(alg))
-	require.NoError(t, err)
+	require.NoError(t, err, "every algorithm a test passes here has to be one the package computes, or the fixture is testing the option parser")
 	closed, disclosures, err := blinder.Blind(map[string]any{
 		"vct":           "closed.example",
 		"checkout_hash": "abc",
 	})
-	require.NoError(t, err)
+	require.NoError(t, err, "no path is blinded here and no claim name is reserved, so a failure means the fixture stopped producing a payload there is anything to delegate")
 
 	chain, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
 		Nonce:    "n-1",
