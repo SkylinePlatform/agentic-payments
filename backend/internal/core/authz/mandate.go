@@ -128,7 +128,7 @@ func (e Endorsement) Verify(signedBy generated.PublicKey, now time.Time) error {
 // mismatch means something is wrong even when the material agrees — but they
 // are checked in addition to the material, never instead of it.
 func (e Endorsement) endorses(signedBy generated.PublicKey) error {
-	if e.AgentKey == nil || !usableKey(*e.AgentKey) {
+	if e.AgentKey == nil || !UsableKey(*e.AgentKey) {
 		return ErrNoEndorsedKey
 	}
 	endorsed := *e.AgentKey
@@ -157,10 +157,22 @@ func (e Endorsement) endorses(signedBy generated.PublicKey) error {
 	return nil
 }
 
-// usableKey reports whether a key carries enough material to be compared at
-// all. An endorsement naming a key type and nothing else endorses nobody, and
-// treating it as a match would invert the rule this package exists for.
-func usableKey(k generated.PublicKey) bool {
+// UsableKey reports whether a key carries enough material to identify
+// anybody at all. A key naming a type and nothing else — a Kty with no
+// Crv/X/Y, say — endorses nobody, and treating it as a match would invert the
+// rule this package exists for.
+//
+// Exported because it answers the same question at two different moments of
+// a mandate's life, in two different packages: Endorsement.endorses calls it
+// here, at verification, to decide whether the key a closed mandate was
+// signed with is one the open mandate could possibly have endorsed;
+// internal/adapters/ap2.IssueOpenCheckout calls it at issuance, before an
+// open mandate naming that key is ever signed. Both have to reach the same
+// verdict on the same key, so there is exactly one implementation rather than
+// two that could drift — a mandate accepted at issuance and refused at
+// verification for the same reason would just move the failure to whichever
+// party is least placed to act on it.
+func UsableKey(k generated.PublicKey) bool {
 	switch k.Kty {
 	case "EC":
 		return nonEmpty(k.Crv) && nonEmpty(k.X) && nonEmpty(k.Y)

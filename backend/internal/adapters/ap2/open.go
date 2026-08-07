@@ -191,15 +191,19 @@ func decodeCnf(raw any) (generated.PublicKey, error) {
 // endorsing. Human Present and Human Not Present do not disagree about this;
 // they diverge only in how the later, closed mandate gets its signature.
 //
-// m.AgentKey must name a key. IssueCheckout guards m.Checkout because
-// checkout_hash cannot be computed without it; the equivalent fact here is
-// that cnf is what makes the mandate constrainable to an agent at all, and
-// AP2 marks it REQUIRED for exactly as long as the mandate stays open — see
-// contracts/authz/checkout_mandate_open.json's own $comment: agent_key is
-// what stops a stolen open mandate being usable by a different agent. An open
-// mandate endorsing nobody authorises whoever holds it, which is the failure
-// the whole mechanism exists to prevent, so a caller that left it out gets
-// ErrMandateMalformed rather than a mandate that quietly endorses nothing.
+// m.AgentKey must be a usable key, not merely a non-zero one. IssueCheckout
+// guards m.Checkout because checkout_hash cannot be computed without it; the
+// equivalent fact here is that cnf is what makes the mandate constrainable to
+// an agent at all, and AP2 marks it REQUIRED for exactly as long as the
+// mandate stays open — see contracts/authz/checkout_mandate_open.json's own
+// $comment: agent_key is what stops a stolen open mandate being usable by a
+// different agent. A key naming a type and no material — a Kty with no
+// Crv/X/Y, say — endorses nobody just as much as an absent key does, which is
+// why the guard is authz.UsableKey and not a check for a zero Kty: it is the
+// same test Endorsement runs at verification, so issuance and verification
+// cannot disagree about what counts as a key. A caller that left the material
+// out gets ErrMandateMalformed rather than a mandate that quietly endorses
+// nothing.
 //
 // There is no binding to compute here, and that absence is not an omission.
 // An open mandate is not bound to a transaction — that is the definition of
@@ -220,9 +224,9 @@ func IssueOpenCheckout(
 	if blinder == nil {
 		return nil, fmt.Errorf("%w: no blinder", ErrMisconfigured)
 	}
-	if m.AgentKey.Kty == "" {
+	if !authz.UsableKey(m.AgentKey) {
 		return nil, fmt.Errorf(
-			"%w: no agent key to endorse, so this mandate would authorise whoever holds it",
+			"%w: no usable agent key to endorse, so this mandate would authorise whoever holds it",
 			ErrMandateMalformed)
 	}
 

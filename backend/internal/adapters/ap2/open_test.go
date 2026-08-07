@@ -1,39 +1,42 @@
-package ap2
+package ap2_test
 
 import (
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
-	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
-	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
-	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
 
-// This is a white-box test file, package ap2 rather than ap2_test, because
-// what it exercises — encodeConstraints, decodeConstraints, encodeCnf,
-// decodeCnf — is deliberately unexported. They are wire-vocabulary internals
-// that IssueOpenCheckout and IssueOpenPayment will call, not an entry point a
-// role constructs a mandate through, so there is no exported surface for an
-// external test package to reach them by.
+// This file exercises IssueOpenCheckout and VerifyOpenCheckout from outside
+// the package, package ap2_test, the same way checkout_test.go and
+// payment_test.go exercise their closed counterparts — both functions are
+// exported and none of the tests below reaches an unexported symbol. It
+// reuses newFixture, issue, mandate and reparse from checkout_test.go rather
+// than building a second fixture family: they are in the same package (Go
+// visibility is per-package, not per-file), and the alternative — a second,
+// near-identical set of helpers with no shared source of truth — is how two
+// tests end up proving different things under one name. The wire-vocabulary
+// internals Task 1 added (encodeConstraints, decodeConstraints, encodeCnf,
+// decodeCnf) stay covered from inside the package, in open_internal_test.go,
+// because they are deliberately unexported and this file cannot reach them.
 
 // ptr is a one-line generic helper for the pointer fields generated.PublicKey
-// carries. internal/core/authz/mandate_test.go has its own copy, but it is in
-// a different package this one cannot reach into, and grepping
-// internal/adapters/ap2/ turned up nothing to reuse — so this is a second copy
-// of a helper too small to be worth sharing.
+// carries. A third copy — internal/core/authz/mandate_test.go and
+// open_internal_test.go each have their own, in packages this one cannot
+// reach into, and it is too small to be worth sharing across a package
+// boundary.
 func ptr[T any](v T) *T { return &v }
 
-// flightToPalma is the built scenario's prompt, exactly as interpret/scenarios.go
-// writes it — the one interpret.Demo() answers with the four constraints these
-// tests round-trip.
+// flightToPalmaPrompt and demoConstraints are open_internal_test.go's own
+// helpers, repeated here for the same reason ptr is: that file is package ap2,
+// not ap2_test, and unexported identifiers do not cross the boundary.
 const flightToPalmaPrompt = "buy a flight to Palma when it drops below $200, this summer"
 
 func demoConstraints(t *testing.T) []generated.Constraint {
@@ -43,108 +46,10 @@ func demoConstraints(t *testing.T) []generated.Constraint {
 	return cs
 }
 
-func TestConstraintsRoundTripThroughTheWire(t *testing.T) {
-	want := demoConstraints(t) // the four constraints of the built scenario
-
-	encoded, err := encodeConstraints(want)
-	require.NoError(t, err)
-
-	got, err := decodeConstraints(encoded)
-	require.NoError(t, err)
-	assert.Equal(t, want, got,
-		"a constraint that does not survive the wire is a limit the verifier evaluates differently from the one the user signed")
-}
-
-func TestEveryConstraintDeclaresItsType(t *testing.T) {
-	encoded, err := encodeConstraints(demoConstraints(t))
-	require.NoError(t, err)
-	require.NotEmpty(t, encoded)
-
-	for i, element := range encoded {
-		obj, ok := element.(map[string]any)
-		require.True(t, ok, "element %d", i)
-		assert.Equal(t, ConstraintType, obj["type"],
-			"AP2 requires an unknown constraint be rejected; a constraint with no type cannot be recognised as unknown, so it would be skipped instead")
-	}
-}
-
-func TestAConstraintOfAnotherTypeIsRefused(t *testing.T) {
-	_, err := decodeConstraints([]any{
-		map[string]any{"type": "checkout.line_items", "items": []any{}},
-	})
-	require.Error(t, err,
-		"AP2's own line_items constraint is one this verifier does not implement, and skipping it would convert a limit the user set into one nobody enforces")
-	assert.ErrorIs(t, err, constraint.ErrUnknownField)
-}
-
-func TestCnfCarriesTheWholeKeyNotAReference(t *testing.T) {
-	key := generated.PublicKey{
-		Kty: "EC",
-		Crv: ptr("P-256"),
-		X:   ptr("c09-Eo2PvuO6VrfzLAxTZXBa3ZWkBaa0pR2jcOYKlw"),
-		Y:   ptr("gRETv5wMvNiZJqckokCyDAjIIEg3Y2m77VryMvS75Ww"),
-		Kid: ptr("k1"),
-	}
-
-	encoded := encodeCnf(key)
-	jwk, ok := encoded["jwk"].(map[string]any)
-	require.True(t, ok, "RFC 7800 §3.2 puts the key under a jwk member")
-	assert.Equal(t, "EC", jwk["kty"])
-
-	got, err := decodeCnf(encoded)
-	require.NoError(t, err)
-	assert.Equal(t, key, got,
-		"AP2 puts the key itself in cnf so a verifier does not have to trust a directory to say which key a name belongs to; a cnf carrying only a kid would give that back")
-}
-
-// openMandateKeyBase is an arbitrary fixed instant for the key store's own
-// clock in userKey. It only has to be self-consistent between key generation
-// and resolution inside one call — it is unrelated to the SD-JWT's own
-// exp/nbf, which every test below drives independently with its own
-// clock.Fake.
-var openMandateKeyBase = time.Date(2026, time.August, 3, 12, 0, 0, 0, time.UTC)
-
-// openUserSlot is the key store slot userKey generates into. One slot name is
-// safe to reuse across calls because each call stands up its own store — see
-// userKey.
-const openUserSlot = crypto.Slot("open-mandate-user")
-
-// userKey returns a signer/verifier pair for the user's key, the same shape
-// checkout_test.go's newFixture builds for the mandate-issuing key: an ES256
-// key out of the platform key store. A fresh store per call, so this is safe
-// to use from more than one test without them sharing state.
-func userKey(t *testing.T) (authz.Signer, authz.Verifier) {
-	t.Helper()
-
-	store, err := crypto.NewStore(clock.NewFake(openMandateKeyBase))
-	require.NoError(t, err, "standing up the key store")
-	ref, err := store.Generate(openUserSlot, authz.ES256, "test-generate")
-	require.NoError(t, err, "generating the user's key")
-
-	signer, err := store.Signer(openUserSlot)
-	require.NoError(t, err, "obtaining a signer")
-	verifier, err := store.Resolve(t.Context(), ref)
-	require.NoError(t, err, "resolving the verifier")
-
-	return signer, verifier
-}
-
-// testBlinder returns a Blinder with deterministic salts — checkout_test.go's
-// newSalts pattern, reproduced here because that helper lives in package
-// ap2_test and is not reachable from this, the internal test package.
-func testBlinder(t *testing.T) *sdjwt.Blinder {
-	t.Helper()
-
-	blinder, err := sdjwt.NewBlinder(
-		sdjwt.WithSaltSource(strings.NewReader(strings.Repeat("0123456789abcdef", 64))))
-	require.NoError(t, err, "building the blinder")
-	return blinder
-}
-
 // agentJWK is a fixed EC public key standing in for an agent's. Nothing in
-// this task ever verifies a signature against it — that arrives with the
+// this file ever verifies a signature against it — that arrives with the
 // delegation chain (#12 Task 5) — so a literal is enough; only its shape (a
-// usable EC key, per authz.usableKey) and its round trip through cnf matter
+// usable EC key, per authz.UsableKey) and its round trip through cnf matter
 // here.
 func agentJWK(t *testing.T) generated.PublicKey {
 	t.Helper()
@@ -157,29 +62,10 @@ func agentJWK(t *testing.T) generated.PublicKey {
 	}
 }
 
-// closedCheckoutFixtureJWT is an opaque merchant-signed checkout, the same
-// role merchantCheckout plays in checkout_test.go. Its contents do not matter
-// to issuedClosedCheckout — only that IssueCheckout has something to bind to.
-const closedCheckoutFixtureJWT = "eyJhbGciOiJFUzI1NiJ9.eyJyb3V0ZSI6IkJFRy1QTUkiLCJhbW91bnQiOjE4OTAwfQ.c2ln"
-
-// issuedClosedCheckout builds a closed Checkout Mandate signed by signer, so
-// TestAClosedCheckoutMandateIsNotAnOpenOne can hand VerifyOpenCheckout a
-// real, well-formed mandate of the wrong kind rather than a hand-built claim
-// set.
-func issuedClosedCheckout(t *testing.T, signer authz.Signer) *sdjwt.SDJWT {
-	t.Helper()
-
-	checkout := closedCheckoutFixtureJWT
-	sd, err := IssueCheckout(t.Context(), signer, generated.CheckoutMandate{
-		Checkout: &checkout,
-	}, testBlinder(t))
-	require.NoError(t, err, "issuing the closed mandate this test needs as a fixture")
-	return sd
-}
-
 func TestAnOpenCheckoutMandateRoundTrips(t *testing.T) {
-	signer, verifier := userKey(t)
-	blinder := testBlinder(t)
+	t.Parallel()
+
+	f := newFixture(t)
 
 	expires := time.Unix(1_777_329_789, 0).UTC()
 	want := generated.OpenCheckoutMandate{
@@ -188,11 +74,11 @@ func TestAnOpenCheckoutMandateRoundTrips(t *testing.T) {
 		ExpiresAt:   &expires,
 	}
 
-	sd, err := IssueOpenCheckout(t.Context(), signer, want, blinder)
+	sd, err := ap2.IssueOpenCheckout(t.Context(), f.signer, want, f.blinder)
 	require.NoError(t, err)
 
-	got, err := VerifyOpenCheckout(sd, OpenOptions{
-		Issuer: verifier, Clock: clock.NewFake(time.Unix(1_777_326_189, 0)),
+	got, err := ap2.VerifyOpenCheckout(reparse(t, sd), ap2.OpenOptions{
+		Issuer: f.verifier, Clock: clock.NewFake(time.Unix(1_777_326_189, 0)),
 	})
 	require.NoError(t, err)
 
@@ -204,39 +90,67 @@ func TestAnOpenCheckoutMandateRoundTrips(t *testing.T) {
 }
 
 func TestAnOpenMandateWithoutAnAgentKeyIsRefusedAtIssuance(t *testing.T) {
-	signer, _ := userKey(t)
+	t.Parallel()
 
-	_, err := IssueOpenCheckout(t.Context(), signer, generated.OpenCheckoutMandate{
+	f := newFixture(t)
+
+	_, err := ap2.IssueOpenCheckout(t.Context(), f.signer, generated.OpenCheckoutMandate{
 		Constraints: demoConstraints(t),
-	}, testBlinder(t))
+	}, f.blinder)
 	require.Error(t, err,
 		"an open mandate endorsing nobody authorises whoever holds it, which is the failure the whole mechanism exists to prevent")
-	assert.ErrorIs(t, err, ErrMandateMalformed)
+	assert.ErrorIs(t, err, ap2.ErrMandateMalformed)
+}
+
+// TestAnOpenMandateWithAKeyCarryingNoMaterialIsRefusedAtIssuance is the case
+// TestAnOpenMandateWithoutAnAgentKeyIsRefusedAtIssuance does not cover: a key
+// that names a type and carries no coordinates endorses nobody just as much
+// as an absent key does — internal/core/authz's UsableKey already refuses it
+// at verification, through Endorsement.endorses, so IssueOpenCheckout has to
+// refuse it too. A mandate accepted here and rejected there would not fail
+// loudly; it would fail later, at authorisation, against whichever party is
+// least placed to act on it.
+func TestAnOpenMandateWithAKeyCarryingNoMaterialIsRefusedAtIssuance(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	_, err := ap2.IssueOpenCheckout(t.Context(), f.signer, generated.OpenCheckoutMandate{
+		AgentKey:    generated.PublicKey{Kty: "EC"}, // a type, and nothing to identify anybody by
+		Constraints: demoConstraints(t),
+	}, f.blinder)
+	require.Error(t, err,
+		"a key type with no coordinates identifies nobody, the same fact authz.UsableKey already enforces at verification")
+	assert.ErrorIs(t, err, ap2.ErrMandateMalformed)
 }
 
 func TestAClosedCheckoutMandateIsNotAnOpenOne(t *testing.T) {
-	signer, verifier := userKey(t)
-	closed := issuedClosedCheckout(t, signer)
+	t.Parallel()
 
-	_, err := VerifyOpenCheckout(closed, OpenOptions{
-		Issuer: verifier, Clock: clock.NewFake(time.Unix(1, 0)),
+	f := newFixture(t)
+	closed := reparse(t, issue(t, f, mandate()))
+
+	_, err := ap2.VerifyOpenCheckout(closed, ap2.OpenOptions{
+		Issuer: f.verifier, Clock: clock.NewFake(time.Unix(1, 0)),
 	})
 	require.Error(t, err,
 		"the two vct values differ by an infix, which is the shape of the trap; a prefix comparison would accept this")
-	assert.ErrorIs(t, err, ErrWrongMandateType)
+	assert.ErrorIs(t, err, ap2.ErrWrongMandateType)
 }
 
 func TestAnExpiredOpenMandateIsRefused(t *testing.T) {
-	signer, verifier := userKey(t)
+	t.Parallel()
+
+	f := newFixture(t)
 	expires := time.Unix(1_777_329_789, 0).UTC()
 
-	sd, err := IssueOpenCheckout(t.Context(), signer, generated.OpenCheckoutMandate{
+	sd, err := ap2.IssueOpenCheckout(t.Context(), f.signer, generated.OpenCheckoutMandate{
 		AgentKey: agentJWK(t), Constraints: demoConstraints(t), ExpiresAt: &expires,
-	}, testBlinder(t))
+	}, f.blinder)
 	require.NoError(t, err)
 
-	_, err = VerifyOpenCheckout(sd, OpenOptions{
-		Issuer: verifier, Clock: clock.NewFake(expires.Add(time.Second)),
+	_, err = ap2.VerifyOpenCheckout(reparse(t, sd), ap2.OpenOptions{
+		Issuer: f.verifier, Clock: clock.NewFake(expires.Add(time.Second)),
 	})
 	require.Error(t, err,
 		"an open mandate's lifetime is its blast radius, so an expiry that is not enforced is the one limit that matters most going unenforced")
