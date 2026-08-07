@@ -1,6 +1,7 @@
 package agent_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/credprovider"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/mpp"
@@ -39,6 +41,9 @@ type world struct {
 	provider  party
 	processor party
 	clock     *clock.Fake
+	// agentEvents is the emitter the client this world hands out records on.
+	// Nil unless the test asked for one.
+	agentEvents *obs.Emitter
 }
 
 type party struct {
@@ -76,11 +81,49 @@ func serve(t *testing.T, build func() (http.Handler, error)) string {
 	return s.URL
 }
 
+// emitters is one emitter per role. The zero value is five nil emitters, which
+// record nothing — which is what every test here that is not about the event
+// log wants, and is the property that lets a Service carry the field without
+// every existing test having to grow one.
+type emitters struct {
+	surface      *obs.Emitter
+	merchant     *obs.Emitter
+	credprovider *obs.Emitter
+	mpp          *obs.Emitter
+	agent        *obs.Emitter
+}
+
+// allEmitting builds one emitter per role, all writing to sink, and closes them
+// when the test ends.
+func allEmitting(t *testing.T, sink obs.Sink) emitters {
+	t.Helper()
+
+	build := func(role string) *obs.Emitter {
+		e, err := obs.NewEmitter(clock.NewFake(base), role, obs.WithSink(sink))
+		require.NoError(t, err, "building the %s emitter", role)
+		// Every emitter owns a goroutine, and go test -race runs the whole suite
+		// in one process, so one that outlives its test outlives every test
+		// after it.
+		t.Cleanup(func() { _ = e.Close(context.Background()) })
+		return e
+	}
+	return emitters{
+		surface:      build("surface"),
+		merchant:     build("merchant"),
+		credprovider: build("credprovider"),
+		mpp:          build("mpp"),
+		agent:        build("agent"),
+	}
+}
+
 // newWorld stands the four roles up and wires them to each other.
 //
 // One clock drives all of them, which is what makes expiry testable: advancing
 // it moves every deadline in the world at once, exactly as wall time would.
-func newWorld(t *testing.T) *world {
+func newWorld(t *testing.T) *world { return newWorldEmitting(t, emitters{}) }
+
+// newWorldEmitting is newWorld with the roles recording what they do.
+func newWorldEmitting(t *testing.T, events emitters) *world {
 	t.Helper()
 
 	clk := clock.NewFake(base)
@@ -97,6 +140,7 @@ func newWorld(t *testing.T) *world {
 
 	surfaceSvc := &surface.Service{
 		Signer: w.user.signer, Keys: w.user.keys, Clock: clk, Blinder: blinder,
+		Events: events.surface,
 	}
 	w.endpoints.Surface = serve(t, surfaceSvc.Handler)
 
@@ -110,6 +154,7 @@ func newWorld(t *testing.T) *world {
 		Rules:  ap2.MerchantRules{Issuer: w.user.verifier, Clock: clk},
 		Signer: w.shop.signer, Own: w.shop.verifier, Keys: w.shop.keys, Clock: clk,
 		Processor: &merchant.HTTPProcessor{},
+		Events:    events.merchant,
 	}
 	w.endpoints.Merchant = serve(t, merchantSvc.Handler)
 
@@ -117,6 +162,7 @@ func newWorld(t *testing.T) *world {
 		ID:     "mock-credential-provider",
 		Rules:  ap2.CredentialProviderRules{Issuer: w.user.verifier, Clock: clk},
 		Signer: w.provider.signer, Keys: w.provider.keys, Clock: clk,
+		Events: events.credprovider,
 	}
 	w.endpoints.CredProvider = serve(t, providerSvc.Handler)
 
@@ -125,6 +171,7 @@ func newWorld(t *testing.T) *world {
 		Payments: ap2.CredentialProviderRules{Issuer: w.user.verifier, Clock: clk},
 		Rules:    ap2.MPPRules{Clock: clk},
 		Signer:   w.processor.signer, Keys: w.processor.keys, Clock: clk,
+		Events: events.mpp,
 	}
 	w.endpoints.MPP = serve(t, mppSvc.Handler)
 
@@ -133,10 +180,13 @@ func newWorld(t *testing.T) *world {
 	// the processor and the agent never does.
 	merchantSvc.Processor = &merchant.HTTPProcessor{Base: w.endpoints.MPP}
 
+	w.agentEvents = events.agent
 	return w
 }
 
-func (w *world) client() *agent.Client { return &agent.Client{Endpoints: w.endpoints} }
+func (w *world) client() *agent.Client {
+	return &agent.Client{Endpoints: w.endpoints, Events: w.agentEvents}
+}
 
 func paymentContent() generated.PaymentMandate {
 	return generated.PaymentMandate{
@@ -344,4 +394,54 @@ func receiptFrom(t *testing.T, p agent.Purchase, from string) string {
 		}
 	}
 	return ""
+}
+
+// TestAPurchaseSurvivesACollectorThatIsNotThere is ADR 0003's constraint stated
+// as a test rather than as a paragraph.
+//
+// The event log is observability and never evidence, so a collector that is
+// down costs a screenshot and must cost nothing else. That claim is easy to
+// make and easy to break — an emitter that returned an error a handler checked,
+// or one that blocked on a socket, would break it without changing a single
+// line that mentions payments — so it is asserted where it would actually
+// matter: every one of the five parties emitting into an address nobody is
+// listening on, with a real HTTP sink, in the middle of a real purchase.
+//
+// The second half of the assertion is the one that keeps this honest. A
+// purchase completing proves nothing on its own if the events were never
+// attempted, so the emitter's own count of failed deliveries has to be
+// positive: the sink really did try, really did fail, and the flow really did
+// not notice.
+func TestAPurchaseSurvivesACollectorThatIsNotThere(t *testing.T) {
+	t.Parallel()
+
+	// A server stood up and immediately closed. That gives an address which is
+	// certainly local and certainly dead — a hardcoded port would be a race
+	// against whatever else happens to be running.
+	dead := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := dead.URL + "/events"
+	dead.Close()
+
+	events := allEmitting(t, obs.NewHTTPSink(url))
+	w := newWorldEmitting(t, events)
+
+	bought, err := w.client().Buy(t.Context(), "BEG", "PMI", paymentContent())
+	require.NoError(t, err, "a purchase must not fail because nobody is collecting its events")
+	assert.True(t, bought.Settled, "the money still has to move")
+	assert.Len(t, bought.Receipts, 3, "and every verifier still has to answer with one")
+
+	// Close drains, so by the time it returns every delivery has been attempted.
+	var failed, delivered int
+	for _, e := range []*obs.Emitter{
+		events.surface, events.merchant, events.credprovider, events.mpp, events.agent,
+	} {
+		require.NoError(t, e.Close(context.Background()), "closing an emitter")
+		failed += e.Stats().Failed
+		delivered += e.Stats().Delivered
+	}
+
+	assert.Positive(t, failed,
+		"the events have to have been attempted and refused; a purchase that "+
+			"completed because nothing was ever emitted proves nothing")
+	assert.Zero(t, delivered, "there was nothing there to deliver to")
 }

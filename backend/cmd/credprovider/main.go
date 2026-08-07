@@ -23,9 +23,10 @@ func main() {
 	addr := flag.String("addr", ":8082", "address to listen on")
 	id := flag.String("id", "mock-credential-provider", "identifier, as it appears in receipts")
 	surface := flag.String("surface", "http://localhost:8084", "Trusted Surface base URL")
+	collector := roles.CollectorFlag()
 	flag.Parse()
 
-	roles.Main("credprovider", *addr, func(identity roles.Identity) (http.Handler, error) {
+	roles.Main("credprovider", *addr, *collector, func(role roles.Role) (http.Handler, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		user, err := roles.AwaitPeer(ctx, *surface)
@@ -35,10 +36,11 @@ func main() {
 
 		service := &credprovider.Service{
 			ID:     *id,
-			Rules:  ap2.CredentialProviderRules{Issuer: user, Clock: identity.Clock},
-			Signer: identity.Signer,
-			Keys:   identity.Keys,
-			Clock:  identity.Clock,
+			Rules:  ap2.CredentialProviderRules{Issuer: user, Clock: role.Clock},
+			Signer: role.Signer,
+			Keys:   role.Keys,
+			Clock:  role.Clock,
+			Events: role.Events,
 		}
 		return service.Handler()
 	})

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/transport"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 )
 
@@ -35,7 +36,9 @@ type Processor interface {
 type HTTPProcessor struct {
 	// Base is the processor's root, e.g. "http://localhost:8083".
 	Base string
-	// Client is the HTTP client to use. Zero means http.DefaultClient.
+	// Client is the HTTP client to use. Zero means http.DefaultClient. Whatever
+	// it is, requests go out through transport.Correlating — a caller supplying
+	// its own client does not have to remember the header.
 	Client *http.Client
 }
 
@@ -68,11 +71,12 @@ func (p *HTTPProcessor) InitiatePayment(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", roles.Fingerprint(url+" "+string(body)))
 
-	client := p.Client
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	// Through the correlating client, so the processor's verdict joins the group
+	// the mandate that caused it belongs to. This hop is the one where losing
+	// the identifier would be least visible and most costly: it is the only leg
+	// the agent has no part in, so nothing else on the path would notice that a
+	// transaction had quietly become two.
+	resp, err := transport.Correlating(p.Client).Do(req)
 	if err != nil {
 		return "", false, fmt.Errorf("calling the processor at %s: %w", url, err)
 	}
