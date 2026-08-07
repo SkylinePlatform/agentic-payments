@@ -58,6 +58,21 @@ var (
 	// fixed outright rather than constrained.
 	ErrPinnedFieldChanged = errors.New("authz: closed mandate changed a pinned value")
 
+	// ErrConstraintViolated means the purchase was evaluated against the open
+	// mandate's constraints and did not meet them.
+	//
+	// constraint.Evaluate itself never returns this: it deliberately answers an
+	// unsatisfied Report with a nil error, so that "this constraint could not be
+	// read" and "this purchase does not meet it" stay two different outcomes
+	// rather than collapsing into one kind of failure — see Evaluate's own doc
+	// comment. A caller that has to turn a verdict into a rejection receipt
+	// still needs a code to put in it, though, and this is the sentinel that
+	// gives one: distinct from ErrPinnedFieldChanged, because a value the user
+	// fixed outright being rewritten is a different failure from a value the
+	// user bounded being exceeded, and a receipt naming the wrong one sends the
+	// reader looking in the wrong place.
+	ErrConstraintViolated = errors.New("authz: purchase falls outside the open mandate's constraints")
+
 	// ErrMalformedMandate means a timestamp or a required field could not be
 	// read at all.
 	ErrMalformedMandate = errors.New("authz: mandate malformed")
@@ -78,7 +93,7 @@ func CodeOf(err error) generated.ErrorCode {
 		return generated.ErrorCodeMandateExpired
 	case errors.Is(err, ErrNotYetValid):
 		return generated.ErrorCodeMandateNotYetValid
-	case errors.Is(err, ErrPinnedFieldChanged):
+	case errors.Is(err, ErrPinnedFieldChanged), errors.Is(err, ErrConstraintViolated):
 		return generated.ErrorCodeConstraintViolated
 	case errors.Is(err, ErrMalformedMandate):
 		return generated.ErrorCodeMandateMalformed
