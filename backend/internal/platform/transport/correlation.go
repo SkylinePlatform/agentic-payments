@@ -135,3 +135,25 @@ func (t *CorrelationTransport) RoundTrip(r *http.Request) (*http.Response, error
 	}
 	return base.RoundTrip(r)
 }
+
+// Correlating returns a client whose every request carries the correlation ID
+// its context holds.
+//
+// base may be nil, meaning http.DefaultClient. The result is a shallow copy
+// with its RoundTripper wrapped, so base itself is not modified — a caller that
+// handed its client to somebody else does not find the header appearing on
+// requests it did not make.
+//
+// The copy shares base's RoundTripper, and the connection pool lives in the
+// RoundTripper rather than in the Client, so building one of these per call
+// costs an allocation and nothing else. That is why there is no cached field
+// beside it: a lazily-built client would need a lock, and a lock inside a type
+// callers construct as a literal is a copy waiting to be made.
+func Correlating(base *http.Client) *http.Client {
+	if base == nil {
+		base = http.DefaultClient
+	}
+	copied := *base
+	copied.Transport = &CorrelationTransport{Base: base.Transport}
+	return &copied
+}
