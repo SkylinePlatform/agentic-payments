@@ -156,3 +156,80 @@ func TestAnExpiredOpenMandateIsRefused(t *testing.T) {
 		"an open mandate's lifetime is its blast radius, so an expiry that is not enforced is the one limit that matters most going unenforced")
 	assert.ErrorIs(t, err, sdjwt.ErrExpired)
 }
+
+// TestAnOpenPaymentMandateWithoutAnAgentKeyIsRefusedAtIssuance is
+// TestAnOpenMandateWithoutAnAgentKeyIsRefusedAtIssuance's counterpart for
+// IssueOpenPayment. The guard is the same call to authz.UsableKey the open
+// Checkout Mandate uses, but it is a separate call site in a separate
+// function, and a mutation that deleted it here would not be caught by any
+// checkout test — a mandate endorsing nobody authorises whoever holds it
+// regardless of which of the two open mandates it is.
+func TestAnOpenPaymentMandateWithoutAnAgentKeyIsRefusedAtIssuance(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	_, err := ap2.IssueOpenPayment(t.Context(), f.signer, generated.OpenPaymentMandate{
+		Constraints: demoConstraints(t),
+	}, f.blinder)
+	require.Error(t, err,
+		"an open mandate endorsing nobody authorises whoever holds it, which is the failure the whole mechanism exists to prevent")
+	assert.ErrorIs(t, err, ap2.ErrMandateMalformed)
+}
+
+// TestAnOpenPaymentMandateCarriesPinnedValues is the open Payment Mandate's
+// equivalent of TestAnOpenCheckoutMandateRoundTrips, plus the thing a
+// Checkout Mandate has no equivalent of: values the user pinned outright
+// rather than constrained. Payee and PaymentInstrument are pinned here;
+// PaymentAmount is not, and the assertion on it is the one this test exists
+// for — an unset pin has to come back nil, not a zero-valued Amount that
+// would read as the user having fixed the amount at nothing.
+func TestAnOpenPaymentMandateCarriesPinnedValues(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	want := generated.OpenPaymentMandate{
+		AgentKey:    agentJWK(t),
+		Constraints: demoConstraints(t),
+		Payee:       &generated.Merchant{ID: "merchant_1", Name: "Demo Merchant"},
+		PaymentInstrument: &generated.PaymentInstrument{
+			ID: "b3f1c8a2-6d4e-4f9a-9e3d-8a7c2f1b9d34", Type: "card",
+		},
+	}
+
+	sd, err := ap2.IssueOpenPayment(t.Context(), f.signer, want, f.blinder)
+	require.NoError(t, err)
+
+	got, err := ap2.VerifyOpenPayment(reparse(t, sd), ap2.OpenOptions{
+		Issuer: f.verifier, Clock: clock.NewFake(time.Unix(1, 0)),
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, want.Payee, got.Payee,
+		"a pinned payee is a value the closed mandate must reproduce, not a limit to evaluate, so losing it turns an instruction into no instruction")
+	assert.Equal(t, want.PaymentInstrument, got.PaymentInstrument)
+	assert.Nil(t, got.PaymentAmount,
+		"an absent pin means the user constrained the amount rather than fixing it, and inventing one would authorise a purchase they did not")
+}
+
+// TestAnOpenPaymentMandateIsNotAnOpenCheckoutOne is TestAClosedCheckoutMandateIsNotAnOpenOne's
+// counterpart for the pair the specification's overview page never prints
+// together: VCTPaymentOpen and VCTCheckoutOpen differ by the same infix
+// ("checkout" vs "payment") that VCTCheckoutClosed and VCTCheckoutOpen do,
+// so a verifier that checked only the "open" suffix would accept this.
+func TestAnOpenPaymentMandateIsNotAnOpenCheckoutOne(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	sd, err := ap2.IssueOpenPayment(t.Context(), f.signer, generated.OpenPaymentMandate{
+		AgentKey: agentJWK(t), Constraints: demoConstraints(t),
+	}, f.blinder)
+	require.NoError(t, err)
+
+	_, err = ap2.VerifyOpenCheckout(reparse(t, sd), ap2.OpenOptions{
+		Issuer: f.verifier, Clock: clock.NewFake(time.Unix(1, 0)),
+	})
+	require.Error(t, err, "all four vct values differ, and this is the pair the specification's overview page never prints together")
+	assert.ErrorIs(t, err, ap2.ErrWrongMandateType)
+}

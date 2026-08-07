@@ -358,3 +358,197 @@ func decodeOpenCheckout(claims map[string]any) (generated.OpenCheckoutMandate, e
 	}
 	return m, nil
 }
+
+// IssueOpenPayment builds an open Payment Mandate and signs it as an SD-JWT.
+//
+// signer and m.AgentKey are guarded exactly as IssueOpenCheckout guards them,
+// for the same reason: an open mandate is always user-signed, endorsing the
+// agent named in m.AgentKey rather than being signed by it, and a key naming
+// no material endorses nobody. See IssueOpenCheckout's comment on
+// authz.UsableKey — this calls the same function rather than re-deriving the
+// same test.
+//
+// Payee, PaymentAmount, PaymentInstrument and ExecutionDate are the values an
+// open Payment Mandate may pin outright rather than constrain — "pay this
+// merchant, from this card, up to fifty euros" fixes the first two and
+// leaves the third to a constraint. Every one of them is optional in the
+// schema, and each is written to its claim only when the caller's pointer is
+// non-nil. Writing one unconditionally would put a claim on the wire for a
+// pin the user never made: a nil *Merchant marshals to a `payee` claim
+// holding JSON null, which decodes back as a present-but-empty Merchant
+// rather than as no pin at all — inventing a fixed payee, instrument or
+// amount the user never stated, which is the failure the schema's own
+// $comment warns against. Checking the pointer before assignment is what
+// keeps absence readable as absence all the way through the round trip.
+//
+// declared and presentPaths are called for the same reason IssueOpenCheckout
+// calls them: OpenPaymentMandate declares only "constraints[]" withholdable,
+// so this is what keeps issuing a mandate whose constraints happen to be
+// empty from failing when the Blinder is asked to blind a path with nothing
+// there to blind.
+func IssueOpenPayment(
+	ctx context.Context,
+	signer authz.Signer,
+	m generated.OpenPaymentMandate,
+	blinder *sdjwt.Blinder,
+) (*sdjwt.SDJWT, error) {
+	if signer == nil {
+		return nil, fmt.Errorf("%w: no signer", ErrMisconfigured)
+	}
+	if blinder == nil {
+		return nil, fmt.Errorf("%w: no blinder", ErrMisconfigured)
+	}
+	if !authz.UsableKey(m.AgentKey) {
+		return nil, fmt.Errorf(
+			"%w: no usable agent key to endorse, so this mandate would authorise whoever holds it",
+			ErrMandateMalformed)
+	}
+
+	encodedConstraints, err := encodeConstraints(m.Constraints)
+	if err != nil {
+		return nil, err
+	}
+
+	claims := map[string]any{
+		vctClaim:         openPayment.vct,
+		claimCnf:         encodeCnf(m.AgentKey),
+		claimConstraints: encodedConstraints,
+	}
+	if m.Payee != nil {
+		claims[claimPayee] = m.Payee
+	}
+	if m.PaymentAmount != nil {
+		claims[claimPaymentAmount] = m.PaymentAmount
+	}
+	if m.PaymentInstrument != nil {
+		claims[claimPaymentInstrument] = m.PaymentInstrument
+	}
+	if m.ExecutionDate != nil {
+		claims[claimExecutionDate] = *m.ExecutionDate
+	}
+	if m.IssuedAt != nil {
+		claims[claimIssuedAt] = m.IssuedAt.Unix()
+	}
+	if m.ExpiresAt != nil {
+		claims[claimExpiresAt] = m.ExpiresAt.Unix()
+	}
+
+	declared, err := blindPaths("OpenPaymentMandate")
+	if err != nil {
+		return nil, err
+	}
+	paths := presentPaths(claims, declared)
+
+	payload, disclosures, err := blinder.Blind(claims, paths...)
+	if err != nil {
+		return nil, err
+	}
+	return sdjwt.Issue(ctx, JOSESigner(signer), payload, disclosures)
+}
+
+// VerifyOpenPayment verifies an open Payment Mandate and returns it in
+// canonical form.
+//
+// It mirrors VerifyOpenCheckout: signature, then credential type, then
+// decode. There is nothing here for a binding check to run against, for the
+// same reason VerifyOpenCheckout has none — an open mandate authorises a
+// class of purchases, not one transaction. Checking a closed mandate's
+// pinned values against this one is authz.AuthorisePayment's job, not this
+// function's: that check needs both mandates at once, and this function only
+// ever sees one.
+func VerifyOpenPayment(sd *sdjwt.SDJWT, opts OpenOptions) (generated.OpenPaymentMandate, error) {
+	var zero generated.OpenPaymentMandate
+	// See VerifyOpenCheckout's identical guard for why these are
+	// ErrMisconfigured and not ErrMandateMalformed.
+	if sd == nil {
+		return zero, fmt.Errorf("%w: no SD-JWT", ErrMisconfigured)
+	}
+	if opts.Issuer == nil || opts.Clock == nil {
+		return zero, fmt.Errorf("%w: verification needs both an issuer key and a clock",
+			ErrMisconfigured)
+	}
+
+	verify := sdjwt.Options{
+		Issuer: JOSEVerifier(opts.Issuer),
+		Clock:  joseClockOf(opts.Clock),
+	}
+
+	claims, err := sdjwt.Verify(sd, verify)
+	if err != nil {
+		return zero, err
+	}
+	if err := requireVCT(claims, openPayment); err != nil {
+		return zero, err
+	}
+	return decodeOpenPayment(claims)
+}
+
+// decodeOpenPayment reads the verified claims into the canonical type.
+//
+// cnf and constraints are required by the schema, checked with the explicit
+// presence guard decodeOpenCheckout uses for the same two claims. payee,
+// payment_amount, payment_instrument and execution_date are pinned values
+// rather than constraints, and every one of them is optional — so each is
+// read with its own presence check, and left nil rather than decoded into a
+// zero value when the claim never arrived. A zero-valued Merchant or Amount
+// standing in for "no pin" is exactly the invented pin IssueOpenPayment's
+// comment describes; decoding cannot un-invent one, so it has to not invent
+// it in the first place.
+func decodeOpenPayment(claims map[string]any) (generated.OpenPaymentMandate, error) {
+	var m generated.OpenPaymentMandate
+
+	rawCnf, ok := claims[claimCnf]
+	if !ok {
+		return m, fmt.Errorf("%w: no %s claim", ErrMandateMalformed, claimCnf)
+	}
+	key, err := decodeCnf(rawCnf)
+	if err != nil {
+		return m, err
+	}
+	m.AgentKey = key
+
+	rawConstraints, ok := claims[claimConstraints]
+	if !ok {
+		return m, fmt.Errorf("%w: no %s claim", ErrMandateMalformed, claimConstraints)
+	}
+	constraints, err := decodeConstraints(rawConstraints)
+	if err != nil {
+		return m, err
+	}
+	m.Constraints = constraints
+
+	if _, ok := claims[claimPayee]; ok {
+		var payee generated.Merchant
+		if err := remarshal(claims, claimPayee, &payee); err != nil {
+			return m, err
+		}
+		m.Payee = &payee
+	}
+
+	if _, ok := claims[claimPaymentAmount]; ok {
+		var amount generated.Amount
+		if err := remarshal(claims, claimPaymentAmount, &amount); err != nil {
+			return m, err
+		}
+		m.PaymentAmount = &amount
+	}
+
+	if _, ok := claims[claimPaymentInstrument]; ok {
+		var instrument generated.PaymentInstrument
+		if err := remarshal(claims, claimPaymentInstrument, &instrument); err != nil {
+			return m, err
+		}
+		m.PaymentInstrument = &instrument
+	}
+
+	date, err := optionalString(claims, claimExecutionDate)
+	if err != nil {
+		return m, err
+	}
+	m.ExecutionDate = date
+
+	if err := timestamps(claims, &m.IssuedAt, &m.ExpiresAt); err != nil {
+		return m, err
+	}
+	return m, nil
+}
