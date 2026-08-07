@@ -3,6 +3,7 @@ package ap2
 import (
 	"errors"
 
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/evidence"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
@@ -130,6 +131,14 @@ var adapterCodes = []struct {
 	{ErrCredentialScopeMismatch, generated.ErrorCodeCredentialScopeMismatch},
 	{ErrCredentialExpired, generated.ErrorCodeMandateExpired},
 	{ErrBindingUnverifiable, generated.ErrorCodeDisclosureInsufficient},
+	// evidence.ErrIncomplete is the domain's, not this package's, and it is in
+	// this table because Dispute.Verify is the thing that reports it — a
+	// dispute bundle missing an artefact is the caller having assembled the
+	// call wrong, which is what request_malformed says, and CodeOf has to stay
+	// total over everything a caller can get back from here. Left out, it would
+	// fall through to verifier_unavailable and blame the arbiter for a gap in
+	// what it was handed.
+	{evidence.ErrIncomplete, generated.ErrorCodeRequestMalformed},
 }
 
 // codeFor maps this package's own failures.

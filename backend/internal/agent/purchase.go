@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/evidence"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/transport"
@@ -70,8 +71,8 @@ type Purchase struct {
 // Receipt is a signed answer, tagged with who gave it.
 //
 // The token is kept rather than the decoded form: a receipt's value is that it
-// is signed, and a struct this package decoded is not evidence of anything. #18
-// assembles disputes from the tokens.
+// is signed, and a struct this package decoded is not evidence of anything.
+// Evidence, below, assembles the dispute bundle out of these tokens unchanged.
 type Receipt struct {
 	From  string
 	Token string
@@ -210,7 +211,7 @@ func (c *Client) Fund(ctx context.Context, p *Purchase) error {
 	// is the point of the whole exercise. A refusal answers with one, and an
 	// agent that returned early on the status would drop the only signed
 	// account of why it was refused.
-	p.keep("credprovider", out.Receipt)
+	p.keep(fromCredProvider, out.Receipt)
 
 	if err != nil {
 		return fmt.Errorf("asking the Credential Provider to fund the purchase: %w", err)
@@ -254,8 +255,8 @@ func (c *Client) Settle(ctx context.Context, p *Purchase) error {
 	err := c.call(ctx, http.MethodPost,
 		strings.TrimSuffix(c.Endpoints.Merchant, "/")+"/checkout", body, &out)
 
-	p.keep("merchant", out.Receipt)
-	p.keep("mpp", out.PaymentReceipt)
+	p.keep(fromMerchant, out.Receipt)
+	p.keep(fromMPP, out.PaymentReceipt)
 	p.Settled = out.Settled
 
 	if err != nil {
@@ -263,6 +264,16 @@ func (c *Client) Settle(ctx context.Context, p *Purchase) error {
 	}
 	return nil
 }
+
+// Who signed each receipt this flow collects. Named because Evidence has to
+// pick two of the three out again, and a bundle assembled by matching string
+// literals would be one typo away from a dispute built on the wrong party's
+// answer — with nothing failing, because the receipt would simply be absent.
+const (
+	fromCredProvider = "credprovider"
+	fromMerchant     = "merchant"
+	fromMPP          = "mpp"
+)
 
 // keep records a receipt, ignoring an absent one.
 //
@@ -274,6 +285,49 @@ func (p *Purchase) keep(from, token string) {
 		return
 	}
 	p.Receipts = append(p.Receipts, Receipt{From: from, Token: token})
+}
+
+// Evidence assembles this purchase into the bundle a dispute is decided from.
+//
+// It decodes nothing and verifies nothing. Every field is a token exactly as it
+// arrived, because the agent is the party with the least authority in the
+// protocol and a bundle it had interpreted would be its own account of a
+// transaction rather than the counterparties' signatures over one. The
+// verification is internal/adapters/ap2.Dispute's, and the arbiter running it
+// brings its own keys.
+//
+// The Payment Receipt is the processor's. Two parties answer the Payment Mandate
+// in this flow — the Credential Provider when it funds the purchase, and the
+// Merchant Payment Processor when it is asked to move the money — and both
+// receipts are genuine answers to the same presentation. A bundle carries one,
+// because the arbiter brings one key to check it with, so which one is a choice
+// and this is it: the processor's is the answer that says whether money moved,
+// which is the question a dispute is opened about. A purchase that never reached
+// the processor has no complete bundle, and Bundle.Validate says so rather than
+// quietly substituting the Credential Provider's answer to a different question.
+//
+// An incomplete purchase yields an incomplete bundle rather than an error. The
+// gaps are the assembly's finding, they are all reported at once, and a caller
+// holding a half-run purchase is better served by a bundle it can hand to
+// Validate than by a second error path here.
+func (p Purchase) Evidence() evidence.Bundle {
+	return evidence.Bundle{
+		Checkout:        p.Offer,
+		CheckoutMandate: p.CheckoutMandate,
+		CheckoutReceipt: p.receipt(fromMerchant),
+		PaymentMandate:  p.PaymentMandate,
+		PaymentReceipt:  p.receipt(fromMPP),
+	}
+}
+
+// receipt returns the token a named party signed, or the empty string.
+func (p Purchase) receipt(from string) string {
+	for _, r := range p.Receipts {
+		if r.From == from {
+			return r.Token
+		}
+	}
+	return ""
 }
 
 // call sends a request and decodes the answer.

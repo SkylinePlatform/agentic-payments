@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/evidence"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
@@ -41,6 +42,11 @@ func TestEveryFailureHasACode(t *testing.T) {
 		{ap2.ErrCredentialScopeMismatch, generated.ErrorCodeCredentialScopeMismatch},
 		{ap2.ErrCredentialExpired, generated.ErrorCodeMandateExpired},
 		{ap2.ErrBindingUnverifiable, generated.ErrorCodeDisclosureInsufficient},
+		// The domain's, not this adapter's, and in the list because Dispute.Verify
+		// hands it back to a caller who has no other way to name it. Left
+		// unmapped it would arrive as verifier_unavailable, blaming the arbiter
+		// for a gap in what it was handed.
+		{evidence.ErrIncomplete, generated.ErrorCodeRequestMalformed},
 	} {
 		t.Run(tc.err.Error(), func(t *testing.T) {
 			t.Parallel()
