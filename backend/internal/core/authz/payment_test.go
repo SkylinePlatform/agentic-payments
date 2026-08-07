@@ -58,8 +58,7 @@ func closedPayment() generated.PaymentMandate {
 func TestAPaymentThatReproducesEveryPinnedValue(t *testing.T) {
 	t.Parallel()
 
-	report, err := authz.AuthorisePayment(
-		openPayment(t), closedPayment(), theAgent, purchase(), acting)
+	report, err := authz.AuthorisePayment(openPayment(t), closedPayment(), purchase(), acting)
 
 	require.NoError(t, err, "a faithful payment was refused")
 	assert.True(t, report.Satisfied(), "%+v", report.Violations())
@@ -103,13 +102,35 @@ func TestAPinnedValueMayNotBeChanged(t *testing.T) {
 			closed := closedPayment()
 			tc.mutate(&closed)
 
-			_, err := authz.AuthorisePayment(openPayment(t), closed, theAgent, purchase(), acting)
+			_, err := authz.AuthorisePayment(openPayment(t), closed, purchase(), acting)
 
 			require.ErrorIs(t, err, authz.ErrPinnedFieldChanged)
 			assert.Equal(t, generated.ErrorCodeConstraintViolated, authz.CodeOf(err),
 				"the receipt would not name a refusal the user can act on")
 		})
 	}
+}
+
+// TestAPaymentMandateWithNoEndorsedKeyIsRefused mirrors the checkout side's
+// TestAnEndorsementOfNobodyEndorsesNobody. AuthorisePayment must still refuse
+// an open mandate that endorses nobody before it ever reaches checkPinned,
+// even though who signed the closed mandate is no longer this package's
+// question. Without this, a closed mandate that faithfully reproduces every
+// pinned value and satisfies every constraint would sail through regardless
+// of what the open mandate's cnf actually names — the wiring this test pins
+// down used to be covered incidentally by the deleted
+// TestPaymentIdentityIsSettledBeforePinning, and that coverage would
+// otherwise have gone with it.
+func TestAPaymentMandateWithNoEndorsedKeyIsRefused(t *testing.T) {
+	t.Parallel()
+
+	open := openPayment(t)
+	open.AgentKey = generated.PublicKey{Kty: "EC"} // a type, and nothing to identify anybody by
+
+	_, err := authz.AuthorisePayment(open, closedPayment(), purchase(), acting)
+	require.ErrorIs(t, err, authz.ErrNoEndorsedKey)
+	assert.Equal(t, generated.ErrorCodeAgentKeyMismatch, authz.CodeOf(err),
+		"the receipt would not name the real reason")
 }
 
 // TestAnUnpinnedFieldIsFreeToVary is the other half. An open mandate that fixes
@@ -125,23 +146,22 @@ func TestAnUnpinnedFieldIsFreeToVary(t *testing.T) {
 	closed.Payee = generated.Merchant{ID: "any-merchant", Name: "Any"}
 	closed.PaymentAmount = usd(19000)
 
-	report, err := authz.AuthorisePayment(open, closed, theAgent, purchase(), acting)
+	report, err := authz.AuthorisePayment(open, closed, purchase(), acting)
 	require.NoError(t, err, "an unpinned mandate refused a varying value")
 	assert.True(t, report.Satisfied())
 }
 
-// TestPaymentIdentityIsSettledBeforePinning keeps the same ordering the
-// checkout side has: who signed it first, then what it says.
-func TestPaymentIdentityIsSettledBeforePinning(t *testing.T) {
-	t.Parallel()
-
-	closed := closedPayment()
-	closed.Payee = generated.Merchant{ID: "elsewhere", Name: "Elsewhere"}
-
-	_, err := authz.AuthorisePayment(openPayment(t), closed, anotherAgent, purchase(), acting)
-	require.ErrorIs(t, err, authz.ErrAgentKeyMismatch,
-		"a pinning failure was reported ahead of an unendorsed signer")
-}
+// TestPaymentIdentityIsSettledBeforePinning used to keep the same ordering the
+// checkout side had: who signed it first, then what it says. That ordering
+// was proven by handing AuthorisePayment an unendorsed signedBy alongside a
+// pinning violation and checking ErrAgentKeyMismatch won. There is no
+// signedBy left to hand it — under the delegation chain (pkg/sdjwt) a closed
+// mandate is verified with the key the open mandate endorsed and no other, so
+// an unendorsed signer never reaches AuthorisePayment at all; it fails one
+// layer down, at chain verification. See mandate_test.go's comment above
+// TestAnEndorsementOfNobodyEndorsesNobody for the fuller account, and
+// pkg/sdjwt's TestADelegationSignedByAnUnendorsedKeyIsRejected for where the
+// property now lives.
 
 // TestAPinnedExecutionDateMustBeReproduced covers the one pinned field that is
 // absent rather than different when it goes missing.
@@ -152,17 +172,17 @@ func TestAPinnedExecutionDateMustBeReproduced(t *testing.T) {
 	open.ExecutionDate = ptr("2026-07-20")
 
 	// Absent where the user fixed one.
-	_, err := authz.AuthorisePayment(open, closedPayment(), theAgent, purchase(), acting)
+	_, err := authz.AuthorisePayment(open, closedPayment(), purchase(), acting)
 	require.ErrorIs(t, err, authz.ErrPinnedFieldChanged)
 
 	// Present and different.
 	closed := closedPayment()
 	closed.ExecutionDate = ptr("2026-08-01")
-	_, err = authz.AuthorisePayment(open, closed, theAgent, purchase(), acting)
+	_, err = authz.AuthorisePayment(open, closed, purchase(), acting)
 	require.ErrorIs(t, err, authz.ErrPinnedFieldChanged)
 
 	// Present and faithful.
 	closed.ExecutionDate = ptr("2026-07-20")
-	_, err = authz.AuthorisePayment(open, closed, theAgent, purchase(), acting)
+	_, err = authz.AuthorisePayment(open, closed, purchase(), acting)
 	require.NoError(t, err)
 }

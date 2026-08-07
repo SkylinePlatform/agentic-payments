@@ -36,6 +36,7 @@ Primary sources, in the order of authority `AGENTS.md` gives them:
 - [The five roles](#the-five-roles)
 - [Human Present](#human-present)
 - [Human Not Present](#human-not-present)
+  - [The delegation mechanism](#the-delegation-mechanism)
   - [The rejection-receipt rule](#the-rejection-receipt-rule)
 - [Binding: `checkout_hash`](#binding-checkout_hash)
 - [Constraints](#constraints)
@@ -282,6 +283,46 @@ interpreted into typed constraints **once**, before anything is signed; after
 the signature, watching a price is an integer comparison and not a model call.
 `../architecture/README.md` shows where that boundary sits in the module
 layout.
+
+### The delegation mechanism
+
+`A->>A: assemble closed mandates, sign with agent key`, in the diagram above,
+names one step and stays silent on how — and how is where the costliest
+mistake on this issue was found (the full account is
+`../specs/2026-08-06-open-mandates-and-the-delegation-chain.md`). The obvious
+reading is that the agent issues a **second, separate SD-JWT**, signs it with
+its own key, and a verifier resolves that key from somewhere and compares it
+against the open mandate's `cnf` by hand. That reading compiles, has tests
+that pass, and is not what the specification says.
+
+A closed mandate under Human Not Present **is** a Key Binding JWT
+(RFC 9901 §4.3) built over the open one, using the key the open mandate
+already endorsed in `cnf` — there is no second issuance to sign. The open
+mandate and the Key Binding JWT travel together as a single `~~`-joined
+Delegate SD-JWT chain (`draft-gco-oauth-delegate-sd-jwt-00`):
+
+```
+<open SD-JWT>~~<KB-JWT>~<disclosure>~…~
+```
+
+There is exactly **one** key resolution in the whole exchange, not two
+independent ones to remember to compare. The obvious reading needed a verifier
+to resolve the signing key of the second SD-JWT *and* resolve `cnf`, then
+check the two agree — two lookups and a hand-written comparison, any of which
+can be skipped. Under the chain, `cnf` is read once, resolved once, to the one
+verifier the KB-JWT's signature is ever checked with — so there is no second
+key for that comparison to be *about*, and the class of bug where somebody
+forgets to write it is closed off structurally rather than by review.
+
+**That resolution is still a real lookup, and it is still the caller's to
+get right.** `pkg/sdjwt` holds no key material by design (`pkg-purity`), so it
+cannot verify that whatever a resolver hands back for a given `cnf` actually
+corresponds to the JWK bytes inside it — turning `cnf` into a `Verifier` is
+`ChainOptions.AgentKey` / `sdjwt.ChainOptions.DelegateKey`, supplied by
+whichever role is verifying, on the same split RFC 9901 key binding already
+draws for a standalone presentation's `HolderKey`. What the chain removes is
+the *second*, independent key and the comparison against it — not the
+resolution itself, which was never a place this package could stand in.
 
 ### The rejection-receipt rule
 
@@ -535,6 +576,7 @@ part worth re-reading before writing code.
 | Open mandates are not a rename of the Intent Mandate; they are a different mechanism | Open and closed |
 | `vct` carries a version suffix and must be matched exactly | The `vct` trap |
 | The agent key in the open mandate is what stops a stolen mandate being reused; not optional | Open and closed |
+| A closed mandate under Human Not Present is a Key Binding JWT over the open one, not a second SD-JWT compared to `cnf` by hand | The delegation mechanism |
 | `checkout_hash` must be recomputed, never trusted as presented | Binding |
 | The Checkout JWT must use a non-deterministic signature scheme | Binding |
 | `transaction_id` and `checkout_hash` are the same value under two names | Binding |

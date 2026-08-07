@@ -1,0 +1,264 @@
+package ap2_test
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
+	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
+)
+
+// This file exercises IssueOpenCheckout and VerifyOpenCheckout from outside
+// the package, package ap2_test, the same way checkout_test.go and
+// payment_test.go exercise their closed counterparts — both functions are
+// exported and none of the tests below reaches an unexported symbol. It
+// reuses newFixture, issue, mandate and reparse from checkout_test.go rather
+// than building a second fixture family: they are in the same package (Go
+// visibility is per-package, not per-file), and the alternative — a second,
+// near-identical set of helpers with no shared source of truth — is how two
+// tests end up proving different things under one name. The wire-vocabulary
+// internals (encodeConstraints, decodeConstraints, encodeCnf, decodeCnf) stay
+// covered from inside the package, in open_internal_test.go, because they are
+// deliberately unexported and this file cannot reach them.
+
+// ptr is a one-line generic helper for the pointer fields generated.PublicKey
+// carries. A third copy — internal/core/authz/mandate_test.go and
+// open_internal_test.go each have their own, in packages this one cannot
+// reach into, and it is too small to be worth sharing across a package
+// boundary.
+func ptr[T any](v T) *T { return &v }
+
+// flightToPalmaPrompt and demoConstraints are open_internal_test.go's own
+// helpers, repeated here for the same reason ptr is: that file is package ap2,
+// not ap2_test, and unexported identifiers do not cross the boundary.
+const flightToPalmaPrompt = "buy a flight to Palma when it drops below $200, this summer"
+
+func demoConstraints(t *testing.T) []generated.Constraint {
+	t.Helper()
+	cs, err := interpret.Demo().Interpret(t.Context(), flightToPalmaPrompt)
+	require.NoError(t, err, "the built scenario is one of interpret.Demo's own scripts")
+	return cs
+}
+
+// agentJWK is a fixed EC public key standing in for an agent's. Nothing in
+// this file ever verifies a signature against it — that arrives with the
+// delegation chain, in chain_test.go — so a literal is enough; only its shape
+// (a usable EC key, per authz.UsableKey) and its round trip through cnf
+// matter here.
+func agentJWK(t *testing.T) generated.PublicKey {
+	t.Helper()
+	return generated.PublicKey{
+		Kty: "EC",
+		Crv: ptr("P-256"),
+		X:   ptr("c09-Eo2PvuO6VrfzLAxTZXBa3ZWkBaa0pR2jcOYKlw"),
+		Y:   ptr("gRETv5wMvNiZJqckokCyDAjIIEg3Y2m77VryMvS75Ww"),
+		Kid: ptr("agent-1"),
+	}
+}
+
+func TestAnOpenCheckoutMandateRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	expires := time.Unix(1_777_329_789, 0).UTC()
+	want := generated.OpenCheckoutMandate{
+		AgentKey:    agentJWK(t),
+		Constraints: demoConstraints(t),
+		ExpiresAt:   &expires,
+	}
+
+	sd, err := ap2.IssueOpenCheckout(t.Context(), f.signer, want, f.blinder)
+	require.NoError(t, err)
+
+	got, err := ap2.VerifyOpenCheckout(reparse(t, sd), ap2.OpenOptions{
+		Issuer: f.verifier, Clock: clock.NewFake(time.Unix(1_777_326_189, 0)),
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, want.AgentKey, got.AgentKey,
+		"the endorsed key is the whole reason an open mandate can be handed to an agent at all")
+	assert.Equal(t, want.Constraints, got.Constraints,
+		"the constraints are what the user actually approved; anything lost here is a limit that stops being enforced")
+	assert.Equal(t, want.ExpiresAt, got.ExpiresAt)
+}
+
+// TestAnOpenMandateWithAnUnusableAgentKeyIsRefusedAtIssuance is table-driven
+// over both open-mandate issuing functions, because IssueOpenCheckout and
+// IssueOpenPayment ask the identical question of the identical helper —
+// authz.UsableKey(m.AgentKey) — through two separate call sites that could
+// silently drift apart. A table that lists the issuing functions as rows
+// makes a third one landing without a row a visible gap in the table rather
+// than a silent one in the suite; two near-identical top-level tests, one per
+// mandate, do not have that property, and this package shipped with exactly
+// that gap once for IssueOpenPayment's "no key at all" case.
+//
+// Two key shapes are covered for each mandate, and the second is the one
+// that matters more than the first reads. "No key at all" is refused by
+// almost any guard, including a wrong one — an absent AgentKey is the
+// easiest case to get right by accident. "A key type with no coordinates"
+// is what a plausible *weakening* of the guard would still accept: a
+// reviewer who rewrote authz.UsableKey(m.AgentKey) as the shallower
+// m.AgentKey.Kty == "" would pass the first case and fail this one, because
+// a Kty naming "EC" with no Crv/X/Y is non-empty but still endorses nobody —
+// the same fact internal/core/authz.Endorsement.endorses refuses at
+// verification. A mandate accepted here and rejected there would not fail
+// loudly; it would fail later, at authorisation, against whichever party is
+// least placed to act on it.
+func TestAnOpenMandateWithAnUnusableAgentKeyIsRefusedAtIssuance(t *testing.T) {
+	t.Parallel()
+
+	keyShapes := []struct {
+		name string
+		key  generated.PublicKey
+		why  string
+	}{
+		{
+			name: "no key at all",
+			key:  generated.PublicKey{},
+			why:  "an open mandate endorsing nobody authorises whoever holds it, which is the failure the whole mechanism exists to prevent",
+		},
+		{
+			name: "a key type with no coordinates",
+			key:  generated.PublicKey{Kty: "EC"}, // a type, and nothing to identify anybody by
+			why:  "a key type with no coordinates identifies nobody, the same fact authz.UsableKey already enforces at verification",
+		},
+	}
+
+	mandates := []struct {
+		name  string
+		issue func(t *testing.T, f fixture, key generated.PublicKey) error
+	}{
+		{
+			name: "open Checkout Mandate",
+			issue: func(t *testing.T, f fixture, key generated.PublicKey) error {
+				_, err := ap2.IssueOpenCheckout(t.Context(), f.signer, generated.OpenCheckoutMandate{
+					AgentKey: key, Constraints: demoConstraints(t),
+				}, f.blinder)
+				return err
+			},
+		},
+		{
+			name: "open Payment Mandate",
+			issue: func(t *testing.T, f fixture, key generated.PublicKey) error {
+				_, err := ap2.IssueOpenPayment(t.Context(), f.signer, generated.OpenPaymentMandate{
+					AgentKey: key, Constraints: demoConstraints(t),
+				}, f.blinder)
+				return err
+			},
+		},
+	}
+
+	for _, m := range mandates {
+		t.Run(m.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, k := range keyShapes {
+				t.Run(k.name, func(t *testing.T) {
+					t.Parallel()
+
+					f := newFixture(t)
+					err := m.issue(t, f, k.key)
+					require.Error(t, err, k.why)
+					assert.ErrorIs(t, err, ap2.ErrMandateMalformed)
+				})
+			}
+		})
+	}
+}
+
+func TestAClosedCheckoutMandateIsNotAnOpenOne(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	closed := reparse(t, issue(t, f, mandate()))
+
+	_, err := ap2.VerifyOpenCheckout(closed, ap2.OpenOptions{
+		Issuer: f.verifier, Clock: clock.NewFake(time.Unix(1, 0)),
+	})
+	require.Error(t, err,
+		"the two vct values differ by an infix, which is the shape of the trap; a prefix comparison would accept this")
+	assert.ErrorIs(t, err, ap2.ErrWrongMandateType)
+}
+
+func TestAnExpiredOpenMandateIsRefused(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	expires := time.Unix(1_777_329_789, 0).UTC()
+
+	sd, err := ap2.IssueOpenCheckout(t.Context(), f.signer, generated.OpenCheckoutMandate{
+		AgentKey: agentJWK(t), Constraints: demoConstraints(t), ExpiresAt: &expires,
+	}, f.blinder)
+	require.NoError(t, err)
+
+	_, err = ap2.VerifyOpenCheckout(reparse(t, sd), ap2.OpenOptions{
+		Issuer: f.verifier, Clock: clock.NewFake(expires.Add(time.Second)),
+	})
+	require.Error(t, err,
+		"an open mandate's lifetime is its blast radius, so an expiry that is not enforced is the one limit that matters most going unenforced")
+	assert.ErrorIs(t, err, sdjwt.ErrExpired)
+}
+
+// TestAnOpenPaymentMandateCarriesPinnedValues is the open Payment Mandate's
+// equivalent of TestAnOpenCheckoutMandateRoundTrips, plus the thing a
+// Checkout Mandate has no equivalent of: values the user pinned outright
+// rather than constrained. Payee and PaymentInstrument are pinned here;
+// PaymentAmount is not, and the assertion on it is the one this test exists
+// for — an unset pin has to come back nil, not a zero-valued Amount that
+// would read as the user having fixed the amount at nothing.
+func TestAnOpenPaymentMandateCarriesPinnedValues(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	want := generated.OpenPaymentMandate{
+		AgentKey:    agentJWK(t),
+		Constraints: demoConstraints(t),
+		Payee:       &generated.Merchant{ID: "merchant_1", Name: "Demo Merchant"},
+		PaymentInstrument: &generated.PaymentInstrument{
+			ID: "b3f1c8a2-6d4e-4f9a-9e3d-8a7c2f1b9d34", Type: "card",
+		},
+	}
+
+	sd, err := ap2.IssueOpenPayment(t.Context(), f.signer, want, f.blinder)
+	require.NoError(t, err)
+
+	got, err := ap2.VerifyOpenPayment(reparse(t, sd), ap2.OpenOptions{
+		Issuer: f.verifier, Clock: clock.NewFake(time.Unix(1, 0)),
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, want.Payee, got.Payee,
+		"a pinned payee is a value the closed mandate must reproduce, not a limit to evaluate, so losing it turns an instruction into no instruction")
+	assert.Equal(t, want.PaymentInstrument, got.PaymentInstrument)
+	assert.Nil(t, got.PaymentAmount,
+		"an absent pin means the user constrained the amount rather than fixing it, and inventing one would authorise a purchase they did not")
+}
+
+// TestAnOpenPaymentMandateIsNotAnOpenCheckoutOne is TestAClosedCheckoutMandateIsNotAnOpenOne's
+// counterpart for the pair the specification's overview page never prints
+// together: VCTPaymentOpen and VCTCheckoutOpen differ by the same infix
+// ("checkout" vs "payment") that VCTCheckoutClosed and VCTCheckoutOpen do,
+// so a verifier that checked only the "open" suffix would accept this.
+func TestAnOpenPaymentMandateIsNotAnOpenCheckoutOne(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	sd, err := ap2.IssueOpenPayment(t.Context(), f.signer, generated.OpenPaymentMandate{
+		AgentKey: agentJWK(t), Constraints: demoConstraints(t),
+	}, f.blinder)
+	require.NoError(t, err)
+
+	_, err = ap2.VerifyOpenCheckout(reparse(t, sd), ap2.OpenOptions{
+		Issuer: f.verifier, Clock: clock.NewFake(time.Unix(1, 0)),
+	})
+	require.Error(t, err, "all four vct values differ, and this is the pair the specification's overview page never prints together")
+	assert.ErrorIs(t, err, ap2.ErrWrongMandateType)
+}

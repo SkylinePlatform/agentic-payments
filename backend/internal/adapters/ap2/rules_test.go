@@ -16,6 +16,35 @@ func merchantRules(f fixture) ap2.MerchantRules {
 	return ap2.MerchantRules{Issuer: f.verifier, Clock: f.clock}
 }
 
+// merchantChainRules and credentialProviderChainRules build the Human Not
+// Present half of each role's rules from a chainFixture's or a
+// paymentChainFixture's own ChainOptions, so a chain that already verifies
+// through ap2.AuthoriseCheckoutChain / ap2.AuthorisePaymentChain directly
+// (chain_test.go) can be re-verified through the role's entry point without
+// restating the fixture.
+//
+// Neither copies opts.Nonce: it is AuthoriseCheckoutChain's and
+// AuthorisePaymentChain's own parameter, not a rules field — see rules.go on
+// why a per-call value cannot be expressed as a field held once. Call sites
+// below pass it explicitly, alongside the rules these helpers build.
+func merchantChainRules(opts ap2.ChainOptions) ap2.MerchantRules {
+	return ap2.MerchantRules{
+		Issuer:   opts.Issuer,
+		Clock:    opts.Clock,
+		AgentKey: opts.AgentKey,
+		Audience: opts.Audience,
+	}
+}
+
+func credentialProviderChainRules(opts ap2.ChainOptions) ap2.CredentialProviderRules {
+	return ap2.CredentialProviderRules{
+		Issuer:   opts.Issuer,
+		Clock:    opts.Clock,
+		AgentKey: opts.AgentKey,
+		Audience: opts.Audience,
+	}
+}
+
 func credentialFor(hash string) generated.PaymentCredential {
 	return generated.PaymentCredential{Token: "tok_scoped_once", CheckoutHash: hash}
 }
@@ -258,4 +287,101 @@ func TestVerificationCanBeDelegated(t *testing.T) {
 	assert.Equal(t, 1, calls, "the delegate has to be the thing that actually answered")
 	assert.NotEqual(t, own.CheckoutHash, elsewhere.CheckoutHash,
 		"if these matched, the call site was not using the verifier it was given")
+}
+
+// TestAMerchantCannotVerifyAChainThroughTheHumanPresentPath is not a
+// behaviour test — a shape test. It passes today and would keep passing if
+// the two modes were merged into one nil-tolerant call, which is why the
+// assertion is on the method set rather than on a result. What would catch
+// that merge is TestTheMerchantAuthorisesADelegatedCheckout and
+// TestAMerchantRequiresAnAudienceAndANonceForADelegatedCheckout below, which
+// exercise what a merged call would have to get both right and wrong.
+func TestAMerchantCannotVerifyAChainThroughTheHumanPresentPath(t *testing.T) {
+	t.Parallel()
+
+	var r ap2.MerchantRules
+	_, isHumanPresent := any(r).(ap2.CheckoutVerifier)
+	_, isChain := any(r).(ap2.CheckoutChainVerifier)
+
+	assert.True(t, isHumanPresent, "the merchant still verifies a directly-signed mandate")
+	assert.True(t, isChain, "and a delegated one, through a separate entry point")
+}
+
+// TestTheMerchantAuthorisesADelegatedCheckout is
+// TestAChainWithinItsConstraintsIsAuthorised's counterpart through the role's
+// own entry point rather than the package-level function directly. A shape
+// test proves MerchantRules satisfies CheckoutChainVerifier; this proves
+// AuthoriseCheckoutChain actually forwards Issuer, AgentKey, Clock, Audience
+// and the nonce it was called with, rather than merely existing.
+func TestTheMerchantAuthorisesADelegatedCheckout(t *testing.T) {
+	t.Parallel()
+
+	fx := chainFixture(t, 18900) // price inside the USD 20000 cap
+	rules := merchantChainRules(fx.opts)
+
+	got, err := rules.AuthoriseCheckoutChain(fx.chain, fx.subject, fx.checkoutJWT, fx.opts.Nonce)
+	require.NoError(t, err, "a chain within the open mandate's constraints was refused")
+	assert.True(t, got.Report.Satisfied(),
+		"the same scenario ap2.AuthoriseCheckoutChain itself authorises in chain_test.go")
+}
+
+// TestAMerchantRequiresAnAudienceAndANonceForADelegatedCheckout is
+// TestTheCredentialProviderRequiresANonceForADelegatedPayment's counterpart
+// for the Merchant: a delegation is a key binding regardless of which role is
+// checking it, so the same refusal applies here. The nonce is withheld by
+// passing "" at the call site rather than by mutating a field — it is not a
+// field any more, see MerchantRules' own doc for why.
+func TestAMerchantRequiresAnAudienceAndANonceForADelegatedCheckout(t *testing.T) {
+	t.Parallel()
+
+	fx := chainFixture(t, 18900)
+	rules := merchantChainRules(fx.opts)
+
+	_, err := rules.AuthoriseCheckoutChain(fx.chain, fx.subject, fx.checkoutJWT, "")
+	require.Error(t, err,
+		"a delegation is a key binding, and a key binding with no nonce is a proof that can be replayed against this merchant tomorrow")
+	assert.ErrorIs(t, err, ap2.ErrMisconfigured)
+}
+
+// TestTheCredentialProviderRequiresANonceForADelegatedPayment is the
+// placeholder VerifyPayment's comment used to defer, made concrete.
+// AuthorisePaymentChain is handed a real, otherwise-valid chain — Issuer,
+// AgentKey and Audience all present — and called with an empty nonce, and
+// refuses it anyway. sdjwt.VerifyChain would refuse the same chain too, but
+// under a different sentinel (sdjwt.ErrInvalidOptions), which is why this
+// asserts ap2.ErrMisconfigured specifically: this role has to own the
+// refusal rather than let the securing format's own vocabulary stand in for
+// it.
+func TestTheCredentialProviderRequiresANonceForADelegatedPayment(t *testing.T) {
+	t.Parallel()
+
+	fx := paymentChainFixture(t)
+	r := ap2.CredentialProviderRules{
+		Issuer:   fx.opts.Issuer,
+		Clock:    fx.opts.Clock,
+		AgentKey: fx.opts.AgentKey,
+		Audience: fx.opts.Audience,
+	}
+
+	_, err := r.AuthorisePaymentChain(fx.chain, fx.subject, "") // nonce deliberately withheld
+	require.Error(t, err,
+		"a delegation is a key binding, and a key binding with no nonce is a proof that can be replayed against the same verifier tomorrow")
+	assert.ErrorIs(t, err, ap2.ErrMisconfigured)
+}
+
+// TestTheCredentialProviderAuthorisesADelegatedPayment is
+// TestAPaymentChainWithinItsConstraintsIsAuthorised's counterpart through the
+// role's own entry point, for the same reason
+// TestTheMerchantAuthorisesADelegatedCheckout exists on the Merchant side.
+func TestTheCredentialProviderAuthorisesADelegatedPayment(t *testing.T) {
+	t.Parallel()
+
+	fx := paymentChainFixture(t)
+	rules := credentialProviderChainRules(fx.opts)
+
+	got, err := rules.AuthorisePaymentChain(fx.chain, fx.subject, fx.opts.Nonce)
+	require.NoError(t, err)
+	assert.True(t, got.Report.Satisfied())
+	assert.Equal(t, pinnedPayee, got.Closed.Payee.ID,
+		"the closed mandate returned has to be the one actually verified")
 }

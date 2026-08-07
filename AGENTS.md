@@ -35,6 +35,14 @@ The "intent" dimension is **not** a third mandate. It is handled by the
 Verifiers always receive closed mandates in both modes. Only the verification
 path differs.
 
+**"The agent signs it with its own key" is not a second issuance.** A closed
+mandate under Human Not Present is a Key Binding JWT built over the open one,
+signed with the key the open mandate already endorsed in `cnf` — not a second,
+separately signed SD-JWT that a verifier then compares against `cnf` by hand.
+See `docs/protocols/ap2.md`'s "The delegation mechanism" and
+`docs/specs/2026-08-06-open-mandates-and-the-delegation-chain.md` for the
+mechanism and why the obvious reading is wrong.
+
 If you find yourself writing `IntentMandate` or `CartMandate`, stop — that is
 training data, not the spec.
 

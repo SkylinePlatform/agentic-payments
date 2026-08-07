@@ -1,0 +1,24 @@
+{
+  "_comment": [
+    "One full open Checkout Mandate, serialised end to end and pinned byte for",
+    "byte. Built from #12's own demo scenario: interpret.Demo()'s constraints",
+    "for \"buy a flight to Palma when it drops below $200, this summer\" (route",
+    "BEG-PMI, a cap of USD 20000 in minor units, the booking window), endorsing",
+    "the fixed agent key open_test.go's agentJWK returns, issued and expiring",
+    "at fixed instants so nothing here depends on a clock.",
+    "",
+    "Reproducing it needs three things pinned together: the salts (newSalts,",
+    "already built for this), and the signer (hmacAuthzKey, a fixed HMAC-SHA256",
+    "key standing in for the ECDSA key issuance actually uses, since ECDSA's",
+    "own randomness would make a signed vector unreproducible regardless of",
+    "how the salts were drawn — see that type's comment in golden_test.go).",
+    "Everything else — claim order, _sd digest sorting, Disclosure encoding —",
+    "is this package's own deterministic output, which is the fact this vector",
+    "is conformance evidence for.",
+    "",
+    "Pinned by running TestGoldenOpenCheckoutMandateSerialisation, reading the",
+    "value it produced, and confirming that same value in a second, separate",
+    "`go test` process before this file was committed."
+  ],
+  "serialization": "eyJhbGciOiJIUzI1NiIsImtpZCI6ImdvbGRlbi1vcGVuLWNoZWNrb3V0In0.eyJfc2RfYWxnIjoic2hhLTI1NiIsImNuZiI6eyJqd2siOnsiY3J2IjoiUC0yNTYiLCJraWQiOiJhZ2VudC0xIiwia3R5IjoiRUMiLCJ4IjoiYzA5LUVvMlB2dU82VnJmekxBeFRaWEJhM1pXa0JhYTBwUjJqY09ZS2x3IiwieSI6ImdSRVR2NXdNdk5pWkpxY2tva0N5REFqSUlFZzNZMm03N1ZyeU12Uzc1V3cifX0sImNvbnN0cmFpbnRzIjpbeyIuLi4iOiJkUVhNbzhEcFRqWHhQaEVueTVtZ011bl9jWTJ4cXdHRHhTMGppbzJBNXVBIn0seyIuLi4iOiIxdXF6TTdGdkV1UnV4WExOcWJIYjVSVWFvS180MGRscFhSNFNGWkdLUFFjIn0seyIuLi4iOiJfXy1wWGZRU1ExUUpMZktxUWxyTFkyWnRKdzZaaXp5NzRrR3VyaTZneEQ4In0seyIuLi4iOiJPUllubWlqclBLVHZsU2k5cS1JanREcGpsZWM1UWxTVDBhQnRyMlBVZ2N3In1dLCJleHAiOjE3NzczMjk3ODksImlhdCI6MTc3NzMyNjE4OSwidmN0IjoibWFuZGF0ZS5jaGVja291dC5vcGVuLjEifQ.y9tInTGKw118jyrZslHx1BF4FqwrLTnBzDOEnEOSYEU~WyJNREV5TXpRMU5qYzRPV0ZpWTJSbFpnIix7ImV4cHJlc3Npb24iOnsiZmllbGQiOiJhbW91bnQiLCJvcCI6Imx0ZSIsInZhbHVlIjp7ImFtb3VudCI6MjAwMDAsImN1cnJlbmN5IjoiVVNEIn19LCJ0eXBlIjoidGVjaC5ldGhlcm5hbC5hcDIuZXhwcmVzc2lvbi4xIn1d~WyJNREV5TXpRMU5qYzRPV0ZpWTJSbFpnIix7ImV4cHJlc3Npb24iOnsiZmllbGQiOiJhdCIsIm9wIjoid2l0aGluIiwidmFsdWUiOnsiZnJvbSI6IjIwMjYtMDYtMDFUMDA6MDA6MDBaIiwidG8iOiIyMDI2LTA4LTMxVDIzOjU5OjU5WiJ9fSwidHlwZSI6InRlY2guZXRoZXJuYWwuYXAyLmV4cHJlc3Npb24uMSJ9XQ~WyJNREV5TXpRMU5qYzRPV0ZpWTJSbFpnIix7ImV4cHJlc3Npb24iOnsiZmllbGQiOiJpdGVtLmF0dHIucm91dGUub3JpZ2luIiwib3AiOiJlcSIsInZhbHVlIjoiQkVHIn0sInR5cGUiOiJ0ZWNoLmV0aGVybmFsLmFwMi5leHByZXNzaW9uLjEifV0~WyJNREV5TXpRMU5qYzRPV0ZpWTJSbFpnIix7ImV4cHJlc3Npb24iOnsiZmllbGQiOiJpdGVtLmF0dHIucm91dGUuZGVzdGluYXRpb24iLCJvcCI6ImVxIiwidmFsdWUiOiJQTUkifSwidHlwZSI6InRlY2guZXRoZXJuYWwuYXAyLmV4cHJlc3Npb24uMSJ9XQ~"
+}

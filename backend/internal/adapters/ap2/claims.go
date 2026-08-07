@@ -36,6 +36,13 @@ const (
 	claimPaymentInstrument = "payment_instrument"
 	claimExecutionDate     = "execution_date"
 	claimRiskData          = "risk_data"
+
+	// Open mandates, both of them. cnf is RFC 7800's confirmation claim; open.go
+	// carries the agent's key inside it rather than a reference to one — see
+	// encodeCnf and decodeCnf. constraints is AP2's own name for the limits the
+	// user approved.
+	claimCnf         = "cnf"
+	claimConstraints = "constraints"
 )
 
 // wireNames maps each canonical type to the AP2 claim its fields travel under.
@@ -66,6 +73,42 @@ var wireNames = map[string]map[string]string{
 		"payment_instrument": claimPaymentInstrument,
 		"execution_date":     claimExecutionDate,
 		"risk_data":          claimRiskData,
+		"issued_at":          claimIssuedAt,
+		"expires_at":         claimExpiresAt,
+	},
+
+	// The two open mandates. Both declare exactly one withholdable path,
+	// "constraints[]" — contracts/authz/*_open.json put x-disclosable-items on
+	// the constraints array, so disclosure.go's generator names the array
+	// element-wise, brackets included, rather than as a bare "constraints". The
+	// key here has to be that same string: blindPaths below matches a
+	// generated.Disclosable path against this table verbatim, with no
+	// suffix-stripping of its own, so a key missing the brackets would make
+	// every future IssueOpenCheckout and IssueOpenPayment call fail at
+	// blindPaths rather than issue a mandate that discloses too much — the
+	// failure is closed, but this is where it is closed correctly instead of by
+	// accident. The wire side carries the same suffix for the same reason
+	// Blind's own path syntax gives: "constraints[]" tells it to blind each
+	// constraint individually, which is the unit doc.go and scenarios.go both
+	// describe disclosure as being.
+	//
+	// The other fields below are not consulted by blindPaths — nothing here is
+	// withholdable but the constraints — and are recorded anyway, because this
+	// table's job, per the comment above it, is naming the wire claim for every
+	// field of the type, not only the ones a caller happens to need today.
+	"OpenCheckoutMandate": {
+		"agent_key":     claimCnf,
+		"constraints[]": claimConstraints + "[]",
+		"issued_at":     claimIssuedAt,
+		"expires_at":    claimExpiresAt,
+	},
+	"OpenPaymentMandate": {
+		"agent_key":          claimCnf,
+		"constraints[]":      claimConstraints + "[]",
+		"payee":              claimPayee,
+		"payment_amount":     claimPaymentAmount,
+		"payment_instrument": claimPaymentInstrument,
+		"execution_date":     claimExecutionDate,
 		"issued_at":          claimIssuedAt,
 		"expires_at":         claimExpiresAt,
 	},

@@ -40,6 +40,21 @@ var (
 	// It surfaces at evaluation rather than parsing, because which currency a
 	// purchase is in is not known when the mandate is signed.
 	ErrCurrencyMismatch = errors.New("constraint: currency mismatch")
+
+	// ErrViolated means a constraint was read and evaluated, and the purchase
+	// did not meet it.
+	//
+	// Evaluate itself never returns this — see its own doc comment on why an
+	// unsatisfied Report has to come back as data, with a nil error, rather
+	// than as a failure: "this constraint could not be read" and "this
+	// purchase does not meet it" are different outcomes, and collapsing them
+	// into one error would make Evaluate's return value lie about which one
+	// happened. What a caller turning a Report into a rejection receipt needs
+	// afterwards is a code for it, and CodeOf could not give one until now —
+	// its own doc comment already named constraint_violated as one of three
+	// outcomes this package answers, and had no way to produce it. Report.Err
+	// is where a Report becomes this error.
+	ErrViolated = errors.New("constraint: purchase falls outside the mandate's limits")
 )
 
 // CodeOf maps a failure to the canonical error code a verifier puts in its
@@ -57,6 +72,8 @@ func CodeOf(err error) generated.ErrorCode {
 		return ""
 	case errors.Is(err, ErrUnknownField), errors.Is(err, ErrUnknownOperator):
 		return generated.ErrorCodeConstraintTypeUnknown
+	case errors.Is(err, ErrViolated):
+		return generated.ErrorCodeConstraintViolated
 	default:
 		return generated.ErrorCodeMandateMalformed
 	}
@@ -371,6 +388,31 @@ func (r Report) Violations() []Result {
 		}
 	}
 	return out
+}
+
+// Err turns an unsatisfied Report into an error wrapping ErrViolated, or
+// returns nil when the Report is satisfied.
+//
+// This is the one place that conversion belongs. Every verifier that
+// evaluates a mandate — a chain, a single closed mandate, a search — reaches
+// the same moment: a Report that says no, and a rejection receipt that needs
+// a reason and a code. Leaving each caller to write that translation is how
+// two verifiers end up disagreeing about which violation's Reason a receipt
+// names, or forgetting the code entirely; a method on the type that already
+// holds both closes that off once.
+//
+// The reason named is the first violation's, in mandate order — the same
+// order Violations returns them in, and the first is what a signer reading
+// the receipt reaches first too.
+func (r Report) Err() error {
+	if r.Satisfied() {
+		return nil
+	}
+	reason := "the purchase did not satisfy every constraint the mandate placed"
+	if violations := r.Violations(); len(violations) > 0 && violations[0].Reason != "" {
+		reason = violations[0].Reason
+	}
+	return fmt.Errorf("%w: %s", ErrViolated, reason)
 }
 
 // Evaluate parses and evaluates every constraint on a mandate against the
