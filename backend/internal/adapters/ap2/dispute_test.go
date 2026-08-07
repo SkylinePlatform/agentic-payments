@@ -121,6 +121,24 @@ func receiptOver(
 	return token
 }
 
+// wideCheckout issues a Checkout Mandate under a sha-384 blinder.
+//
+// That is how two digests of one document under two algorithms arise without
+// anybody misbehaving, and it is ordinary issuance rather than contrivance: a
+// Checkout Mandate always blinds checkout_jwt, so it carries _sd_alg and its
+// binding takes the blinder's algorithm, while a Payment Mandate whose only
+// withholdable claim is absent blinds nothing, carries no _sd_alg and defaults
+// to sha-256.
+func wideCheckout(t *testing.T, f fixture, m generated.CheckoutMandate) *sdjwt.SDJWT {
+	t.Helper()
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()), sdjwt.WithHashAlg(sdjwt.SHA384))
+	require.NoError(t, err, "building a sha-384 blinder")
+	sd, err := ap2.IssueCheckout(t.Context(), f.signer, m, blinder)
+	require.NoError(t, err, "issuing a Checkout Mandate under sha-384")
+	return reparse(t, sd)
+}
+
 // TestAFaithfulBundleHoldsLinkByLink is the shape of the whole change: five
 // links, in order, each recorded only once it has held.
 func TestAFaithfulBundleHoldsLinkByLink(t *testing.T) {
@@ -356,6 +374,47 @@ func tamperCases() []tamperCase {
 			code:  generated.ErrorCodeCheckoutHashMismatch,
 		},
 		{
+			// The fallback arm, with the payment side wrong. The two digests are
+			// under different algorithms, so comparing them answers nothing and
+			// each has to be recomputed against the document — this is the row
+			// that makes the payment half of that recompute load-bearing rather
+			// than merely present.
+			name:   "the digests cannot be compared, and the payment is for another purchase",
+			vector: "unequal_algorithms_payment_bound_elsewhere",
+			tamper: func(t *testing.T, fx disputeFx, _ *ap2.Dispute, b *evidence.Bundle) {
+				cm := wideCheckout(t, fx.user, mandate())
+				pm := reparse(t, issuePayment(t, fx.user, payment(), otherCheckout))
+				b.CheckoutMandate = cm.String()
+				b.CheckoutReceipt = receiptOver(t, fx.merchant, merchantID, cm, checkoutKind, nil)
+				b.PaymentMandate = pm.String()
+				b.PaymentReceipt = receiptOver(t, fx.processor, processorID, pm, paymentKind, nil)
+			},
+			broke: evidence.StepOnePurchase,
+			is:    ap2.ErrCheckoutHashMismatch,
+			code:  generated.ErrorCodeCheckoutHashMismatch,
+		},
+		{
+			// The same arm with the checkout side wrong, which needs a delegate
+			// that did not check the binding for the mandate to have got this
+			// far. Without the checkout half of the fallback recompute, the
+			// Payment Mandate here covers the bundle's document perfectly and
+			// would carry a Checkout Mandate that authorises something else.
+			name:   "the digests cannot be compared, and the Checkout Mandate is for another purchase",
+			vector: "unequal_algorithms_checkout_bound_elsewhere",
+			tamper: func(t *testing.T, fx disputeFx, d *ap2.Dispute, b *evidence.Bundle) {
+				d.CheckoutMandates = laxCheckoutVerifier{opts: ap2.CheckoutOptions{
+					Issuer: fx.user.verifier, Clock: fx.arbiterClock,
+				}}
+
+				cm := wideCheckout(t, fx.user, checkoutFor(otherCheckout))
+				b.CheckoutMandate = cm.String()
+				b.CheckoutReceipt = receiptOver(t, fx.merchant, merchantID, cm, checkoutKind, nil)
+			},
+			broke: evidence.StepOnePurchase,
+			is:    ap2.ErrCheckoutHashMismatch,
+			code:  generated.ErrorCodeCheckoutHashMismatch,
+		},
+		{
 			name:   "the Payment Receipt answers a different Payment Mandate",
 			vector: "payment_receipt_answers_another_mandate",
 			tamper: func(t *testing.T, fx disputeFx, _ *ap2.Dispute, b *evidence.Bundle) {
@@ -517,15 +576,9 @@ func TestTwoDigestsUnderDifferentAlgorithmsStillPair(t *testing.T) {
 	t.Parallel()
 
 	fx := newDisputeFixture(t)
+	fx.checkoutMandate = wideCheckout(t, fx.user, mandate())
 
-	wide, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()), sdjwt.WithHashAlg(sdjwt.SHA384))
-	require.NoError(t, err, "building a sha-384 blinder")
-	cm, err := ap2.IssueCheckout(t.Context(), fx.user.signer, mandate(), wide)
-	require.NoError(t, err, "issuing a Checkout Mandate under sha-384")
-	fx.checkoutMandate = reparse(t, cm)
-
-	b := fx.bundle(t)
-	rep := fx.arbiter().Verify(b)
+	rep := fx.arbiter().Verify(fx.bundle(t))
 
 	require.True(t, rep.Holds(),
 		"two digests of one document under two algorithms are not two purchases: %v", rep.Err)

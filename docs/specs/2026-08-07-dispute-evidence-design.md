@@ -78,6 +78,22 @@ Payment Mandate never carries the document it binds to, so nothing in links 1–
 has ever compared it to one. `Binding.Covers(checkoutJWT)` inside link 4 is the
 first and only time the Payment Mandate's digest meets the merchant's bytes.
 
+The anchor is not redundant with link 1 even though `MerchantRules`' own binding
+check makes it arithmetically implied there. `CheckoutMandates` is an interface,
+so a delegate may check the mandate against whatever document the mandate itself
+discloses — and without the anchor, two mandates agreeing on a digest of a
+*different* checkout would carry the whole chain.
+
+Link 4 has a second arm, reachable without anybody misbehaving. `checkout_hash`
+is computed under whatever `_sd_alg` names, and `pkg/sdjwt` writes that claim
+only for a payload carrying digests — so a Checkout Mandate issued with a
+sha-384 blinder, which always blinds `checkout_jwt`, and a Payment Mandate that
+blinds nothing and defaults to sha-256 hold two digests of one document under two
+algorithms. Comparing those answers nothing, so `Binding.Same` refuses them as
+`ErrBindingUnverifiable` and both are recomputed against the document instead.
+Refusing the pair as a mismatch would report fraud because somebody chose
+sha-384.
+
 **Why step 4 is the Credential Provider's rules.** `MPPRules` has exactly one
 method, `VerifyCredential(credential, checkoutHash)`. It takes a
 `generated.PaymentCredential`, not a mandate, and never touches an SD-JWT. The

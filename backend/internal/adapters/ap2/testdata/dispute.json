@@ -47,6 +47,14 @@
       "step": "one_purchase",
       "code": "checkout_hash_mismatch"
     },
+    "unequal_algorithms_payment_bound_elsewhere": {
+      "step": "one_purchase",
+      "code": "checkout_hash_mismatch"
+    },
+    "unequal_algorithms_checkout_bound_elsewhere": {
+      "step": "one_purchase",
+      "code": "checkout_hash_mismatch"
+    },
     "payment_receipt_answers_another_mandate": {
       "step": "payment_answered",
       "code": "mandate_malformed"
