@@ -162,9 +162,20 @@ func (c *Chain) String() string {
 	return strings.Join(parts, separator)
 }
 
-// Root returns the Issuer-signed hop on its own, which is what sd_hash is
-// computed over and what a party holding only the open mandate would have.
-func (c *Chain) Root() *SDJWT { return c.root }
+// There is deliberately no accessor for either hop.
+//
+// One was written and removed unused. It returned the Issuer-signed hop, on the
+// reasoning that a caller might want what sd_hash is computed over — and that
+// reasoning does not survive contact with the one consumer whose needs are
+// written down. AP2 says a receipt's reference over a chain is "a hash over the
+// final SD-JWT in the chain", so the adapter that arrives next needs a digest of
+// the *delegating* hop, which an accessor for the root would have quietly
+// pointed away from.
+//
+// Exported surface in this package is a promise to strangers, since it is meant
+// to be lifted out and used outside this repository. When a caller proves what
+// it needs, the right accessor goes in then and is shaped by that need rather
+// than guessed ahead of it.
 
 // Delegate signs a delegating KB-JWT over this presentation and returns the
 // two-hop chain.

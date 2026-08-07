@@ -2,7 +2,7 @@
 // (RFC 9901): issuance, disclosure handling, selective presentation and
 // verification, including Key Binding. It also implements the two-hop form of
 // Delegate SD-JWT (draft-gco-oauth-delegate-sd-jwt-00): Chain, ParseChain,
-// SDJWT.Delegate and VerifyChain.
+// SDJWT.Delegate, VerifyChain and Verified.
 //
 // AP2 secures its mandates with SD-JWT, and Go's ecosystem support for it is
 // thinner than Python's or JavaScript's, so the disclosure layer is built
