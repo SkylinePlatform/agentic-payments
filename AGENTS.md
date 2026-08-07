@@ -181,7 +181,16 @@ These are enforced, not advisory.
    `ScriptedInterpreter` in `internal/agent/interpret/`, which maps fixed
    prompts to fixed constraint sets. It is not a mock and not in a `_test.go`
    file: it computes an interpretation rather than recording a call, and the
-   demo runs it, so `cmd/` has to be able to name it.
+   agent leg of #15 has to be able to name it — a type declared in a `_test.go`
+   file is reachable only from its own package's test binary, so `cmd/agent`
+   could not construct one.
+
+   **Nothing imports the package yet**, and that is worth saying rather than
+   leaving a reader to discover it: the only occurrence of its import path
+   outside itself is in `roles/surface/nonagentic_test.go`, which names it to
+   prove the Trusted Surface does *not* reach it. The caller arrives with the
+   Human Not Present flow. Until then this rule binds by forbidding the
+   alternative, not by pointing at a live call site.
 
    Whatever ends up behind `IntentInterpreter` calls `interpret.Validate` on
    what it is about to return. A constraint naming a field the verifier does
