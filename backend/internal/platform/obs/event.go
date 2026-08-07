@@ -19,11 +19,24 @@ type Kind string
 
 // The five protocol-significant moments.
 const (
-	// KindMandateConstructed is an agent assembling a mandate. It is the first
-	// event in a transaction that has one.
+	// KindMandateConstructed is a mandate being assembled and signed. It is the
+	// first event in a transaction that has one.
+	//
+	// Who emits it follows who signs, which differs by mode: in Human Present
+	// the Trusted Surface builds and signs both closed mandates, so it is the
+	// surface; in Human Not Present the agent signs the closed mandate against
+	// the user's open one, so it will be the agent. Both are the party that
+	// made the mandate, which is the rule underneath the two cases.
 	KindMandateConstructed Kind = "mandate_constructed"
 
-	// KindMandatePresented is a mandate arriving at a verifier.
+	// KindMandatePresented is a mandate being handed to a verifier.
+	//
+	// The presenter emits it, immediately before the hop — the agent presenting
+	// to the Credential Provider and to the merchant, the merchant presenting
+	// the payment side to its processor. Emitting on arrival instead would read
+	// identically on the happy path and lose the case worth seeing: a hop that
+	// never lands leaves a presentation with no verdict after it, which is the
+	// true shape of that failure and is invisible if only verifiers speak.
 	KindMandatePresented Kind = "mandate_presented"
 
 	// KindMandateVerified is a verifier accepting one.

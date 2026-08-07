@@ -144,6 +144,17 @@ func NewEmitter(clk authz.Clock, role string, opts ...EmitterOption) (*Emitter, 
 
 // Emit records that something happened. It never blocks and never fails.
 //
+// # A nil *Emitter is a working no-op
+//
+// Every method below is safe on a nil receiver, which is what lets a role hold
+// an *Emitter as an optional field rather than a required one. That is the same
+// decision Discard makes for the same reason: ADR 0003 says emission must never
+// affect the operation it observes, and the most common absence by far is a
+// test process where no collector was ever started. A nil check at every call
+// site would be the alternative, and the site that forgot one would panic
+// inside a verification path — turning a missing screenshot into a failed
+// purchase, which is precisely the coupling this package exists to prevent.
+//
 // # Why it returns nothing
 //
 // An error here would be one a caller is expected to check, and a checked error
@@ -179,6 +190,9 @@ func (e *Emitter) EmitRejection(ctx context.Context, code, detail string) {
 // is the seam a caller reaches for when it needs a field the helpers above do
 // not expose.
 func (e *Emitter) EmitEvent(ev Event) {
+	if e == nil {
+		return
+	}
 	if ev.Role == "" {
 		ev.Role = e.role
 	}
@@ -225,6 +239,9 @@ func (e *Emitter) EmitEvent(ev Event) {
 // should need it; it is for tests and for an operator asking why the event log
 // looks thin.
 func (e *Emitter) Stats() Stats {
+	if e == nil {
+		return Stats{}
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.stats
@@ -239,8 +256,13 @@ func (e *Emitter) Stats() Stats {
 // A caller with no opinion passes context.Background() and waits; a caller that
 // is already shutting down passes the deadline it is shutting down under.
 //
-// Emit after Close is safe and counts as a drop. Close twice is safe.
+// Emit after Close is safe and counts as a drop. Close twice is safe, and so is
+// closing a nil Emitter — a caller that was handed one should not have to know
+// whether there was anything to shut down.
 func (e *Emitter) Close(ctx context.Context) error {
+	if e == nil {
+		return nil
+	}
 	e.mu.Lock()
 	alreadyClosed := e.closed
 	e.closed = true

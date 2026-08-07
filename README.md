@@ -97,14 +97,20 @@ Nothing else — no Docker, no database, no accounts, no keys.
 
 ### What actually comes up today
 
-Two of the nine processes. `make demo` prints exactly which, and names the
+Seven of the nine processes. `make demo` prints exactly which, and names the
 issue that will build each of the rest:
 
 ```
   Protocol participants
-    [ -- ]    agent         Shopping Agent — watches the price and assembles mandates
-                            not built yet — issue #10
-    …
+    [ up ]    surface       Trusted Surface — shows the interpretation and takes the user's signature
+    [ up ]    merchant      Merchant — prices the route and verifies the Checkout Mandate
+    [ up ]    credprovider  Credential Provider — issues a payment credential scoped to one checkout
+    [ up ]    mpp           Merchant Payment Processor — verifies the Payment Mandate
+    [ -- ]    registry      local agent registry — resolves an agent's key reference
+                            not built yet — issue #26
+    [ -- ]    proxy         verifying proxy at the merchant edge — checks RFC 9421 signatures
+                            not built yet — issue #30
+    [ up ]    agent         Shopping Agent — runs one Human Present purchase, then waits
 
   Demo infrastructure — takes no part in the protocol
     [ up ]    collector     gathers protocol events and streams them to the frontend over SSE
@@ -112,14 +118,22 @@ issue that will build each of the rest:
   Interface
     [ up ]    frontend      three lanes, the Mandate Inspector and the Trusted Surface consent screen
 
-  2 up, 7 not built yet.
+  7 up, 2 not built yet.
 ```
 
-So the ten-beat scenario does **not** run end to end yet. What you can see is
-the event stream working and the app shell serving; the seven role binaries
-still print a line and exit. That is said here because the demo runner says it
-too, and a README claiming otherwise would be the only optimistic thing in the
-repository.
+The agent buys on startup, so a run leaves a completed Human Present purchase
+behind it: three signed receipts on the agent's output, and eleven events on
+the collector's stream under one correlation ID. Read them with
+
+```bash
+curl -N http://127.0.0.1:8085/events
+```
+
+The two that are still stubs are TAP's, and the ten-beat scenario in
+[docs/business/use-cases.md](docs/business/use-cases.md) does **not** run end to
+end yet — its interesting half is Human Not Present, where the agent waits on a
+condition the user described, and that arrives with #15. What runs today is the
+Human Present flow, in full, with nothing about it faked.
 
 ### Working on it
 

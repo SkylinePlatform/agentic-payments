@@ -3,9 +3,16 @@
     "The demo topology: what `make demo` starts, in what order, and how it knows each one is up.",
     "",
     "Order matters. The collector comes first because every role emits into it, and a role that",
-    "starts before it is listening loses the events that explain its own startup. The frontend",
-    "comes last because it proxies to the collector and there is nothing to look at until the",
-    "roles are running.",
+    "starts before it is listening loses whatever it emits in the meantime — there is no retry,",
+    "on purpose, because an event log that pushed back on the roles would be the coupling ADR",
+    "0003 forbids. The frontend comes last because it proxies to the collector and there is",
+    "nothing to look at until the roles are running.",
+    "",
+    "The agent comes second to last and buys. Every role above it is already answering its",
+    "health check by then, so the purchase runs against a stack that is up; the events it",
+    "produces are in the collector's history before the frontend starts, which is what the",
+    "512-entry ring and the SSE replay are for — a browser attaching afterwards still sees the",
+    "whole transaction.",
     "",
     "`implemented: false` marks a binary that is still a stub. The runner starts it anyway and",
     "expects it to exit — which is how a stale flag becomes visible rather than silently wrong.",
@@ -36,7 +43,9 @@
       "command": "bin/surface",
       "args": [
         "-addr",
-        ":8084"
+        ":8084",
+        "-collector",
+        "http://127.0.0.1:8085/events"
       ],
       "health": "http://localhost:8084/.well-known/jwks.json"
     },
@@ -52,7 +61,9 @@
         "-addr",
         ":8081",
         "-surface",
-        "http://localhost:8084"
+        "http://localhost:8084",
+        "-collector",
+        "http://127.0.0.1:8085/events"
       ],
       "health": "http://localhost:8081/.well-known/jwks.json"
     },
@@ -68,7 +79,9 @@
         "-addr",
         ":8082",
         "-surface",
-        "http://localhost:8084"
+        "http://localhost:8084",
+        "-collector",
+        "http://127.0.0.1:8085/events"
       ],
       "health": "http://localhost:8082/.well-known/jwks.json"
     },
@@ -84,7 +97,9 @@
         "-addr",
         ":8083",
         "-surface",
-        "http://localhost:8084"
+        "http://localhost:8084",
+        "-collector",
+        "http://127.0.0.1:8085/events"
       ],
       "health": "http://localhost:8083/.well-known/jwks.json"
     },
@@ -109,7 +124,7 @@
     {
       "name": "agent",
       "kind": "role",
-      "summary": "Shopping Agent — watches the price and assembles mandates",
+      "summary": "Shopping Agent — runs one Human Present purchase, then waits",
       "issue": "9",
       "implemented": true,
       "dir": "backend",
@@ -122,7 +137,10 @@
         "-credprovider",
         "http://localhost:8082",
         "-mpp",
-        "http://localhost:8083"
+        "http://localhost:8083",
+        "-collector",
+        "http://127.0.0.1:8085/events",
+        "-buy"
       ]
     },
     {

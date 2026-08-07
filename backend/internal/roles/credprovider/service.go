@@ -21,6 +21,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
@@ -39,6 +40,10 @@ type Service struct {
 	Clock authz.Clock
 	// CredentialLifetime is how long a minted credential stays redeemable.
 	CredentialLifetime time.Duration
+	// Events records the moments this role owns: its verdict on a presented
+	// Payment Mandate, and the receipt carrying it. Optional — a nil Emitter
+	// records nothing.
+	Events *obs.Emitter
 }
 
 type request struct {
@@ -90,6 +95,17 @@ func (s *Service) fund(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mandate, verdict := s.Rules.VerifyPayment(presented)
+	// The verdict is recorded before the receipt that carries it, in the order
+	// the two happened. ap2.CodeOf is the same mapping IssueReceipt uses, so the
+	// code in the log and the code in the signed answer cannot disagree — which
+	// matters because a reader comparing them would have no way to tell which
+	// one was wrong.
+	if verdict != nil {
+		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(verdict)),
+			"Payment Mandate refused: "+verdict.Error())
+	} else {
+		s.Events.Emit(r.Context(), obs.KindMandateVerified, "Payment Mandate verified")
+	}
 
 	receipt, err := ap2.IssueReceipt(r.Context(), presented, verdict, ap2.ReceiptOptions{
 		Issuer:      s.ID,
@@ -102,6 +118,7 @@ func (s *Service) fund(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("issuing the receipt: %v", err))
 		return
 	}
+	s.Events.Emit(r.Context(), obs.KindReceiptIssued, "receipt issued for the Payment Mandate")
 
 	if verdict != nil {
 		// A refusal still gets a receipt, and gets no credential. Returning one

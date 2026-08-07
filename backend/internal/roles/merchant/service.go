@@ -13,6 +13,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
@@ -63,6 +64,10 @@ type Service struct {
 	Processor Processor
 	// OfferLifetime is how long a quoted checkout stays purchasable.
 	OfferLifetime time.Duration
+	// Events records the moments this role owns: its verdict on a presented
+	// Checkout Mandate, the receipt carrying it, and the payment side it then
+	// presents to its processor. Optional — a nil Emitter records nothing.
+	Events *obs.Emitter
 }
 
 // signedOffer is what GET /checkout returns: the merchant-signed document and
@@ -338,6 +343,12 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	// takes it as an argument rather than being called on one branch, which is
 	// what makes "answer a rejection with a receipt" structural here.
 	_, verdict := s.Rules.VerifyCheckout(presented, req.Checkout)
+	if verdict != nil {
+		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(verdict)),
+			"Checkout Mandate refused: "+verdict.Error())
+	} else {
+		s.Events.Emit(r.Context(), obs.KindMandateVerified, "Checkout Mandate verified")
+	}
 
 	receipt, err := ap2.IssueReceipt(r.Context(), presented, verdict, ap2.ReceiptOptions{
 		Issuer:      s.ID,
@@ -350,6 +361,7 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("issuing the receipt: %v", err))
 		return
 	}
+	s.Events.Emit(r.Context(), obs.KindReceiptIssued, "receipt issued for the Checkout Mandate")
 
 	if verdict != nil {
 		// The receipt is the answer either way, so the status says only whether
@@ -365,6 +377,14 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	// Only now, and only because verification passed. This is the leg AP2 gives
 	// the merchant rather than the agent — the agent never speaks to the
 	// processor, so nothing it sends can decide whether money moves.
+	//
+	// The merchant is the presenter on this hop, so this is the merchant's
+	// event, and it carries the same correlation ID the agent's request arrived
+	// with — which is what makes the processor's verdict land in the same group
+	// as the mandate that caused it.
+	s.Events.Emit(r.Context(), obs.KindMandatePresented,
+		"Payment Mandate presented to the Merchant Payment Processor")
+
 	paymentReceipt, settled, err := s.Processor.InitiatePayment(
 		r.Context(), req.Payment, req.Credential)
 	if err != nil {

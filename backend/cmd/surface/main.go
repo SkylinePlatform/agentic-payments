@@ -22,17 +22,19 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8084", "address to listen on")
+	collector := roles.CollectorFlag()
 	flag.Parse()
 
-	roles.Main("surface", *addr, func(identity roles.Identity) (http.Handler, error) {
+	roles.Main("surface", *addr, *collector, func(role roles.Role) (http.Handler, error) {
 		blinder, err := sdjwt.NewBlinder()
 		if err != nil {
 			return nil, err
 		}
 		service := &surface.Service{
-			Signer:  identity.Signer,
-			Keys:    identity.Keys,
-			Clock:   identity.Clock,
+			Signer:  role.Signer,
+			Keys:    role.Keys,
+			Clock:   role.Clock,
+			Events:  role.Events,
 			Blinder: blinder,
 		}
 		return service.Handler()

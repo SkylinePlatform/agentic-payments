@@ -25,6 +25,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
@@ -44,6 +45,10 @@ type Service struct {
 	Clock authz.Clock
 	// Blinder decides what may be withheld from which verifier.
 	Blinder *sdjwt.Blinder
+	// Events records the moments this role owns. Optional: a nil Emitter
+	// records nothing, which is what a unit test wants and what a role started
+	// without a collector gets.
+	Events *obs.Emitter
 }
 
 // approval is what POST /approve takes: the purchase, exactly as it will be
@@ -116,6 +121,11 @@ func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 		reject(w, "signing the Checkout Mandate", err)
 		return
 	}
+	// Emitted per mandate and after its own signature, so the log says what
+	// exists rather than what was attempted. This is where a Human Present
+	// transaction's mandates come into being: the user is the signer, and the
+	// surface is the party holding the pen.
+	s.Events.Emit(r.Context(), obs.KindMandateConstructed, "Checkout Mandate signed by the user")
 
 	payment := req.Payment
 	stamp(s.Clock, &payment.IssuedAt, &payment.ExpiresAt)
@@ -125,6 +135,7 @@ func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 		reject(w, "signing the Payment Mandate", err)
 		return
 	}
+	s.Events.Emit(r.Context(), obs.KindMandateConstructed, "Payment Mandate signed by the user")
 
 	roles.OK(w, http.StatusOK, approved{
 		CheckoutMandate: signedCheckout.String(),

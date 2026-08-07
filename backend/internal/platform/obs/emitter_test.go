@@ -327,3 +327,28 @@ func TestConcurrentEmit(t *testing.T) {
 	// under testify's lock rather than one this test would have to hold.
 	assert.Len(t, delivered(sent), 50, "an event emitted concurrently never reached the sink")
 }
+
+// TestANilEmitterIsAWorkingNoOp is what lets a role hold its emitter as an
+// optional field rather than a required one.
+//
+// Every role Service does, and so does agent.Client. A nil receiver that
+// panicked would put a crash in the middle of a verification path — turning a
+// missing screenshot into a failed purchase, which is the one thing ADR 0003
+// says emission may never do. It is the same decision Discard makes about a
+// missing collector, one layer up.
+func TestANilEmitterIsAWorkingNoOp(t *testing.T) {
+	t.Parallel()
+
+	var e *obs.Emitter
+
+	assert.NotPanics(t, func() {
+		e.Emit(t.Context(), obs.KindMandateVerified, "nobody is listening")
+		e.EmitRejection(t.Context(), "mandate_expired", "nor to this")
+		e.EmitEvent(obs.Event{Kind: obs.KindReceiptIssued, Role: "agent", At: base})
+	}, "a role started without a collector must not panic where it verifies")
+
+	assert.Zero(t, e.Stats(), "an emitter that does not exist has recorded nothing")
+	assert.NoError(t, e.Close(t.Context()),
+		"closing what was never opened is not a failure; a caller handed one should "+
+			"not have to know whether there was anything to shut down")
+}
