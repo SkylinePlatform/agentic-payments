@@ -29,7 +29,7 @@ func flatSchedule(t *testing.T, minor int) *merchant.Schedule {
 // to the same stock drifting apart.
 //
 // The Human Present flow buys BEG→PMI through GET /checkout; a search finds the
-// same flight through POST /search. They are priced by separate Schedule values
+// same flight through GET /search. They are priced by separate Schedule values
 // built from one function, and if that ever stops being one function the symptom
 // is a product list and a checkout naming different prices for one purchase —
 // which is not something a demonstration recovers from on screen, and not

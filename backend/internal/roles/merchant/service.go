@@ -2,6 +2,7 @@ package merchant
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,7 +39,7 @@ type Service struct {
 	ID string
 	// Inventory prices the routes.
 	Inventory *Inventory
-	// Catalogue is what POST /search searches. Optional: a merchant selling a
+	// Catalogue is what GET /search searches. Optional: a merchant selling a
 	// route an agent already knows the name of needs no catalogue, and the
 	// Human Present flow is exactly that. When it is absent the route is not
 	// registered at all rather than answering nothing — a caller cannot tell
@@ -141,7 +142,7 @@ func (s *Service) Handler() (http.Handler, error) {
 	mux.HandleFunc("GET /checkout", s.quote)
 	mux.HandleFunc("POST /checkout", s.settle)
 	if s.Catalogue != nil {
-		mux.HandleFunc("POST /search", s.search)
+		mux.HandleFunc("GET /search", s.search)
 	}
 	return roles.Middleware(s.Clock, mux)
 }
@@ -184,48 +185,65 @@ func (s *Service) quote(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// searchRequest is what POST /search takes: the constraints a mandate would
-// carry, and nothing else.
+// SearchParam is the query parameter GET /search reads the constraint set from:
+// the JSON array a mandate would carry, base64url-encoded without padding.
 //
 // generated.Constraint rather than a shape of this package's own, because the
 // point of the endpoint is that these are the same bytes a mandate carries. A
 // merchant-specific query language here would be a second thing to keep in step
 // with the field registry, and the first divergence would be a search returning
 // something the verifier then refuses.
-type searchRequest struct {
-	Constraints []generated.Constraint `json:"constraints"`
-}
+const SearchParam = "constraints"
 
 // search returns the catalogue offers a constraint set authorises.
 //
-// # Why this is a POST, and why it carries an idempotency key
+// # Why this is a GET, when the query is a tree
 //
 // A constraint set is a tree — `within` carries an object, `in` carries an
-// array, `all` carries children — and a query string is not where a tree goes.
-// So it is a POST, and the idempotency middleware every role runs behind
-// requires a key on anything that is not a safe method.
+// array, `all` carries children — so it does not fit a query string as
+// key-value pairs, and the obvious move is a POST with a JSON body. That was
+// the first shape of this endpoint and it was wrong, for a reason specific to
+// what this merchant sells.
 //
-// By the letter of the standing rule that is wrong: a search changes nothing,
-// so there is no second execution to prevent and the key buys no safety. It
-// takes one anyway, because the alternative is a route-specific exemption
-// inside shared middleware — and an exemption is inherited by whatever POST is
-// added beside it later, where the failure is a purchase that runs twice
-// against a header nobody noticed had stopped being required. A key on a read
-// costs one header; getting that wrong once costs money.
+// Every role runs behind the idempotency middleware, which by RFC 9110 skips
+// the safe methods and remembers the response to every unsafe one. A search
+// changes nothing, so the key buys no safety — and worse, the remembering is
+// active harm here: this catalogue's prices move on a schedule, and the whole
+// reason the endpoint exists is an agent watching one come down. Poll twice
+// with one key and the second answer is the first one replayed, so the price a
+// watcher sees never changes. Telling callers to vary the key per poll makes
+// the header a cache-buster rather than an idempotency key, and fills the store
+// with an entry per poll.
 //
-// The other half is what a caller has to know: a repeat with the same key is
-// answered from the store rather than re-run, so an agent polling a moving
-// price must vary its key per poll or it will read its first answer for the
-// whole retention window. That is the middleware working exactly as designed —
-// one key means one operation — and it is only surprising here because this
-// operation's answer depends on the clock.
+// So the fix is to be honest about the method rather than to carve out an
+// exemption. A read is a GET, GET is safe, and safe methods are already outside
+// the middleware **by method semantics rather than by a route list** — which
+// matters, because a route-specific exemption is the thing that gets inherited
+// by whatever POST is added beside it later, and that failure costs money. The
+// tree travels base64url-encoded in one parameter; a set too large for a URL is
+// refused loudly, which is the failure mode to prefer over a silently stale
+// price.
 func (s *Service) search(w http.ResponseWriter, r *http.Request) {
-	var req searchRequest
-	if !roles.DecodeJSON(w, r, &req) {
+	encoded := r.URL.Query().Get(SearchParam)
+	if encoded == "" {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			fmt.Sprintf("%s must carry the constraint set, base64url-encoded", SearchParam))
+		return
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			fmt.Sprintf("%s is not base64url: %v", SearchParam, err))
+		return
+	}
+	var constraints []generated.Constraint
+	if err := json.Unmarshal(decoded, &constraints); err != nil {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			fmt.Sprintf("%s does not decode to a constraint set: %v", SearchParam, err))
 		return
 	}
 
-	results, err := s.Catalogue.Search(req.Constraints)
+	results, err := s.Catalogue.Search(constraints)
 	switch {
 	case errors.Is(err, ErrNoConstraints):
 		roles.Fail(w, generated.ErrorCodeRequestMalformed, err.Error())

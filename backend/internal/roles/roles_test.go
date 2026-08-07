@@ -2,6 +2,7 @@ package roles_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -84,6 +85,34 @@ func post(t *testing.T, url string, body, into any) int {
 	// refuses the request without it, so a test that omitted it would be
 	// exercising the rejection rather than the role.
 	req.Header.Set("Idempotency-Key", t.Name())
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err, "calling %s", url)
+	defer func() { _ = resp.Body.Close() }()
+
+	if into != nil {
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(into), "decoding the answer")
+	}
+	return resp.StatusCode
+}
+
+// searchGet calls GET /search with a constraint set, encoding it the way the
+// endpoint reads it.
+//
+// It sets no Idempotency-Key, and that absence is the point rather than an
+// omission: a GET is a safe method, so the middleware never remembers the
+// answer — which is what lets a watcher poll a moving price and see it move.
+func searchGet(t *testing.T, base string, constraints []map[string]any, into any) int {
+	t.Helper()
+
+	encoded, err := json.Marshal(constraints)
+	require.NoError(t, err, "encoding the constraint set")
+
+	url := base + "/search?" + merchant.SearchParam + "=" +
+		base64.RawURLEncoding.EncodeToString(encoded)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	require.NoError(t, err)
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err, "calling %s", url)
@@ -474,13 +503,11 @@ func TestTheMerchantSearchesItsCatalogue(t *testing.T) {
 			} `json:"offers"`
 			ObservedAt time.Time `json:"observed_at"`
 		}
-		status := post(t, srv.URL+"/search", map[string]any{
-			"constraints": []map[string]any{
-				{"op": "eq", "field": "item.category", "value": "ladders"},
-				{"op": "lte", "field": "amount", "value": map[string]any{
-					"amount": merchant.DemoLadderCap, "currency": merchant.DemoCurrency,
-				}},
-			},
+		status := searchGet(t, srv.URL, []map[string]any{
+			{"op": "eq", "field": "item.category", "value": "ladders"},
+			{"op": "lte", "field": "amount", "value": map[string]any{
+				"amount": merchant.DemoLadderCap, "currency": merchant.DemoCurrency,
+			}},
 		}, &out)
 
 		require.Equal(t, http.StatusOK, status)
@@ -496,11 +523,51 @@ func TestTheMerchantSearchesItsCatalogue(t *testing.T) {
 			"a result set that does not say when it was priced cannot be told from a stale one")
 	})
 
+	t.Run("a watcher polling the same query sees the price move", func(t *testing.T) {
+		// The endpoint exists so an agent can watch a price come down, and this
+		// is the test that keeps it able to. Search was first written as a POST,
+		// which every role's idempotency middleware remembers the answer to — so
+		// a second poll with the same key replayed the first price and the
+		// watcher saw 24000 for the whole retention window. It is a GET now, and
+		// safe methods are outside that middleware by RFC 9110's own definition
+		// rather than by a route exemption somebody has to maintain.
+		//
+		// What this subtest holds is narrower than "the endpoint is a GET", and
+		// deliberately so: it fails whenever two identical queries a step apart
+		// come back with one price, whatever the cause. Making the route a POST
+		// again is one cause, and it would fail every subtest here rather than
+		// only this one — so this is the guard against the answer being cached,
+		// not against the method changing.
+		query := []map[string]any{
+			{"op": "eq", "field": "item.id", "value": merchant.DemoFlightID},
+		}
+
+		var first, second struct {
+			Offers []struct {
+				Price struct {
+					Amount int `json:"amount"`
+				} `json:"price"`
+			} `json:"offers"`
+		}
+
+		require.Equal(t, http.StatusOK, searchGet(t, srv.URL, query, &first))
+		require.Len(t, first.Offers, 1)
+		assert.Equal(t, merchant.DemoPriceWatched, first.Offers[0].Price.Amount,
+			"beat 4: the first price the agent sees is the one it cannot act on")
+
+		shop.clock.Advance(merchant.DefaultStep)
+
+		require.Equal(t, http.StatusOK, searchGet(t, srv.URL, query, &second))
+		require.Len(t, second.Offers, 1)
+		assert.Equal(t, merchant.DemoPriceRejected, second.Offers[0].Price.Amount,
+			"a search whose answer depends on the clock must not be answered from a cache; a watcher that never sees the price move has nothing to watch")
+	})
+
 	t.Run("an empty constraint set is refused", func(t *testing.T) {
 		var problem struct {
 			Code generated.ErrorCode `json:"code"`
 		}
-		status := post(t, srv.URL+"/search", map[string]any{"constraints": []any{}}, &problem)
+		status := searchGet(t, srv.URL, []map[string]any{}, &problem)
 
 		assert.Equal(t, http.StatusBadRequest, status)
 		assert.Equal(t, generated.ErrorCodeRequestMalformed, problem.Code,
@@ -512,10 +579,8 @@ func TestTheMerchantSearchesItsCatalogue(t *testing.T) {
 		var problem struct {
 			Code generated.ErrorCode `json:"code"`
 		}
-		status := post(t, srv.URL+"/search", map[string]any{
-			"constraints": []map[string]any{
-				{"op": "eq", "field": "item.colour", "value": "slate"},
-			},
+		status := searchGet(t, srv.URL, []map[string]any{
+			{"op": "eq", "field": "item.colour", "value": "slate"},
 		}, &problem)
 
 		assert.Equal(t, http.StatusForbidden, status)

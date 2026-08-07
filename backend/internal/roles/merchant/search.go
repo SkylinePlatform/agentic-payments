@@ -22,7 +22,7 @@ import (
 // Refusing costs a caller one error and removes the ambiguity entirely.
 var ErrNoConstraints = errors.New("merchant: a search needs at least one constraint; an empty set is not a filter")
 
-// Results is what a search found, and the body POST /search returns.
+// Results is what a search found, and the body GET /search returns.
 type Results struct {
 	// Offers are the offers the constraints authorise, in catalogue order.
 	Offers []PricedOffer `json:"offers"`
