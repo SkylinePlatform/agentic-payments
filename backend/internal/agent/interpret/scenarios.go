@@ -54,10 +54,23 @@ var demoScenarios = []Script{
 // minor units, a booking window of 2026-06-01 to 2026-08-31.
 //
 // It is character for character the constraint set in
-// internal/core/authz/mandate_test.go, and that is the point rather than a
+// internal/core/authz/mandate_test.go, and that matters rather than being a
 // coincidence: what the interpreter produces at beat 2 is the mandate the rest
 // of this repository already asserts on at beats 5 and 6, so the three beats are
-// demonstrably about the same four limits rather than about four limits each.
+// about the same four limits rather than about four limits each.
+//
+// **Nothing enforces that, and the copy is not laziness.** `core-isolation`
+// forbids `internal/core/**` from importing anything else in this module, so the
+// test over there cannot name this table — and embedding one file from both
+// places is not available either, since go:embed does not reach outside its own
+// package directory. The two are therefore kept in step by whoever edits one
+// remembering the other.
+//
+// The symptom of forgetting is worth knowing, because it is not a failing test:
+// both sides keep passing, and the demo simply stops being the scenario the
+// documentation describes — the interpreter proposes limits the mandate fixture
+// does not carry, and the two screenshots the exercise exists to produce no
+// longer show one story. Grep for `BEG` before changing either.
 //
 // # Four top-level constraints, not one `all` group
 //
