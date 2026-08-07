@@ -26,6 +26,8 @@ import (
 	"strings"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/transport"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 )
 
@@ -78,7 +80,20 @@ type Receipt struct {
 // Client runs purchases.
 type Client struct {
 	Endpoints Endpoints
-	HTTP      *http.Client
+	// HTTP is the client to use; nil means http.DefaultClient. Whatever it is,
+	// requests go out through transport.Correlating, so no call site here can
+	// drop the correlation ID by forgetting a header.
+	HTTP *http.Client
+	// Events records the moments this role owns: presenting a mandate to a
+	// verifier. Optional — a nil Emitter records nothing, which is what a unit
+	// test wants.
+	//
+	// The agent emits nothing about verdicts, and that absence is the design.
+	// It is the party with the least authority in the protocol, so an agent
+	// reporting that a mandate was verified would be reporting somebody else's
+	// decision as its own — and the event log is what the three-lane view
+	// teaches from.
+	Events *obs.Emitter
 }
 
 // ErrRefused means a counterparty declined, and the purchase stopped there.
@@ -109,6 +124,18 @@ var ErrRefused = errors.New("agent: a counterparty refused the purchase")
 // leave exactly the dispute AP2 requires them to settle.
 func (c *Client) Buy(ctx context.Context, from, to string, payment generated.PaymentMandate) (Purchase, error) {
 	var p Purchase
+
+	// A transaction begins here — ADR 0003 calls this the entry point, and it is
+	// before any HTTP request exists to adopt a header from, so this is where
+	// the identifier has to be minted. Ensure rather than mint: a caller that
+	// already has one, as cmd/agent does when it quotes before buying, keeps it,
+	// because no hop regenerates the value.
+	//
+	// The error is deliberately dropped. EnsureCorrelationID returns the context
+	// unchanged when its entropy source fails, so the purchase proceeds without
+	// a label rather than failing over one — the same choice the correlation
+	// middleware makes, for the same reason.
+	ctx, _, _ = obs.EnsureCorrelationID(ctx, nil)
 
 	if err := c.Quote(ctx, from, to, &p); err != nil {
 		return p, err
@@ -168,6 +195,13 @@ func (c *Client) Fund(ctx context.Context, p *Purchase) error {
 		Receipt    string                       `json:"receipt"`
 		Credential *generated.PaymentCredential `json:"credential"`
 	}
+	// Before the call rather than after it. On the happy path the two orders are
+	// indistinguishable; where they differ is a hop that never lands, and a log
+	// showing a presentation with no verdict under it is the true shape of that
+	// failure. Emitting afterwards would show nothing at all.
+	c.Events.Emit(ctx, obs.KindMandatePresented,
+		"Payment Mandate presented to the Credential Provider")
+
 	body := map[string]any{"mandate": p.PaymentMandate}
 	err := c.call(ctx, http.MethodPost,
 		strings.TrimSuffix(c.Endpoints.CredProvider, "/")+"/credential", body, &out)
@@ -205,6 +239,12 @@ func (c *Client) Settle(ctx context.Context, p *Purchase) error {
 		PaymentReceipt string `json:"payment_receipt"`
 		Settled        bool   `json:"settled"`
 	}
+	// One event for the Checkout Mandate, which is the one the merchant will
+	// decide about. The Payment Mandate travels in the same body and is not
+	// presented to the merchant for a verdict — the merchant passes it on, and
+	// emits its own presentation when it does.
+	c.Events.Emit(ctx, obs.KindMandatePresented, "Checkout Mandate presented to the merchant")
+
 	body := map[string]any{
 		"mandate":    p.CheckoutMandate,
 		"checkout":   p.Offer,
@@ -263,11 +303,11 @@ func (c *Client) call(ctx context.Context, method, url string, body, into any) e
 		req.Header.Set("Idempotency-Key", idempotencyKey(method, url, body))
 	}
 
-	client := c.HTTP
-	if client == nil {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	// transport.Correlating rather than a header set here, and that is not
+	// interchangeable: "no hop drops the identifier" has to hold at call sites
+	// written later as well as at these four, and a client built with the
+	// round-tripper cannot forget where a call site can.
+	resp, err := transport.Correlating(c.HTTP).Do(req)
 	if err != nil {
 		return fmt.Errorf("calling %s: %w", url, err)
 	}
