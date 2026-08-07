@@ -1,9 +1,11 @@
 package ap2
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
@@ -27,6 +29,14 @@ import (
 // A merchant constructed with somebody else's CheckoutVerifier has delegated,
 // and nothing else in it changes.
 //
+// The Merchant and the Credential Provider each satisfy a second, separate
+// interface as well — CheckoutChainVerifier and PaymentChainVerifier — for
+// Human Not Present, where what arrives is a delegation chain rather than a
+// single presented mandate. That is a second method, not an optional
+// parameter grafted onto the first: see CheckoutChainVerifier's own doc
+// comment for why a nullable argument was rejected here on the same grounds
+// PaymentOptions rejected one.
+//
 // None of this holds state and none of it performs I/O, so a role's rules are
 // testable without standing the role up — which is the other thing issue #8
 // asks for.
@@ -47,12 +57,73 @@ type CredentialVerifier interface {
 	VerifyCredential(credential generated.PaymentCredential, checkoutHash string) error
 }
 
+// CheckoutChainVerifier is the Merchant's Human Not Present half: authorising
+// a closed Checkout Mandate against the open one that endorsed it, out of a
+// verified delegation chain, rather than against a single presented mandate.
+//
+// It is a separate interface from CheckoutVerifier, and a separate method
+// rather than an optional parameter on VerifyCheckout — the shape
+// PaymentOptions' own doc comment argues against. A nullable open mandate
+// would read as "constraints are checked when you supply one," and a
+// verifier that checks them only when asked does not check them. Keeping the
+// two behind different methods means a Human Not Present presentation can
+// only be verified through a code path that knows it is one; there is no
+// single entry point a caller could hand a chain to by mistake and have it
+// silently evaluate no constraints.
+type CheckoutChainVerifier interface {
+	AuthoriseCheckoutChain(c *sdjwt.Chain, subject constraint.Subject, checkoutJWT string) (CheckoutAuthorisation, error)
+}
+
+// PaymentChainVerifier is CheckoutChainVerifier's counterpart for the
+// Credential Provider and the Network: authorising a closed Payment Mandate
+// against the open one that endorsed it. See CheckoutChainVerifier for why
+// this is a distinct interface rather than a parameter on PaymentVerifier.
+type PaymentChainVerifier interface {
+	AuthorisePaymentChain(c *sdjwt.Chain, subject constraint.Subject) (PaymentAuthorisation, error)
+}
+
 // MerchantRules is what a Merchant checks before it accepts a purchase.
 type MerchantRules struct {
-	// Issuer verifies the signature over the closed Checkout Mandate. Required.
+	// Issuer verifies the signature over the closed Checkout Mandate in Human
+	// Present mode, and — under a delegation chain, where AuthoriseCheckoutChain
+	// uses it instead — the signature over the open mandate at the chain's
+	// root. The closed hop of a chain is never checked against Issuer; that is
+	// what AgentKey is for. Required.
 	Issuer authz.Verifier
 	// Clock decides whether the mandate has expired. Required.
 	Clock authz.Clock
+
+	// AgentKey, Audience and Nonce are AuthoriseCheckoutChain's half of this
+	// rule set; VerifyCheckout never reads them, because a directly-signed
+	// Checkout Mandate carries no delegation to check freshness against. All
+	// three are copied into a ChainOptions unchanged — see that type for what
+	// each does. AuthoriseCheckoutChain checks Audience and Nonce itself
+	// before delegating, rather than letting either arrive at sdjwt.VerifyChain
+	// empty and be refused there: that refusal is real, but it carries
+	// sdjwt.ErrInvalidOptions, a sentinel this package's own ErrMisconfigured
+	// does not wrap, so a caller checking errors.Is(err, ErrMisconfigured)
+	// would see this role's own misconfiguration reported as somebody else's.
+	// A nil AgentKey needs no matching guard: the package-level
+	// AuthoriseCheckoutChain already refuses that under ap2.ErrMisconfigured
+	// on its own.
+
+	// AgentKey turns the open mandate's cnf claim into the Verifier the
+	// delegating hop is checked against. Required for AuthoriseCheckoutChain.
+	AgentKey func(cnf json.RawMessage) (authz.Verifier, error)
+	// Audience is the value the delegating hop's aud claim must carry — this
+	// merchant's own identifier. Required for AuthoriseCheckoutChain.
+	Audience string
+	// Nonce supplies the value the delegating hop's nonce claim must carry, as
+	// issued to the agent for this transaction. It is a function rather than a
+	// fixed string so a Merchant can hand this whatever it uses to issue and
+	// remember one, on the same grounds AgentKey is a resolver rather than a
+	// key: this package holds no nonce store either. For this proof of
+	// concept a closure over a caller-supplied value is enough to make the
+	// field real; issue #27 is the replay store that would make reuse of that
+	// value detectable. Required for AuthoriseCheckoutChain, and an empty
+	// result is treated the same as a nil field — a nonce nobody checks is the
+	// same gap as a nonce nobody supplied.
+	Nonce func() string
 }
 
 // VerifyCheckout runs the Merchant's rules against a presented Checkout Mandate.
@@ -88,17 +159,80 @@ func (r MerchantRules) VerifyCheckout(
 	})
 }
 
+// AuthoriseCheckoutChain runs the Merchant's rules against a delegation
+// chain — a closed Checkout Mandate authorised by the open one that endorsed
+// it — the Human Not Present counterpart to VerifyCheckout.
+//
+// checkoutJWT plays the same role it plays there: the merchant's own copy of
+// what it offered, required for the same reason VerifyCheckout requires it —
+// there is no other document to recompute the binding against.
+//
+// Audience and Nonce are also required, and refused here rather than left to
+// fail inside the package-level AuthoriseCheckoutChain: that function forwards
+// an empty Audience or Nonce straight into sdjwt.VerifyChain, which refuses
+// them too, but as sdjwt.ErrInvalidOptions — a sentinel this package's own
+// ErrMisconfigured does not wrap. Refusing them here instead means a Merchant
+// handed nothing to check freshness with gets ap2.ErrMisconfigured, not the
+// chain library's own vocabulary. A nonce that resolves to the empty string is
+// refused on the same terms as a nil Nonce field: a value nobody actually
+// supplied is not a nonce, whatever the type checker thinks of it. AgentKey
+// needs no matching guard here — a nil one is already caught by
+// AuthoriseCheckoutChain's own check, under the same ap2.ErrMisconfigured.
+func (r MerchantRules) AuthoriseCheckoutChain(
+	c *sdjwt.Chain,
+	subject constraint.Subject,
+	checkoutJWT string,
+) (CheckoutAuthorisation, error) {
+	var zero CheckoutAuthorisation
+	if checkoutJWT == "" {
+		return zero, fmt.Errorf(
+			"%w: a merchant verifies against the checkout it issued, and none was supplied",
+			ErrMisconfigured)
+	}
+	if r.Audience == "" || r.Nonce == nil {
+		return zero, fmt.Errorf(
+			"%w: a delegation is a key binding, and a key binding with no audience or no nonce is a proof that can be replayed against this merchant tomorrow",
+			ErrMisconfigured)
+	}
+	nonce := r.Nonce()
+	if nonce == "" {
+		return zero, fmt.Errorf(
+			"%w: the nonce this verification was supplied is empty, which checks nothing",
+			ErrMisconfigured)
+	}
+
+	return AuthoriseCheckoutChain(c, subject, checkoutJWT, ChainOptions{
+		Issuer:   r.Issuer,
+		AgentKey: r.AgentKey,
+		Clock:    r.Clock,
+		Audience: r.Audience,
+		Nonce:    nonce,
+	})
+}
+
 // CredentialProviderRules is what a Credential Provider — and the Network,
 // which asks the same question — checks before it will fund a purchase.
 type CredentialProviderRules struct {
-	// Issuer verifies the signature over the closed Payment Mandate. Required.
+	// Issuer verifies the signature over the closed Payment Mandate in Human
+	// Present mode, and — under a delegation chain, where AuthorisePaymentChain
+	// uses it instead — the signature over the open mandate at the chain's
+	// root, on the same terms MerchantRules.Issuer documents. Required.
 	Issuer authz.Verifier
 	// Clock decides whether the mandate has expired. Required.
 	Clock authz.Clock
+
+	// AgentKey, Audience and Nonce are AuthorisePaymentChain's half of this
+	// rule set. See MerchantRules' identical trio for what each does and why
+	// each is a function or a required string rather than a plain default —
+	// the reasoning is the role's proof-of-possession question, not the
+	// Merchant's, but it does not change between the two roles.
+	AgentKey func(cnf json.RawMessage) (authz.Verifier, error)
+	Audience string
+	Nonce    func() string
 }
 
-// VerifyPayment runs the Credential Provider's rules against a presented
-// Payment Mandate.
+// VerifyPayment runs the Credential Provider's rules against a directly
+// presented, Human Present Payment Mandate.
 //
 // It takes no checkout, and that absence is the role's defining constraint
 // rather than an omission. AP2 sends the Credential Provider the Payment Mandate
@@ -118,16 +252,70 @@ func (r CredentialProviderRules) VerifyPayment(sd *sdjwt.SDJWT) (generated.Payme
 	// grew a KeyBindingPolicy, so the options are now wider than the rules
 	// rather than the rules wider than the options.
 	//
-	// The literal below therefore leaves the policy at its zero value, and that
-	// is a placeholder rather than an answer. A Credential Provider is the party
-	// that most wants proof the presenter holds the key it is being asked to
-	// fund on behalf of — but the nonce it would check against has to be issued
-	// by somebody, and who issues it is a question about the Human Not Present
-	// flow. #12 answers it; until then this role verifies exactly what it
-	// verified before, with the gap visible instead of implied.
+	// The literal below leaves the policy at its zero value, and that is now a
+	// decision rather than a placeholder. In Human Present mode the user signs
+	// the closed mandate directly, through the Trusted Surface, and there is
+	// no agent key in play for a Key Binding JWT to prove possession of — a
+	// Credential Provider that required one here would be asking for proof of
+	// a delegation that never happened. AuthorisePaymentChain, below, is where
+	// this role answers the question the old comment deferred: under Human Not
+	// Present the delegation chain itself *is* the proof of possession — the
+	// agent signs the delegating hop with the key the open mandate endorsed in
+	// cnf, which is exactly what a Key Binding JWT would otherwise be proving.
+	// A separate KB-JWT layered on top of that would prove the same fact
+	// twice, so this path stays as it was rather than growing one.
 	return VerifyPayment(sd, PaymentOptions{
 		Issuer: r.Issuer,
 		Clock:  r.Clock,
+	})
+}
+
+// AuthorisePaymentChain runs the Credential Provider's rules against a
+// delegation chain — a closed Payment Mandate authorised by the open one
+// that endorsed it — the Human Not Present counterpart to VerifyPayment.
+//
+// Unlike VerifyPayment it requires an AgentKey, an Audience and a Nonce. The
+// requirement is not optional the way key binding is optional on a standalone
+// presentation: sdjwt.VerifyChain binds the delegating hop to the open
+// mandate's cnf key unconditionally, so a delegation chain is a key binding
+// by construction, and a key binding with no nonce is a proof that can be
+// replayed against this verifier tomorrow. Audience and Nonce are checked
+// here, before the package-level AuthorisePaymentChain is ever called, for
+// the reason MerchantRules.AuthoriseCheckoutChain's identical guard gives:
+// left unchecked, an empty one of either would still be refused, but as
+// sdjwt.ErrInvalidOptions rather than this package's own ErrMisconfigured. A
+// nil AgentKey needs no matching guard here — the package-level
+// AuthorisePaymentChain already refuses that under ap2.ErrMisconfigured.
+//
+// Where the nonce comes from is this role's business — a Credential Provider
+// issues one and remembers it, so a second presentation carrying the same
+// value is refused as a replay rather than accepted again. This proof of
+// concept goes only as far as accepting a caller-supplied nonce and checking
+// it matches; it checks nothing about reuse. Issue #27 is the replay store
+// that would make that real.
+func (r CredentialProviderRules) AuthorisePaymentChain(
+	c *sdjwt.Chain,
+	subject constraint.Subject,
+) (PaymentAuthorisation, error) {
+	var zero PaymentAuthorisation
+	if r.Audience == "" || r.Nonce == nil {
+		return zero, fmt.Errorf(
+			"%w: a delegation is a key binding, and a key binding with no audience or no nonce is a proof that can be replayed against the same verifier tomorrow",
+			ErrMisconfigured)
+	}
+	nonce := r.Nonce()
+	if nonce == "" {
+		return zero, fmt.Errorf(
+			"%w: the nonce this verification was supplied is empty, which checks nothing",
+			ErrMisconfigured)
+	}
+
+	return AuthorisePaymentChain(c, subject, ChainOptions{
+		Issuer:   r.Issuer,
+		AgentKey: r.AgentKey,
+		Clock:    r.Clock,
+		Audience: r.Audience,
+		Nonce:    nonce,
 	})
 }
 
@@ -190,7 +378,9 @@ func (r MPPRules) VerifyCredential(
 // behind. Without these a delegating role would only discover a mismatch at the
 // call site that tried to swap an implementation in.
 var (
-	_ CheckoutVerifier   = MerchantRules{}
-	_ PaymentVerifier    = CredentialProviderRules{}
-	_ CredentialVerifier = MPPRules{}
+	_ CheckoutVerifier      = MerchantRules{}
+	_ CheckoutChainVerifier = MerchantRules{}
+	_ PaymentVerifier       = CredentialProviderRules{}
+	_ PaymentChainVerifier  = CredentialProviderRules{}
+	_ CredentialVerifier    = MPPRules{}
 )
