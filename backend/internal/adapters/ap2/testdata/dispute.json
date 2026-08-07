@@ -1,5 +1,5 @@
 {
-  "_comment": "Dispute evidence conformance vectors. Two implementations shown the same broken bundle must name the same link and the same reason, or one dispute reaches two verdicts depending on whose code heard it. `steps` is read by position as well as by name: a stored report holds an ordinal, so a reordering that kept every spelling would still change what a stored report means. `broken` maps a tampered Human Present bundle to the first link that must refuse and the contracts/evidence/error_code.json code the refusal carries. Every tamper leaves exactly one thing wrong and everything else genuine, so the link named is the earliest that can refuse rather than merely one that does.",
+  "_comment": "Dispute evidence conformance vectors. Two implementations shown the same broken bundle must name the same link and the same reason, or one dispute reaches two verdicts depending on whose code heard it. `steps` is read by position as well as by name: a stored report holds an ordinal, so a reordering that kept every spelling would still change what a stored report means. `broken` maps a tampered Human Present bundle to the first link that must refuse and the contracts/evidence/error_code.json code the refusal carries. Every tamper leaves exactly one thing wrong and everything else genuine, so the link named is the earliest that can refuse rather than merely one that does. Every row here is reproducible from the bundle alone, against an arbiter holding the ordinary Merchant and Credential Provider rules — a tamper that needs a differently configured arbiter to reach the link it names is not a vector and is not published, because an implementation applying it to the bundle would refuse earlier and be judged non-conformant for being right.",
 
   "steps": [
     "none",
@@ -43,15 +43,7 @@
       "step": "one_purchase",
       "code": "payment_binding_mismatch"
     },
-    "both_mandates_bound_to_another_document": {
-      "step": "one_purchase",
-      "code": "checkout_hash_mismatch"
-    },
     "unequal_algorithms_payment_bound_elsewhere": {
-      "step": "one_purchase",
-      "code": "checkout_hash_mismatch"
-    },
-    "unequal_algorithms_checkout_bound_elsewhere": {
       "step": "one_purchase",
       "code": "checkout_hash_mismatch"
     },
@@ -62,6 +54,10 @@
     "payment_receipt_signed_by_the_merchant": {
       "step": "payment_answered",
       "code": "signature_invalid"
+    },
+    "payment_receipt_mislabelled_as_checkout": {
+      "step": "payment_answered",
+      "code": "mandate_malformed"
     }
   }
 }

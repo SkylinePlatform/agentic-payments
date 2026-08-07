@@ -105,14 +105,25 @@ func TestAStepOutsideTheChainStillPrints(t *testing.T) {
 
 // TestAReportHoldsExactlyWhenNothingBroke pins Holds to the error rather than to
 // the count of links, which is the reading a caller would otherwise reach for.
+//
+// The last two fixtures are the ones that make that claim true rather than
+// merely stated. In every report an AP2 chain actually builds, "five links held"
+// and "no error" coincide, so `return len(r.Held) == 5` would be an
+// indistinguishable implementation — and the two fixtures below are states that
+// chain does not produce. That is the point rather than a defect in them: Holds
+// is Report's contract and not one verifier's, Report is an exported struct
+// anybody can construct or rehydrate from storage, and the second implementation
+// of the port — the Human Not Present one — has not been written yet.
 func TestAReportHoldsExactlyWhenNothingBroke(t *testing.T) {
 	t.Parallel()
 
-	held := evidence.Report{Held: []evidence.Step{
+	all := []evidence.Step{
 		evidence.StepCheckoutAuthorised, evidence.StepCheckoutAnswered,
 		evidence.StepPaymentAuthorised, evidence.StepOnePurchase,
 		evidence.StepPaymentAnswered,
-	}}
+	}
+
+	held := evidence.Report{Held: all}
 	assert.True(t, held.Holds())
 	assert.Equal(t, evidence.StepNone, held.Broke,
 		"a chain that held names no broken link")
@@ -124,6 +135,11 @@ func TestAReportHoldsExactlyWhenNothingBroke(t *testing.T) {
 		Code:  generated.ErrorCodeMandateMalformed,
 	}
 	assert.False(t, broke.Holds())
+
+	assert.False(t, evidence.Report{Held: all, Err: errors.New("something refused")}.Holds(),
+		"five links is not the question; a report carrying an error has not held whatever else it carries")
+	assert.True(t, evidence.Report{Held: all[:3]}.Holds(),
+		"and a report with no error has held, whether or not it counted to five")
 }
 
 // TestNothingCheckedIsNotAFinding is the distinction StepNone exists to keep

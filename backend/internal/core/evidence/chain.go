@@ -27,11 +27,19 @@ const (
 	// StepCheckoutAuthorised: the Checkout Mandate is genuine, still live, of
 	// the right credential type, and binds the Checkout JWT in the bundle.
 	//
-	// The binding is part of this link rather than one of its own. A Merchant's
-	// VerifyCheckout always ends by recomputing the digest of the document it
-	// holds, so a swapped Checkout JWT is refused here — a separate
-	// "recompute the hash" link after it could never be the first to fail, and
-	// a link that can never fail first is not one anybody can test.
+	// The binding is part of this link rather than one of its own, because under
+	// every rule set this repository ships it would otherwise be a link that can
+	// never fail first: a Merchant's VerifyCheckout ends by recomputing the
+	// digest of the document it holds, so a swapped Checkout JWT is refused
+	// here, and a link that can never fail first is not one anybody can test.
+	//
+	// That reasoning is about the rule sets rather than about the chain, and the
+	// difference is worth stating rather than smoothing over. Verification is
+	// delegable — that is the point of a rule set being a value a role can be
+	// handed — and a delegate checking the mandate against whatever document the
+	// mandate itself discloses would let a swapped Checkout JWT past this link.
+	// What refuses it then is StepOnePurchase's independent recompute, which is
+	// a check with other work to do rather than a link nobody could reach.
 	StepCheckoutAuthorised
 
 	// StepCheckoutAnswered: the Checkout Receipt is signed by the key the

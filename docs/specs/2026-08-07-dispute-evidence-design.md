@@ -16,6 +16,15 @@ This is that something. `evidence.Bundle` is the four artefacts plus the documen
 they are about; `ap2.Dispute` is what an arbiter brings to them; `evidence.Report`
 is what came back, link by link.
 
+**What a holding chain says is that all four artefacts are about one document.**
+Not "one transaction" — the chain is narrower than the sentence this section
+opens with, and the difference is stated here rather than left implied, because
+every other limit below is a variation on it. Two Checkout/Payment Mandate pairs
+issued over the same merchant offer pair across each other perfectly, since the
+digest is identical in all four; `TestTwoPairsOverOneOfferCrossVerify` is that
+case. Which purchase four artefacts name is the fact a dispute turns on, and it
+is not the whole of what "one transaction" would claim.
+
 Every conclusion is recomputed from the tokens at the moment of the dispute.
 Nothing here trusts a value because an earlier verifier already checked it, and
 nothing here reads the event log — that is [ADR
@@ -68,10 +77,22 @@ than quietly implemented.
 **Why step 2 is not a link of its own.** `MerchantRules.VerifyCheckout` passes the
 merchant's document as `opts.Checkout`, and `ap2.VerifyCheckout` always ends in
 `verifyBinding(alg, m.CheckoutHash, checkout)`. Tampering with `Bundle.Checkout`
-therefore fails at link 1 with `checkout_hash_mismatch`. A separate "recompute the
-hash" link after it could never be the first to refuse, and a link that can never
-fail first is not one anybody can test — which is the property the issue's third
-box asks for.
+therefore fails at link 1 with `checkout_hash_mismatch`, so a separate "recompute
+the hash" link after it could never be the first to refuse — and a link that can
+never fail first is not one anybody can test, which is the property the issue's
+third box asks for.
+
+**That argument is about the rule set, not about the chain**, and the two are
+worth keeping apart because this document relies on the distinction two
+paragraphs further down. `CheckoutMandates` is an interface — verification is
+delegable, which is the point of a rule set being a value a role can be handed —
+and against a delegate that checks the mandate against whatever document the
+mandate itself discloses, a separate link 2 *would* be first to fail.
+`laxCheckoutVerifier` in `dispute_test.go` is exactly that delegate, and this
+branch ships it. So the decision stands on "under every rule set this repository
+ships in production, that link is unreachable-as-first", and what catches the
+delegate is link 4's anchor, below — a check with other work to do rather than a
+link nobody could reach.
 
 Where the independent recompute genuinely lives is the **payment** side. A closed
 Payment Mandate never carries the document it binds to, so nothing in links 1–3
@@ -93,6 +114,18 @@ algorithms. Comparing those answers nothing, so `Binding.Same` refuses them as
 `ErrBindingUnverifiable` and both are recomputed against the document instead.
 Refusing the pair as a mismatch would report fraud because somebody chose
 sha-384.
+
+**Which links are first-reachable under production wiring, stated plainly.**
+Links 1, 2, 3, 5 and the *payment* half of link 4's anchor all refuse first for
+some bundle against an arbiter holding `MerchantRules` and
+`CredentialProviderRules`. The *checkout* half of the anchor — `checkout.Covers`
+inside the `ErrBindingUnverifiable` arm — does not: under every `CheckoutVerifier`
+this repository ships, link 1 has already established that same equality, and the
+two tests that reach it get there through `laxCheckoutVerifier`. It is kept
+because a delegate is permitted and the anchor is what a delegate's shortcuts
+must not be able to carry, and it is proved by deletion rather than by coverage,
+which is the only honest way to hold a guard whose first-reachability depends on
+who is verifying.
 
 **Why step 4 is the Credential Provider's rules.** `MPPRules` has exactly one
 method, `VerifyCredential(credential, checkoutHash)`. It takes a
@@ -144,10 +177,28 @@ so where a reader will meet them.
 
 There is no sixth link. `checkoutType = "ap2-checkout+jwt"` is unexported in
 `internal/roles/merchant` — the offer's format belongs to the merchant, not to
-this adapter, which treats the document as opaque bytes. What the chain
-establishes is that four artefacts are about one document; who issued that
-document is a question the merchant's own key answers, and a `success` Checkout
-Receipt is already the merchant's signature over having accepted it.
+this adapter, which treats the document as opaque bytes.
+
+**So a holding chain asserts nothing about where `Bundle.Checkout` came from.**
+That is the cost of the decision and it is worth stating without softening: a
+bundle whose `Checkout` is the literal string `"this is not a JWT at all, nobody
+signed it"`, with both mandates bound to it and both receipts genuine, verifies
+link for link. `TestAHoldingChainSaysNothingAboutWhoIssuedTheOffer` is that
+bundle.
+
+An earlier draft of this section argued that a `success` Checkout Receipt is
+already the merchant's signature over having accepted the offer. That is an
+inference about one implementation rather than a link in the chain, and it does
+not cover the case this change is proudest of — a chain over a **rejection**
+Checkout Receipt also holds, and a rejection receipt being a valid link is the
+headline property here.
+
+Where provenance is actually closed is the role: `merchant.Service.settle` runs
+`ownOffer` before it will issue *any* receipt, success or rejection, and answers
+Problem Details with no receipt when it fails. So a receipt from that merchant
+does imply the offer was its own. The arbiter cannot see that, and a delegate
+need not have done it — which is why the property belongs in this section as a
+limit rather than in the chain as a link.
 
 ### It covers Human Present bundles only
 
@@ -256,6 +307,23 @@ purchase that never reached the processor has no complete bundle, and
 `Bundle.Validate` says so rather than quietly substituting the Credential
 Provider's answer to a different question.
 
+**And it is each party's *latest* answer, not its first.** `Client.Settle` is
+exported and the four steps are documented as separately usable, so a retry needs
+no misuse to reach: settle a purchase whose credential the processor refuses,
+settle it again with a good one, and the trail is `[credprovider, merchant, mpp,
+merchant, mpp]` with the money moved. A bundle built from the first answer would
+be five links that all verify over the processor's signed statement that the
+payment did not go through — every artefact in it genuine, so nothing in the
+chain could catch it. The invariant is that the bundle describes the purchase as
+of its last attempt, which is the same thing `Purchase.Settled` describes, and
+the two cannot disagree.
+
+`keep` still appends and never replaces. `Purchase.Receipts` is the evidence
+trail, and an agent able to delete a signed refusal by retrying would be deleting
+the fact AP2 makes the rejection receipt mandatory to produce — so the trail
+keeps every answer and only the assembly picks.
+`TestARetriedPurchaseIsDisputedOnItsLatestAnswer` pins both halves.
+
 ## The error codes
 
 Every refusal is reported in `contracts/evidence/error_code.json`'s vocabulary, so
@@ -270,13 +338,24 @@ a gap in what it was handed.
 ## Conformance
 
 `TestGoldenABrokenChainNamesTheSameLink` reads
-`backend/internal/adapters/ap2/testdata/dispute.json` and drives every tamper in
-the matrix through `Verify`.
+`backend/internal/adapters/ap2/testdata/dispute.json` and drives the published
+tampers through `Verify`.
 
 Two implementations shown the same broken bundle have to name the same link and
 the same reason, or one dispute reaches two verdicts depending on whose code
 heard it. Neither value is ours to choose: the link names come from
 `internal/core/evidence` and the codes from `contracts/evidence/error_code.json`.
+
+**The published set is narrower than the tamper matrix, on purpose.** A vector
+says: apply this tamper to the *bundle*, and the first link to refuse must be
+this one. Two rows in the matrix also swap the arbiter's `CheckoutVerifier` for
+`laxCheckoutVerifier` in order to reach link 4 at all — under `MerchantRules`,
+which is what `cmd/merchant` and every production wiring hold, the same bundles
+refuse at `checkout_authorised`. Publishing those would judge a correct
+implementation non-conformant for being right, so the `tamperCase.delegated` flag
+keeps them out of the file while leaving them as ordinary tests of the anchor.
+The golden test asserts the published set is exactly the undelegated rows, in
+both directions, so neither list can drift.
 
 It lives in `dispute_test.go` rather than `golden_test.go` because `make vectors`
 selects by test *name* — `-run 'TestGolden'` over `internal/adapters/...` and

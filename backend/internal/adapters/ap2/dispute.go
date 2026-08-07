@@ -12,8 +12,16 @@ import (
 )
 
 // Dispute is the arbiter: what somebody adjudicating a transaction brings to a
-// bundle of four signed artefacts in order to decide whether they are one
-// transaction.
+// bundle of four signed artefacts in order to decide whether they are all about
+// **one document**.
+//
+// One document, and not "one transaction", because the second is more than the
+// chain establishes and the gap is not academic. Two Checkout/Payment Mandate
+// pairs issued over the same merchant offer pair across each other perfectly —
+// the digest is the same in all four — so a chain that held over a crossed pair
+// would be saying the same true thing it says about an uncrossed one. What the
+// links below prove is which purchase four artefacts name, which is the fact a
+// dispute turns on and is not the whole of what "one transaction" would claim.
 //
 // **The arbiter brings the keys; the token never chooses one.** A receipt
 // carries iss, and resolving a key from it would let the party being judged
@@ -171,10 +179,17 @@ func (d Dispute) VerifyPaymentReceipt(token string, sd *sdjwt.SDJWT) (generated.
 // There is no sixth link over the merchant's own signature on the Checkout JWT.
 // The offer's format belongs to the merchant — checkoutType is unexported in
 // internal/roles/merchant, and this adapter treats the document as opaque bytes
-// on purpose. What the chain establishes is that four artefacts are about one
-// document; who issued that document is a question the merchant's own key
-// answers, and a Checkout Receipt saying success is already the merchant's
-// signature over having accepted it.
+// on purpose.
+//
+// **So a holding chain asserts nothing about where Bundle.Checkout came from.**
+// That is the honest statement and it holds in both directions: a bundle whose
+// Checkout is a string nobody ever signed, with both mandates bound to it and
+// both receipts genuine, verifies here link for link. Provenance is closed at
+// the role instead — merchant.Service.settle runs ownOffer before it will issue
+// any receipt at all, so a receipt from *that* merchant does imply the offer was
+// its own — but that is a property of one implementation which the arbiter
+// cannot see and a delegate need not have. Reading a holding chain as evidence
+// that the merchant made the offer is reading in a link that is not there.
 func (d Dispute) Verify(b evidence.Bundle) evidence.Report {
 	var rep evidence.Report
 
@@ -219,6 +234,16 @@ func (d Dispute) Verify(b evidence.Bundle) evidence.Report {
 
 	// BindingOf reads _sd_alg off a presentation whose signature has already
 	// been checked above, which is the precondition its own comment sets.
+	//
+	// **Neither of the two error arms below can fire from here**, and that is
+	// recorded rather than left for somebody to discover while hunting untested
+	// branches. BindingOf refuses three things: a nil SD-JWT, which sdjwt.Parse
+	// has already ruled out; an empty hash, which requireString rejects at
+	// decode for both claim names; and an _sd_alg it cannot compute, which
+	// sdjwt.Verify resolved through the same hashAlgOf on both mandates before
+	// either of them got this far. They stay because handling them is correct
+	// for any caller whose preconditions are weaker than this one's, and because
+	// the alternative is discarding an error to make a branch disappear.
 	checkoutBinding, err := BindingOf(checkoutSD, checkout.CheckoutHash)
 	if err != nil {
 		return broken(rep, evidence.StepOnePurchase, err)

@@ -229,6 +229,17 @@ type tamperCase struct {
 	// callers branch on and the code is what a counterparty reads.
 	is   error
 	code generated.ErrorCode
+	// delegated marks a row whose tamper also swaps the arbiter's
+	// CheckoutVerifier for laxCheckoutVerifier, which exists only in this file.
+	//
+	// Such a row is **not published** in testdata/dispute.json, and the reason
+	// is what a conformance vector means: a second implementation reads a tamper
+	// and applies it to the *bundle*. These rows are not reproducible that way —
+	// under MerchantRules, which is what cmd/merchant and every production
+	// wiring hold, the same bundle refuses at checkout_authorised instead, so a
+	// correct implementation would be judged non-conformant. They are ordinary
+	// tests of the link-4 anchor, and the anchor is the thing they are for.
+	delegated bool
 }
 
 // tamperCases is the matrix, shared by the behaviour test and the conformance
@@ -369,9 +380,10 @@ func tamperCases() []tamperCase {
 				b.PaymentMandate = pm.String()
 				b.PaymentReceipt = receiptOver(t, fx.processor, processorID, pm, paymentKind, nil)
 			},
-			broke: evidence.StepOnePurchase,
-			is:    ap2.ErrCheckoutHashMismatch,
-			code:  generated.ErrorCodeCheckoutHashMismatch,
+			broke:     evidence.StepOnePurchase,
+			is:        ap2.ErrCheckoutHashMismatch,
+			code:      generated.ErrorCodeCheckoutHashMismatch,
+			delegated: true,
 		},
 		{
 			// The fallback arm, with the payment side wrong. The two digests are
@@ -410,9 +422,10 @@ func tamperCases() []tamperCase {
 				b.CheckoutMandate = cm.String()
 				b.CheckoutReceipt = receiptOver(t, fx.merchant, merchantID, cm, checkoutKind, nil)
 			},
-			broke: evidence.StepOnePurchase,
-			is:    ap2.ErrCheckoutHashMismatch,
-			code:  generated.ErrorCodeCheckoutHashMismatch,
+			broke:     evidence.StepOnePurchase,
+			is:        ap2.ErrCheckoutHashMismatch,
+			code:      generated.ErrorCodeCheckoutHashMismatch,
+			delegated: true,
 		},
 		{
 			name:   "the Payment Receipt answers a different Payment Mandate",
@@ -442,7 +455,34 @@ func tamperCases() []tamperCase {
 			is:    sdjwt.ErrSignatureInvalid,
 			code:  generated.ErrorCodeSignatureInvalid,
 		},
+		{
+			// The mandate_type check in its other direction, so that neither
+			// slot is trusted to be labelled correctly because the other one is.
+			// The processor really did sign this and it really does answer this
+			// presentation; it claims to be answering a Checkout Mandate.
+			name:   "the processor's own answer is labelled as a Checkout Receipt",
+			vector: "payment_receipt_mislabelled_as_checkout",
+			tamper: func(t *testing.T, fx disputeFx, _ *ap2.Dispute, b *evidence.Bundle) {
+				b.PaymentReceipt = receiptOver(
+					t, fx.processor, processorID, fx.paymentMandate, checkoutKind, nil)
+			},
+			broke: evidence.StepPaymentAnswered,
+			is:    ap2.ErrReceiptMismatch,
+			code:  generated.ErrorCodeMandateMalformed,
+		},
 	}
+}
+
+// publishable is the subset of the matrix a second implementation can reproduce
+// from the bundle alone — every row that does not also reconfigure the arbiter.
+func publishable(cases []tamperCase) []tamperCase {
+	var out []tamperCase
+	for _, tc := range cases {
+		if !tc.delegated {
+			out = append(out, tc)
+		}
+	}
+	return out
 }
 
 // run applies one case and returns what the chain concluded.
@@ -595,6 +635,74 @@ func TestTwoDigestsUnderDifferentAlgorithmsStillPair(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, checkout.CheckoutHash, pay.CheckoutHash,
 		"the two mandates have to actually disagree on the digest, or the direct comparison would have answered")
+}
+
+// TestAHoldingChainSaysNothingAboutWhoIssuedTheOffer states the limit of having
+// no sixth link, as a test rather than as a paragraph.
+//
+// The document below was signed by nobody and is not even a JWT. Both mandates
+// bind it, both receipts answer them, and the chain holds — because what the
+// chain checks is that four artefacts are about one document, and provenance is
+// a question it never asks. merchant.Service.settle closes this at the role by
+// running ownOffer before it will issue any receipt at all, so a receipt from
+// that merchant does imply the offer was its own; the arbiter cannot see that
+// and a delegate need not have done it.
+//
+// This is worth a test rather than a sentence because the reading it forbids is
+// the tempting one, and because it holds for a success receipt as much as for a
+// rejection — the earlier justification here appealed to a success receipt being
+// the merchant's signature over having accepted the offer, which is an inference
+// about one implementation and not a link in the chain.
+func TestAHoldingChainSaysNothingAboutWhoIssuedTheOffer(t *testing.T) {
+	t.Parallel()
+
+	const unsigned = "this is not a JWT at all, nobody signed it"
+
+	fx := newDisputeFixture(t)
+	fx.checkout = unsigned
+	fx.checkoutMandate = reparse(t, issue(t, fx.user, checkoutFor(unsigned)))
+	fx.paymentMandate = reparse(t, issuePayment(t, fx.user, payment(), unsigned))
+
+	rep := fx.arbiter().Verify(fx.bundle(t))
+
+	require.True(t, rep.Holds(),
+		"the chain has no link over the offer's provenance, and must not appear to: %v", rep.Err)
+	assert.Len(t, rep.Held, 5,
+		"every link held over a document no merchant ever issued, which is exactly the limit being stated")
+}
+
+// TestTwoPairsOverOneOfferCrossVerify is the reason Dispute says "one document"
+// rather than "one transaction".
+//
+// Two Checkout Mandates and two Payment Mandates, all four over the same
+// merchant offer, all four genuine. A bundle taking one mandate from each pair
+// holds, because the digest is the same in all four and the digest is what links
+// 1 and 4 compare. Nothing here is wrong; the claim would be.
+func TestTwoPairsOverOneOfferCrossVerify(t *testing.T) {
+	t.Parallel()
+
+	fx := newDisputeFixture(t)
+
+	// The second pair, issued exactly as the first was. Only its Payment Mandate
+	// is used below, because that is the artefact being crossed in.
+	otherPaymentMandate := reparse(t, issuePayment(t, fx.user, payment(), merchantCheckout))
+
+	require.NotEqual(t, fx.paymentMandate.String(), otherPaymentMandate.String(),
+		"the crossed-in mandate has to be a different document from the one it replaces, or this test asserts nothing")
+
+	crossed := evidence.Bundle{
+		Checkout:        fx.checkout,
+		CheckoutMandate: fx.checkoutMandate.String(),
+		CheckoutReceipt: receiptOver(t, fx.merchant, merchantID, fx.checkoutMandate, checkoutKind, nil),
+		PaymentMandate:  otherPaymentMandate.String(),
+		PaymentReceipt:  receiptOver(t, fx.processor, processorID, otherPaymentMandate, paymentKind, nil),
+	}
+
+	rep := fx.arbiter().Verify(crossed)
+	require.True(t, rep.Holds(),
+		"a mandate from one pair and a mandate from another name the same purchase, and the chain says so: %v", rep.Err)
+	assert.Len(t, rep.Held, 5,
+		"which is why the chain claims one document rather than one transaction")
 }
 
 // TestAnIncompleteBundleIsNotAFinding keeps the two answers apart. Three
@@ -758,9 +866,14 @@ func TestGoldenABrokenChainNamesTheSameLink(t *testing.T) {
 			"a second implementation reads this table by position as well as by name")
 	}
 
-	cases := tamperCases()
+	// The published set is the tampers that live in the bundle. A row that also
+	// swaps the arbiter's rule set is a test of ours and not a vector: another
+	// implementation applying the named tamper to the bundle and holding
+	// MerchantRules would refuse it at checkout_authorised and be judged
+	// non-conformant for being right.
+	cases := publishable(tamperCases())
 	require.Len(t, v.Broken, len(cases),
-		"every tamper this package knows how to build has to be published, and nothing else")
+		"every tamper reproducible from the bundle has to be published, and nothing else")
 
 	for _, tc := range cases {
 		t.Run(tc.vector, func(t *testing.T) {
