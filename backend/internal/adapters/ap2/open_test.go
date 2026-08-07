@@ -89,39 +89,88 @@ func TestAnOpenCheckoutMandateRoundTrips(t *testing.T) {
 	assert.Equal(t, want.ExpiresAt, got.ExpiresAt)
 }
 
-func TestAnOpenMandateWithoutAnAgentKeyIsRefusedAtIssuance(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t)
-
-	_, err := ap2.IssueOpenCheckout(t.Context(), f.signer, generated.OpenCheckoutMandate{
-		Constraints: demoConstraints(t),
-	}, f.blinder)
-	require.Error(t, err,
-		"an open mandate endorsing nobody authorises whoever holds it, which is the failure the whole mechanism exists to prevent")
-	assert.ErrorIs(t, err, ap2.ErrMandateMalformed)
-}
-
-// TestAnOpenMandateWithAKeyCarryingNoMaterialIsRefusedAtIssuance is the case
-// TestAnOpenMandateWithoutAnAgentKeyIsRefusedAtIssuance does not cover: a key
-// that names a type and carries no coordinates endorses nobody just as much
-// as an absent key does — internal/core/authz's UsableKey already refuses it
-// at verification, through Endorsement.endorses, so IssueOpenCheckout has to
-// refuse it too. A mandate accepted here and rejected there would not fail
+// TestAnOpenMandateWithAnUnusableAgentKeyIsRefusedAtIssuance is table-driven
+// over both open-mandate issuing functions, because IssueOpenCheckout and
+// IssueOpenPayment ask the identical question of the identical helper —
+// authz.UsableKey(m.AgentKey) — through two separate call sites that could
+// silently drift apart. A table that lists the issuing functions as rows
+// makes a third one landing without a row a visible gap in the table rather
+// than a silent one in the suite; two near-identical top-level tests, one per
+// mandate, do not have that property, and Task 3 shipped with exactly that
+// gap once for IssueOpenPayment's "no key at all" case.
+//
+// Two key shapes are covered for each mandate, and the second is the one
+// that matters more than the first reads. "No key at all" is refused by
+// almost any guard, including a wrong one — an absent AgentKey is the
+// easiest case to get right by accident. "A key type with no coordinates"
+// is what a plausible *weakening* of the guard would still accept: a
+// reviewer who rewrote authz.UsableKey(m.AgentKey) as the shallower
+// m.AgentKey.Kty == "" would pass the first case and fail this one, because
+// a Kty naming "EC" with no Crv/X/Y is non-empty but still endorses nobody —
+// the same fact internal/core/authz.Endorsement.endorses refuses at
+// verification. A mandate accepted here and rejected there would not fail
 // loudly; it would fail later, at authorisation, against whichever party is
 // least placed to act on it.
-func TestAnOpenMandateWithAKeyCarryingNoMaterialIsRefusedAtIssuance(t *testing.T) {
+func TestAnOpenMandateWithAnUnusableAgentKeyIsRefusedAtIssuance(t *testing.T) {
 	t.Parallel()
 
-	f := newFixture(t)
+	keyShapes := []struct {
+		name string
+		key  generated.PublicKey
+		why  string
+	}{
+		{
+			name: "no key at all",
+			key:  generated.PublicKey{},
+			why:  "an open mandate endorsing nobody authorises whoever holds it, which is the failure the whole mechanism exists to prevent",
+		},
+		{
+			name: "a key type with no coordinates",
+			key:  generated.PublicKey{Kty: "EC"}, // a type, and nothing to identify anybody by
+			why:  "a key type with no coordinates identifies nobody, the same fact authz.UsableKey already enforces at verification",
+		},
+	}
 
-	_, err := ap2.IssueOpenCheckout(t.Context(), f.signer, generated.OpenCheckoutMandate{
-		AgentKey:    generated.PublicKey{Kty: "EC"}, // a type, and nothing to identify anybody by
-		Constraints: demoConstraints(t),
-	}, f.blinder)
-	require.Error(t, err,
-		"a key type with no coordinates identifies nobody, the same fact authz.UsableKey already enforces at verification")
-	assert.ErrorIs(t, err, ap2.ErrMandateMalformed)
+	mandates := []struct {
+		name  string
+		issue func(t *testing.T, f fixture, key generated.PublicKey) error
+	}{
+		{
+			name: "open Checkout Mandate",
+			issue: func(t *testing.T, f fixture, key generated.PublicKey) error {
+				_, err := ap2.IssueOpenCheckout(t.Context(), f.signer, generated.OpenCheckoutMandate{
+					AgentKey: key, Constraints: demoConstraints(t),
+				}, f.blinder)
+				return err
+			},
+		},
+		{
+			name: "open Payment Mandate",
+			issue: func(t *testing.T, f fixture, key generated.PublicKey) error {
+				_, err := ap2.IssueOpenPayment(t.Context(), f.signer, generated.OpenPaymentMandate{
+					AgentKey: key, Constraints: demoConstraints(t),
+				}, f.blinder)
+				return err
+			},
+		},
+	}
+
+	for _, m := range mandates {
+		t.Run(m.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, k := range keyShapes {
+				t.Run(k.name, func(t *testing.T) {
+					t.Parallel()
+
+					f := newFixture(t)
+					err := m.issue(t, f, k.key)
+					require.Error(t, err, k.why)
+					assert.ErrorIs(t, err, ap2.ErrMandateMalformed)
+				})
+			}
+		})
+	}
 }
 
 func TestAClosedCheckoutMandateIsNotAnOpenOne(t *testing.T) {
@@ -155,26 +204,6 @@ func TestAnExpiredOpenMandateIsRefused(t *testing.T) {
 	require.Error(t, err,
 		"an open mandate's lifetime is its blast radius, so an expiry that is not enforced is the one limit that matters most going unenforced")
 	assert.ErrorIs(t, err, sdjwt.ErrExpired)
-}
-
-// TestAnOpenPaymentMandateWithoutAnAgentKeyIsRefusedAtIssuance is
-// TestAnOpenMandateWithoutAnAgentKeyIsRefusedAtIssuance's counterpart for
-// IssueOpenPayment. The guard is the same call to authz.UsableKey the open
-// Checkout Mandate uses, but it is a separate call site in a separate
-// function, and a mutation that deleted it here would not be caught by any
-// checkout test — a mandate endorsing nobody authorises whoever holds it
-// regardless of which of the two open mandates it is.
-func TestAnOpenPaymentMandateWithoutAnAgentKeyIsRefusedAtIssuance(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t)
-
-	_, err := ap2.IssueOpenPayment(t.Context(), f.signer, generated.OpenPaymentMandate{
-		Constraints: demoConstraints(t),
-	}, f.blinder)
-	require.Error(t, err,
-		"an open mandate endorsing nobody authorises whoever holds it, which is the failure the whole mechanism exists to prevent")
-	assert.ErrorIs(t, err, ap2.ErrMandateMalformed)
 }
 
 // TestAnOpenPaymentMandateCarriesPinnedValues is the open Payment Mandate's
