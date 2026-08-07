@@ -411,6 +411,27 @@ Squash-merge. Link the issue with `Closes #N` when the pull request finishes
 it, or `Refs #N` when it does not — and say in the body what is left, so that
 an issue staying open is a decision rather than an oversight.
 
+**Show the change, do not only describe it.** Two things belong in a pull
+request body wherever they apply, and GitHub renders both natively:
+
+- **A mermaid diagram** where the change moves a flow, a sequence between roles,
+  or the shape of an object. Mermaid is already this repository's diagram
+  language — `make diagrams` exports the inline mermaid in `docs/` to SVG, and
+  the protocol documentation is built around it — so a ` ```mermaid ` fence in a
+  pull request costs nothing to write and nothing to host.
+- **A table of the old behaviour against the new**, one row per case rather than
+  per file, wherever behaviour changed.
+
+The reader to write for is the one who was not in the conversation. A closed
+mandate turning from a separately issued SD-JWT into a Key Binding JWT inside a
+`~~`-joined chain took four paragraphs to explain and would have taken one
+diagram; a search endpoint moving from `POST` to `GET` is two columns.
+
+**And the limit, which matters as much.** A diagram that restates the file list,
+or a table with one row, is ceremony — leave it out. This documentation is dense
+because every line earns its place, and a rule that produced a diagram on every
+typo fix would be the first one people quietly stopped following.
+
 **Issues:** work is tracked in GitHub Issues under two milestones, *Google AP2*
 (#1–23) and *Visa TAP* (#24–33), plus *Foundations*. Issue bodies carry spec
 references, dependencies and known traps. Read the issue before starting.
