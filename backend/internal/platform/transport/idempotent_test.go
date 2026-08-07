@@ -111,15 +111,22 @@ func post(key, target, body string) *http.Request {
 }
 
 // problemOf decodes a Problem Details body, failing if the response is not one.
+//
+// assert, for the reason ran gives: this is a helper, and the call site that
+// gets it wrong is the one that has not been written yet. The early return is
+// what "cannot continue" looks like without FailNow — a caller then reads .Code
+// off the zero Problem and adds a second failure, which is noise next to a
+// failure that was never reported at all.
 func problemOf(t *testing.T, rec *httptest.ResponseRecorder) problem.Problem {
 	t.Helper()
-	if got := rec.Header().Get("Content-Type"); got != problem.ContentType {
-		t.Fatalf("Content-Type = %q, want %q; body: %s", got, problem.ContentType, rec.Body)
-	}
 	var p problem.Problem
-	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
-		t.Fatalf("decode problem: %v; body: %s", err, rec.Body)
+	if !assert.Equalf(t, problem.ContentType, rec.Header().Get("Content-Type"),
+		"a rejection a client cannot recognise as Problem Details is one it has to guess at; body: %s",
+		rec.Body) {
+		return p
 	}
+	assert.NoErrorf(t, json.Unmarshal(rec.Body.Bytes(), &p),
+		"a caller reading .Code off a body that did not decode is asserting nothing; body: %s", rec.Body)
 	return p
 }
 
@@ -151,12 +158,10 @@ func TestMissingKeyIsRejected(t *testing.T) {
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, post("", "/checkout", `{"amount":100}`))
 
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", rec.Code)
-	}
-	if p := problemOf(t, rec); p.Code != generated.ErrorCodeIdempotencyKeyMissing {
-		t.Errorf("code = %q, want %q", p.Code, generated.ErrorCodeIdempotencyKeyMissing)
-	}
+	assert.Equal(t, http.StatusBadRequest, rec.Code,
+		"a missing key is the caller's to fix, and a 5xx would invite them to retry it unchanged")
+	assert.Equal(t, generated.ErrorCodeIdempotencyKeyMissing, problemOf(t, rec).Code,
+		"the code is what names the header, and 400 alone does not")
 	// The point of refusing rather than deduplicating on the body: the
 	// operation must not have happened.
 	ran(t, h, 0, "a request with no key reached the handler")
@@ -175,21 +180,15 @@ func TestRetryReplaysWithoutRerunning(t *testing.T) {
 	wrapped.ServeHTTP(second, post("k1", "/checkout", `{"amount":100}`))
 
 	ran(t, h, 1, "the retry re-executed the operation")
-	if first.Body.String() != second.Body.String() {
-		t.Errorf("replayed body %q, want %q", second.Body, first.Body)
-	}
-	if second.Code != first.Code {
-		t.Errorf("replayed status %d, want %d", second.Code, first.Code)
-	}
-	if second.Header().Get("Content-Type") != "application/json" {
-		t.Errorf("replay lost the content type: %q", second.Header().Get("Content-Type"))
-	}
-	if first.Header().Get(transport.ReplayedHeader) != "" {
-		t.Error("the first response was marked as a replay")
-	}
-	if second.Header().Get(transport.ReplayedHeader) != "true" {
-		t.Error("the replay was not marked, so an operator cannot tell the two apart")
-	}
+	assert.Equal(t, first.Body.String(), second.Body.String(),
+		"a retry is owed the answer the operation already produced, not a second opinion")
+	assert.Equal(t, first.Code, second.Code, "the status is part of that answer")
+	assert.Equal(t, "application/json", second.Header().Get("Content-Type"),
+		"a replay a client cannot parse is not the answer the first caller got")
+	assert.Empty(t, first.Header().Get(transport.ReplayedHeader),
+		"marking the original a replay would make the header mean nothing")
+	assert.Equal(t, "true", second.Header().Get(transport.ReplayedHeader),
+		"the two are identical by design, so without the header an operator cannot tell them apart")
 }
 
 func TestSameKeyDifferentRequestConflicts(t *testing.T) {
@@ -216,12 +215,10 @@ func TestSameKeyDifferentRequestConflicts(t *testing.T) {
 			rec := httptest.NewRecorder()
 			wrapped.ServeHTTP(rec, post("k1", tc.target, tc.body))
 
-			if rec.Code != http.StatusConflict {
-				t.Errorf("status = %d, want 409", rec.Code)
-			}
-			if p := problemOf(t, rec); p.Code != generated.ErrorCodeIdempotencyConflict {
-				t.Errorf("code = %q, want %q", p.Code, generated.ErrorCodeIdempotencyConflict)
-			}
+			assert.Equal(t, http.StatusConflict, rec.Code,
+				"answering anything else would hand this request the other one's result")
+			assert.Equal(t, generated.ErrorCodeIdempotencyConflict, problemOf(t, rec).Code,
+				"a reused key and a busy key are both 409, and only the code separates them")
 			ran(t, h, 1, "the conflicting request was executed")
 		})
 	}
@@ -246,9 +243,8 @@ func TestServerErrorIsNotRemembered(t *testing.T) {
 	for range 2 {
 		rec := httptest.NewRecorder()
 		wrapped.ServeHTTP(rec, post("k1", "/checkout", `{"amount":100}`))
-		if rec.Code != http.StatusInternalServerError {
-			t.Fatalf("status = %d, want 500", rec.Code)
-		}
+		require.Equal(t, http.StatusInternalServerError, rec.Code,
+			"the run count below only means what it says if both attempts failed")
 	}
 	ran(t, h, 2, "a transient failure was cached")
 
@@ -270,9 +266,8 @@ func TestClientErrorIsRemembered(t *testing.T) {
 	for range 2 {
 		rec := httptest.NewRecorder()
 		wrapped.ServeHTTP(rec, post("k1", "/checkout", `{"amount":100}`))
-		if rec.Code != http.StatusForbidden {
-			t.Fatalf("status = %d, want 403", rec.Code)
-		}
+		require.Equal(t, http.StatusForbidden, rec.Code,
+			"the second answer is only a replay of the first if the first was the rejection")
 	}
 	ran(t, h, 1, "a settled rejection was re-evaluated")
 }
@@ -287,10 +282,8 @@ func TestHandlerStillReadsTheBody(t *testing.T) {
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, post("k1", "/checkout", body))
 
-	if rec.Body.String() != body {
-		t.Errorf("handler saw %q, want %q — the middleware consumed the body without restoring it",
-			rec.Body, body)
-	}
+	assert.Equal(t, body, rec.Body.String(),
+		"the handler echoes what it read, so a difference here is the body the middleware consumed and did not restore")
 }
 
 func TestRecordLapses(t *testing.T) {
@@ -321,12 +314,10 @@ func TestCapacityRefusesBeforeTheOperationRuns(t *testing.T) {
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, post("k2", "/checkout", `{"amount":2}`))
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want 503", rec.Code)
-	}
-	if p := problemOf(t, rec); p.Code != generated.ErrorCodeVerifierUnavailable {
-		t.Errorf("code = %q, want %q", p.Code, generated.ErrorCodeVerifierUnavailable)
-	}
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code,
+		"a store with no room is the verifier's problem, and the caller is owed a status that says come back")
+	assert.Equal(t, generated.ErrorCodeVerifierUnavailable, problemOf(t, rec).Code,
+		"the key is still the caller's to reuse, which a capacity code says and a conflict would deny")
 	ran(t, h, 1, "an operation ran that could not be remembered")
 }
 
@@ -365,12 +356,16 @@ func TestRetryWhileTheFirstIsStillRunning(t *testing.T) {
 	retry := httptest.NewRecorder()
 	wrapped.ServeHTTP(retry, post("k1", "/checkout", `{"amount":100}`))
 
-	if retry.Code != http.StatusConflict {
-		t.Errorf("status = %d, want 409", retry.Code)
-	}
-	if p := problemOf(t, retry); p.Code != generated.ErrorCodeIdempotencyInFlight {
-		t.Errorf("code = %q, want %q", p.Code, generated.ErrorCodeIdempotencyInFlight)
-	}
+	// assert, though these two do run on the test goroutine and FailNow would
+	// be legal here. The first request is parked on <-release, and aborting
+	// before the close below strands it: the failure would be reported, and
+	// then the test that reported it would be the one holding a goroutine open.
+	// Getting to the close is worth more than stopping early, which is what the
+	// t.Errorf these replaced was already saying.
+	assert.Equal(t, http.StatusConflict, retry.Code,
+		"letting the retry through is how one payment becomes two")
+	assert.Equal(t, generated.ErrorCodeIdempotencyInFlight, problemOf(t, retry).Code,
+		"this retry should be sent back later, where the conflict code tells a caller not to bother")
 
 	close(release)
 	wg.Wait()
@@ -381,9 +376,8 @@ func TestRetryWhileTheFirstIsStillRunning(t *testing.T) {
 	after := httptest.NewRecorder()
 	wrapped.ServeHTTP(after, post("k1", "/checkout", `{"amount":100}`))
 	ran(t, h, 1, "the operation ran again once the first one had finished")
-	if after.Body.String() != first.Body.String() {
-		t.Errorf("replayed %q, want %q", after.Body, first.Body)
-	}
+	assert.Equal(t, first.Body.String(), after.Body.String(),
+		"the caller who was refused mid-flight is owed the same answer as the one who waited")
 }
 
 // TestPanickingHandlerFreesTheKey covers the same rule on the path that does
@@ -433,13 +427,12 @@ func TestReplayKeepsEveryHeader(t *testing.T) {
 	wrapped.ServeHTTP(second, post("k1", "/checkout", `{"amount":100}`))
 
 	for _, name := range []string{"Location", "ETag", "Content-Type"} {
-		if got, want := second.Header().Get(name), first.Header().Get(name); got != want {
-			t.Errorf("replayed %s = %q, want %q", name, got, want)
-		}
+		assert.Equalf(t, first.Header().Get(name), second.Header().Get(name),
+			"%s did not survive the replay, so the second caller was not given the answer the first one got",
+			name)
 	}
-	if second.Code != http.StatusCreated {
-		t.Errorf("replayed status = %d, want 201", second.Code)
-	}
+	assert.Equal(t, http.StatusCreated, second.Code,
+		"a 201 replayed as anything else tells the second caller the resource was never created")
 }
 
 // TestOversizedBodyIsRejectedAsSuch covers the status the caller is owed. A
@@ -455,12 +448,10 @@ func TestOversizedBodyIsRejectedAsSuch(t *testing.T) {
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, post("k1", "/checkout", strings.Repeat("x", (1<<20)+1)))
 
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Errorf("status = %d, want 413", rec.Code)
-	}
-	if p := problemOf(t, rec); p.Code != generated.ErrorCodeRequestTooLarge {
-		t.Errorf("code = %q, want %q", p.Code, generated.ErrorCodeRequestTooLarge)
-	}
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code,
+		"400 would send the sender looking for a syntax error that is not there")
+	assert.Equal(t, generated.ErrorCodeRequestTooLarge, problemOf(t, rec).Code,
+		"the code is what tells the sender to send less rather than to fix what it sent")
 	ran(t, h, 0, "an oversized body reached the handler")
 }
 
@@ -477,10 +468,9 @@ func TestOversizedResponseIsNotRemembered(t *testing.T) {
 
 	first := httptest.NewRecorder()
 	wrapped.ServeHTTP(first, post("k1", "/checkout", `{"amount":100}`))
-	if first.Body.Len() != len(big) {
-		t.Fatalf("the caller got %d bytes, want %d — the cap truncated the real answer",
-			first.Body.Len(), len(big))
-	}
+	require.Equal(t, len(big), first.Body.Len(),
+		"the cap may give up the remembered copy and never the answer itself, so a short body here "+
+			"makes the run count below a test of the wrong thing")
 
 	wrapped.ServeHTTP(httptest.NewRecorder(), post("k1", "/checkout", `{"amount":100}`))
 	ran(t, h, 2, "an oversized response was remembered anyway")
@@ -496,8 +486,12 @@ func TestFlushReachesTheUnderlyingWriter(t *testing.T) {
 	flushed := make(chan struct{}, 1)
 	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		f, ok := w.(http.Flusher)
-		if !ok {
-			t.Error("the handler was given a writer that cannot flush")
+		// assert, not require: a handler is a callback. This one happens to be
+		// called on the test goroutine, because nothing here starts a server —
+		// but the two tests below serve theirs from httptest.NewServer, where
+		// the identical line would be running on net/http's goroutine and
+		// FailNow would not be legal. Nothing about it would look different.
+		if !assert.True(t, ok, "wrapping a ResponseWriter drops Flusher unless the wrapper reimplements it") {
 			return
 		}
 		_, _ = w.Write([]byte(`{"partial":true}`))
@@ -509,14 +503,11 @@ func TestFlushReachesTheUnderlyingWriter(t *testing.T) {
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, post("k1", "/checkout", `{"amount":100}`))
 
-	select {
-	case <-flushed:
-	default:
-		t.Fatal("the handler never reached its flush")
-	}
-	if !rec.Flushed {
-		t.Error("the flush did not reach the underlying writer")
-	}
+	// The send is the last line of the handler, so an empty channel means the
+	// handler returned early and the flush below would be proving nothing.
+	require.Len(t, flushed, 1, "the handler never reached its flush")
+	assert.True(t, rec.Flushed,
+		"a flush that stops at the wrapper is invisible until a stream stalls in production")
 }
 
 // TestHijackIsNotRemembered is the test the Hijack/Unwrap pair exists to make
