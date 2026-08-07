@@ -6,24 +6,25 @@
 // has no interpretation step at all, since the user approves the closed mandates
 // directly. That arrives with #15.
 //
-// Bringing the stack up does not buy anything. It confirms every counterparty is
-// reachable and publishing a readable key, then waits.
+// It confirms every counterparty is reachable and publishing a readable key,
+// and then, under -buy, runs one Human Present purchase and stays up.
 //
-// That is a deliberate emptiness rather than an unfinished one. A Human Present
-// purchase is one specific checkout approved at the moment of purchase — there
-// are no constraints, nothing is being waited for, and nothing is inferred. So a
-// demo that ran one on startup could only ever show a hardcoded scenario
-// completing, which teaches a viewer the mechanics of a flow the specification
-// itself says a normal e-commerce journey could replace. The flow worth watching
-// is Human Not Present, where the agent waits on a condition the user described,
-// and that arrives with #15.
+// # Why it stays up afterwards
 //
-// -buy runs a purchase for anyone who wants to smoke-test the stack by hand, and
-// the integration tests in internal/agent cover the flow properly.
+// The demo runner treats a process that exits as a failure, so an agent that
+// vanished the moment its purchase completed would leave the stack looking
+// broken when nothing is. -once is for the other caller: somebody smoke-testing
+// the stack by hand who wants the receipts printed and the shell back.
 //
-// Staying up is not idling for its own sake: the demo runner treats a process
-// that exits as a failure, so a role that vanished after a readiness check would
-// leave the stack looking broken when nothing is.
+// # Why one purchase, and not a loop
+//
+// A Human Present purchase is one specific checkout approved at the moment of
+// purchase — no constraints, nothing waited for, nothing inferred. Running it
+// once on startup is what makes the event log have something in it, which is the
+// whole of issue #20's three-lane view; running it repeatedly would only repeat
+// the same nine events. The flow worth watching over time is Human Not Present,
+// where the agent waits on a condition the user described, and that arrives
+// with #15.
 package main
 
 import (
@@ -37,10 +38,27 @@ import (
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 )
 
+// flushGrace is how long a stopping agent waits for its buffered events to
+// reach the collector. The same budget roles.Main gives a server, and for the
+// same reason: the events are never evidence, so nothing waits long for them.
+const flushGrace = 2 * time.Second
+
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "agent: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// run is main with the exit taken out, so the emitter's flush can be a defer.
+// os.Exit does not run deferred functions, and the events worth seeing most are
+// the ones emitted just before a process stops.
+func run() error {
 	endpoints := agent.Endpoints{}
 	flag.StringVar(&endpoints.Merchant, "merchant", "http://localhost:8081", "Merchant base URL")
 	flag.StringVar(&endpoints.CredProvider, "credprovider", "http://localhost:8082", "Credential Provider base URL")
@@ -49,33 +67,53 @@ func main() {
 	from := flag.String("from", "BEG", "origin IATA code")
 	to := flag.String("to", "PMI", "destination IATA code")
 	wait := flag.Duration("wait", 30*time.Second, "how long to wait for the roles to come up")
-	buy := flag.Bool("buy", false, "run one Human Present purchase, print it, and exit")
+	buy := flag.Bool("buy", false, "run one Human Present purchase once the counterparties are up")
+	once := flag.Bool("once", false, "exit after the purchase instead of staying up")
+	collector := roles.CollectorFlag()
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	events, err := roles.Events(clock.New(), "agent", *collector)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		flush, cancel := context.WithTimeout(context.Background(), flushGrace)
+		defer cancel()
+		if err := events.Close(flush); err != nil {
+			fmt.Fprintf(os.Stderr, "agent: flushing events: %v\n", err)
+		}
+	}()
+
 	if err := ready(ctx, endpoints, *wait); err != nil {
-		fmt.Fprintf(os.Stderr, "agent: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if *buy {
-		if err := buyOnce(ctx, endpoints, *from, *to); err != nil {
-			fmt.Fprintf(os.Stderr, "agent: %v\n", err)
-			os.Exit(1)
+		if err := buyOnce(ctx, endpoints, events, *from, *to); err != nil {
+			return err
 		}
-		return
+		if *once {
+			return nil
+		}
 	}
 
 	fmt.Println("  agent: ready. Waiting for work — the flow worth watching is #15.")
 	<-ctx.Done()
+	return nil
 }
 
 func ready(ctx context.Context, e agent.Endpoints, wait time.Duration) error {
 	// Wait for the counterparties before doing anything. The roles start
 	// together, so whichever comes up first finds the others not yet listening —
 	// which is the ordinary case rather than a misconfiguration.
+	//
+	// The collector is deliberately not in this list. Waiting on it would make a
+	// side channel for screenshots a precondition for transacting, which is the
+	// coupling ADR 0003 forbids; a collector that is not there costs events and
+	// nothing else.
 	ready, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 
@@ -111,8 +149,25 @@ func ready(ctx context.Context, e agent.Endpoints, wait time.Duration) error {
 // checkout_hash, which proves they name the same purchase and says nothing
 // about the number. A smoke test that printed two unrelated figures as though
 // they were one is worse than no smoke test.
-func buyOnce(ctx context.Context, e agent.Endpoints, from, to string) error {
-	client := &agent.Client{Endpoints: e}
+//
+// The correlation ID is minted here rather than inside Buy, because the quote
+// above is part of the same transaction and Buy has not started yet. Buy would
+// mint one otherwise, and the two would name the same purchase differently.
+func buyOnce(
+	ctx context.Context, e agent.Endpoints, events *obs.Emitter, from, to string,
+) error {
+	ctx, id, err := obs.EnsureCorrelationID(ctx, nil)
+	if err != nil {
+		// Not fatal. A purchase that cannot be labelled is still a purchase, and
+		// refusing to transact because a screenshot would be harder to read
+		// would be the tail wagging the dog.
+		fmt.Fprintf(os.Stderr, "agent: minting a correlation ID: %v\n", err)
+	}
+	if id != "" {
+		fmt.Printf("\n  corr       %s\n", id)
+	}
+
+	client := &agent.Client{Endpoints: e, Events: events}
 
 	var quoted agent.Purchase
 	if err := client.Quote(ctx, from, to, &quoted); err != nil {
@@ -124,7 +179,7 @@ func buyOnce(ctx context.Context, e agent.Endpoints, from, to string) error {
 	// The receipts are printed whether or not the purchase completed. They are
 	// the reason the flow is worth running, and a refusal is the case where the
 	// signed reason matters most.
-	fmt.Printf("\n  route      %s→%s\n", from, to)
+	fmt.Printf("  route      %s→%s\n", from, to)
 	if bought.Price.Currency != "" {
 		fmt.Printf("  price      %d %s\n", bought.Price.Amount, bought.Price.Currency)
 	}
