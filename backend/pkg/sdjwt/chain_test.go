@@ -247,6 +247,26 @@ func TestIssuerJWTHashBindsWithoutCoveringDisclosures(t *testing.T) {
 	require.NoError(t, err, "issuer_jwt_hash covers only the delegating JWT, not the disclosures presented alongside the root, so dropping one must not break verification")
 }
 
+func TestAnIssuerJWTHashNamingAnotherRootIsRejected(t *testing.T) {
+	// The weaker of the two hashes still has to bind. Without this the
+	// issuer_jwt_hash comparison could be deleted outright and every test would
+	// stay green — the test above only asserts NoError, and the both-present
+	// case is refused before any comparison happens.
+	//
+	// What it stops: a delegation lifted off the root it was signed over and
+	// presented on top of a different one. That is the whole job of a binding
+	// claim, and it is the branch a verifier reaches whenever a chain it did not
+	// build chose issuer_jwt_hash over sd_hash.
+	chain := delegatedChainWithIssuerJWTHash(t, issuedRootWithExtraDisclosure(t))
+	transplanted := replaceRoot(t, chain, issuedRoot(t))
+
+	_, err := sdjwt.VerifyChain(transplanted, chainOptions(t))
+	require.Error(t, err, "a delegation must not verify against a root other than the one it named")
+	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid)
+	assert.ErrorContains(t, err, "issuer_jwt_hash",
+		"pinning the claim name keeps this from passing on some other rejection further up")
+}
+
 func TestVerifyChainRefusesOptionsItCannotApply(t *testing.T) {
 	validChain := delegatedChain(t, "delegate")
 
@@ -798,6 +818,36 @@ func dropOneRootDisclosure(t *testing.T, chain *sdjwt.Chain) *sdjwt.Chain {
 	return again
 }
 
+// replaceRoot swaps a chain's first hop for a different SD-JWT, leaving the
+// delegating JWT and its disclosures untouched.
+//
+// This is the transplant a binding claim exists to refuse: the delegation is
+// still validly signed by the key the *original* root endorsed, and both roots
+// here endorse the same key, so nothing upstream of the hash comparison can
+// notice. Only the hash names which root was signed over.
+func replaceRoot(t *testing.T, chain *sdjwt.Chain, root *sdjwt.SDJWT) *sdjwt.Chain {
+	t.Helper()
+
+	parts := strings.Split(chain.String(), "~")
+	sep := -1
+	for i := 1; i < len(parts); i++ {
+		if parts[i] == "" {
+			sep = i
+			break
+		}
+	}
+	require.Greater(t, sep, 0, "the fixture must be a two-hop chain")
+
+	// The replacement root's own wire form ends in the empty component that
+	// separates it from what follows, so it slots in ahead of parts[sep+1:]
+	// exactly as the original did.
+	swapped := root.String() + strings.Join(append([]string{""}, parts[sep+1:]...), "~")
+
+	again, err := sdjwt.ParseChain(swapped)
+	require.NoError(t, err, "swapping the root must produce a chain that still parses, or the test proves nothing about the binding")
+	return again
+}
+
 // chainFrom assembles a chain's wire form from a root, an already-signed
 // delegating JWT and the Disclosures to attach to it, and parses the result.
 //
@@ -954,6 +1004,32 @@ func TestDelegateRefusesAPayloadItsDisclosuresDoNotBelongTo(t *testing.T) {
 	require.Error(t, err,
 		"a mistake made at the issuer must be reported at the issuer; deferring it produces a chain that only fails at the verifier, where the party holding it cannot fix it")
 	assert.ErrorIs(t, err, sdjwt.ErrDisclosureUnreachable)
+}
+
+func TestDelegateRefusesAnEmptyPayloadAndNotOnlyANilOne(t *testing.T) {
+	root := issuedRoot(t)
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name    string
+		payload map[string]any
+	}{
+		{name: "nil", payload: nil},
+		{name: "empty", payload: map[string]any{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
+				Nonce:    "n-1",
+				Audience: "https://merchant.example",
+				IssuedAt: time.Unix(1_777_326_189, 0),
+			}, tc.payload, nil)
+
+			require.Error(t, err,
+				"a delegation carrying no content hands a verifier an authorisation that says nothing, and absence must never be readable as permission")
+			assert.ErrorIs(t, err, sdjwt.ErrDelegatePayloadInvalid)
+		})
+	}
 }
 
 func TestDelegateAcceptsAPayloadThatWithholdsEverything(t *testing.T) {

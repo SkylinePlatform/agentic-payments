@@ -56,11 +56,18 @@
 //
 // # Numbers
 //
-// Every JSON value that passes through this package is decoded with
+// Every JSON value a digest is computed over is decoded with
 // json.Decoder.UseNumber, so numbers arrive as json.Number rather than
 // float64. A digest commits to an exact byte sequence, and a payload that
 // silently rounded a 64-bit integer on the way through would produce
 // disclosures that no longer match what was signed.
+//
+// The exception is deliberate and worth knowing: the Key Binding JWT's own
+// four claims decode straight into a typed struct, because none of them is
+// ever re-encoded and iat lands in an int64 that json.Unmarshal fills exactly.
+// A delegating JWT's payload does go through UseNumber, since its delegate
+// payload is content a digest covers — which is why numericDate exists there
+// and not beside verifyKeyBinding.
 //
 // Self-contained on purpose: it must not import anything under internal/.
 package sdjwt

@@ -217,7 +217,12 @@ func (s *SDJWT) Delegate(
 	case kb.IssuedAt.IsZero():
 		return nil, fmt.Errorf("%w: issued-at is required", ErrKeyBindingInvalid)
 	}
-	if payload == nil {
+	// Emptiness, not nil-ness. An earlier version guarded only nil, which caught
+	// the spelling and not the condition: map[string]any{} delegated cleanly and
+	// verified cleanly, handing a verifier an authorisation with no content in
+	// it. ErrDelegatePayloadInvalid exists because absence must not be readable
+	// as permission, and a delegate payload of {} is exactly that absence.
+	if len(payload) == 0 {
 		return nil, fmt.Errorf("%w: nothing to delegate", ErrDelegatePayloadInvalid)
 	}
 
