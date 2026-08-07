@@ -90,7 +90,7 @@ type Role struct {
 	Events *obs.Emitter
 }
 
-// flushGrace is how long a stopping role waits for its buffered events to reach
+// FlushGrace is how long a stopping role waits for its buffered events to reach
 // the collector.
 //
 // Short, and deliberately shorter than the server's own drain: the events are
@@ -98,7 +98,13 @@ type Role struct {
 // for them. What this buys is the last few events of a demonstration arriving
 // instead of dying with the process, which is most of the value of emitting at
 // all when the thing being watched is a shutdown.
-const flushGrace = 2 * time.Second
+//
+// Exported because the agent is not a server and so does not go through Main,
+// but shuts its own emitter down for exactly the same reason and must not
+// answer the question differently. One budget, one place: two constants of the
+// same value in two files are free to drift, and the drift would show up as a
+// demonstration whose last events arrive from four processes and not the fifth.
+const FlushGrace = 2 * time.Second
 
 // Run serves h until the process is asked to stop, then drains.
 //
@@ -173,7 +179,7 @@ func start(role, addr, collector string, build func(Role) (http.Handler, error))
 		return err
 	}
 	defer func() {
-		flush, cancel := context.WithTimeout(context.Background(), flushGrace)
+		flush, cancel := context.WithTimeout(context.Background(), FlushGrace)
 		defer cancel()
 		if err := events.Close(flush); err != nil {
 			// Worth a line and nothing more. Events that did not make it out are

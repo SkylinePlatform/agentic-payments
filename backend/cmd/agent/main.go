@@ -43,11 +43,6 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 )
 
-// flushGrace is how long a stopping agent waits for its buffered events to
-// reach the collector. The same budget roles.Main gives a server, and for the
-// same reason: the events are never evidence, so nothing waits long for them.
-const flushGrace = 2 * time.Second
-
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "agent: %v\n", err)
@@ -80,7 +75,7 @@ func run() error {
 		return err
 	}
 	defer func() {
-		flush, cancel := context.WithTimeout(context.Background(), flushGrace)
+		flush, cancel := context.WithTimeout(context.Background(), roles.FlushGrace)
 		defer cancel()
 		if err := events.Close(flush); err != nil {
 			fmt.Fprintf(os.Stderr, "agent: flushing events: %v\n", err)
