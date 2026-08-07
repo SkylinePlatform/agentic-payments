@@ -118,6 +118,16 @@ of a public standard with no AP2 vocabulary in it, which is what `pkg/` is for,
 and it is testable against the draft's own rules without a mandate anywhere in
 sight.
 
+**The two hops are named on the way out, not numbered.** `sdjwt.VerifyChain`
+answers with a `Verified{Root, Delegated}` rather than the list the draft's
+prose describes, because this implementation accepts exactly two hops and
+refuses a third at parse time — a list would model a length that cannot occur,
+and would leave the adapter distinguishing the open mandate from the closed one
+by remembering which index is which. Reading one for the other evaluates a
+purchase against itself: a verification that passes while proving nothing. The
+type is what makes that unwriteable, on the same grounds as everything else in
+this document.
+
 ## The open mandate on the wire
 
 | AP2 claim | Canonical field | Required | Note |
@@ -175,9 +185,12 @@ requires and which failing-open would silently defeat. And our divergence
 becomes a declared extension rather than an undeclared incompatibility — the
 difference between using a standard's escape hatch and ignoring its schema.
 
-**Open decision:** the prefix itself. `tech.ethernal.ap2.expression.1` is the
-proposal, following AP2's own habit of a version suffix. It is one constant in
-`vct.go`'s neighbourhood and cheap to change before anything signs one.
+The name is **`tech.ethernal.ap2.expression.1`**, decided 2026-08-06. It follows
+AP2's own habit of a version suffix, for the same reason AP2 has one: the next
+shape of our expression tree is a different constraint type rather than a
+silently different reading of this one. It is a single constant in `vct.go`'s
+neighbourhood, and it is cheap to change only until something signs one — after
+that it is a mandate nobody can verify.
 
 ## What this changes in code that already exists
 
