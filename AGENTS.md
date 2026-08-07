@@ -192,13 +192,22 @@ These are enforced, not advisory.
    Human Not Present flow. Until then this rule binds by forbidding the
    alternative, not by pointing at a live call site.
 
-   Whatever ends up behind `IntentInterpreter` calls `interpret.Validate` on
-   what it is about to return. A constraint naming a field the verifier does
+   Whatever ends up behind `IntentInterpreter` must call `interpret.Validate`
+   on what it is about to return. A constraint naming a field the verifier does
    not know would otherwise render on the approval screen, get signed, and be
    rejected as `constraint_type_unknown` at the moment of purchase — having
    looked like a limit the whole way. The check runs the *verifier's* parser
    rather than a second list of field names, because a copy would drift in the
    direction that accepts what the verifier cannot read.
+
+   This one is **an obligation, not yet an enforcement**, and the difference is
+   worth being straight about in a section headed "enforced, not advisory".
+   `ScriptedInterpreter` does call it, and for that implementation the call
+   cannot fail — `NewScripted` validated the same text and decoding is
+   deterministic. Nothing makes the *next* implementation call it. The place to
+   close that is a shared conformance test the model-backed interpreter has to
+   pass, which is #17's to add, because that is when there is a second
+   implementation to hold to it.
 
 5. **Time goes through the injected clock.** Never call `time.Now()` directly, or
    signature expiry becomes untestable. Enforced by `forbidigo`;
