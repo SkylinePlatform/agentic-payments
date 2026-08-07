@@ -447,6 +447,65 @@ func TestARefusedPurchaseIsStillDisputable(t *testing.T) {
 		"and the reason the money did not move is the finding the dispute is for")
 }
 
+// TestARetriedPurchaseIsDisputedOnItsLatestAnswer is the case where taking a
+// party's first answer produces a chain that verifies and lies.
+//
+// Settle is exported and this package documents the four steps as separately
+// usable, so a retry needs no misuse to reach: the processor refuses a
+// credential scoped elsewhere, the agent gets the right one and settles again.
+// Both parties have now answered twice and the money has moved.
+//
+// A bundle built from the first answer would hold — every artefact in it is
+// genuine — over the processor's signed statement that the payment did not go
+// through. Nothing in the chain could catch that, because nothing in the chain
+// is wrong. The only place it can be got right is here, at assembly.
+func TestARetriedPurchaseIsDisputedOnItsLatestAnswer(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	c := w.client()
+
+	var p agent.Purchase
+	require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &p))
+	require.NoError(t, c.Approve(t.Context(), paymentContent(), &p))
+	require.NoError(t, c.Fund(t.Context(), &p))
+
+	// The first attempt, with the credential pointed at somebody else's
+	// purchase. The merchant is happy and the processor is not.
+	good := *p.Credential
+	elsewhere, err := sdjwt.SHA256.Digest("a different offer entirely")
+	require.NoError(t, err)
+	p.Credential.CheckoutHash = elsewhere
+	require.ErrorIs(t, c.Settle(t.Context(), &p), agent.ErrRefused)
+	require.False(t, p.Settled)
+
+	// The second, with the credential the Credential Provider actually issued.
+	p.Credential = &good
+	require.NoError(t, c.Settle(t.Context(), &p))
+	require.True(t, p.Settled, "the money moved on the retry, and the evidence has to agree")
+
+	// The trail keeps both answers from both parties. It has to: an agent that
+	// could drop the refusal by retrying would be deleting the fact AP2 makes
+	// the rejection receipt mandatory to produce.
+	require.Len(t, p.Receipts, 5,
+		"one from the Credential Provider, then merchant and processor twice")
+	assert.Equal(t, []string{"credprovider", "merchant", "mpp", "merchant", "mpp"},
+		[]string{p.Receipts[0].From, p.Receipts[1].From, p.Receipts[2].From,
+			p.Receipts[3].From, p.Receipts[4].From})
+
+	b := p.Evidence()
+	assert.Equal(t, p.Receipts[4].Token, b.PaymentReceipt,
+		"the bundle carries the processor's latest answer, not its first")
+	assert.NotEqual(t, p.Receipts[2].Token, b.PaymentReceipt,
+		"if these matched, the bundle would be evidence of the attempt that was abandoned")
+	assert.Equal(t, p.Receipts[3].Token, b.CheckoutReceipt)
+
+	rep := w.arbiter().Verify(b)
+	require.True(t, rep.Holds(), "the retried purchase's own evidence must verify: %v", rep.Err)
+	assert.Equal(t, generated.ReceiptResultSuccess, rep.PaymentReceipt.Result,
+		"Settled says the money moved, so the signed answer in the bundle has to say so too")
+}
+
 // TestAnAbandonedPurchaseAssemblesIntoAnIncompleteBundle is the other side of
 // Evidence being total. A flow that stopped before the processor was asked has
 // no Payment Receipt, and the assembly says so rather than inventing one or

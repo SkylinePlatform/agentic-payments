@@ -269,6 +269,9 @@ func (c *Client) Settle(ctx context.Context, p *Purchase) error {
 // pick two of the three out again, and a bundle assembled by matching string
 // literals would be one typo away from a dispute built on the wrong party's
 // answer — with nothing failing, because the receipt would simply be absent.
+//
+// The constants prevent the typo and nothing else. Which of a party's answers
+// a bundle carries when there is more than one is receipt's problem, below.
 const (
 	fromCredProvider = "credprovider"
 	fromMerchant     = "merchant"
@@ -310,6 +313,14 @@ func (p *Purchase) keep(from, token string) {
 // gaps are the assembly's finding, they are all reported at once, and a caller
 // holding a half-run purchase is better served by a bundle it can hand to
 // Validate than by a second error path here.
+//
+// A retried step leaves a party having answered more than once, and the bundle
+// carries the latest answer from each. **The invariant is that the bundle
+// describes the purchase as of its last attempt, which is the same thing
+// Settled describes** — the two cannot disagree, and a bundle built from the
+// first answer could: Settle a purchase whose credential the processor refuses,
+// then Settle it again with a good one, and a first-answer bundle would be a
+// verifying chain saying the money did not move while Settled says it did.
 func (p Purchase) Evidence() evidence.Bundle {
 	return evidence.Bundle{
 		Checkout:        p.Offer,
@@ -320,14 +331,28 @@ func (p Purchase) Evidence() evidence.Bundle {
 	}
 }
 
-// receipt returns the token a named party signed, or the empty string.
+// receipt returns the latest token a named party signed, or the empty string.
+//
+// The **latest**, and the direction is the whole of it. keep appends and never
+// replaces, because Receipts is the evidence trail and an agent that retried
+// after a refusal must not be able to delete the signed refusal — that is the
+// fact AP2 makes the rejection receipt mandatory to produce. So the trail keeps
+// every answer, and the bundle takes the one that describes the purchase now.
+//
+// Reading the first instead is a verifying chain that lies. Settle a purchase
+// whose credential the processor refuses, settle it again with a good one, and
+// the receipts are [credprovider, merchant, mpp, merchant, mpp]: the money moved,
+// Settled is true, and a first-answer bundle produces five links that all verify
+// over a signed statement that it did not. Nothing in the chain could catch it,
+// because every artefact in it is genuine.
 func (p Purchase) receipt(from string) string {
+	latest := ""
 	for _, r := range p.Receipts {
 		if r.From == from {
-			return r.Token
+			latest = r.Token
 		}
 	}
-	return ""
+	return latest
 }
 
 // call sends a request and decodes the answer.
