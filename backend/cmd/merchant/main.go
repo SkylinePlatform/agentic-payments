@@ -62,12 +62,17 @@ func main() {
 			// Handed in rather than constructed inside the service, which is
 			// what makes AP2's delegation allowance reachable: a merchant built
 			// with somebody else's CheckoutVerifier has delegated.
-			Rules:  ap2.MerchantRules{Issuer: user, Clock: role.Clock},
-			Own:    role.Verifier,
-			Signer: role.Signer,
-			Keys:   role.Keys,
-			Clock:  role.Clock,
-			Events: role.Events,
+			Rules: ap2.MerchantRules{Issuer: user, Clock: role.Clock},
+			// The Payment Mandate travelling beside it, verified so that the
+			// merchant can compare what it pays against what this checkout
+			// costs. Same key: in Human Present mode the user signs both closed
+			// mandates, so the surface's key is whose signature both checks.
+			Payments: ap2.CredentialProviderRules{Issuer: user, Clock: role.Clock},
+			Own:      role.Verifier,
+			Signer:   role.Signer,
+			Keys:     role.Keys,
+			Clock:    role.Clock,
+			Events:   role.Events,
 			// The merchant initiates payment, not the agent.
 			Processor: &merchant.HTTPProcessor{Base: *processor},
 		}

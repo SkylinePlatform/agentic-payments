@@ -39,7 +39,7 @@ except the handler that serves one and the client that fetches one.
 | Role | Endpoint | Does |
 |---|---|---|
 | Merchant | `GET /checkout` | prices the route, returns a merchant-signed Checkout JWT |
-| | `POST /checkout` | verifies the Checkout Mandate against the offer it made, answers with a Checkout Receipt |
+| | `POST /checkout` | verifies the Checkout Mandate against the offer it made and that the Payment Mandate pays what that offer costs, answers with a Checkout Receipt |
 | Credential Provider | `POST /credential` | verifies the Payment Mandate, mints a credential scoped to that checkout |
 | Merchant Payment Processor | `POST /payment` | verifies the credential is scoped to this purchase, answers with a Payment Receipt |
 | Trusted Surface | `POST /approve` | shows what is being approved and returns the user's signature |

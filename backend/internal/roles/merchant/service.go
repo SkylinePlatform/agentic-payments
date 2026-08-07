@@ -49,6 +49,26 @@ type Service struct {
 	Catalogue *Catalogue
 	// Rules decide whether a presented Checkout Mandate is acceptable.
 	Rules ap2.CheckoutVerifier
+	// Payments verify the Payment Mandate travelling beside it.
+	//
+	// AP2 does not give the Merchant this mandate to verify — it names the
+	// Credential Provider, the Network and the Merchant Payment Processor. The
+	// merchant needs it anyway for one question none of those three is given a
+	// checkout to answer: whether the amount being paid is the amount this
+	// checkout costs. See ap2.AmountMatches for why that check is ours rather
+	// than the protocol's, and why the merchant is the party positioned to
+	// make it.
+	//
+	// Verified rather than read, for the reason the Merchant Payment Processor
+	// gives about the same mandate: a claim read out of an unverified payload is
+	// a claim the caller chose, and an agent that edited payment_amount to match
+	// the offer would otherwise walk through this check and leave the merchant
+	// with a signed receipt saying the purchase was fine.
+	//
+	// Required, not optional. A nullable verifier would read as "the amount is
+	// checked when you supply one", and a merchant that checks the price only
+	// when asked does not check the price.
+	Payments ap2.PaymentVerifier
 	// Signer holds the merchant's key: it signs offers and receipts.
 	Signer authz.Signer
 	// Own verifies the merchant's own signature, so it can tell an offer it
@@ -135,11 +155,11 @@ type answer struct {
 // Handler returns the merchant's routes, wrapped in the middleware every role
 // runs behind.
 func (s *Service) Handler() (http.Handler, error) {
-	if s.Inventory == nil || s.Rules == nil || s.Signer == nil ||
+	if s.Inventory == nil || s.Rules == nil || s.Payments == nil || s.Signer == nil ||
 		s.Own == nil || s.Keys == nil || s.Clock == nil || s.Processor == nil {
 		return nil, errors.New(
-			"merchant: a Service needs inventory, rules, a signer, its own verifier, " +
-				"a key set, a clock and a payment processor")
+			"merchant: a Service needs inventory, checkout rules, payment rules, a signer, " +
+				"its own verifier, a key set, a clock and a payment processor")
 	}
 
 	mux := http.NewServeMux()
@@ -295,17 +315,22 @@ func (s *Service) offerLifetime() time.Duration {
 	return s.OfferLifetime
 }
 
-// settle verifies a presented Checkout Mandate and answers with a receipt.
+// settle decides whether a presented purchase may proceed, and answers with a
+// receipt.
 //
-// Every path below that has a mandate answers with one, including every refusal.
-// That is the AP2 rule, and this is the layer where forgetting it would be
-// invisible: a 400 with a good error message looks like a working verifier and
+// Every path below that has examined a mandate answers with one, including every
+// refusal. That is the AP2 rule, and this is the layer where forgetting it would
+// be invisible: a 400 with a good error message looks like a working verifier and
 // leaves a dispute with nothing signed.
 //
-// The one path that does not is a body that will not parse into an SD-JWT at
-// all. There is no mandate to reference, and a receipt whose reference points at
-// nothing is worse than none — so that answer is Problem Details, per the rule
-// #7 recorded.
+// The paths that do not all come before any mandate has been examined: an offer
+// that is missing or that this merchant did not sign, and a Checkout Mandate
+// that will not parse into an SD-JWT at all. There is nothing to reference, and
+// a receipt whose reference points at nothing is worse than none — so those
+// answers are Problem Details, per the rule #7 recorded. After that point there
+// is a mandate to reference, which is why a *Payment* Mandate that will not
+// parse gets a receipt rather than Problem Details: it is refused inside
+// verdict, below, and the receipt answers the Checkout Mandate that did parse.
 func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	var req purchase
 	if !roles.DecodeJSON(w, r, &req) {
@@ -317,7 +342,8 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.ownOffer(req.Checkout); err != nil {
+	quoted, err := s.ownOffer(req.Checkout)
+	if err != nil {
 		// Before anything else, and this is the check the binding is worthless
 		// without. VerifyCheckout proves the mandate names *this* document; it
 		// says nothing about where the document came from. A merchant that
@@ -342,12 +368,13 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	// The verdict, whatever it is, is what the receipt carries. IssueReceipt
 	// takes it as an argument rather than being called on one branch, which is
 	// what makes "answer a rejection with a receipt" structural here.
-	_, verdict := s.Rules.VerifyCheckout(presented, req.Checkout)
+	verdict := s.verdict(presented, req, quoted)
 	if verdict != nil {
 		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(verdict)),
-			"Checkout Mandate refused: "+verdict.Error())
+			"the purchase was refused: "+verdict.Error())
 	} else {
-		s.Events.Emit(r.Context(), obs.KindMandateVerified, "Checkout Mandate verified")
+		s.Events.Emit(r.Context(), obs.KindMandateVerified,
+			"Checkout Mandate verified and the payment names the price quoted")
 	}
 
 	receipt, err := ap2.IssueReceipt(r.Context(), presented, verdict, ap2.ReceiptOptions{
@@ -368,8 +395,12 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 		// the purchase happened. A reader that branches on it and one that reads
 		// the receipt reach the same conclusion.
 		//
-		// No payment is initiated: a merchant that asked for money on a mandate
-		// it had just refused would be contradicting its own signed answer.
+		// No payment is initiated: a merchant that asked for money on a purchase
+		// it had just refused would be contradicting its own signed answer. That
+		// reasoning is what puts the amount check inside verdict rather than
+		// after this branch — a refusal on price has to stop the money for the
+		// same reason a refusal on the mandate does, and has to be evidence in
+		// the same way.
 		roles.OK(w, http.StatusUnprocessableEntity, answer{Receipt: receipt})
 		return
 	}
@@ -406,36 +437,119 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ownOffer establishes that the checkout presented is one this merchant signed,
-// and that it has not expired.
+// verdict is the merchant's answer about one presented purchase: the Checkout
+// Mandate, and then the price the payment side asks for.
+//
+// quoted is the price read back out of the merchant's own signed offer, which
+// ownOffer has already established this merchant made and is still making.
+//
+// Whatever comes back from here is carried by one receipt, and that receipt's
+// mandate_type stays checkout and its reference stays the Checkout Mandate's
+// digest even when the failure was on the payment side. The merchant makes one
+// signed statement per purchase put to it, and this is it: a reader gets "the
+// merchant refused this presentation, and here is why", which is what a dispute
+// needs. A second receipt naming the Payment Mandate would read as this
+// merchant's verdict on that mandate, which is a verdict AP2 asks three other
+// roles for; the merchant reads it to answer its own question, not theirs.
+//
+// # Why the order is this way round
+//
+// The Checkout Mandate goes first, and the amount check never reports on a
+// purchase the mandate has already sunk. Two reasons, and the second is the one
+// that would be easy to get wrong.
+//
+// A purchase is refused for the first thing wrong with it, and a mandate that
+// does not verify is the failure a caller has to fix before the price is worth
+// discussing at all. That much is ordinary.
+//
+// The other is that the amount check is a divergence from AP2 and the Checkout
+// Mandate's verification is not — see ap2.AmountMatches. Reporting ours ahead
+// of the specification's would put payment_amount_mismatch on a receipt whose
+// real problem was a substituted checkout, and send whoever reads it looking
+// for a local policy decision instead of the protocol failure that actually
+// happened. It costs the case where both are wrong: the caller is told about
+// the mandate, fixes it, and is refused a second time on the price. That is the
+// same trade MPPRules.VerifyCredential makes when it reports a credential out
+// of scope ahead of one that has also expired.
+func (s *Service) verdict(
+	presented *sdjwt.SDJWT, req purchase, quoted generated.Amount,
+) error {
+	if _, err := s.Rules.VerifyCheckout(presented, req.Checkout); err != nil {
+		return err
+	}
+
+	payment, err := sdjwt.Parse(req.Payment)
+	if err != nil {
+		return fmt.Errorf("the Payment Mandate is not a readable SD-JWT: %w", err)
+	}
+	// Verified before a claim is read out of it. The merchant is not one of the
+	// roles AP2 gives this mandate to verify, and it verifies anyway rather than
+	// reading the payload — see the Payments field for the whole of that
+	// argument.
+	mandate, err := s.Payments.VerifyPayment(payment)
+	if err != nil {
+		return err
+	}
+	return ap2.AmountMatches(mandate, quoted)
+}
+
+// ownOffer establishes that the checkout presented is one this merchant signed
+// and that it has not expired, and returns the price it commits to.
 //
 // The signature answers "did I make this offer"; exp answers "is it still the
 // offer I am making". Both are needed and neither implies the other: a genuine
 // offer from last week is genuinely the merchant's and genuinely stale, and
 // accepting it would sell at whatever the price was then.
-func (s *Service) ownOffer(checkout string) error {
+//
+// The price comes back from here rather than from a second read of the same
+// document, and that is the coupling worth having: an offer's price means
+// nothing until the offer has been established as this merchant's, so there is
+// no way to reach the number without having checked. Nothing else in this
+// package can read it, because the claims never leave this function.
+func (s *Service) ownOffer(checkout string) (generated.Amount, error) {
+	var quoted generated.Amount
+
 	claims, err := sdjwt.VerifyJWT(checkout, checkoutType, ap2.JOSEVerifier(s.Own))
 	if err != nil {
-		return fmt.Errorf("this is not an offer this merchant made: %w", err)
+		return quoted, fmt.Errorf("this is not an offer this merchant made: %w", err)
 	}
 
 	raw, ok := claims["exp"]
 	if !ok {
-		return errors.New("the offer carries no expiry, so it cannot be known to be current")
+		return quoted, errors.New("the offer carries no expiry, so it cannot be known to be current")
 	}
 	// pkg/sdjwt decodes with UseNumber, so the claim arrives as json.Number
 	// rather than as a float64 — which is what keeps a large exp from losing
 	// precision on its way to a comparison.
 	seconds, ok := raw.(json.Number)
 	if !ok {
-		return fmt.Errorf("the offer's expiry is %T, not a number of seconds", raw)
+		return quoted, fmt.Errorf("the offer's expiry is %T, not a number of seconds", raw)
 	}
 	exp, err := seconds.Int64()
 	if err != nil {
-		return fmt.Errorf("the offer's expiry is not a whole number of seconds: %w", err)
+		return quoted, fmt.Errorf("the offer's expiry is not a whole number of seconds: %w", err)
 	}
 	if !s.Clock.Now().Before(time.Unix(exp, 0)) {
-		return errors.New("this offer has expired; ask for the current price")
+		return quoted, errors.New("this offer has expired; ask for the current price")
 	}
-	return nil
+
+	// The two claims sign puts there, read back the way exp was: UseNumber means
+	// every number in this map is a json.Number, so this is the same assertion
+	// and not a second convention.
+	minor, ok := claims["amount"].(json.Number)
+	if !ok {
+		return quoted, fmt.Errorf("the offer's amount is %T, not a number of minor units",
+			claims["amount"])
+	}
+	value, err := minor.Int64()
+	if err != nil {
+		return quoted, fmt.Errorf("the offer's amount is not a whole number of minor units: %w", err)
+	}
+	currency, ok := claims["currency"].(string)
+	if !ok {
+		return quoted, fmt.Errorf("the offer's currency is %T, not an ISO 4217 code",
+			claims["currency"])
+	}
+
+	return generated.Amount{Amount: int(value), Currency: currency}, nil
 }

@@ -123,8 +123,9 @@ func newWorld(t *testing.T, ingest string) *world {
 	// because the two need each other's addresses and only one can be first.
 	shopSvc := &merchant.Service{
 		ID: "air-serbia", Inventory: inventory,
-		Rules:  ap2.MerchantRules{Issuer: user.verifier, Clock: clk},
-		Signer: shop.signer, Own: shop.verifier, Keys: shop.keys, Clock: clk,
+		Rules:    ap2.MerchantRules{Issuer: user.verifier, Clock: clk},
+		Payments: ap2.CredentialProviderRules{Issuer: user.verifier, Clock: clk},
+		Signer:   shop.signer, Own: shop.verifier, Keys: shop.keys, Clock: clk,
 		Processor: &merchant.HTTPProcessor{},
 		Events:    emitter("merchant"),
 	}
@@ -183,13 +184,20 @@ func (w *world) flush(t *testing.T) {
 	}
 }
 
-func paymentContent() generated.PaymentMandate {
+// paymentContent is the payment side of a purchase, at the price the merchant
+// quoted for it.
+//
+// The price is a parameter rather than a constant because the merchant refuses
+// a Payment Mandate that pays something else — see ap2.AmountMatches — and the
+// demo schedule the inventory is seeded with does not start at any one number a
+// literal here could name.
+func paymentContent(price generated.Amount) generated.PaymentMandate {
 	return generated.PaymentMandate{
 		// Deliberately wrong: the surface recomputes it from the offer. A test
 		// that seeded the right value could not tell recomputation from copying.
 		CheckoutHash:      "not-the-hash",
 		Payee:             generated.Merchant{ID: "air-serbia", Name: "Air Serbia"},
-		PaymentAmount:     generated.Amount{Amount: 18900, Currency: "USD"},
+		PaymentAmount:     price,
 		PaymentInstrument: generated.PaymentInstrument{ID: "card-4242", Type: "CARD"},
 	}
 }
@@ -247,7 +255,12 @@ func TestAPurchaseArrivesOnTheStream(t *testing.T) {
 	hub, ingest := hubFor(t)
 	w := newWorld(t, ingest)
 
-	bought, err := w.client().Buy(t.Context(), "BEG", "PMI", paymentContent())
+	c := w.client()
+	var quoted agent.Purchase
+	require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &quoted),
+		"asking the merchant for a price")
+
+	bought, err := c.Buy(t.Context(), "BEG", "PMI", paymentContent(quoted.Price))
 	require.NoError(t, err, "a purchase nobody objected to was refused")
 	require.True(t, bought.Settled)
 
@@ -309,7 +322,7 @@ func TestARejectionReachesTheStreamWithItsCode(t *testing.T) {
 
 	var p agent.Purchase
 	require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &p))
-	require.NoError(t, c.Approve(t.Context(), paymentContent(), &p))
+	require.NoError(t, c.Approve(t.Context(), paymentContent(p.Price), &p))
 
 	// Nobody misbehaved: the user approved, and then the world moved on.
 	w.clock.Advance(24 * time.Hour)

@@ -135,19 +135,25 @@ func ready(ctx context.Context, e agent.Endpoints, wait time.Duration) error {
 
 // buyOnce runs a Human Present purchase and prints what came back.
 //
-// It quotes first and builds the payment content from the price it was quoted,
+// It quotes once and builds the payment content from the price it was quoted,
 // rather than from a constant. A literal amount here would be printed beside a
 // live price it has nothing to do with — the merchant's schedule steps every
 // thirty seconds, so an agent started early quotes $240.00 and would have paid
-// a hardcoded $189.00 — and nothing downstream would catch it. No rule compares
-// payment_amount to what the checkout costs: the mandates are tied by
-// checkout_hash, which proves they name the same purchase and says nothing
-// about the number. A smoke test that printed two unrelated figures as though
-// they were one is worse than no smoke test.
+// a hardcoded $189.00. The merchant now refuses that outright, as
+// payment_amount_mismatch, and that check is ours rather than AP2's: the
+// mandates are tied by checkout_hash, which proves they name the same purchase
+// and says nothing about the number, so no rule in the specification compares
+// the two. See ap2.AmountMatches and docs/protocols/ap2.md.
+//
+// It also runs the four steps itself rather than calling Buy, which would quote
+// a second time. Two quotes taken either side of a schedule step produce an
+// offer at the new price and a payment naming the old one, and the merchant
+// would refuse a purchase in which nobody had misbehaved. One quote is the only
+// shape in which the printed price is the price that was bound.
 //
 // The correlation ID is minted here rather than inside Buy, because the quote
-// above is part of the same transaction and Buy has not started yet. Buy would
-// mint one otherwise, and the two would name the same purchase differently.
+// below is part of the same transaction. Buy would mint one otherwise, and the
+// two would name the same purchase differently.
 func buyOnce(
 	ctx context.Context, e agent.Endpoints, events *obs.Emitter, from, to string,
 ) error {
@@ -164,12 +170,11 @@ func buyOnce(
 
 	client := &agent.Client{Endpoints: e, Events: events}
 
-	var quoted agent.Purchase
-	if err := client.Quote(ctx, from, to, &quoted); err != nil {
+	var bought agent.Purchase
+	if err := client.Quote(ctx, from, to, &bought); err != nil {
 		return err
 	}
-
-	bought, err := client.Buy(ctx, from, to, content(quoted.Price))
+	err = steps(ctx, client, content(bought.Price), &bought)
 
 	// The receipts are printed whether or not the purchase completed. They are
 	// the reason the flow is worth running, and a refusal is the case where the
@@ -187,6 +192,22 @@ func buyOnce(
 	}
 	fmt.Printf("  settled    %v\n", bought.Settled)
 	return nil
+}
+
+// steps is Buy without the quote, run against a purchase that has one already.
+//
+// The four steps are exported individually as well as composed, so this costs
+// nothing but the three lines; purchase.go records why they are.
+func steps(
+	ctx context.Context, c *agent.Client, payment generated.PaymentMandate, p *agent.Purchase,
+) error {
+	if err := c.Approve(ctx, payment, p); err != nil {
+		return err
+	}
+	if err := c.Fund(ctx, p); err != nil {
+		return err
+	}
+	return c.Settle(ctx, p)
 }
 
 // content is the purchase to be signed, at the price the merchant quoted.

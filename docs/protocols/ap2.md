@@ -39,6 +39,7 @@ Primary sources, in the order of authority `AGENTS.md` gives them:
   - [The delegation mechanism](#the-delegation-mechanism)
   - [The rejection-receipt rule](#the-rejection-receipt-rule)
 - [Binding: `checkout_hash`](#binding-checkout_hash)
+  - [What the binding does not cover](#what-the-binding-does-not-cover)
 - [Constraints](#constraints)
   - [The known open problem](#the-known-open-problem)
 - [Selective disclosure](#selective-disclosure)
@@ -430,6 +431,53 @@ sides disagreed about a default. **Compute `checkout_hash` under the algorithm a
 verifier will observe**, which is the issuer's only when the payload will carry
 digests at all.
 
+### What the binding does not cover
+
+The binding proves the two mandates name **one purchase**. It proves nothing
+about whether they agree on the price, and the obvious reading of "bound to the
+same checkout" is that it covers the number.
+
+AP2 defines `transaction_id` as the *"base64url-encoded hash of the
+`checkout_jwt` field value, uniquely identifying the checkout associated with
+this"* — a digest of a document, and that is the whole of it. No language in the
+specification requires any verifier to compare the Payment Mandate's
+`payment_amount` against what that checkout costs, none describes what happens
+when the two differ, and no role is assigned the comparison. The only amount
+rule AP2 states is the Amount Range constraint, which bounds `payment_amount`
+between a `min` and a `max` carried by the open mandate — the mandate measured
+against itself, never against the document it references.
+
+So a Payment Mandate saying **pay 1 USD**, correctly bound by hash to a checkout
+priced at **189 USD**, is a *conforming* mandate. Both carry the same digest,
+every signature verifies, and nothing in the protocol stops it settling.
+
+**Only the merchant is positioned to close that gap, and the reason is the
+opacity above.** The binding hashes the Checkout JWT's compact serialisation as
+a string, which is precisely what removes any need to canonicalise the
+merchant's JSON — so nothing in the protocol reads inside the document, and a
+verifier cannot in general learn what a checkout costs. A closed Payment Mandate
+carries `transaction_id` and never the document, so a Credential Provider or a
+Merchant Payment Processor sent only that mandate holds a digest with no price
+to compare it against. The merchant is the exception because the document is its
+own — it issued the offer, so whether it kept a copy or checks its own signature
+over one presented back to it, the price it reads is a price it committed to.
+
+**This implementation checks it at the merchant anyway, and that is a
+divergence from the specification rather than a requirement of it.** A purchase
+whose Payment Mandate pays something other than what the checkout costs is
+refused as `payment_amount_mismatch`, before payment is initiated and with a
+signed receipt naming why. That code is ours: it is the one entry in
+`../../contracts/evidence/error_code.json` that no protocol rule produces, and
+the file marks it as such. `backend/internal/adapters/ap2/amount.go` is where
+the comparison and the argument for it live. Issue #88 is the finding and the
+decision.
+
+Two limits on that, both worth stating because a reader who assumed either
+would be wrong. It is the *merchant's* check and nobody else's — the Credential
+Provider and the processor are sent no checkout, so nothing about them changes.
+And it is a check on agreement, not on fairness: a merchant that quotes a
+different price to every caller is doing something this says nothing about.
+
 ## Constraints
 
 Constraints are an AP2 **extension point**. The specification does not define a
@@ -580,6 +628,7 @@ part worth re-reading before writing code.
 | `checkout_hash` must be recomputed, never trusted as presented | Binding |
 | The Checkout JWT must use a non-deterministic signature scheme | Binding |
 | `transaction_id` and `checkout_hash` are the same value under two names | Binding |
+| "Bound to the same checkout" does not mean "agreed on the price" — no AP2 rule compares `payment_amount` to what the checkout costs, and no role is assigned it | What the binding does not cover |
 | An unknown constraint type must be rejected, never silently ignored | Constraints |
 | Constraints are evaluated by the verifier, never by the agent | Constraints |
 | Presenting every disclosure passes every test and defeats SD-JWT entirely | Selective disclosure |

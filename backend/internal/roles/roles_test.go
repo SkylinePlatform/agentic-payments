@@ -242,6 +242,7 @@ func TestTheMerchantAnswersARejectionWithAReceipt(t *testing.T) {
 		ID:        "air-serbia",
 		Inventory: inventory,
 		Rules:     ap2.MerchantRules{Issuer: user.verifier, Clock: shop.clock},
+		Payments:  ap2.CredentialProviderRules{Issuer: user.verifier, Clock: shop.clock},
 		Signer:    shop.signer,
 		Own:       shop.verifier,
 		// These tests are about the merchant's own decision, so the processor
@@ -438,6 +439,7 @@ func TestTheMerchantRefusesAnOfferItNeverMade(t *testing.T) {
 		ID:        "air-serbia",
 		Inventory: inventory,
 		Rules:     ap2.MerchantRules{Issuer: user.verifier, Clock: shop.clock},
+		Payments:  ap2.CredentialProviderRules{Issuer: user.verifier, Clock: shop.clock},
 		Signer:    shop.signer,
 		Own:       shop.verifier,
 		// These tests are about the merchant's own decision, so the processor
@@ -608,6 +610,7 @@ func theShop(t *testing.T, shop party) (http.Handler, error) {
 		// refuses to build a half-wired merchant — which is the check that stops
 		// one being deployed.
 		Rules:     ap2.MerchantRules{Issuer: shop.verifier, Clock: shop.clock},
+		Payments:  ap2.CredentialProviderRules{Issuer: shop.verifier, Clock: shop.clock},
 		Signer:    shop.signer,
 		Own:       shop.verifier,
 		Processor: refusingProcessor{},
