@@ -2,6 +2,7 @@ package merchant
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
@@ -37,6 +39,13 @@ type Service struct {
 	ID string
 	// Inventory prices the routes.
 	Inventory *Inventory
+	// Catalogue is what GET /search searches. Optional: a merchant selling a
+	// route an agent already knows the name of needs no catalogue, and the
+	// Human Present flow is exactly that. When it is absent the route is not
+	// registered at all rather than answering nothing — a caller cannot tell
+	// "nothing matched" from "this merchant does not do search", and a 404 says
+	// which.
+	Catalogue *Catalogue
 	// Rules decide whether a presented Checkout Mandate is acceptable.
 	Rules ap2.CheckoutVerifier
 	// Signer holds the merchant's key: it signs offers and receipts.
@@ -56,14 +65,19 @@ type Service struct {
 	OfferLifetime time.Duration
 }
 
-// offer is what GET /checkout returns: the merchant-signed document and the
-// price in a form a caller can read without verifying anything.
+// signedOffer is what GET /checkout returns: the merchant-signed document and
+// the price in a form a caller can read without verifying anything.
+//
+// Named for the signature to keep it apart from Offer, the catalogue entry.
+// They are two layers of one word: an Offer is a thing this merchant sells, and
+// a signedOffer is this merchant committing to sell one of them at a price, for
+// as long as the exp inside it says.
 //
 // The price appears twice on purpose — inside the signed JWT, where it is what
 // the mandate will bind to, and beside it as plain JSON so an agent's watcher
 // can compare quotes without unpacking a JWS on every poll. The signed copy is
 // the one that counts, and the merchant recomputes the binding against it.
-type offer struct {
+type signedOffer struct {
 	Checkout   string           `json:"checkout"`
 	Price      generated.Amount `json:"price"`
 	Step       int              `json:"step"`
@@ -127,6 +141,9 @@ func (s *Service) Handler() (http.Handler, error) {
 	mux.Handle("GET "+roles.JWKSPath, roles.JWKS(s.Keys))
 	mux.HandleFunc("GET /checkout", s.quote)
 	mux.HandleFunc("POST /checkout", s.settle)
+	if s.Catalogue != nil {
+		mux.HandleFunc("GET /search", s.search)
+	}
 	return roles.Middleware(s.Clock, mux)
 }
 
@@ -159,13 +176,89 @@ func (s *Service) quote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	roles.OK(w, http.StatusOK, offer{
+	roles.OK(w, http.StatusOK, signedOffer{
 		Checkout:   checkout,
 		Price:      quoted.Price,
 		Step:       quoted.Step,
 		Final:      quoted.Final,
 		ObservedAt: quoted.ObservedAt,
 	})
+}
+
+// SearchParam is the query parameter GET /search reads the constraint set from:
+// the JSON array a mandate would carry, base64url-encoded without padding.
+//
+// generated.Constraint rather than a shape of this package's own, because the
+// point of the endpoint is that these are the same bytes a mandate carries. A
+// merchant-specific query language here would be a second thing to keep in step
+// with the field registry, and the first divergence would be a search returning
+// something the verifier then refuses.
+const SearchParam = "constraints"
+
+// search returns the catalogue offers a constraint set authorises.
+//
+// # Why this is a GET, when the query is a tree
+//
+// A constraint set is a tree — `within` carries an object, `in` carries an
+// array, `all` carries children — so it does not fit a query string as
+// key-value pairs, and the obvious move is a POST with a JSON body. That was
+// the first shape of this endpoint and it was wrong, for a reason specific to
+// what this merchant sells.
+//
+// Every role runs behind the idempotency middleware, which by RFC 9110 skips
+// the safe methods and remembers the response to every unsafe one. A search
+// changes nothing, so the key buys no safety — and worse, the remembering is
+// active harm here: this catalogue's prices move on a schedule, and the whole
+// reason the endpoint exists is an agent watching one come down. Poll twice
+// with one key and the second answer is the first one replayed, so the price a
+// watcher sees never changes. Telling callers to vary the key per poll makes
+// the header a cache-buster rather than an idempotency key, and fills the store
+// with an entry per poll.
+//
+// So the fix is to be honest about the method rather than to carve out an
+// exemption. A read is a GET, GET is safe, and safe methods are already outside
+// the middleware **by method semantics rather than by a route list** — which
+// matters, because a route-specific exemption is the thing that gets inherited
+// by whatever POST is added beside it later, and that failure costs money. The
+// tree travels base64url-encoded in one parameter; a set too large for a URL is
+// refused loudly, which is the failure mode to prefer over a silently stale
+// price.
+func (s *Service) search(w http.ResponseWriter, r *http.Request) {
+	encoded := r.URL.Query().Get(SearchParam)
+	if encoded == "" {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			fmt.Sprintf("%s must carry the constraint set, base64url-encoded", SearchParam))
+		return
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			fmt.Sprintf("%s is not base64url: %v", SearchParam, err))
+		return
+	}
+	var constraints []generated.Constraint
+	if err := json.Unmarshal(decoded, &constraints); err != nil {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			fmt.Sprintf("%s does not decode to a constraint set: %v", SearchParam, err))
+		return
+	}
+
+	results, err := s.Catalogue.Search(constraints)
+	switch {
+	case errors.Is(err, ErrNoConstraints):
+		roles.Fail(w, generated.ErrorCodeRequestMalformed, err.Error())
+		return
+	case err != nil:
+		// constraint.CodeOf rather than a code chosen here, so that a
+		// constraint this verifier cannot read is named the same thing whether
+		// it arrived on a search or on a mandate. An unknown field is
+		// constraint_type_unknown on both — which is the whole claim this
+		// endpoint makes, and it would be quietly false if search reported its
+		// own rejections differently.
+		roles.Fail(w, constraint.CodeOf(err), err.Error())
+		return
+	}
+	roles.OK(w, http.StatusOK, results)
 }
 
 // sign produces the merchant-signed Checkout JWT.

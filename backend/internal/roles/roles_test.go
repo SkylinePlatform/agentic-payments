@@ -2,6 +2,7 @@ package roles_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -84,6 +85,34 @@ func post(t *testing.T, url string, body, into any) int {
 	// refuses the request without it, so a test that omitted it would be
 	// exercising the rejection rather than the role.
 	req.Header.Set("Idempotency-Key", t.Name())
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err, "calling %s", url)
+	defer func() { _ = resp.Body.Close() }()
+
+	if into != nil {
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(into), "decoding the answer")
+	}
+	return resp.StatusCode
+}
+
+// searchGet calls GET /search with a constraint set, encoding it the way the
+// endpoint reads it.
+//
+// It sets no Idempotency-Key, and that absence is the point rather than an
+// omission: a GET is a safe method, so the middleware never remembers the
+// answer — which is what lets a watcher poll a moving price and see it move.
+func searchGet(t *testing.T, base string, constraints []map[string]any, into any) int {
+	t.Helper()
+
+	encoded, err := json.Marshal(constraints)
+	require.NoError(t, err, "encoding the constraint set")
+
+	url := base + "/search?" + merchant.SearchParam + "=" +
+		base64.RawURLEncoding.EncodeToString(encoded)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	require.NoError(t, err)
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err, "calling %s", url)
@@ -440,6 +469,152 @@ func TestTheMerchantRefusesAnOfferItNeverMade(t *testing.T) {
 		"a mandate that binds perfectly to a forged offer must still be refused")
 	assert.NotContains(t, body, "receipt",
 		"no mandate has been examined yet, so there is nothing to sign an answer about")
+}
+
+// TestTheMerchantSearchesItsCatalogue is the endpoint at the layer a caller
+// meets it, which is where the two things that could go wrong here live: the
+// wire shape of a constraint set, and whether a rejection keeps its code on the
+// way out.
+//
+// The evaluation itself is proved in internal/roles/merchant, where the property
+// is stated — a product appears exactly when a mandate carrying those
+// constraints would authorise buying it. This is the same claim seen through
+// HTTP: the same constraint that would be refused on a mandate has to be refused
+// here, under the same code, or search and verification are two verifiers
+// wearing one name.
+func TestTheMerchantSearchesItsCatalogue(t *testing.T) {
+	t.Parallel()
+
+	shop := newParty(t, "merchant")
+	handler, err := theShop(t, shop)
+	srv := serve(t, handler, err)
+
+	t.Run("a constraint set returns what it authorises", func(t *testing.T) {
+		var out struct {
+			Offers []struct {
+				ID       string `json:"id"`
+				Category string `json:"category"`
+				Title    string `json:"title"`
+				ImageURL string `json:"image_url"`
+				Price    struct {
+					Amount   int    `json:"amount"`
+					Currency string `json:"currency"`
+				} `json:"price"`
+			} `json:"offers"`
+			ObservedAt time.Time `json:"observed_at"`
+		}
+		status := searchGet(t, srv.URL, []map[string]any{
+			{"op": "eq", "field": "item.category", "value": "ladders"},
+			{"op": "lte", "field": "amount", "value": map[string]any{
+				"amount": merchant.DemoLadderCap, "currency": merchant.DemoCurrency,
+			}},
+		}, &out)
+
+		require.Equal(t, http.StatusOK, status)
+		require.Len(t, out.Offers, 1,
+			"the ladders prompt has to find the ladders and nothing else")
+		assert.Equal(t, merchant.DemoLadderID, out.Offers[0].ID)
+		assert.Equal(t, merchant.DemoLadderPrice, out.Offers[0].Price.Amount,
+			"a product list with no price on it cannot be the thing a user chooses from")
+		assert.NotEmpty(t, out.Offers[0].Title,
+			"the descriptive fields are the reason the catalogue exists; a verifier never "+
+				"sees them and a person only ever sees them")
+		assert.False(t, out.ObservedAt.IsZero(),
+			"a result set that does not say when it was priced cannot be told from a stale one")
+	})
+
+	t.Run("a watcher polling the same query sees the price move", func(t *testing.T) {
+		// The endpoint exists so an agent can watch a price come down, and this
+		// is the test that keeps it able to. Search was first written as a POST,
+		// which every role's idempotency middleware remembers the answer to — so
+		// a second poll with the same key replayed the first price and the
+		// watcher saw 24000 for the whole retention window. It is a GET now, and
+		// safe methods are outside that middleware by RFC 9110's own definition
+		// rather than by a route exemption somebody has to maintain.
+		//
+		// What this subtest holds is narrower than "the endpoint is a GET", and
+		// deliberately so: it fails whenever two identical queries a step apart
+		// come back with one price, whatever the cause. Making the route a POST
+		// again is one cause, and it would fail every subtest here rather than
+		// only this one — so this is the guard against the answer being cached,
+		// not against the method changing.
+		query := []map[string]any{
+			{"op": "eq", "field": "item.id", "value": merchant.DemoFlightID},
+		}
+
+		var first, second struct {
+			Offers []struct {
+				Price struct {
+					Amount int `json:"amount"`
+				} `json:"price"`
+			} `json:"offers"`
+		}
+
+		require.Equal(t, http.StatusOK, searchGet(t, srv.URL, query, &first))
+		require.Len(t, first.Offers, 1)
+		assert.Equal(t, merchant.DemoPriceWatched, first.Offers[0].Price.Amount,
+			"beat 4: the first price the agent sees is the one it cannot act on")
+
+		shop.clock.Advance(merchant.DefaultStep)
+
+		require.Equal(t, http.StatusOK, searchGet(t, srv.URL, query, &second))
+		require.Len(t, second.Offers, 1)
+		assert.Equal(t, merchant.DemoPriceRejected, second.Offers[0].Price.Amount,
+			"a search whose answer depends on the clock must not be answered from a cache; a watcher that never sees the price move has nothing to watch")
+	})
+
+	t.Run("an empty constraint set is refused", func(t *testing.T) {
+		var problem struct {
+			Code generated.ErrorCode `json:"code"`
+		}
+		status := searchGet(t, srv.URL, []map[string]any{}, &problem)
+
+		assert.Equal(t, http.StatusBadRequest, status)
+		assert.Equal(t, generated.ErrorCodeRequestMalformed, problem.Code,
+			"an empty set answered with the whole catalogue would look like a working "+
+				"search that had never filtered anything")
+	})
+
+	t.Run("a field this verifier does not know is refused, never skipped", func(t *testing.T) {
+		var problem struct {
+			Code generated.ErrorCode `json:"code"`
+		}
+		status := searchGet(t, srv.URL, []map[string]any{
+			{"op": "eq", "field": "item.colour", "value": "slate"},
+		}, &problem)
+
+		assert.Equal(t, http.StatusForbidden, status)
+		assert.Equal(t, generated.ErrorCodeConstraintTypeUnknown, problem.Code,
+			"a constraint nobody understands has to be named the same thing on a search as "+
+				"on a mandate, or the two disagree about the same bytes")
+	})
+}
+
+// theShop stands up a merchant carrying both the route inventory and the demo
+// catalogue.
+func theShop(t *testing.T, shop party) (http.Handler, error) {
+	t.Helper()
+
+	inventory, err := merchant.NewDemoInventory(shop.clock, base, merchant.DefaultStep)
+	require.NoError(t, err)
+	catalogue, err := merchant.NewDemoCatalogue(shop.clock, "air-serbia", base, merchant.DefaultStep)
+	require.NoError(t, err)
+
+	svc := &merchant.Service{
+		ID:        "air-serbia",
+		Inventory: inventory,
+		Catalogue: catalogue,
+		// Search reaches none of these, and they are here because Handler
+		// refuses to build a half-wired merchant — which is the check that stops
+		// one being deployed.
+		Rules:     ap2.MerchantRules{Issuer: shop.verifier, Clock: shop.clock},
+		Signer:    shop.signer,
+		Own:       shop.verifier,
+		Processor: refusingProcessor{},
+		Keys:      shop.keys,
+		Clock:     shop.clock,
+	}
+	return svc.Handler()
 }
 
 // refusingProcessor stands in for the Merchant Payment Processor where a test is
