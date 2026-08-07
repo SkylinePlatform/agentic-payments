@@ -1,11 +1,14 @@
 package ap2
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
 
 // This file is the open mandate's wire vocabulary: how the two things an open
@@ -178,4 +181,176 @@ func decodeCnf(raw any) (generated.PublicKey, error) {
 		return key, err
 	}
 	return key, nil
+}
+
+// IssueOpenCheckout builds an open Checkout Mandate and signs it as an
+// SD-JWT.
+//
+// signer holds the user's key. An open mandate is always user-signed — the
+// agent is the party being endorsed, in m.AgentKey, never the party doing the
+// endorsing. Human Present and Human Not Present do not disagree about this;
+// they diverge only in how the later, closed mandate gets its signature.
+//
+// m.AgentKey must name a key. IssueCheckout guards m.Checkout because
+// checkout_hash cannot be computed without it; the equivalent fact here is
+// that cnf is what makes the mandate constrainable to an agent at all, and
+// AP2 marks it REQUIRED for exactly as long as the mandate stays open — see
+// contracts/authz/checkout_mandate_open.json's own $comment: agent_key is
+// what stops a stolen open mandate being usable by a different agent. An open
+// mandate endorsing nobody authorises whoever holds it, which is the failure
+// the whole mechanism exists to prevent, so a caller that left it out gets
+// ErrMandateMalformed rather than a mandate that quietly endorses nothing.
+//
+// There is no binding to compute here, and that absence is not an omission.
+// An open mandate is not bound to a transaction — that is the definition of
+// open — so nothing in this function corresponds to checkout_hash, and
+// bindingAlg is never called.
+func IssueOpenCheckout(
+	ctx context.Context,
+	signer authz.Signer,
+	m generated.OpenCheckoutMandate,
+	blinder *sdjwt.Blinder,
+) (*sdjwt.SDJWT, error) {
+	// signer and blinder are this caller's to supply; m.AgentKey is the
+	// mandate's own content — same split IssueCheckout makes, for the same
+	// reason: the errors have to name different culprits.
+	if signer == nil {
+		return nil, fmt.Errorf("%w: no signer", ErrMisconfigured)
+	}
+	if blinder == nil {
+		return nil, fmt.Errorf("%w: no blinder", ErrMisconfigured)
+	}
+	if m.AgentKey.Kty == "" {
+		return nil, fmt.Errorf(
+			"%w: no agent key to endorse, so this mandate would authorise whoever holds it",
+			ErrMandateMalformed)
+	}
+
+	encodedConstraints, err := encodeConstraints(m.Constraints)
+	if err != nil {
+		return nil, err
+	}
+
+	claims := map[string]any{
+		vctClaim:         openCheckout.vct,
+		claimCnf:         encodeCnf(m.AgentKey),
+		claimConstraints: encodedConstraints,
+	}
+	if m.IssuedAt != nil {
+		claims[claimIssuedAt] = m.IssuedAt.Unix()
+	}
+	if m.ExpiresAt != nil {
+		claims[claimExpiresAt] = m.ExpiresAt.Unix()
+	}
+
+	declared, err := blindPaths("OpenCheckoutMandate")
+	if err != nil {
+		return nil, err
+	}
+	paths := presentPaths(claims, declared)
+
+	payload, disclosures, err := blinder.Blind(claims, paths...)
+	if err != nil {
+		return nil, err
+	}
+	return sdjwt.Issue(ctx, JOSESigner(signer), payload, disclosures)
+}
+
+// OpenOptions is what a verifier brings to VerifyOpenCheckout and
+// VerifyOpenPayment.
+//
+// It carries neither a Checkout field, the way CheckoutOptions does, nor a
+// KeyBinding field, the way both closed-mandate options do: an open mandate
+// binds to no transaction, so there is no document to check it against, and
+// it is presented directly rather than through a Key Binding JWT, so there is
+// no proof of possession to have a policy about. That is settled at the
+// delegation this mandate later endorses, not here.
+type OpenOptions struct {
+	// Issuer verifies the signature over the mandate — the user's key, in
+	// both flows an open mandate can start. Required.
+	Issuer authz.Verifier
+	// Clock decides whether exp has passed. Required.
+	Clock authz.Clock
+}
+
+// VerifyOpenCheckout verifies an open Checkout Mandate and returns it in
+// canonical form.
+//
+// It mirrors VerifyCheckout minus the binding: there is nothing here for a
+// binding check to run against, since an open mandate authorises a class of
+// purchases rather than one transaction. What is left is signature, then
+// credential type, then decode.
+func VerifyOpenCheckout(sd *sdjwt.SDJWT, opts OpenOptions) (generated.OpenCheckoutMandate, error) {
+	var zero generated.OpenCheckoutMandate
+	// None of these three is a statement about the mandate — a nil *SDJWT
+	// means the caller never parsed one, and a nil Issuer or Clock means this
+	// verifier was stood up without them. See VerifyCheckout's identical guard
+	// for why these are ErrMisconfigured and not ErrMandateMalformed.
+	if sd == nil {
+		return zero, fmt.Errorf("%w: no SD-JWT", ErrMisconfigured)
+	}
+	if opts.Issuer == nil || opts.Clock == nil {
+		return zero, fmt.Errorf("%w: verification needs both an issuer key and a clock",
+			ErrMisconfigured)
+	}
+
+	verify := sdjwt.Options{
+		Issuer: JOSEVerifier(opts.Issuer),
+		Clock:  joseClockOf(opts.Clock),
+	}
+
+	// sdjwt.Verify enforces exp and nbf right here, through checkValidity —
+	// this is what makes an expired open mandate fail with sdjwt.ErrExpired
+	// before this function ever sees a claim. That is not redundant with
+	// authz.Endorsement's own window check, which runs later against the
+	// canonical value once this mandate is used to authorise a closed one:
+	// one is the credential's own lifetime, as SD-JWT (RFC 9901 §7.1 step 6)
+	// defines it, and the other is the authorisation's, as this domain
+	// defines it. The two happen to read the same claim today; they would
+	// diverge the day an open mandate's authority window stopped being
+	// exactly exp. Keep both rather than treating either as the other's
+	// duplicate.
+	claims, err := sdjwt.Verify(sd, verify)
+	if err != nil {
+		return zero, err
+	}
+	if err := requireVCT(claims, openCheckout); err != nil {
+		return zero, err
+	}
+	return decodeOpenCheckout(claims)
+}
+
+// decodeOpenCheckout reads the verified claims into the canonical type.
+//
+// cnf and constraints are both required by the schema — an open mandate
+// carrying neither is not a smaller open mandate, it is not one at all — so
+// both are read with an explicit presence check rather than left to whatever
+// error decodeCnf or decodeConstraints would produce for a nil input.
+func decodeOpenCheckout(claims map[string]any) (generated.OpenCheckoutMandate, error) {
+	var m generated.OpenCheckoutMandate
+
+	rawCnf, ok := claims[claimCnf]
+	if !ok {
+		return m, fmt.Errorf("%w: no %s claim", ErrMandateMalformed, claimCnf)
+	}
+	key, err := decodeCnf(rawCnf)
+	if err != nil {
+		return m, err
+	}
+	m.AgentKey = key
+
+	rawConstraints, ok := claims[claimConstraints]
+	if !ok {
+		return m, fmt.Errorf("%w: no %s claim", ErrMandateMalformed, claimConstraints)
+	}
+	constraints, err := decodeConstraints(rawConstraints)
+	if err != nil {
+		return m, err
+	}
+	m.Constraints = constraints
+
+	if err := timestamps(claims, &m.IssuedAt, &m.ExpiresAt); err != nil {
+		return m, err
+	}
+	return m, nil
 }
