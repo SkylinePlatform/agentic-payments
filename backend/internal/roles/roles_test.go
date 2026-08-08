@@ -136,10 +136,19 @@ func theSurface(t *testing.T, user party) *httptest.Server {
 		Keys:    user.keys,
 		Clock:   user.clock,
 		Blinder: blinder,
+		// Only /authorise reads this — a Human Present mandate carries the
+		// instrument the agent assembled — but Handler refuses to build a
+		// surface without one, which is the check that stops a half-wired one
+		// being deployed.
+		Instrument: pinnedInstrument,
 	}
 	handler, err := svc.Handler()
 	return serve(t, handler, err)
 }
+
+// pinnedInstrument is what the surface in these tests pins into every open
+// Payment Mandate. In the process it comes from -instrument.
+var pinnedInstrument = generated.PaymentInstrument{ID: "card-4242", Type: "CARD"}
 
 // TestTheSurfaceSignsWhatItWasShown is the Human Present flow's first step: the
 // user approves a specific purchase and the surface returns the two closed

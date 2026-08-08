@@ -1,0 +1,151 @@
+package roles
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
+)
+
+// The two directions an agent key travels, and the only two this project needs.
+//
+// An open mandate binds to the agent it authorises by carrying that agent's
+// public key — the canonical model calls it agent_key and AP2 puts it in the
+// RFC 7800 cnf claim. Putting a key into one and reading a key back out of one
+// are separate problems with separate callers: an agent asking its own key
+// store what to be endorsed as, and a verifier asking what the cnf it has just
+// read endorses.
+//
+// Neither function names a crypto/ecdsa, crypto/ed25519 or crypto/rsa type, and
+// neither needs to. generated.PublicKey's JSON tags are exactly the JWK member
+// names of RFC 7517 §6, so both directions are decoding rather than
+// translation, and the key material itself stays where depguard's
+// key-material-containment rule keeps it — inside internal/platform/crypto,
+// behind an authz.Verifier that can check a signature and cannot yield a key.
+
+// PublicKey reads the single key a publisher publishes, in the canonical
+// model's own form.
+//
+// This is what an agent hands a Trusted Surface to be endorsed by: the surface
+// writes it into the open mandate's agent_key and the adapter encodes it as
+// cnf, so what the user signs is a copy of the key rather than a name for one.
+// That is why this returns a generated.PublicKey where Peer.Only — the same
+// question asked of a counterparty over HTTP — returns an authz.Verifier. A
+// relying party wants something that can check a signature; a party being
+// endorsed has to hand over the key itself, because the endorsement travels to
+// verifiers that have never met the agent.
+//
+// It refuses a set that is not exactly one key, on the reasoning Peer.Only
+// already sets out: a mock role signs with one key, so "this role's key" is
+// unambiguous and a caller has no kid to choose with. Picking one of several
+// would be worse here than there. Peer.Only picking wrong produces a signature
+// that does not verify, which points at the key; this picking wrong produces a
+// mandate endorsing a key the agent will not sign with, which fails an hour
+// later at a verifier that can say nothing more useful than that the delegation
+// was signed by an unendorsed key.
+func PublicKey(ctx context.Context, keys authz.KeySetPublisher) (generated.PublicKey, error) {
+	var zero generated.PublicKey
+	if keys == nil {
+		return zero, errors.New("roles: no key set to read a public key from")
+	}
+
+	document, err := keys.JWKS(ctx)
+	if err != nil {
+		return zero, fmt.Errorf("publishing the key set: %w", err)
+	}
+
+	// The published entries carry members this type does not model — "use" and
+	// "key_ops" among them — and encoding/json drops what a struct has no field
+	// for. That is the right direction to be lossy in: what an open mandate has
+	// to carry is the material a verifier reconstructs the key from, and a
+	// publication hint is not part of it.
+	var set struct {
+		Keys []generated.PublicKey `json:"keys"`
+	}
+	if err := json.Unmarshal(document, &set); err != nil {
+		return zero, fmt.Errorf("reading the published key set: %w", err)
+	}
+
+	switch len(set.Keys) {
+	case 1:
+		return set.Keys[0], nil
+	case 0:
+		return zero, errors.New("roles: this key set publishes no keys, so there is nothing to endorse")
+	default:
+		return zero, fmt.Errorf(
+			"roles: this key set publishes %d keys and an open mandate endorses exactly one",
+			len(set.Keys))
+	}
+}
+
+// AgentKey resolves the key an open mandate's cnf claim endorses.
+//
+// It is PublicKey's inverse and the verifying side's half of the delegation:
+// the key a closed mandate's delegating hop is checked against is the one the
+// user's own signature already covers. Its shape is fixed by the fields it is
+// written for — ap2.MerchantRules.AgentKey and
+// ap2.CredentialProviderRules.AgentKey, neither of which any role sets yet —
+// which is why it takes no context and cannot grow one. See the call to Resolve
+// below for why that costs nothing.
+//
+// cnf arrives as pkg/sdjwt hands it over: the JSON encoding of the whole
+// confirmation claim, {"jwk": {...}}, taken from the *processed* payload, so a
+// cnf that travelled as a disclosure reads the same as one in the clear. The
+// jwk member is lifted out and re-wrapped as a one-entry JWK Set because
+// crypto.ParseJWKS is the only parser in this module that turns published key
+// material into something that can verify — and it is the parser worth reaching
+// for rather than a shorter one, because it is the one that refuses a point off
+// its curve, a coordinate of the wrong width, an alg that contradicts the key
+// type, and a "d" member. An agent key arriving with private material in it is
+// a key leak at whoever minted it, and this is a place it can be caught.
+//
+// What this deliberately does not check is whether the key names enough
+// material to endorse anybody. ap2.wrapAgentKey runs authz.UsableKey on the
+// same cnf before calling this, and reports the failure as
+// authz.ErrAgentKeyMismatch — the mandate is well formed and the key is the
+// problem, a distinction only that layer can draw.
+func AgentKey(cnf json.RawMessage) (authz.Verifier, error) {
+	var confirmation struct {
+		JWK json.RawMessage `json:"jwk"`
+	}
+	if err := json.Unmarshal(cnf, &confirmation); err != nil {
+		return nil, fmt.Errorf("roles: reading the cnf claim: %w", err)
+	}
+	if len(confirmation.JWK) == 0 {
+		return nil, errors.New("roles: cnf carries no jwk member, so it endorses no key")
+	}
+
+	document, err := json.Marshal(struct {
+		Keys []json.RawMessage `json:"keys"`
+	}{Keys: []json.RawMessage{confirmation.JWK}})
+	if err != nil {
+		return nil, fmt.Errorf("roles: re-wrapping the endorsed key as a key set: %w", err)
+	}
+
+	set, err := crypto.ParseJWKS(document)
+	if err != nil {
+		return nil, fmt.Errorf("roles: reading the key cnf endorses: %w", err)
+	}
+
+	// The document has exactly one entry, so this is 1 or 0 and nothing else.
+	// Zero means ParseJWKS skipped the entry rather than failing on it, which
+	// it does for a key type or curve this implementation cannot verify with,
+	// and for a key published for something other than signing.
+	refs := set.Keys()
+	if len(refs) == 0 {
+		return nil, fmt.Errorf(
+			"%w: cnf endorses a key this implementation cannot verify a signature with",
+			authz.ErrUnsupportedAlgorithm)
+	}
+
+	// authz.KeyResolver takes a context because the port is also implemented
+	// over a remote directory. This implementation is a map parsed three lines
+	// ago and reads the context only to return early when it is already
+	// cancelled, so there is no work here for a caller's deadline to cut short
+	// — which is what lets the signature above leave the context out.
+	return set.Resolve(context.Background(), refs[0])
+}

@@ -15,6 +15,7 @@ import (
 	"flag"
 	"net/http"
 
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/surface"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
@@ -22,6 +23,12 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8084", "address to listen on")
+	// The instrument this surface pins into every open Payment Mandate it
+	// signs. A flag rather than a field of the request, because the party that
+	// gets to say which of the user's cards pays is the party the user is
+	// present at — see surface.Service.Instrument.
+	instrument := flag.String("instrument", "card-4242",
+		"identifier of the payment instrument pinned into open Payment Mandates")
 	collector := roles.CollectorFlag()
 	flag.Parse()
 
@@ -36,6 +43,19 @@ func main() {
 			Clock:   role.Clock,
 			Events:  role.Events,
 			Blinder: blinder,
+			Instrument: generated.PaymentInstrument{
+				ID: *instrument,
+				// CARD, and there is no flag for it: this project enrols no
+				// real instrument and the mock Credential Provider mints
+				// against exactly one category, so a second flag would offer a
+				// choice nothing downstream can honour.
+				Type: "CARD",
+				// Description is left unset on purpose. It is what a user reads
+				// to tell which instrument they are approving, and this binary
+				// knows an identifier and nothing else — "Visa ending 4242"
+				// printed beside an arbitrary -instrument would be the surface
+				// describing a card it cannot see.
+			},
 		}
 		return service.Handler()
 	})
