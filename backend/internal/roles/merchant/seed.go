@@ -40,9 +40,15 @@ var DemoRoute = Route{Origin: "BEG", Destination: "PMI"}
 // DefaultStep is how long each price holds in a live demonstration.
 //
 // Thirty seconds is long enough that a viewer can read the screen between
-// moves and short enough that the whole sequence fits inside one sitting. A
-// demo runner with its own pacing passes a different value; a test passes a
-// fake clock and advances it, so nothing waits.
+// moves and short enough that the whole sequence fits inside one sitting.
+//
+// It is the default of cmd/merchant's -step, and deploy/demo.json passes this
+// same value back explicitly, so the pacing of the demonstration is stated
+// where the demonstration is configured rather than inherited from here. A
+// runner that wants a shorter one passes it there; a test passes a fake clock
+// and advances it, so nothing waits. Whoever is running it live has a third
+// option that needs no restart — POST /demo/advance, which moves the merchant's
+// clock on by one step.
 const DefaultStep = 30 * time.Second
 
 // usd is an amount in the demo currency.

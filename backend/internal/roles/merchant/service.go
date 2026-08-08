@@ -15,6 +15,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
@@ -138,6 +139,26 @@ type Service struct {
 	Challenge *crypto.Challenger
 	// OfferLifetime is how long a quoted checkout stays purchasable.
 	OfferLifetime time.Duration
+	// DemoClock is the clock POST /demo/advance moves, and it has to be the
+	// clock this Service reads — Handler refuses a Service where it is not, for
+	// the reason on that check.
+	//
+	// Optional, and **absent means the route is not registered at all**, which
+	// is the same shape Catalogue and Challenge use and here it is a guard rail
+	// rather than a courtesy. An endpoint that lets a caller move a verifier's
+	// clock is catastrophic anywhere but a demonstration, and a route that
+	// exists and refuses is a route somebody can be talked into enabling; a
+	// route that was never registered is a 404. cmd/merchant builds one only
+	// under -demo-controls, which is off by default.
+	DemoClock *clock.Offset
+	// DemoStep is how far one call to that endpoint moves it: one step of the
+	// price schedule, so whoever is working the demonstration does not have to
+	// know the schedule to move it on.
+	//
+	// Read only when DemoClock is set, and required to be positive then — a
+	// control that advanced by nothing would answer 200 and change no price,
+	// which is the failure hardest to tell from a broken schedule.
+	DemoStep time.Duration
 	// Events records the moments this role owns: its verdict on a presented
 	// purchase, the receipt carrying it, and the payment side it then presents
 	// to its processor. Optional — a nil Emitter records nothing.
@@ -392,6 +413,27 @@ func (s *Service) Handler() (http.Handler, error) {
 				"to say what is being bought")
 	}
 
+	// The demo control moves a clock; this is what makes it move *this*
+	// merchant's. Handing the endpoint an Offset while the Service reads the
+	// clock underneath it is the bug this whole feature most easily creates —
+	// the prices would step and every expiry would still be judged against the
+	// wall clock, so an offer would go on being purchasable after the price it
+	// names had moved. Refusing here makes that a merchant that will not start
+	// rather than a demonstration that quietly lies.
+	if s.DemoClock != nil {
+		held, ok := s.Clock.(*clock.Offset)
+		if !ok || held != s.DemoClock {
+			return nil, errors.New(
+				"merchant: the demo clock has to be the clock this merchant reads, or advancing " +
+					"time would move the prices and leave every expiry judged against the wall clock")
+		}
+		if s.DemoStep <= 0 {
+			return nil, fmt.Errorf(
+				"merchant: a demo control that advances by %s advances nothing; give it one step "+
+					"of the price schedule", s.DemoStep)
+		}
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("GET "+roles.JWKSPath, roles.JWKS(s.Keys))
 	mux.HandleFunc("GET /checkout", s.quote)
@@ -401,6 +443,9 @@ func (s *Service) Handler() (http.Handler, error) {
 	}
 	if s.Challenge != nil {
 		mux.Handle("GET "+roles.NoncePath, roles.Nonce(s.Challenge))
+	}
+	if s.DemoClock != nil {
+		mux.HandleFunc("POST "+AdvancePath, s.advance)
 	}
 	return roles.Middleware(s.Clock, mux)
 }

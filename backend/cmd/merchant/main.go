@@ -14,6 +14,7 @@ import (
 	"net/http"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant"
@@ -24,6 +25,15 @@ func main() {
 	id := flag.String("id", "air-serbia", "merchant identifier, as it appears in receipts")
 	surface := flag.String("surface", "http://localhost:8084", "Trusted Surface base URL")
 	processor := flag.String("mpp", "http://localhost:8083", "Merchant Payment Processor base URL")
+	step := flag.Duration("step", merchant.DefaultStep,
+		"how long each price holds before the schedule moves on")
+	// Off by default, and that is a guard rail rather than a taste: this
+	// registers an endpoint that moves this merchant's whole clock, which is
+	// catastrophic anywhere but a demonstration. Absent, the route does not
+	// exist at all — merchant.Service registers it only when it is handed a
+	// clock to move.
+	demoControls := flag.Bool("demo-controls", false,
+		"register POST /demo/advance, which moves this merchant's whole clock on by one step")
 	collector := roles.CollectorFlag()
 	flag.Parse()
 
@@ -38,20 +48,43 @@ func main() {
 			return nil, err
 		}
 
+		// The demo's control over time **replaces** the role's clock rather
+		// than sitting beside it, and that is deliberate: everything below
+		// reads role.Clock, so there is one clock in this function and no
+		// second one to hand half of these collaborators by accident.
+		//
+		// That accident is the bug this endpoint most easily creates. Give the
+		// schedules the offset clock and the challenger or the rule sets the
+		// wall clock, and advancing time moves the prices while every expiry
+		// goes on being judged against a clock nobody moved — an offer that
+		// stays purchasable after the price it names has gone. Reassigning the
+		// field means writing that bug takes a second variable somebody has to
+		// introduce on purpose.
+		//
+		// One collaborator is deliberately outside this: roles.Main built
+		// role.Events from the process clock before this function ran, so
+		// events carry the moment they were emitted while receipts carry the
+		// advanced one. The event log is observability and never evidence — ADR
+		// 0003 — so those are answers to different questions rather than a
+		// disagreement, but it is better known than discovered.
+		var demoClock *clock.Offset
+		if *demoControls {
+			demoClock = clock.NewOffset(role.Clock)
+			role.Clock = demoClock
+		}
+
 		// One instant seeds both, so the flight the catalogue lists and the
 		// route the inventory quotes step through their prices together. Read
 		// twice they would be a schedule apart, and a search and a checkout
 		// taken a moment later would disagree about what one flight costs.
 		start := role.Clock.Now()
 
-		inventory, err := merchant.NewDemoInventory(
-			role.Clock, start, merchant.DefaultStep)
+		inventory, err := merchant.NewDemoInventory(role.Clock, start, *step)
 		if err != nil {
 			return nil, err
 		}
 
-		catalogue, err := merchant.NewDemoCatalogue(
-			role.Clock, *id, start, merchant.DefaultStep)
+		catalogue, err := merchant.NewDemoCatalogue(role.Clock, *id, start, *step)
 		if err != nil {
 			return nil, err
 		}
@@ -134,6 +167,11 @@ func main() {
 			Clock:         role.Clock,
 			Events:        role.Events,
 			Challenge:     challenge,
+			// nil unless -demo-controls was given, and nil is what keeps
+			// POST /demo/advance unregistered. The step is the schedule's own,
+			// so one call moves the demonstration on by exactly one price.
+			DemoClock: demoClock,
+			DemoStep:  *step,
 			// The merchant initiates payment, not the agent.
 			Processor: &merchant.HTTPProcessor{Base: *processor},
 		}
