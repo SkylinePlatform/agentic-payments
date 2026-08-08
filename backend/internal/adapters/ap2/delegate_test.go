@@ -210,14 +210,14 @@ func TestADelegationRecomputesTheBindingRatherThanCarryingTheAgentsOwn(t *testin
 		"the seeded value has to be gone; if it survives, whoever assembles the mandate chooses what it is bound to")
 }
 
-// TestADelegatedMandateOverAPriceTheUserDidNotApproved is beat 5 of the demo at
+// TestADelegatedMandateOverAPriceTheUserDidNotApprove is beat 5 of the demo at
 // adapter level, and issue #15's second box.
 //
 // Nothing asks the agent whether $210 is acceptable and nothing here lets it
 // decide: DelegateCheckout mints this chain without ever seeing a price. The
 // *merchant* refuses, which is the entire claim of the flow — an agent declining
 // its own purchase would prove nothing to anybody watching.
-func TestADelegatedMandateOverAPriceTheUserDidNotApproved(t *testing.T) {
+func TestADelegatedMandateOverAPriceTheUserDidNotApprove(t *testing.T) {
 	t.Parallel()
 
 	fx := checkoutDelegateFixture(t)
@@ -419,31 +419,39 @@ func withRootDisclosures(t *testing.T, c *sdjwt.Chain, keep []sdjwt.Disclosure) 
 	return got
 }
 
-// TestADelegationSignedWithAKeyTheOpenMandateDidNotEndorseIsRefused is #12's
-// third bullet as a property of DelegateCheckout.
+// endorsedKeyFx is what the two cnf tests below share: a real key pair
+// published as a JWK Set the way a counterparty would fetch it, an open Checkout
+// Mandate whose cnf endorses exactly that key, and a resolver that reads cnf
+// instead of ignoring it the way resolveTo does everywhere else in this package.
 //
-// DelegateCheckout cannot check its Signer against the cnf it delegates from:
-// authz.Signer exposes no public key, and one that did would be answering with
-// material the same caller supplied. So the chain is minted without complaint
-// and the *verifier* refuses it — the answer sdjwt.Delegate gives and the one
-// AttachKeyBinding documents, that the key is chosen by whoever resolved the
-// Signer.
-//
-// Two real key pairs are in play and the resolver reads cnf rather than ignoring
-// it the way resolveTo does elsewhere in this package, so the rejection is a
-// genuine signature mismatch against a resolver that would have accepted the
-// right key — not an artefact of a resolver that accepts nothing.
-func TestADelegationSignedWithAKeyTheOpenMandateDidNotEndorseIsRefused(t *testing.T) {
-	t.Parallel()
+// It is one fixture rather than two set-ups because the pair is only worth
+// anything if the two halves differ in *one* thing — which key signs the
+// delegation. Two separately written set-ups could drift into proving that two
+// different verifiers behave differently, which is not the question.
+type endorsedKeyFx struct {
+	f *delegateFx
+
+	// signer holds the key cnf endorses. delegateFx.agentSigner does not: it is
+	// a second, entirely real key, standing in for an agent that holds one of
+	// its own but was never handed this particular delegation.
+	signer   authz.Signer
+	resolver func(json.RawMessage) (authz.Verifier, error)
+}
+
+func endorsedKeyFixture(t *testing.T) *endorsedKeyFx {
+	t.Helper()
 
 	f := newFixture(t)
 
-	endorsedStore, err := crypto.NewStore(f.clock)
+	store, err := crypto.NewStore(f.clock)
 	require.NoError(t, err, "standing up the endorsed key's own store")
-	_, err = endorsedStore.Generate(crypto.Slot("delegate-endorsed"), authz.ES256, "test-generate-endorsed")
+	slot := crypto.Slot("delegate-endorsed")
+	_, err = store.Generate(slot, authz.ES256, "test-generate-endorsed")
 	require.NoError(t, err, "generating the key the open mandate will endorse")
+	endorsed, err := store.Signer(slot)
+	require.NoError(t, err, "obtaining a signer for the endorsed key")
 
-	published, err := endorsedStore.JWKS(t.Context())
+	published, err := store.JWKS(t.Context())
 	require.NoError(t, err, "publishing the endorsed key the way a counterparty would fetch it")
 	var doc struct {
 		Keys []generated.PublicKey `json:"keys"`
@@ -453,7 +461,16 @@ func TestADelegationSignedWithAKeyTheOpenMandateDidNotEndorseIsRefused(t *testin
 
 	set, err := crypto.ParseJWKS(published)
 	require.NoError(t, err, "parsing the published set back")
-	realResolver := func(cnf json.RawMessage) (authz.Verifier, error) {
+
+	unendorsed, _ := agentKeys(t, f.clock)
+	open, err := ap2.IssueOpenCheckout(t.Context(), f.signer, generated.OpenCheckoutMandate{
+		AgentKey:    doc.Keys[0],
+		Constraints: demoConstraints(t),
+	}, f.blinder)
+	require.NoError(t, err, "issuing the open Checkout Mandate")
+
+	fx := &endorsedKeyFx{signer: endorsed}
+	fx.resolver = func(cnf json.RawMessage) (authz.Verifier, error) {
 		var raw struct {
 			JWK generated.PublicKey `json:"jwk"`
 		}
@@ -470,44 +487,98 @@ func TestADelegationSignedWithAKeyTheOpenMandateDidNotEndorseIsRefused(t *testin
 		return set.Resolve(t.Context(), authz.KeyRef{KeyID: kid, Algorithm: authz.Algorithm(alg)})
 	}
 
-	// A second, entirely real key: an agent that holds one of its own but was
-	// never handed this particular delegation.
-	unendorsed, _ := agentKeys(t, f.clock)
+	// The verifier argument is nil because it is the one thing this fixture must
+	// not use: newDelegateFx would wrap it in resolveTo, which answers whatever
+	// cnf says, and a resolver that ignores cnf cannot tell an endorsed key from
+	// an unendorsed one. The real resolver replaces it on the next line.
+	fx.f = newDelegateFx(f, unendorsed, nil, open)
+	fx.f.opts.AgentKey = fx.resolver
+	return fx
+}
 
-	open, err := ap2.IssueOpenCheckout(t.Context(), f.signer, generated.OpenCheckoutMandate{
-		AgentKey:    doc.Keys[0],
-		Constraints: demoConstraints(t),
-	}, f.blinder)
-	require.NoError(t, err, "issuing the open Checkout Mandate")
+// authoriseSignedBy mints a delegation with the given key and puts it to a
+// verifier that resolves cnf for real.
+func (fx *endorsedKeyFx) authoriseSignedBy(t *testing.T, signer authz.Signer) error {
+	t.Helper()
 
-	chain, err := ap2.DelegateCheckout(t.Context(), unendorsed, open, delegatedCheckout(), sdjwt.KeyBinding{
-		Nonce: chainNonce, Audience: chainAudience, IssuedAt: f.clock.Now(),
-	}, f.blinder)
+	chain, err := ap2.DelegateCheckout(t.Context(), signer, fx.f.open,
+		delegatedCheckout(), fx.f.kb, fx.f.f.blinder)
 	require.NoError(t, err,
 		"nothing at issuance can tell an endorsed Signer from an unendorsed one, and a function that pretended otherwise would be checking material the same caller supplied")
 
-	_, err = ap2.AuthoriseCheckoutChain(reparseChain(t, chain), purchaseAt(18900), merchantCheckout, ap2.ChainOptions{
-		Issuer:   f.verifier,
-		AgentKey: realResolver,
-		Clock:    f.clock,
-		Audience: chainAudience,
-		Nonce:    chainNonce,
-	})
+	_, err = ap2.AuthoriseCheckoutChain(
+		reparseChain(t, chain), purchaseAt(18900), merchantCheckout, fx.f.opts)
+	return err
+}
+
+// TestADelegationSignedWithTheEndorsedKeyIsAccepted is the positive control the
+// test below needs in order to mean what it says.
+//
+// The blind spot it closes is exact. A delegation signed by the wrong key and a
+// delegation checked by a verifier that rejects everything both come back as
+// ErrSignatureInvalid, and that sentinel is the whole of what the negative test
+// asserts — so replacing the resolved delegate key with a verifier that says no
+// to everybody leaves that test passing, and chain_test.go's older sibling
+// passing too. Measured on this branch, not assumed: this is the only test among
+// the three that fails there.
+//
+// The neighbouring mistake is not the same one and is already covered: a
+// resolver that *errors* on every cnf produces some other sentinel entirely, and
+// the negative test catches it. What no negative test can catch is a resolver
+// that resolves happily and hands back a verifier nothing can satisfy.
+//
+// The two tests run the same resolver over the same open mandate and differ in
+// one thing, which key signs — see endorsedKeyFx for why that is a shared
+// fixture rather than two set-ups.
+func TestADelegationSignedWithTheEndorsedKeyIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	fx := endorsedKeyFixture(t)
+
+	require.NoError(t, fx.authoriseSignedBy(t, fx.signer),
+		"the key the open mandate's cnf endorses, resolved out of that cnf through a published JWK Set, has to produce a chain that authorises — this is the whole delegation mechanism working end to end")
+}
+
+// TestADelegationSignedWithAKeyTheOpenMandateDidNotEndorseIsRefused is #12's
+// third bullet as a property of DelegateCheckout.
+//
+// DelegateCheckout cannot check its Signer against the cnf it delegates from:
+// authz.Signer exposes no public key, and one that did would be answering with
+// material the same caller supplied. So the chain is minted without complaint
+// and the *verifier* refuses it — the answer sdjwt.Delegate gives and the one
+// AttachKeyBinding documents, that the key is chosen by whoever resolved the
+// Signer.
+//
+// Two real key pairs are in play and the resolver reads cnf, so the rejection is
+// a genuine signature mismatch rather than an artefact of a resolver that
+// accepts nothing. That last half is not something this test can establish on
+// its own; TestADelegationSignedWithTheEndorsedKeyIsAccepted is what establishes
+// it, over this same fixture.
+func TestADelegationSignedWithAKeyTheOpenMandateDidNotEndorseIsRefused(t *testing.T) {
+	t.Parallel()
+
+	fx := endorsedKeyFixture(t)
+
+	err := fx.authoriseSignedBy(t, fx.f.agentSigner)
 	require.Error(t, err,
 		"the delegating hop is signed by a real key, just not the one the open mandate's cnf endorses")
 	assert.ErrorIs(t, err, sdjwt.ErrSignatureInvalid,
 		"this is a signature check failing, not a malformed chain and not a misconfigured verifier")
 }
 
-// TestAClosedMandateMayOnlyBeDelegatedFromItsOwnOpenMandate covers the pairing
-// Minimise cannot make for itself.
+// TestAClosedMandateMayOnlyBeDelegatedFromItsOwnOpenMandate pins where a
+// mispaired delegation fails, not whether it fails.
 //
-// Minimise takes its audience from the root's own vct, which is what stops a
-// caller naming the wrong one — but nothing in it knows what the *delegated*
-// content is about to be. An open Payment Mandate handed to DelegateCheckout
-// would be narrowed for a Credential Provider's reach, dropping the route pins,
-// and the chain would then be refused by AuthoriseCheckoutChain's own requireVCT
-// for what reads like an unrelated reason.
+// A verifier catches this anyway, in the same words — AuthoriseCheckoutChain
+// runs requireVCT over the same two types — and catches it before evaluating a
+// single constraint. What the guard changes is that the agent finds out in its
+// own process, without spending the nonce a verifier issued for the transaction
+// and without a request leaving the machine.
+//
+// So these two subtests are about the sentinel and the message arriving *from
+// DelegateCheckout and DelegatePayment*. An assertion that merely reached
+// ErrWrongMandateType somewhere would pass with the guard deleted, which is what
+// makes calling the constructor directly the whole of the test.
 func TestAClosedMandateMayOnlyBeDelegatedFromItsOwnOpenMandate(t *testing.T) {
 	t.Parallel()
 
@@ -521,6 +592,9 @@ func TestAClosedMandateMayOnlyBeDelegatedFromItsOwnOpenMandate(t *testing.T) {
 			"these are two different authorisations and neither endorses the other's transaction")
 		assert.ErrorIs(t, err, ap2.ErrWrongMandateType,
 			"the sentinel names the pairing, which is what tells this apart from a root nobody could read at all")
+		// "a open" is vct.go's own wording, not a typo here. It predates this
+		// file, and pinning it with ErrorContains is what turns fixing it into a
+		// two-file change — worth doing, not worth doing on this branch.
 		assert.ErrorContains(t, err, "not a open Checkout Mandate",
 			"the message has to name the type the root was checked against, or a reader cannot tell which of the two mandates is in the wrong place")
 	})
