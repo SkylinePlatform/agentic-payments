@@ -31,10 +31,11 @@ func IssueCheckout(
 	m generated.CheckoutMandate,
 	blinder *sdjwt.Blinder,
 ) (*sdjwt.SDJWT, error) {
-	// signer and blinder are this caller's to supply; m.Checkout is the mandate's
-	// own content. The guards are separated along that line because the errors
-	// name different culprits: ErrMisconfigured is a verifier stood up wrong,
-	// ErrMandateMalformed is a mandate that cannot be built from what it carries.
+	// signer and blinder are this caller's to supply; what the mandate itself
+	// carries is checkoutClaims' to judge. The guards are separated along that
+	// line because the errors name different culprits: ErrMisconfigured is a
+	// verifier stood up wrong, ErrMandateMalformed is a mandate that cannot be
+	// built from what it carries.
 	//
 	// signer is guarded here rather than left to sdjwt.Issue because "no signer"
 	// is a worse sentence than this one, not because it has to be — JOSESigner
@@ -45,8 +46,53 @@ func IssueCheckout(
 	if blinder == nil {
 		return nil, fmt.Errorf("%w: no blinder", ErrMisconfigured)
 	}
+
+	claims, paths, err := checkoutClaims(m)
+	if err != nil {
+		return nil, err
+	}
+
+	// The digest must use the algorithm a verifier will read out of _sd_alg,
+	// which is the Blinder's only when the payload ends up carrying digests —
+	// see bindingAlg. checkout_jwt is required by checkoutClaims and
+	// withholdable, so this mandate always blinds something and always takes the
+	// Blinder's algorithm. It goes through bindingAlg anyway so that stays a
+	// fact rather than a coincidence nobody would notice losing.
+	//
+	// m.Checkout is safe to dereference because checkoutClaims refuses a mandate
+	// that carries none.
+	if err := bindClosed(claims, claimCheckoutHash,
+		bindingAlg(blinder, len(paths) > 0), *m.Checkout); err != nil {
+		return nil, err
+	}
+
+	payload, disclosures, err := blinder.Blind(claims, paths...)
+	if err != nil {
+		return nil, err
+	}
+	return sdjwt.Issue(ctx, JOSESigner(signer), payload, disclosures)
+}
+
+// checkoutClaims turns a closed Checkout Mandate into the claims it travels as,
+// together with the withholdable paths this particular mandate actually has
+// something at.
+//
+// IssueCheckout and DelegateCheckout both go through it, and that is the point
+// rather than a convenience. The two differ in how the mandate is signed — as
+// its own SD-JWT, or as the Delegate Payload of a chain — and in nothing about
+// what it says, so a second body here would be a second answer to one question.
+// MerchantRules.VerifyCheckoutAsOf sets out at length why that drifts; a fork of
+// exactly this shape was found and closed on the branch that added it.
+//
+// The binding is the one claim it does not write, and that is the part of the
+// question the two callers genuinely answer differently: checkout_hash has to be
+// taken under the algorithm the presentation will declare in _sd_alg, and a
+// standalone mandate declares it only when something is blinded while a
+// delegating hop always declares it. bindingAlg is where that reasoning lives
+// and each caller passes it its own answer.
+func checkoutClaims(m generated.CheckoutMandate) (map[string]any, []string, error) {
 	if m.Checkout == nil || *m.Checkout == "" {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"%w: no checkout to bind to, so checkout_hash cannot be computed",
 			ErrMandateMalformed)
 	}
@@ -64,27 +110,9 @@ func IssueCheckout(
 
 	declared, err := blindPaths("CheckoutMandate")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	paths := presentPaths(claims, declared)
-
-	// The digest must use the algorithm a verifier will read out of _sd_alg,
-	// which is the Blinder's only when the payload ends up carrying digests —
-	// see bindingAlg. checkout_jwt is required above and withholdable, so this
-	// mandate always blinds something and always takes the Blinder's algorithm.
-	// It goes through bindingAlg anyway so that stays a fact rather than a
-	// coincidence nobody would notice losing.
-	hash, err := checkoutHash(bindingAlg(blinder, len(paths) > 0), *m.Checkout)
-	if err != nil {
-		return nil, err
-	}
-	claims[claimCheckoutHash] = hash
-
-	payload, disclosures, err := blinder.Blind(claims, paths...)
-	if err != nil {
-		return nil, err
-	}
-	return sdjwt.Issue(ctx, JOSESigner(signer), payload, disclosures)
+	return claims, presentPaths(claims, declared), nil
 }
 
 // CheckoutOptions is what a verifier brings to VerifyCheckout.

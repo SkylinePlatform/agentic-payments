@@ -329,6 +329,131 @@ func TestGoldenOpenCheckoutMandateSerialisation(t *testing.T) {
 	assert.Equal(t, m.Constraints, got.Constraints)
 }
 
+// delegationVector is what testdata/delegated_checkout_mandate.json pins: a
+// whole Human Not Present presentation, both hops, as one string.
+type delegationVector struct {
+	Serialization string `json:"serialization"`
+	CheckoutHash  string `json:"checkout_hash"`
+	Audience      string `json:"audience"`
+	Nonce         string `json:"nonce"`
+}
+
+// TestGoldenDelegatedCheckoutMandate pins the artefact a Human Not Present
+// purchase actually puts on the wire: an open Checkout Mandate the user signed,
+// and the closed one the agent signed as a delegation of it, joined into one
+// two-hop chain.
+//
+// It is reachable as a byte-for-byte vector for the reason
+// TestGoldenOpenCheckoutMandateSerialisation gives — hmacAuthzKey stands in for
+// the ECDSA keys issuance uses, so both signatures are deterministic — and it
+// needs *two* of them here, because a delegation is signed by a different party
+// from the credential it delegates: the user's key signs the root, the agent's
+// signs the delegating hop.
+//
+// # What this vector deliberately does not exercise: cnf
+//
+// The root's cnf names an EC P-256 key ("agent-1", agentJWK) and the delegating
+// hop is HS256 under kid "golden-delegation-agent". **Those are not the same
+// key, and this chain authorises below only because resolveTo returns the agent
+// verifier whatever cnf says.** A second implementation that resolved cnf to a
+// key — which is what AuthoriseCheckoutChain does in production, through
+// wrapAgentKey — would reproduce this string and then reject it as
+// ErrSignatureInvalid.
+//
+// So read this as a vector over the *encoding* and over sd_hash, and not over
+// the delegation's trust link. The link has its own tests, which is where a
+// second implementation should look instead:
+// TestADelegationSignedWithAKeyTheOpenMandateDidNotEndorseIsRefused for the
+// rejection and TestADelegationSignedWithTheEndorsedKeyIsAccepted for the
+// acceptance, both against a resolver that really reads cnf.
+//
+// It cannot be made faithful here, and both escapes are closed rather than
+// unexplored. A symmetric key cannot go in cnf at all — authz.UsableKey admits
+// EC, OKP and RSA and nothing else, so an oct JWK is refused by wrapAgentKey
+// before any signature is checked. And the one deterministic *asymmetric*
+// signature available, Ed25519, needs crypto/ed25519, which
+// key-material-containment forbids outside internal/platform/crypto. Pinning an
+// ECDSA chain is not an option either: that is the non-determinism this whole
+// file works around.
+//
+// What a second implementation has to reproduce to land on this string is more
+// than an encoding: the delegating hop's sd_hash covers the root *as presented*,
+// so the string commits to which of the root's disclosures travelled. This
+// presentation withholds none of the four — a Merchant can state every fact the
+// constraint registry holds, which the assertion at the end of this test pins —
+// so an implementation that narrowed it at all, or that narrowed it after
+// signing, lands on a different sd_hash and a chain no verifier accepts. That is
+// the one fact this vector holds which neither mandate's own vector can.
+//
+// The audience and nonce are in the file rather than only in this test because
+// they are part of what the string commits to: a chain minted for one verifier
+// is not presentable to another, and a reader comparing serialisations without
+// knowing which verifier this one was addressed to would have no way to tell a
+// drift from a different transaction.
+func TestGoldenDelegatedCheckoutMandate(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile("testdata/delegated_checkout_mandate.json")
+	require.NoError(t, err, "reading the golden delegation vector")
+	var vector delegationVector
+	require.NoError(t, json.Unmarshal(raw, &vector), "decoding the golden delegation vector")
+
+	user := hmacAuthzKey{secret: []byte("golden-delegation-user-secret"), kid: "golden-delegation-user"}
+	agent := hmacAuthzKey{secret: []byte("golden-delegation-agent-secret"), kid: "golden-delegation-agent"}
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err, "building a deterministic blinder")
+
+	issuedAt := time.Unix(1_777_326_189, 0).UTC()
+	expires := time.Unix(1_777_329_789, 0).UTC()
+
+	open, err := ap2.IssueOpenCheckout(t.Context(), user, generated.OpenCheckoutMandate{
+		AgentKey:    agentJWK(t),
+		Constraints: demoConstraints(t),
+		IssuedAt:    &issuedAt,
+		ExpiresAt:   &expires,
+	}, blinder)
+	require.NoError(t, err, "issuing the open mandate the vector delegates from")
+
+	checkout := merchantCheckout
+	chain, err := ap2.DelegateCheckout(t.Context(), agent, open, generated.CheckoutMandate{
+		Checkout: &checkout,
+		// Deliberately wrong, and pinned wrong: a vector whose input carried the
+		// right binding could be reproduced by an implementation that copied it.
+		CheckoutHash: "not-the-hash",
+		IssuedAt:     &issuedAt,
+		ExpiresAt:    &expires,
+	}, sdjwt.KeyBinding{
+		Nonce:    vector.Nonce,
+		Audience: vector.Audience,
+		IssuedAt: issuedAt,
+	}, blinder)
+	require.NoError(t, err, "delegating the golden vector")
+
+	assert.Equal(t, vector.Serialization, chain.String(),
+		"a second implementation handed this open mandate, this closed one and this key binding must land on exactly this chain; a mismatch is either a non-deterministic step or a genuine drift in the wire vocabulary")
+
+	// Closes the loop the same way the two mandate vectors close theirs: the
+	// pinned string is not merely well formed, it is what this package's own
+	// verifier authorises, and what it decodes back to.
+	parsed, err := sdjwt.ParseChain(vector.Serialization)
+	require.NoError(t, err, "the pinned string has to parse as a chain")
+
+	got, err := ap2.AuthoriseCheckoutChain(parsed, purchaseAt(18900), merchantCheckout, ap2.ChainOptions{
+		Issuer:   user,
+		AgentKey: resolveTo(agent),
+		Clock:    clock.NewFake(issuedAt),
+		Audience: vector.Audience,
+		Nonce:    vector.Nonce,
+	})
+	require.NoError(t, err, "the pinned vector must itself authorise")
+	assert.Equal(t, vector.CheckoutHash, got.Closed.CheckoutHash,
+		"the binding the vector publishes is the one the chain actually carries, recomputed from the merchant's document rather than taken from the mandate that claimed it")
+	assert.Equal(t, loadVectors(t).CheckoutHash["sha-256"], got.Closed.CheckoutHash,
+		"a closed mandate signed as a delegation binds its checkout exactly as a standalone one does; two digests here would mean the delegated path hashes something else, and no party holding both mandates could pair them")
+	assert.Len(t, got.Open.Constraints, 4,
+		"the Merchant can state every fact the registry holds, so this presentation withholds nothing from it — a shorter list here would mean the vector pins a narrowed chain while claiming to pin a full one")
+}
+
 // minimisationVector is the pair testdata/open_payment_minimised.json pins: one
 // open Payment Mandate as the user signed it, and the same mandate as an agent
 // presents it to a Credential Provider.
