@@ -14,6 +14,17 @@
     "512-entry ring and the SSE replay are for — a browser attaching afterwards still sees the",
     "whole transaction.",
     "",
+    "It runs the Human Present flow, and it keeps its place here when the agent that watches a",
+    "price and buys on its own joins it — that one is a second process, not a replacement. A",
+    "regression in the path that must keep working should fail on every `make demo`, in front of",
+    "whoever was about to take a screenshot, rather than only in CI.",
+    "",
+    "The merchant runs with `-demo-controls`, so `POST /demo/advance` moves its whole clock on by",
+    "one `-step`. Whole, deliberately: offer expiry, mandate expiry and challenge freshness move",
+    "with the price, because the control says time passed rather than the price changed. Off by",
+    "default everywhere else — an endpoint that moves a verifier's clock belongs in a",
+    "demonstration and nowhere near anything real.",
+    "",
     "`implemented: false` marks a binary that is still a stub. The runner starts it anyway and",
     "expects it to exit — which is how a stale flag becomes visible rather than silently wrong.",
     "Flip it in the pull request that implements the role."
@@ -53,6 +64,7 @@
       "name": "merchant",
       "kind": "role",
       "summary": "Merchant — prices the route and verifies the Checkout Mandate",
+      "note": "POST /demo/advance moves its whole clock on by one -step, so a demonstration need not wait the schedule out.",
       "issue": "9",
       "implemented": true,
       "dir": "backend",
@@ -63,7 +75,10 @@
         "-surface",
         "http://localhost:8084",
         "-collector",
-        "http://127.0.0.1:8085/events"
+        "http://127.0.0.1:8085/events",
+        "-step",
+        "30s",
+        "-demo-controls"
       ],
       "health": "http://localhost:8081/.well-known/jwks.json"
     },
