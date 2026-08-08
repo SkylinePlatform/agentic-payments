@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -458,6 +459,34 @@ func (s chainShop) forwarded(t *testing.T) (string, string) {
 	return "", ""
 }
 
+// theseAreTheMerchant and justOne are constraint sets written for this file
+// rather than borrowed from the scripted prompts, because each isolates one fact
+// on the subject that no scripted prompt happens to read.
+//
+// Both carry an amount bound, and it is deliberately far above anything the
+// catalogue holds. This merchant will not authorise against a mandate that says
+// nothing about the amount — RequireConstrained, in newChainShop — so one has to
+// be there, and a loose one cannot be the reason for any verdict below.
+const (
+	// theseAreTheMerchant names who is being paid, by both fields Party carries.
+	// The demo merchant trades as air-serbia under MCC 5399 while the flight's
+	// retailer is "Adria Wings", so a subject that named the retailer, or named
+	// nobody, fails this and a subject that names the merchant passes it.
+	theseAreTheMerchant = `[
+		{"op":"eq","field":"merchant.id","value":"air-serbia"},
+		{"op":"eq","field":"merchant.category","value":"5399"},
+		{"op":"lte","field":"amount","value":{"amount":99999,"currency":"USD"}}
+	]`
+
+	// justOne is satisfied by a purchase of one and by nothing larger, which is
+	// what a search's own quantity has to be for its answer to mean "a single
+	// unit of this could be bought".
+	justOne = `[
+		{"op":"lte","field":"quantity","value":1},
+		{"op":"lte","field":"amount","value":{"amount":99999,"currency":"USD"}}
+	]`
+)
+
 // flightConstraints is the built scenario's mandate: BEG→PMI, at most $200, this
 // summer. Character for character the set in internal/agent/interpret's
 // scenarios.go, which is what makes the beats these tests assert the beats the
@@ -768,6 +797,40 @@ func TestTheSubjectAMerchantBuildsIsTheSubjectItsSearchMatched(t *testing.T) {
 				steps:       1,
 				because:     "beat 5 again, seen from the search side: the offer is out of range for both",
 			},
+			{
+				// Subject.Merchant is what these two read, and until this row
+				// nothing on either half did. The catalogue's own doc comment
+				// argues at length that the field is load-bearing — a mandate
+				// constraining merchant.id is constraining who is being paid —
+				// while three separate ways of getting it wrong left the whole
+				// suite green: dropping it, dropping its category, and naming
+				// the offer's Retailer instead. The last is the one to fear,
+				// because "Adria Wings" is a plausible-looking answer and it is
+				// not who the money goes to.
+				name:        "a mandate that names who is being paid",
+				constraints: theseAreTheMerchant,
+				item:        merchant.DemoFlightID,
+				steps:       2,
+				authorised:  true,
+				because: "the merchant on the subject is who operates the catalogue, not the " +
+					"offer's retailer, and neither half was checking that",
+			},
+			{
+				// The search side's quantity of one, which is the single place
+				// the two halves are *allowed* to differ and therefore the one
+				// place a literal can drift unnoticed. A search asking about two
+				// units would answer this constraint differently from the
+				// checkout that then buys one — which is the disagreement this
+				// whole test exists to catch, arriving from the only direction
+				// the comparison in the subtest above cannot see.
+				name:        "a mandate that will buy exactly one",
+				constraints: justOne,
+				item:        merchant.DemoFlightID,
+				steps:       2,
+				authorised:  true,
+				because: "search asks whether a single unit could be bought, and the checkout " +
+					"buys the quantity the offer was signed for; both are one here",
+			},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				t.Parallel()
@@ -974,13 +1037,38 @@ func TestTheAmountEvaluatedIsWhatTheWholeBasketCosts(t *testing.T) {
 
 			body := s.chains(t, constraintsFrom(t, upToFiveUnderOneSixty), offer, price,
 				sameNonce(s.nonce(t)))
-			status, _ := s.present(t, strconv.Itoa(tc.quantity), body)
+			status, out := s.present(t, strconv.Itoa(tc.quantity), body)
 
 			want := http.StatusUnprocessableEntity
 			if tc.authorised {
 				want = http.StatusOK
 			}
-			assert.Equal(t, want, status, tc.because)
+			require.Equal(t, want, status, tc.because)
+			if tc.authorised {
+				return
+			}
+
+			// **Which mandate refused, not merely that one did.** Both chains
+			// carry this cap, and the payment side derives its own subject from
+			// the closed Payment Mandate's payment_amount — which is the line
+			// price too, so it would refuse this basket even if the checkout
+			// side had been shown a unit price by mistake. A test asserting only
+			// the status therefore passes whether the merchant compared the cap
+			// against $225 or against $75, which is the whole question.
+			//
+			// This is a rebase's doing rather than an original oversight: the
+			// status assertion did isolate the checkout side until #120 gave
+			// AuthorisePaymentChain a subject of its own, and it stopped doing so
+			// silently. A mutation feeding the checkout side a unit price is what
+			// found it.
+			token, ok := out["receipt"].(string)
+			require.True(t, ok, "a refusal is answered with a receipt")
+			receipt, err := ap2.VerifyReceipt(token, s.merchant)
+			require.NoError(t, err)
+			assert.Equal(t, generated.ReceiptMandateTypeCheckout, receipt.MandateType,
+				"the user's cap has to be exceeded on the Checkout Mandate, evaluated against "+
+					"what the merchant says this purchase costs; a payment-typed receipt here "+
+					"means the checkout side was shown the price of one ticket")
 		})
 	}
 }
@@ -1225,6 +1313,23 @@ func TestAMalformedDelegatedPurchaseIsRefusedBeforeAnythingIsParsed(t *testing.T
 				"nonce and signed an acceptance for money that never moves",
 		},
 		{
+			// The nonce split's third case, and the one that is correct by
+			// ordering rather than by a guard of its own. This merchant's own
+			// nonce is not required by presentation(); an empty one reaches
+			// Challenge.Check, which refuses it as a value this verifier never
+			// issued — before any mandate is read, so there is nothing to write
+			// a receipt about. It lands on the right side of the receipt line
+			// because examineChain checks the nonce before it parses a chain,
+			// and reordering those two lines is what this row would catch.
+			name: "no challenge of this merchant's at all",
+			body: func(full map[string]any) map[string]any {
+				delete(full, "nonce")
+				return full
+			},
+			because: "an absent challenge and an invented one are the same thing to a verifier " +
+				"that authenticates its own issuance, and neither says anything about a mandate",
+		},
+		{
 			name: "a directly signed mandate beside a chain",
 			body: func(full map[string]any) map[string]any {
 				full["mandate"] = "eyJhbGciOiJFUzI1NiJ9.e30.c2ln~"
@@ -1287,6 +1392,88 @@ func TestAMerchantThatDoesNotVerifyChainsRefusesOneRatherThanIgnoringIt(t *testi
 	assert.Equal(t, string(generated.ErrorCodeRequestMalformed), out["code"],
 		"silently treating a delegation as a directly signed mandate would evaluate none "+
 			"of the user's constraints and settle anyway")
+}
+
+// TestAnOfferThisMerchantMadeAndIsNoLongerMakingIsRefused is the demo's own
+// mechanic, and nothing in internal/roles held it before this.
+//
+// ownOffer asks two questions and they are not the same one: the signature
+// answers "did I make this offer" and exp answers "is it still the offer I am
+// making". A genuine offer from an earlier moment passes the first and must fail
+// the second — otherwise a watcher that saved the $240 quote could present it
+// after the price moved, or after the merchant stopped making it, and buy at a
+// number the merchant is no longer quoting.
+//
+// The price here is deliberately the schedule's *last* one, so re-quoting would
+// return the same amount and the refusal cannot be about the money. What is
+// stale is the document, not the number — which is the case a check on the price
+// alone would wave through.
+//
+// Both flows, because the guard is in ownOffer, which runs before either branch:
+// a regression there would take the Human Present path down with it and no test
+// in this repository would have said so.
+func TestAnOfferThisMerchantMadeAndIsNoLongerMakingIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		present func(t *testing.T, s chainShop, offer string, price generated.Amount) map[string]any
+	}{
+		{
+			name: "presented as a delegation",
+			present: func(t *testing.T, s chainShop, offer string, price generated.Amount) map[string]any {
+				return s.chains(t, flightConstraints(t), offer, price, sameNonce(s.nonce(t)))
+			},
+		},
+		{
+			name: "presented directly",
+			present: func(t *testing.T, s chainShop, offer string, price generated.Amount) map[string]any {
+				checkout, err := ap2.IssueCheckout(t.Context(), s.user,
+					generated.CheckoutMandate{Checkout: &offer}, s.blinder)
+				require.NoError(t, err)
+				payment, err := ap2.IssuePayment(t.Context(), s.user, generated.PaymentMandate{
+					Payee:             generated.Merchant{ID: chainMerchantID, Name: "Air Serbia"},
+					PaymentAmount:     price,
+					PaymentInstrument: generated.PaymentInstrument{ID: "card-4242", Type: "CARD"},
+				}, offer, s.blinder)
+				require.NoError(t, err)
+				return map[string]any{
+					"mandate": checkout.String(), "payment": payment.String(), "checkout": offer,
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newChainShop(t)
+			s.clock.Advance(2 * merchant.DefaultStep)
+
+			offer, price := s.quoteItem(t, merchant.DemoFlightID, 1)
+			require.Equal(t, merchant.DemoPriceAccepted, price.Amount,
+				"the last price in the schedule, so staleness is the only thing wrong below")
+
+			body := tc.present(t, s, offer, price)
+
+			// Past the offer's own window. newChainShop leaves OfferLifetime at
+			// its default, which the service documents as fifteen minutes: long
+			// enough to read a consent screen, short enough that a price which
+			// has moved cannot be bought at yesterday's number.
+			s.clock.Advance(16 * time.Minute)
+
+			status, out := s.present(t, "stale", body)
+
+			require.Equal(t, http.StatusBadRequest, status,
+				"an offer this merchant is no longer making must not be purchasable, however "+
+					"genuine the signature over it")
+			assert.Equal(t, string(generated.ErrorCodeRequestMalformed), out["code"])
+			assert.Contains(t, fmt.Sprint(out["detail"]), "expired",
+				"the caller's move is to ask for the current price, and the refusal has to say so")
+			assert.NotContains(t, out, "receipt",
+				"no mandate has been examined — the offer was refused before either branch — so "+
+					"there is nothing to sign an answer about")
+		})
+	}
 }
 
 // TestTheHumanPresentPathIsUntouched is the property this slice most had to
