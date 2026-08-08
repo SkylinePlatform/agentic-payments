@@ -342,10 +342,12 @@ func TestANarrowedPresentationAuthorisesWhereTheFullOneCannot(t *testing.T) {
 //
 // It goes through IssueOpenPayment for every constraint set but the empty one,
 // which that function refuses: an open mandate carrying no limits authorises
-// every purchase there is, and this package will not mint one. The refusal is
-// about issuing and says nothing about verifying — a verifier still has to be
-// able to read such a mandate in order to reach a verdict on it, which is what
-// TestAMandateThatSetNoLimitsIsNotAPresentationNarrowedToNothing is about.
+// every purchase there is, and this package will not mint one. Strict in what we
+// produce, permissive in what we accept — the refusal is about issuing and
+// invents no rule for anybody else, while a verifier still has to accept what
+// the schema permits from any issuer and reach a verdict on it. That is what
+// TestAMandateThatSetNoLimitsIsNotAPresentationNarrowedToNothing is about, and
+// IssueOpenCheckout's own comment sets the asymmetry out in full.
 //
 // So for that one case the root is assembled here instead, from the same claims
 // IssueOpenPayment would write. That is not a way around the guard, it is the

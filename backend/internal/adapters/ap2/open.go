@@ -220,13 +220,29 @@ func decodeCnf(raw any) (generated.PublicKey, error) {
 // any refactor that defers it routes around it — which is exactly what happened
 // to the Trusted Surface's, and is why this guard exists.
 //
-// The verifying side deliberately does not run the same test, and that
-// asymmetry is the point rather than a gap. VerifyOpenCheckout has to be able
-// to read a badly minted mandate in order to refuse it with a receipt naming
-// why, so refusing at decode would replace an answerable rejection with an
-// unparseable one. The floor on the verifying side is
-// requireSomeConstraintDisclosed, which refuses a presentation that disclosed
-// none of the constraints its mandate committed to.
+// The verifying side deliberately does not run this test, and the asymmetry is
+// the design rather than an inconsistency somebody should later tidy away:
+// strict in what we produce, permissive in what we accept. The two do not meet.
+// This guard is about what *we* mint, and being stricter about our own output
+// invents no rule for anybody else. A verifier is the opposite case — it has to
+// accept what the schema permits from *anyone*, because refusing a conforming
+// artefact from a foreign issuer would be us inventing a rule and enforcing it
+// on a party who followed the specification.
+//
+// TestAMandateThatSetNoLimitsIsNotAPresentationNarrowedToNothing is the other
+// half, and reads as a contradiction of this guard until the sentence above is
+// applied to it. It asserts that AuthorisePaymentChain accepts an open mandate
+// carrying no constraints, and it is correct: zero constraints committed to,
+// zero violated, which is the honest answer. Its fixture assembles that mandate
+// by hand precisely because this function will no longer produce one. Refusing
+// at decode instead would be worse than useless — it would replace an
+// answerable rejection, which AP2 requires be carried in a receipt, with a
+// mandate nobody can parse well enough to write one about.
+//
+// The floor on the verifying side is requireSomeConstraintDisclosed, which
+// refuses a presentation that disclosed none of the constraints its mandate
+// committed to. That is a different question from this one, and it stays that
+// way.
 //
 // There is no binding to compute here, and that absence is not an omission.
 // An open mandate is not bound to a transaction — that is the definition of
