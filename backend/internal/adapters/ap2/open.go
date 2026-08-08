@@ -321,7 +321,7 @@ func VerifyOpenCheckout(sd *sdjwt.SDJWT, opts OpenOptions) (generated.OpenChecko
 	if err := requireVCT(claims, openCheckout); err != nil {
 		return zero, err
 	}
-	return decodeOpenCheckout(claims)
+	return decodeOpenPresented(sd, decodeOpenCheckout, claims)
 }
 
 // decodeOpenCheckout reads the verified claims into the canonical type.
@@ -480,7 +480,7 @@ func VerifyOpenPayment(sd *sdjwt.SDJWT, opts OpenOptions) (generated.OpenPayment
 	if err := requireVCT(claims, openPayment); err != nil {
 		return zero, err
 	}
-	return decodeOpenPayment(claims)
+	return decodeOpenPresented(sd, decodeOpenPayment, claims)
 }
 
 // decodeOpenPayment reads the verified claims into the canonical type.

@@ -381,7 +381,7 @@ func TestGoldenMinimisedOpenPaymentMandate(t *testing.T) {
 	require.Equal(t, vector.Full, sd.String(),
 		"the full presentation has to reproduce before the narrowed one means anything")
 
-	narrowed, err := ap2.Minimise(sd, ap2.ForPayment)
+	narrowed, err := ap2.Minimise(sd)
 	require.NoError(t, err, "narrowing for the Credential Provider")
 	assert.Equal(t, vector.Minimised, narrowed.String(),
 		"a second implementation presenting this mandate to a Credential Provider must send exactly this; a string carrying more disclosures is one that has quietly told that role where the user is flying")

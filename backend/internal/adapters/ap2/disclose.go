@@ -35,10 +35,20 @@ import (
 // The two readings coincide because each open mandate has one audience: an open
 // Checkout Mandate is only ever presented as the root of a Checkout Mandate
 // chain, an open Payment Mandate as the root of a Payment Mandate one — chain.go's
-// requireVCT refuses either in the other's place. What the audience then decides
-// is the field set, which is where the two mandates genuinely differ: a Merchant
-// holds the checkout it issued and can state everything in it, and a Credential
-// Provider is sent the closed Payment Mandate and nothing else.
+// requireVCT refuses either in the other's place. Minimise reads that audience
+// off the mandate's own vct rather than taking it from its caller, for the
+// reason its doc comment gives: a caller that could name the other one could
+// narrow away the constraint that would have refused the purchase.
+//
+// **The specification's own granularity is the checkout, and ours is the role.**
+// *"Ad-hoc based on the Checkout"* is per transaction; the table below is per
+// verifier, fixed at compile time. The two agree whenever a verifier of a given
+// kind holds the facts the table says it holds, and diverge the moment one
+// holds fewer — a merchant whose checkout omits a category is shown a
+// constraint on `item.category` it will refuse in ignorance. Closing that would
+// mean deriving the reach from the actual document, per transaction, which is a
+// real design and not this one. See the spec for why a proof of concept stops
+// here.
 //
 // # Why a verifier that cannot state a fact should not be shown the constraint
 //
@@ -52,13 +62,26 @@ import (
 // constraint is enforced where it can be — by the Merchant, out of the open
 // Checkout Mandate — and withheld where it cannot.
 //
-// **That is also the whole of what makes withholding safe, so it is worth
-// saying rather than implying.** A constraint withheld here is enforced by
-// another verifier only if another open mandate carried it to one. Nothing in
-// this file can check that, because it sees one mandate. What a verifier can do
-// is name the facts it will not proceed without having seen constrained — see
-// ChainOptions.RequireConstrained — which is the half of this that does not
-// depend on the agent's good faith.
+// # The cost of that rule, which is real and is not a rounding error
+//
+// **Disclosure granularity is the top-level constraint, so "every fact it
+// reads" makes one group all-or-nothing.** A user's intent written as four
+// top-level constraints gives a Credential Provider the two it can apply. The
+// identical intent written as a single `all` group — which is a legal
+// constraint, and how internal/core/authz/constraint's own tests write the same
+// scenario — reads facts that verifier cannot state, so the whole group is
+// withheld and the price cap inside it is enforced by nobody at that verifier.
+//
+// This is the lesser of two losses rather than the correct answer, and it is
+// worth being plain that the other branch is also unsafe: disclosing the group
+// makes the Credential Provider refuse every transaction in ignorance, which is
+// not enforcement either. What closes the floor under it is
+// requireSomeConstraintDisclosed below — a mandate whose *only* constraint is
+// such a group narrows to nothing, and a presentation of nothing is refused
+// outright rather than read as a mandate with no limits. What stays open is the
+// mixed case: a group withheld alongside another constraint that survives. A
+// verifier's own RequireConstrained is the answer there, and it is a policy
+// rather than a guarantee.
 //
 // # This is not the agent evaluating constraints
 //
@@ -71,13 +94,18 @@ import (
 // discover which constraint would have refused the purchase, because it has
 // nothing to evaluate against.
 
-// Evaluation names the closed mandate a presentation of an open mandate is
-// being narrowed for, which is what settles who the verifier is.
+// Evaluation names the closed mandate an open one will be evaluated against,
+// which is what settles who the verifier is.
 //
-// It is not ChainOptions.Audience, which is the `aud` claim of one delegation —
-// one verifier's own identifier, checked for equality. This names a *kind* of
-// verifier, and the two would be a poor pair of synonyms: an audience string
-// changes per merchant, and the facts a merchant can state do not.
+// It is not a parameter anywhere. Minimise derives it from the mandate's own
+// vct, because the audience is a property of the credential and not a choice
+// its holder makes — see that function.
+//
+// It is also not ChainOptions.Audience, which is the `aud` claim of one
+// delegation: one verifier's own identifier, checked for equality. This names a
+// *kind* of verifier, and the two would be a poor pair of synonyms — an
+// audience string changes per merchant, and the facts a merchant can state do
+// not.
 type Evaluation string
 
 const (
@@ -102,6 +130,13 @@ type evaluation struct {
 	// neither list is a fact nobody decided about, and TestEveryFactIsPlacedWithAVerifier
 	// is what fails on it. Derived lists agree with the registry by
 	// construction, including agreeing that a gap is not a gap.
+	//
+	// **Nothing ties this to the constraint.Subject a role actually builds.**
+	// It is this package's statement of what each verifier *can* hold, and a
+	// role populating less refuses in ignorance while one populating more has
+	// constraints withheld that it could have enforced. Keeping the two in step
+	// is a caller's obligation today; internal/adapters/ap2's own
+	// credentialProviderSubject honours it by hand and says so.
 	states map[string]bool
 
 	// attributes says whether this verifier can state item attributes —
@@ -109,6 +144,11 @@ type evaluation struct {
 	// construction and therefore cannot be enumerated above.
 	attributes bool
 }
+
+// knownFields is the closed half of the constraint vocabulary, read once
+// because it does not change at runtime. What is not in it, for a field name
+// that came out of a parsed Expression, is an item attribute — see canState.
+var knownFields = constraint.FieldNames()
 
 // evaluations is which facts each verifier of a closed mandate can state.
 //
@@ -130,11 +170,6 @@ type evaluation struct {
 // has. Item, quantity, category and every item attribute are absent, and a
 // Credential Provider cannot acquire them without being sent a document AP2
 // does not send it.
-// knownFields is the closed half of the constraint vocabulary, read once
-// because it does not change at runtime. What is not in it, for a field name
-// that came out of a parsed Expression, is an item attribute — see canState.
-var knownFields = constraint.FieldNames()
-
 var evaluations = map[Evaluation]evaluation{
 	ForCheckout: {
 		who: "the Merchant, which holds the checkout it issued",
@@ -158,6 +193,19 @@ var evaluations = map[Evaluation]evaluation{
 		},
 		attributes: false,
 	},
+}
+
+// audienceOf is the one open mandate type each verifier reads, keyed by the vct
+// that names it.
+//
+// The two closed types are deliberately absent rather than mapped to anything.
+// A closed mandate is already bound to a transaction and carries no constraints
+// array, so there is nothing in one to minimise and no audience to minimise it
+// for; Minimise refuses it here rather than narrowing a credential whose shape
+// it has not understood.
+var audienceOf = map[string]Evaluation{
+	VCTCheckoutOpen: ForCheckout,
+	VCTPaymentOpen:  ForPayment,
 }
 
 // canState reports whether this verifier can supply a value for every fact the
@@ -185,15 +233,43 @@ func (e evaluation) canState(fields []string) bool {
 }
 
 // Minimise narrows a presentation of an open mandate to the disclosures the
-// verifier named by to actually needs.
+// verifier that will evaluate it actually needs.
+//
+// # It takes no audience, and that is the point
+//
+// The audience is read from the mandate's own vct. An earlier shape took it as
+// a parameter, and that parameter was a hole big enough to drive the whole
+// issue through: Minimise(openCheckoutMandate, ForPayment) narrowed a Merchant's
+// mandate for a Credential Provider's reach, dropped the route pins the user
+// set, and the Merchant then authorised a flight to the wrong city with
+// err == nil. One wrong enum let the holder evaluate away the constraint that
+// would have refused the purchase — the very line this file's header claims is
+// structural. A caller cannot name the wrong audience if there is no audience
+// to name.
+//
+// A vct that is not one of the two open mandates is refused rather than
+// narrowed: a closed mandate has no constraints array and no audience of its
+// own, and a credential type this adapter has never heard of is one whose shape
+// it cannot make a disclosure decision about.
+//
+// The vct is read from the Issuer-signed payload without verifying the
+// signature, which is sound here in a way it would not be in a verifier. This
+// is the Holder narrowing its own credential; a mandate whose vct has been
+// tampered with narrows wrongly and is then refused by the verifier's own
+// requireVCT, which reads the *verified* claims. Nothing downstream trusts this
+// read.
+//
+// # What it produces
 //
 // The returned SD-JWT carries the same Issuer-signed JWT and a subset of its
 // Disclosures, so it verifies exactly as the full one does — the digests of the
 // withheld constraints stay in the signed payload and simply match nothing.
 // constraints is an array, so the step that governs is RFC 9901 §7.1 step 3.d,
 // which removes an element whose digest matched nothing rather than leaving a
-// hole; the withheld-or-decoy rule a reader is more likely to have in mind is
-// step 3.c.i, and that one is about an object's _sd array.
+// hole. The withheld-or-decoy rule a reader is more likely to have in mind is
+// step 3.c.i, and that one is about an object's _sd array — pkg/sdjwt's
+// processObject carries it, and processArray, which is the branch a constraint
+// actually travels through, carries 3.d.
 //
 // Call it **before** delegating. sdjwt.Delegate binds sd_hash over the root as
 // presented, so narrowing afterwards produces a chain whose delegation no
@@ -201,16 +277,17 @@ func (e evaluation) canState(fields []string) bool {
 //
 // # What this does not hide
 //
-// It hides the *content* of the withheld constraints and nothing else, and the
-// difference matters enough to be stated rather than left to a reader who
-// assumes selective disclosure hides more than it does. The signed payload
-// carries one `{"...": digest}` element per constraint whether or not that
-// constraint is disclosed, in issuance order. So a verifier holding this
-// presentation can see how many constraints the mandate carries, how many were
-// withheld from it, and which positions they occupied. What it cannot do is
-// learn what they said, or tell a withheld constraint from an Issuer's decoy —
-// that indistinguishability is the property the salt buys, and it is the whole
-// of what is bought.
+// It hides the *content* of the withheld constraints, and not the fact that
+// there were any. The signed payload carries one `{"...": digest}` element per
+// constraint whether or not that constraint is disclosed, in issuance order, so
+// a verifier holding this presentation can count how many the mandate carries,
+// how many were withheld from it, and which positions they occupied —
+// sdjwt.SDJWT.SignedClaims is that computation and requireSomeConstraintDisclosed
+// depends on it. What it cannot learn is what they said, or which of two
+// withheld positions held what. Decoys do not close the gap either: pkg/sdjwt
+// adds them to _sd arrays only and never to arrays of values, on the deliberate
+// grounds that padding an array makes an application counting its elements read
+// a number the Issuer invented.
 //
 // # What it refuses
 //
@@ -223,18 +300,18 @@ func (e evaluation) canState(fields []string) bool {
 // generated.Disclosable for either open mandate — but a mandate from another
 // implementation may, and dropping one would hand a verifier an open mandate
 // that endorses nobody.
-// An array element that does not decode as a constraint of this adapter's own
-// type is refused through decodeConstraints, the same refusal a verifier makes
-// on the way in, so a constraint type nobody here can read is never silently
-// dropped from a presentation either.
-func Minimise(sd *sdjwt.SDJWT, to Evaluation) (*sdjwt.SDJWT, error) {
+func Minimise(sd *sdjwt.SDJWT) (*sdjwt.SDJWT, error) {
 	if sd == nil {
 		return nil, fmt.Errorf("%w: no SD-JWT to narrow", ErrMisconfigured)
 	}
-	audience, ok := evaluations[to]
-	if !ok {
-		return nil, fmt.Errorf("%w: %q is not a verifier this adapter knows the reach of",
-			ErrMisconfigured, to)
+
+	signed, err := sd.SignedClaims()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrMandateMalformed, err)
+	}
+	audience, err := audienceFor(signed)
+	if err != nil {
+		return nil, err
 	}
 
 	// Decided up front rather than inside the predicate, because Present takes
@@ -262,37 +339,128 @@ func Minimise(sd *sdjwt.SDJWT, to Evaluation) (*sdjwt.SDJWT, error) {
 	return sd.Present(func(d sdjwt.Disclosure) bool { return keep[d.String()] })
 }
 
+// audienceFor resolves the one verifier a mandate carrying these claims will be
+// evaluated by.
+//
+// It reports the mandate types this adapter *can* narrow when it refuses, since
+// the caller that gets this wrong is holding a credential and wondering which
+// of four it has.
+func audienceFor(signed map[string]any) (evaluation, error) {
+	raw, ok := signed[vctClaim]
+	if !ok {
+		return evaluation{}, fmt.Errorf("%w: no %s claim, so there is no audience to narrow for",
+			ErrMandateMalformed, vctClaim)
+	}
+	vct, ok := raw.(string)
+	if !ok {
+		return evaluation{}, fmt.Errorf("%w: %s must be a string, got %T",
+			ErrMandateMalformed, vctClaim, raw)
+	}
+	name, ok := audienceOf[vct]
+	if !ok {
+		return evaluation{}, fmt.Errorf(
+			"%w: %s is %q, and only an open mandate (%q, %q) has constraints to narrow and one audience to narrow them for",
+			ErrWrongMandateType, vctClaim, vct, VCTCheckoutOpen, VCTPaymentOpen)
+	}
+	return evaluations[name], nil
+}
+
+// requireSomeConstraintDisclosed refuses a presentation that withheld every
+// constraint the open mandate committed to.
+//
+// # Why this one needs no configuration
+//
+// It is the floor under RequireConstrained, and it is the only part of this
+// that is verifier-independent. An open mandate whose constraints all reached a
+// verifier as undisclosed digests arrives as constraint.Report{} — and an empty
+// report is *satisfied*, correctly, because a mandate carrying no constraints is
+// one where the user placed no limits. That correctness is what makes the
+// narrowed-to-nothing case dangerous: the two states are identical in the
+// processed payload, and the second authorises a purchase against limits nobody
+// read.
+//
+// They are not identical in the *signed* payload. It commits to one digest per
+// constraint whether disclosed or not, so "the user set no limits" is zero
+// committed and "you were shown none of them" is more than zero committed and
+// none disclosed. sdjwt.Verified.RootSigned is where that count comes from, and
+// it exists because of this check.
+//
+// So this fires only on a presentation nobody has a legitimate reason to send,
+// which is why it is always on where RequireConstrained is policy. It is a
+// floor and not a ceiling: a mandate narrowed from six constraints to one
+// passes here, and only a verifier saying what it needs catches that.
+func requireSomeConstraintDisclosed(committed int, disclosed []generated.Constraint) error {
+	if committed == 0 || len(disclosed) > 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: the open mandate commits to %d constraints and this presentation disclosed none of them, which is not the same thing as a mandate that set no limits",
+		ErrDisclosureInsufficient, committed)
+}
+
+// committedConstraints counts the elements the Issuer signed into the
+// constraints array, disclosed or withheld.
+//
+// A claim that is absent, or is not an array, answers zero rather than an
+// error. Both states are already refused by the decoder that runs beside this —
+// decodeOpenCheckout requires the claim and decodeConstraints requires an array
+// — so raising a second, differently-worded failure here would only decide
+// which of two checks reported the same defect.
+func committedConstraints(signed map[string]any) int {
+	elements, ok := signed[claimConstraints].([]any)
+	if !ok {
+		return 0
+	}
+	return len(elements)
+}
+
 // requireConstrained refuses a presentation whose disclosed constraints say
 // nothing about a fact this verifier will not proceed without.
 //
 // # Why this is the shape the check has to take
 //
-// Because the obvious shape does not exist. A verifier cannot detect that a
-// constraint was withheld from it: RFC 9901 makes an undisclosed digest and an
-// Issuer's decoy indistinguishable by design — pkg/sdjwt/verify.go says so at
-// the line that ignores one — and the processed payload drops the element
-// entirely rather than leaving a hole. Counting would not help even if the
-// count were reachable: "one of six was withheld" tells a verifier nothing
-// about whether the one mattered, so a verifier refusing on any withholding
-// forbids minimisation outright and one accepting learns nothing.
+// Because the obvious shape does not exist. A verifier cannot detect *which*
+// constraint was withheld from it, or what it said: RFC 9901 makes an
+// undisclosed digest opaque by design, and the processed payload drops the
+// element rather than leaving a hole. Nor would knowing *how many* went missing
+// help — "one of six was withheld" says nothing about whether the one mattered,
+// so a verifier refusing on any withholding forbids minimisation outright and
+// one accepting learns nothing.
+//
+// (How many is nonetheless computable, and requireSomeConstraintDisclosed above
+// uses it. The one thing a count settles is the extreme: none of them.)
 //
 // So the verifier states its own requirement instead, and the requirement is
 // about *facts* rather than about constraints it has never seen. "I will not
-// authorise a purchase against a mandate that does not limit the amount" is
+// authorise a purchase against a mandate that says nothing about the amount" is
 // something a verifier knows without being told, and it is checkable against
 // what it was shown. That is the reading of disclosure_insufficient this file
 // implements: *a claim this verifier needs was withheld*, where the verifier is
 // the one that says what it needs.
 //
-// **What it does not close.** A constraint on a fact nobody required is
-// withheld undetectably, and that is a property of selective disclosure rather
-// than of this function. The remedy is elsewhere and is worth naming: the agent
-// signs sd_hash over the root exactly as presented, so the narrowing it chose
-// is attributable to it afterwards, in the evidence a dispute reads.
+// # What it does not close
 //
-// An empty required list is a verifier with no such policy, not a verifier that
-// checks nothing by accident. Every caller that existed before this check did
-// leaves it empty, which is why no chain test written for #12 changed.
+// A constraint on a fact nobody required is withheld undetectably, and that is
+// a property of selective disclosure rather than of this function. So is the
+// weaker point that this checks a fact is *mentioned* and not that it is
+// *bounded*: `any[amount lte 200 USD, merchant.id eq "x"]` satisfies a
+// requirement for "amount" while placing no effective cap whenever the payee
+// matches. Requiring an effective bound would mean deciding what "effective"
+// means across every operator and every group shape, which is the verifier's
+// policy question and not this table's.
+//
+// The remedy for both is elsewhere and is worth naming: the agent signs sd_hash
+// over the root exactly as presented, so the narrowing it chose is attributable
+// to it afterwards, in the evidence a dispute reads.
+//
+// Every name must be stated, not any of them. A Credential Provider requiring
+// both an amount and a payee is not served by a presentation that constrains
+// only the amount — that is the case where an any-of reading funds a payment to
+// a payee the mandate never pinned.
+//
+// An empty required list is a verifier that has no such policy. Every caller
+// that existed before this check leaves it empty, which is why no chain test
+// written for #12 changed.
 func requireConstrained(cs []generated.Constraint, required []string) error {
 	if len(required) == 0 {
 		return nil
@@ -312,9 +480,67 @@ func requireConstrained(cs []generated.Constraint, required []string) error {
 	for _, name := range required {
 		if !stated[name] {
 			return fmt.Errorf(
-				"%w: this verifier does not authorise without a limit on %s, and none of the %d constraints disclosed to it names one",
+				"%w: this verifier does not authorise unless a constraint names %s, and none of the %d disclosed to it does",
 				ErrDisclosureInsufficient, name, len(cs))
 		}
 	}
 	return nil
+}
+
+// decodeOpenPresented is the standalone-presentation counterpart of the floor
+// the two chain entry points apply, shared by VerifyOpenCheckout and
+// VerifyOpenPayment because the question does not differ between them.
+//
+// The signed claims are read off the presentation rather than taken from the
+// caller, and that is sound here for the reason it is sound in VerifyChain and
+// not in Minimise: sdjwt.Verify has already checked the signature over them by
+// the time this runs. A chain gets the same payload from
+// sdjwt.Verified.RootSigned, which is that same read done one layer down.
+//
+// It is generic over the mandate type so that neither open mandate's decoder
+// has to be wrapped in a near-copy of the other's, and so that a third one
+// cannot land with the floor silently missing from it.
+func decodeOpenPresented[M any](
+	sd *sdjwt.SDJWT,
+	decode func(map[string]any) (M, error),
+	claims map[string]any,
+) (M, error) {
+	m, err := decode(claims)
+	if err != nil {
+		return m, err
+	}
+
+	signed, err := sd.SignedClaims()
+	if err != nil {
+		var zero M
+		return zero, fmt.Errorf("%w: %w", ErrMandateMalformed, err)
+	}
+	return m, requireSomeConstraintDisclosed(committedConstraints(signed), constraintsOf(m))
+}
+
+// constraintsOf reads the constraints off either open mandate.
+//
+// A type switch rather than an interface the generated types would have to
+// satisfy: internal/core/generated is regenerated from contracts/ on every
+// build, so a method declared on one of its types by hand is deleted rather
+// than reviewed.
+//
+// **A case missing here fails closed, not open**, and that is worth stating
+// because the opposite is the natural guess — this comment claimed it until a
+// mutation said otherwise. The default returns nil, which reads as "nothing was
+// disclosed", so the floor refuses *every* presentation of that mandate type
+// rather than passing them. A third open mandate landing without a case here
+// therefore stops working loudly and immediately; it does not quietly lose its
+// floor. TestTheFloorCoversBothOpenMandates covers the two that exist, and
+// removing either case reddens that test together with every round-trip test
+// for the type.
+func constraintsOf(m any) []generated.Constraint {
+	switch v := m.(type) {
+	case generated.OpenCheckoutMandate:
+		return v.Constraints
+	case generated.OpenPaymentMandate:
+		return v.Constraints
+	default:
+		return nil
+	}
 }
