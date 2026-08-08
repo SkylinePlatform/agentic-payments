@@ -180,6 +180,17 @@ type MerchantRules struct {
 	// Audience is the value the delegating hop's aud claim must carry — this
 	// merchant's own identifier. Required for AuthoriseCheckoutChain.
 	Audience string
+
+	// RequireConstrained names the facts this merchant will not authorise a
+	// purchase without having seen constrained. Optional, and copied into
+	// ChainOptions unchanged — see that field for what it does and why the
+	// check is shaped as a requirement rather than as a detection.
+	//
+	// It is a field rather than a parameter, unlike the nonce: what a merchant
+	// insists on seeing constrained is its own policy, fixed for the rule set's
+	// lifetime the way Issuer and Audience are, and not a value it minted for
+	// one transaction.
+	RequireConstrained []string
 }
 
 // VerifyCheckout runs the Merchant's rules against a presented Checkout Mandate.
@@ -302,11 +313,12 @@ func (r MerchantRules) AuthoriseCheckoutChain(
 	}
 
 	return AuthoriseCheckoutChain(c, subject, checkoutJWT, ChainOptions{
-		Issuer:   r.Issuer,
-		AgentKey: r.AgentKey,
-		Clock:    r.Clock,
-		Audience: r.Audience,
-		Nonce:    nonce,
+		Issuer:             r.Issuer,
+		AgentKey:           r.AgentKey,
+		Clock:              r.Clock,
+		Audience:           r.Audience,
+		Nonce:              nonce,
+		RequireConstrained: r.RequireConstrained,
 	})
 }
 
@@ -331,6 +343,17 @@ type CredentialProviderRules struct {
 	// Merchant's, but it does not change between the two roles.
 	AgentKey func(cnf json.RawMessage) (authz.Verifier, error)
 	Audience string
+
+	// RequireConstrained names the facts this Credential Provider will not fund
+	// a purchase without having seen constrained. See MerchantRules' identical
+	// field, and ChainOptions.RequireConstrained for the check itself.
+	//
+	// This is the role the field is most useful to. An open Payment Mandate
+	// presented here is legitimately narrowed hard — Minimise withholds every
+	// constraint reading a fact the Payment Mandate does not carry — so "the
+	// amount is limited" is close to the whole of what a Credential Provider
+	// can insist on having been shown, and it can insist on it.
+	RequireConstrained []string
 }
 
 // VerifyPayment runs the Credential Provider's rules against a directly
@@ -436,11 +459,12 @@ func (r CredentialProviderRules) AuthorisePaymentChain(
 	}
 
 	return AuthorisePaymentChain(c, subject, ChainOptions{
-		Issuer:   r.Issuer,
-		AgentKey: r.AgentKey,
-		Clock:    r.Clock,
-		Audience: r.Audience,
-		Nonce:    nonce,
+		Issuer:             r.Issuer,
+		AgentKey:           r.AgentKey,
+		Clock:              r.Clock,
+		Audience:           r.Audience,
+		Nonce:              nonce,
+		RequireConstrained: r.RequireConstrained,
 	})
 }
 

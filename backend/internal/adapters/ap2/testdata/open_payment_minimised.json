@@ -1,0 +1,47 @@
+{
+  "_comment": [
+    "One open Payment Mandate over the built scenario's four constraints, pinned",
+    "twice: as the user signed it, and as a Shopping Agent presents it to a",
+    "Credential Provider. The pair is the vector — either string alone says",
+    "nothing about minimisation, and the difference between them is the whole of",
+    "what issue #14 adds.",
+    "",
+    "The two share an issuer-signed JWT character for character. Narrowing",
+    "removes disclosures and never re-signs, so a Credential Provider verifies",
+    "the same signature over the same digests; the two withheld constraints stay",
+    "in the payload as digests matching nothing, which RFC 9901 s7.1 step 3.d",
+    "removes from the array rather than leaving a hole.",
+    "",
+    "withheld_for_the_credential_provider names what goes and why. AP2 sends that",
+    "role the Payment Mandate and nothing else, so it holds an amount, a payee",
+    "and its own clock and can state no fact about an item. The route is enforced",
+    "by the Merchant, out of the open Checkout Mandate, and the Credential",
+    "Provider never learns where the user is flying.",
+    "",
+    "What this vector does NOT show, because SD-JWT cannot hide it: the number of",
+    "constraints. Split either string on '~' and the disclosures are countable;",
+    "decode the issuer JWT and the constraints array holds four digests in both.",
+    "A Credential Provider therefore knows two constraints were withheld from it",
+    "and which positions they held. It cannot learn what they said, and it cannot",
+    "tell a withheld constraint from an issuer's decoy.",
+    "",
+    "Reproducing it needs the salts (newSalts) and the signer (hmacAuthzKey)",
+    "pinned together, for the reason testdata/open_checkout_mandate.json gives at",
+    "length: ECDSA draws a fresh nonce per signature, so a signed vector under",
+    "the key issuance actually uses could never hold.",
+    "",
+    "Pinned by running TestGoldenMinimisedOpenPaymentMandate, reading the values",
+    "it produced, and confirming both in a second, separate `go test` process",
+    "before this file was committed."
+  ],
+  "serialization": "eyJhbGciOiJIUzI1NiIsImtpZCI6ImdvbGRlbi1vcGVuLXBheW1lbnQifQ.eyJfc2RfYWxnIjoic2hhLTI1NiIsImNuZiI6eyJqd2siOnsiY3J2IjoiUC0yNTYiLCJraWQiOiJhZ2VudC0xIiwia3R5IjoiRUMiLCJ4IjoiYzA5LUVvMlB2dU82VnJmekxBeFRaWEJhM1pXa0JhYTBwUjJqY09ZS2x3IiwieSI6ImdSRVR2NXdNdk5pWkpxY2tva0N5REFqSUlFZzNZMm03N1ZyeU12Uzc1V3cifX0sImNvbnN0cmFpbnRzIjpbeyIuLi4iOiJkUVhNbzhEcFRqWHhQaEVueTVtZ011bl9jWTJ4cXdHRHhTMGppbzJBNXVBIn0seyIuLi4iOiIxdXF6TTdGdkV1UnV4WExOcWJIYjVSVWFvS180MGRscFhSNFNGWkdLUFFjIn0seyIuLi4iOiJfXy1wWGZRU1ExUUpMZktxUWxyTFkyWnRKdzZaaXp5NzRrR3VyaTZneEQ4In0seyIuLi4iOiJPUllubWlqclBLVHZsU2k5cS1JanREcGpsZWM1UWxTVDBhQnRyMlBVZ2N3In1dLCJleHAiOjE3NzczMjk3ODksImlhdCI6MTc3NzMyNjE4OSwicGF5ZWUiOnsiaWQiOiJhaXItc2VyYmlhIiwibmFtZSI6IkFpciBTZXJiaWEifSwidmN0IjoibWFuZGF0ZS5wYXltZW50Lm9wZW4uMSJ9.F_d8yCiZCn-yeHv57s0dRSNSdttRWQdRd9o-7dvbcyk~WyJNREV5TXpRMU5qYzRPV0ZpWTJSbFpnIix7ImV4cHJlc3Npb24iOnsiZmllbGQiOiJhbW91bnQiLCJvcCI6Imx0ZSIsInZhbHVlIjp7ImFtb3VudCI6MjAwMDAsImN1cnJlbmN5IjoiVVNEIn19LCJ0eXBlIjoidGVjaC5ldGhlcm5hbC5hcDIuZXhwcmVzc2lvbi4xIn1d~WyJNREV5TXpRMU5qYzRPV0ZpWTJSbFpnIix7ImV4cHJlc3Npb24iOnsiZmllbGQiOiJhdCIsIm9wIjoid2l0aGluIiwidmFsdWUiOnsiZnJvbSI6IjIwMjYtMDYtMDFUMDA6MDA6MDBaIiwidG8iOiIyMDI2LTA4LTMxVDIzOjU5OjU5WiJ9fSwidHlwZSI6InRlY2guZXRoZXJuYWwuYXAyLmV4cHJlc3Npb24uMSJ9XQ~WyJNREV5TXpRMU5qYzRPV0ZpWTJSbFpnIix7ImV4cHJlc3Npb24iOnsiZmllbGQiOiJpdGVtLmF0dHIucm91dGUub3JpZ2luIiwib3AiOiJlcSIsInZhbHVlIjoiQkVHIn0sInR5cGUiOiJ0ZWNoLmV0aGVybmFsLmFwMi5leHByZXNzaW9uLjEifV0~WyJNREV5TXpRMU5qYzRPV0ZpWTJSbFpnIix7ImV4cHJlc3Npb24iOnsiZmllbGQiOiJpdGVtLmF0dHIucm91dGUuZGVzdGluYXRpb24iLCJvcCI6ImVxIiwidmFsdWUiOiJQTUkifSwidHlwZSI6InRlY2guZXRoZXJuYWwuYXAyLmV4cHJlc3Npb24uMSJ9XQ~",
+  "minimised_for_the_credential_provider": "eyJhbGciOiJIUzI1NiIsImtpZCI6ImdvbGRlbi1vcGVuLXBheW1lbnQifQ.eyJfc2RfYWxnIjoic2hhLTI1NiIsImNuZiI6eyJqd2siOnsiY3J2IjoiUC0yNTYiLCJraWQiOiJhZ2VudC0xIiwia3R5IjoiRUMiLCJ4IjoiYzA5LUVvMlB2dU82VnJmekxBeFRaWEJhM1pXa0JhYTBwUjJqY09ZS2x3IiwieSI6ImdSRVR2NXdNdk5pWkpxY2tva0N5REFqSUlFZzNZMm03N1ZyeU12Uzc1V3cifX0sImNvbnN0cmFpbnRzIjpbeyIuLi4iOiJkUVhNbzhEcFRqWHhQaEVueTVtZ011bl9jWTJ4cXdHRHhTMGppbzJBNXVBIn0seyIuLi4iOiIxdXF6TTdGdkV1UnV4WExOcWJIYjVSVWFvS180MGRscFhSNFNGWkdLUFFjIn0seyIuLi4iOiJfXy1wWGZRU1ExUUpMZktxUWxyTFkyWnRKdzZaaXp5NzRrR3VyaTZneEQ4In0seyIuLi4iOiJPUllubWlqclBLVHZsU2k5cS1JanREcGpsZWM1UWxTVDBhQnRyMlBVZ2N3In1dLCJleHAiOjE3NzczMjk3ODksImlhdCI6MTc3NzMyNjE4OSwicGF5ZWUiOnsiaWQiOiJhaXItc2VyYmlhIiwibmFtZSI6IkFpciBTZXJiaWEifSwidmN0IjoibWFuZGF0ZS5wYXltZW50Lm9wZW4uMSJ9.F_d8yCiZCn-yeHv57s0dRSNSdttRWQdRd9o-7dvbcyk~WyJNREV5TXpRMU5qYzRPV0ZpWTJSbFpnIix7ImV4cHJlc3Npb24iOnsiZmllbGQiOiJhbW91bnQiLCJvcCI6Imx0ZSIsInZhbHVlIjp7ImFtb3VudCI6MjAwMDAsImN1cnJlbmN5IjoiVVNEIn19LCJ0eXBlIjoidGVjaC5ldGhlcm5hbC5hcDIuZXhwcmVzc2lvbi4xIn1d~WyJNREV5TXpRMU5qYzRPV0ZpWTJSbFpnIix7ImV4cHJlc3Npb24iOnsiZmllbGQiOiJhdCIsIm9wIjoid2l0aGluIiwidmFsdWUiOnsiZnJvbSI6IjIwMjYtMDYtMDFUMDA6MDA6MDBaIiwidG8iOiIyMDI2LTA4LTMxVDIzOjU5OjU5WiJ9fSwidHlwZSI6InRlY2guZXRoZXJuYWwuYXAyLmV4cHJlc3Npb24uMSJ9XQ~",
+  "withheld_for_the_credential_provider": [
+    "item.attr.route.origin",
+    "item.attr.route.destination"
+  ],
+  "disclosed_to_the_credential_provider": [
+    "amount",
+    "at"
+  ]
+}

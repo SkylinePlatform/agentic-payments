@@ -70,6 +70,29 @@ type ChainOptions struct {
 	// MaxAge is how far the delegating hop's iat may sit from now, in either
 	// direction. Zero leaves replay protection to the nonce alone.
 	MaxAge time.Duration
+
+	// RequireConstrained names the facts about a purchase this verifier will
+	// not authorise without having been shown a constraint on.
+	//
+	// It is this verifier's policy against an over-minimised presentation, and
+	// requireConstrained's own comment sets out why the check has to be shaped
+	// this way round rather than as "nothing was withheld": an undisclosed
+	// digest and a decoy are indistinguishable by design, so a verifier can
+	// state what it needs and cannot detect what it was denied.
+	//
+	// The names are constraint field names — "amount", "merchant.id" — and a
+	// name this verifier's own parser does not know is a policy that can never
+	// be satisfied, so it is worth writing them beside constraint.FieldNames
+	// rather than from memory.
+	//
+	// Empty is a verifier that has no such policy, on the same terms MaxAge
+	// above and sdjwt.Options.AllowedHashAlgs are empty: a genuine policy
+	// question this type declines to answer on a caller's behalf, rather than a
+	// check that quietly does not run. The difference from the nullable open
+	// mandate CheckoutChainVerifier's own comment rejects is that there is no
+	// verifier-independent right answer here — what a Merchant insists on
+	// seeing constrained is not what a Credential Provider does.
+	RequireConstrained []string
 }
 
 // wrapAgentKey adapts ChainOptions.AgentKey into the resolver
@@ -180,10 +203,16 @@ type CheckoutAuthorisation struct {
 //     authority that was already bound to a transaction, which is exactly
 //     the escalation the open/closed split exists to prevent.
 //  3. requireVCT(verified.Delegated, closedCheckout).
-//  4. Decode both hops into the canonical model.
-//  5. Verify the closed hop's binding against checkoutJWT, the same
+//  4. Decode the open hop into the canonical model.
+//  5. requireConstrained(open.Constraints, opts.RequireConstrained). A
+//     presentation of an open mandate may disclose only some of its
+//     constraints — Minimise is how, and why — so this is where a verifier
+//     refuses one narrowed past what it needs to decide anything. It reads the
+//     open hop alone, which is why it sits here and not after both are decoded.
+//  6. Decode the closed hop.
+//  7. Verify the closed hop's binding against checkoutJWT, the same
 //     recompute-never-trust check VerifyCheckout runs.
-//  6. authz.AuthoriseCheckout(open, subject, opts.Clock.Now()), and turn an
+//  8. authz.AuthoriseCheckout(open, subject, opts.Clock.Now()), and turn an
 //     unsatisfied report into a rejection with report.Err().
 func AuthoriseCheckoutChain(
 	c *sdjwt.Chain,
@@ -208,6 +237,9 @@ func AuthoriseCheckoutChain(
 	open, err := decodeOpenCheckout(verified.Root)
 	if err != nil {
 		return zero, err
+	}
+	if err := requireConstrained(open.Constraints, opts.RequireConstrained); err != nil {
+		return CheckoutAuthorisation{Open: open}, err
 	}
 	closed, err := decodeCheckout(verified.Delegated)
 	if err != nil {
@@ -246,6 +278,12 @@ type PaymentAuthorisation struct {
 // equivalent of (authz.AuthorisePayment runs it) and with no binding check at
 // all.
 //
+// opts.RequireConstrained is honoured here on the same terms and in the same
+// position, and it is this role that has the most use for it: a Credential
+// Provider is the audience an open Payment Mandate is legitimately narrowed
+// hardest for, because AP2 sends it the Payment Mandate and nothing else, so
+// most of what a mandate can constrain is invisible to it. See Minimise.
+//
 // That last omission is forced by the protocol rather than chosen here: a
 // closed Payment Mandate never carries the document it binds to —
 // VerifyPayment's own doc comment sets out why at length, and the reasoning
@@ -277,6 +315,9 @@ func AuthorisePaymentChain(
 	open, err := decodeOpenPayment(verified.Root)
 	if err != nil {
 		return zero, err
+	}
+	if err := requireConstrained(open.Constraints, opts.RequireConstrained); err != nil {
+		return PaymentAuthorisation{Open: open}, err
 	}
 	closed, err := decodePayment(verified.Delegated)
 	if err != nil {

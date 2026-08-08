@@ -328,3 +328,79 @@ func TestGoldenOpenCheckoutMandateSerialisation(t *testing.T) {
 	assert.Equal(t, m.AgentKey, got.AgentKey)
 	assert.Equal(t, m.Constraints, got.Constraints)
 }
+
+// minimisationVector is the pair testdata/open_payment_minimised.json pins: one
+// open Payment Mandate as the user signed it, and the same mandate as an agent
+// presents it to a Credential Provider.
+type minimisationVector struct {
+	Full      string   `json:"serialization"`
+	Minimised string   `json:"minimised_for_the_credential_provider"`
+	Withheld  []string `json:"withheld_for_the_credential_provider"`
+	Disclosed []string `json:"disclosed_to_the_credential_provider"`
+}
+
+// TestGoldenMinimisedOpenPaymentMandate pins a minimised presentation, which is
+// a wire artefact in exactly the sense TestGoldenOpenCheckoutMandateSerialisation
+// pins a full one — with the difference that here the *pair* is the vector.
+//
+// A single serialisation proves an encoding. Two serialisations of one mandate,
+// differing only in which disclosures travel, prove the narrowing itself: a
+// second implementation handed the same open Payment Mandate and asked to
+// present it to a Credential Provider lands on the second string, and one that
+// sends every disclosure lands on the first. That is the difference issue #14
+// is about, and it is invisible in any vector that pins one presentation.
+//
+// The withheld and disclosed lists are in the file so that a reader can see
+// which constraints moved without decoding base64, and they are asserted here
+// so that they cannot quietly stop describing the strings beside them.
+func TestGoldenMinimisedOpenPaymentMandate(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile("testdata/open_payment_minimised.json")
+	require.NoError(t, err, "reading the minimisation vector")
+	var vector minimisationVector
+	require.NoError(t, json.Unmarshal(raw, &vector), "decoding the minimisation vector")
+
+	key := hmacAuthzKey{secret: []byte("golden-minimised-open-payment-secret"), kid: "golden-open-payment"}
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err, "building a deterministic blinder")
+
+	issuedAt := time.Unix(1_777_326_189, 0).UTC()
+	expires := time.Unix(1_777_329_789, 0).UTC()
+	payee := generated.Merchant{ID: "air-serbia", Name: "Air Serbia"}
+	m := generated.OpenPaymentMandate{
+		AgentKey:    agentJWK(t),
+		Constraints: demoConstraints(t),
+		Payee:       &payee,
+		IssuedAt:    &issuedAt,
+		ExpiresAt:   &expires,
+	}
+
+	sd, err := ap2.IssueOpenPayment(t.Context(), key, m, blinder)
+	require.NoError(t, err, "issuing the mandate the vector is taken over")
+	require.Equal(t, vector.Full, sd.String(),
+		"the full presentation has to reproduce before the narrowed one means anything")
+
+	narrowed, err := ap2.Minimise(sd, ap2.ForPayment)
+	require.NoError(t, err, "narrowing for the Credential Provider")
+	assert.Equal(t, vector.Minimised, narrowed.String(),
+		"a second implementation presenting this mandate to a Credential Provider must send exactly this; a string carrying more disclosures is one that has quietly told that role where the user is flying")
+
+	assert.Equal(t, strings.Split(vector.Full, "~")[0], strings.Split(vector.Minimised, "~")[0],
+		"narrowing removes disclosures and never re-signs, so both presentations must carry the identical issuer-signed JWT")
+
+	// The two lists in the file, checked against the strings they describe, so
+	// that a reader who trusts the prose is trusting something the suite holds.
+	got, err := ap2.VerifyOpenPayment(reparse(t, narrowed), ap2.OpenOptions{
+		Issuer: key, Clock: clock.NewFake(issuedAt),
+	})
+	require.NoError(t, err, "the narrowed vector must itself verify, which is the whole claim that withheld digests are ignored rather than fatal")
+
+	disclosed := fieldsRead(t, got.Constraints)
+	assert.ElementsMatch(t, vector.Disclosed, disclosed,
+		"the file says which limits a Credential Provider is left holding, and it has to be true")
+	for _, withheld := range vector.Withheld {
+		assert.NotContains(t, disclosed, withheld,
+			"%s is named in the vector as withheld, and a presentation carrying it has disclosed the user's route to a role that can do nothing with it", withheld)
+	}
+}
