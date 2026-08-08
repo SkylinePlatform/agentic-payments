@@ -64,8 +64,10 @@ type Service struct {
 	// exactly that.
 	//
 	// Optional, and absent means this merchant does not accept delegated
-	// purchases at all — the Human Present flow every existing test exercises,
-	// and what `make demo` ran before #119. It is not independently optional:
+	// purchases at all — the Human Present flow every existing test exercises.
+	// cmd/merchant sets it, so a running demonstration has both entry points
+	// live; nothing presents a chain to it yet, because the agent that would is
+	// #121. It is not independently optional:
 	// Handler refuses a merchant that sets this without ChainPayments, Challenge
 	// and Catalogue, because a merchant that could verify the chain and not the
 	// nonce, or could not say what it was selling, would be a verifier with a
@@ -241,7 +243,7 @@ const (
 	// noPresentation is the zero value, and it names nothing this merchant will
 	// act on. It exists so that the zero value of the type is not silently one
 	// of the two real flows — a function returning it by mistake reaches
-	// settle's default arm rather than the Human Present path.
+	// settle's refusal arm rather than the Human Present path.
 	noPresentation presentation = iota
 
 	// humanPresent is a directly signed pair: the user signed both closed
@@ -355,9 +357,12 @@ func (s *Service) Handler() (http.Handler, error) {
 // The query parameters GET /checkout reads, one set per thing this merchant can
 // be asked to price.
 //
-// ItemParam and QuantityParam are exported because an agent has to build the
-// URL and a test has to assert on it; from and to are not, because they predate
-// this and nothing outside spells them.
+// ItemParam and QuantityParam are exported because whoever builds this URL is
+// outside this package. Today that is only this package's own tests; the agent
+// that will build it in production arrives with #121. from and to are not
+// exported, because they predate this and nothing outside spells them — which
+// is worth noticing rather than tidying, since the route path is the one an
+// agent already talks to by hand.
 const (
 	// ItemParam names a catalogue offer — the same string a mandate's item.id
 	// names, which is what lets a constraint on "this bicycle" be evaluated
@@ -468,15 +473,17 @@ func (s *Service) quoteItem(w http.ResponseWriter, r *http.Request, item, rawQua
 		quantity = parsed
 	}
 
+	// One answer for all three of Quote's refusals — an offer this catalogue
+	// does not list, a quantity of zero, and a quantity large enough to overflow
+	// the price — because all three are the caller having asked for something
+	// this merchant does not sell, and none of them is the verifier failing.
+	//
+	// quoteRoute branches instead, on ErrNoSuchRoute against everything else,
+	// and the asymmetry is real rather than an oversight: Inventory.Quote can
+	// fail for reasons of its own, and Catalogue.Quote's other two are guards on
+	// the argument this handler just parsed.
 	quoted, err := s.Catalogue.Quote(item, quantity)
 	if err != nil {
-		if errors.Is(err, ErrNoSuchOffer) {
-			roles.Fail(w, generated.ErrorCodeRequestMalformed, err.Error())
-			return
-		}
-		// A quantity of zero, or one large enough to overflow the price. Both
-		// are the caller's, and both are refused by Quote rather than here so
-		// that a direct caller gets the same answer this endpoint does.
 		roles.Fail(w, generated.ErrorCodeRequestMalformed, err.Error())
 		return
 	}
@@ -583,9 +590,10 @@ func (s *Service) search(w http.ResponseWriter, r *http.Request) {
 // carries both** — which is what ownOffer relies on to tell the two apart
 // without being told which endpoint made it.
 //
-// They are constants rather than string literals at the four sites that spell
-// them because signing and reading back are two halves of one agreement, and a
-// typo in either half is an offer this merchant cannot recognise as its own.
+// They are constants rather than string literals because signing and reading
+// back are two halves of one agreement, spelled in different functions — sign
+// and the two quote paths on one side, ownOffer and readItem on the other — and
+// a typo in either half is an offer this merchant cannot recognise as its own.
 const (
 	claimIssuer   = "iss"
 	claimAmount   = "amount"
@@ -707,11 +715,14 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	case humanNotPresent:
 		answered, examined = s.examineChain(w, req, quoted)
 	case noPresentation:
-		// Unreachable: presentation() returns this only with a non-nil error,
-		// which the guard above has already answered on. It is here rather than
-		// folded into a default arm because a state machine that silently treats
-		// an unhandled state as one of the real ones is the thing being avoided,
-		// and an empty 200 is what this handler would otherwise send.
+		fallthrough
+	default:
+		// Unreachable today: presentation() returns noPresentation only with a
+		// non-nil error, which the guard above has already answered on. The arm
+		// exists for the state that does not exist yet — a third flow added to
+		// the type and not to this switch — because without it that mode falls
+		// out of the switch with examined still false and the handler answers an
+		// empty 200 having verified nothing.
 		roles.Fail(w, generated.ErrorCodeVerifierUnavailable,
 			"this merchant could not tell what was presented to it")
 		return

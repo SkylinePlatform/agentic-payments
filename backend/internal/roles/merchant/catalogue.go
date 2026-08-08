@@ -238,12 +238,12 @@ func (c *Catalogue) Price(id string) (PricedOffer, error) {
 
 // Find returns the offer listed under id, without pricing it.
 //
-// It exists because the two facts about an offer that authorisation reads —
-// its category and its attributes — are fixed at construction while its price
-// is a function of the clock, and a verifier deciding an already-signed
-// checkout needs the first pair without re-reading the second. The price it
-// must use is the one the merchant committed to in the document it signed, not
-// whatever the schedule says now; see Service.ownOffer.
+// It exists because the facts about an offer that authorisation reads — its
+// identity, its category and its attributes — are fixed at construction while
+// its price is a function of the clock, and a verifier deciding an
+// already-signed checkout needs the first set without re-reading the second.
+// The price it must use is the one the merchant committed to in the document it
+// signed, not whatever the schedule says now; see Service.ownOffer.
 //
 // The copy is the same copy Offers and priced hand out, so nothing a caller
 // holds is what a later search matches against.

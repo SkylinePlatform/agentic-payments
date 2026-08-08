@@ -383,9 +383,11 @@ type PaymentAuthorisation struct {
 	// else, reported about a disagreement over a default. Binding exists to make
 	// exactly that unrepresentable.
 	//
-	// It is populated whenever the closed mandate decoded, error or not, on the
-	// same terms as Report — and is the zero Binding otherwise, which
-	// Binding.recomputable refuses rather than treating as a passed check.
+	// It is populated from the moment the closed mandate decodes, and stays
+	// populated on every error after that — which is more often than Report,
+	// since Report needs evaluation to have run and this does not. Before that
+	// it is the zero Binding, which Binding.recomputable refuses rather than
+	// treating as a passed check.
 	//
 	// This does **not** fold the binding check in. See this function's own
 	// comment on why the check stays the caller's: what is supplied here is the
