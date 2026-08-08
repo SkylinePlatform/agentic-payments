@@ -28,7 +28,8 @@ out:
 2. `requireSomeConstraintDisclosed` is an always-on floor. A presentation that
    discloses **none** of the constraints its mandate committed to is refused,
    because an empty constraint list is `Satisfied()` and would otherwise
-   authorise a purchase against limits nobody read.
+   authorise a purchase against limits nobody read. So is a presentation whose
+   commitment cannot be read at all — see below.
 3. `ChainOptions.RequireConstrained` is a verifier's own policy on top: the
    facts it will not proceed without having seen constrained.
 
@@ -169,8 +170,13 @@ issuer invented.
 So there are two checks rather than one, and the count is what makes the first
 possible.
 
-**The floor, always on.** *The mandate committed to constraints and disclosed
-none of them.* That is verifier-independent, needs no configuration, and — this
+**The floor, always on, in two arms.** *The mandate committed to constraints and
+disclosed none of them* — and *the commitment cannot be read at all*, which RFC
+9901 §4.2.6 makes reachable by hiding the whole `constraints` claim rather than
+only its elements. The second arm is not hypothetical: `Blinder.Blind` mints
+that shape, the first implementation answered zero for it, and a Credential
+Provider funded $5,000 against a $200 cap through the gap. Unanswerable refuses.
+The first arm is the one the count settles: That is verifier-independent, needs no configuration, and — this
 is the part the count buys — is distinguishable from a mandate the user
 legitimately signed with no constraints at all, which commits to none. Without
 the count the two are the same empty array, and `constraint.Report{}` is
@@ -193,7 +199,9 @@ fall back to a different check. An empty `RequireConstrained` falls back to
 trusting the agent's narrowing, and to nothing else.** It is optional anyway
 because there is no verifier-independent right answer — what a Merchant insists
 on is not what a Credential Provider does — and because the case that does have
-one is the floor above, which no caller can switch off.
+one is the floor above. No issuer or holder can turn either arm of that floor
+into a pass: hiding the whole `constraints` claim makes the count unreadable,
+and unreadable refuses.
 
 **What that leaves open.** A constraint on a fact no verifier required, withheld
 alongside others that survive, goes undetected. The remedy is not detection and
@@ -223,6 +231,12 @@ from a decoy *in general* — but that defence is not available for this array i
 particular, because `pkg/sdjwt` puts decoys in `_sd` arrays only. For a mandate
 minted here the count is exact, and the implementation depends on its being
 exact.
+
+For a mandate minted elsewhere it is a **lower bound**: §4.2.5 permits decoys in
+a value array, and a foreign issuer that pads one inflates the number the floor
+reads. A mandate that set no limits and carries two decoys reads as committing to
+two and disclosing none, so the floor refuses it. Padding therefore costs
+availability and never safety, which is the direction to be wrong in.
 
 `testdata/open_payment_minimised.json` publishes both presentations of one
 mandate so a second implementation can be held to the narrowing, and records
@@ -264,6 +278,16 @@ the moment one holds fewer — a merchant whose checkout omits a category is sho
 a constraint on `item.category` it will refuse in ignorance. So *"both, and they
 turn out to be one question"* is true at role granularity and is not a claim
 about per-transaction reach.
+
+**The payment row credits three verifiers with what the narrowest of them
+holds.** AP2 has the Payment Mandate verified by the Credential Provider, the
+Network *and* the Merchant Payment Processor. `ForPayment` is one row, written
+for the first: the Payment Mandate and nothing else. An MPP sits merchant-side
+and may well hold the checkout, in which case that row withholds constraints it
+could have enforced — safe, and not right. It is a gap rather than a decision
+because nothing routes an MPP through a chain today; `MPPRules.VerifyCredential`
+answers a different question, about a credential rather than a mandate. A third
+row is what an MPP chain verifier would need.
 
 **Nothing ties `evaluations` to the `constraint.Subject` a role actually
 builds.** A Credential Provider populating fewer facts than its row claims
