@@ -665,6 +665,177 @@ func TestDelegatedSDAlgDoesNotSurviveIntoThePayload(t *testing.T) {
 		"a caller reading the algorithm off the returned payload — the pattern HashAlg's own doc comment invites — must not see a delegate-chosen value the digest was never verified under")
 }
 
+// TestTheChainReferenceCoversTheDelegatingHopAlone is the half of Chain.SDHash
+// that a golden vector cannot state, because the vector's root has no
+// Disclosures to leave out.
+//
+// The root here has one, so both halves of what a root is can be moved
+// independently: the signed JWT, and the run of Disclosures presented with it.
+// Neither moves the value, and both are asserted because the second is not a
+// weaker restatement of the first.
+//
+// Under sd_hash the two look alike, because neither chain below verifies
+// afterwards — the delegating JWT commits to the root as presented, so
+// TestTheDelegationIsBoundToTheDisclosuresTheRootPresented refuses the same drop
+// and TestAnIssuerJWTHashNamingAnotherRootIsRejected the same swap. That both
+// still have a reference is the point rather than an oddity: a verifier that
+// cannot name what it just refused cannot answer it with a receipt, and AP2
+// requires the refusal to be answered.
+//
+// Under issuer_jwt_hash they come apart, and the drop is the one that matters.
+// TestIssuerJWTHashBindsWithoutCoveringDisclosures shows a narrowed root still
+// *verifying* there, so a chain bound that way can be presented twice, showing
+// different Disclosures of the root each time, and be answered by two receipts
+// carrying one reference. For AP2 those Disclosures are the open mandate's
+// constraints. This test is where that consequence is written down; SDHash's own
+// doc comment carries the reasoning.
+func TestTheChainReferenceCoversTheDelegatingHopAlone(t *testing.T) {
+	chain := delegatedChainFromRoot(t, issuedRootWithExtraDisclosure(t), "", "delegate")
+
+	want, err := chain.SDHash()
+	require.NoError(t, err, "a chain this package built has to be able to name itself before anything can be said about what the name covers")
+
+	digest, err := sdjwt.SHA256.Digest(delegateHopOf(t, chain))
+	require.NoError(t, err, "sha-256 is what this chain's delegating hop declares; a failure here is the algorithm table moving, not the property under test")
+	assert.Equal(t, digest, want,
+		"the digested bytes are the chain's wire form from the delegating JWT onwards — the boundary a second implementation has to find in the same place")
+
+	swapped, err := replaceRoot(t, chain, issuedRoot(t)).SDHash()
+	require.NoError(t, err, "a transplanted root must still leave a chain that can be named, or the refusal it earns cannot be answered")
+	assert.Equal(t, want, swapped,
+		"AP2 names a receipt's reference over a chain as a hash over the final SD-JWT in it, and the root is not that hop")
+
+	narrowed, err := dropOneRootDisclosure(t, chain).SDHash()
+	require.NoError(t, err, "narrowing the root leaves a chain that still has to be nameable, for the same reason")
+	assert.Equal(t, want, narrowed,
+		"the root's Disclosures are as much outside the digested bytes as the root's JWT is; a digest starting one component early would notice this and not the swap above")
+}
+
+// TestTheChainReferenceCoversTheDelegatedDisclosures is the other half, over the
+// hop that *is* digested.
+//
+// It is the chain-shaped statement of what RFC 9901's sd_hash buys for a single
+// SD-JWT, and internal/adapters/ap2 spends it the same way in both shapes: a
+// receipt answers the presentation the verifier was shown, so evidence of having
+// seen everything must not answer a presentation that showed less.
+//
+// A swap rather than an addition or a removal, because those two move the
+// component count as well as the bytes — and a digest over the count alone would
+// pass either of them while a Disclosure was substituted underneath it.
+func TestTheChainReferenceCoversTheDelegatedDisclosures(t *testing.T) {
+	chain := delegatedChain(t, "delegate")
+
+	before, err := chain.SDHash()
+	require.NoError(t, err, "the unmodified chain's reference is the value the swapped one is compared against")
+
+	after, err := swapOneDelegatedDisclosure(t, chain).SDHash()
+	require.NoError(t, err, "a chain carrying a substituted Disclosure still has to be nameable — it is precisely the kind that gets refused and has to be answered")
+
+	assert.NotEqual(t, before, after,
+		"two presentations of one delegation that disclose different things must not share a reference, or one receipt would answer both")
+}
+
+// TestTheChainReferenceFollowsTheDelegatingHopsSDAlg pins which hop's
+// declaration decides the digest.
+//
+// Every other chain in this file has both hops at sha-256, and under one of
+// those an implementation reading _sd_alg from the root — or assuming the RFC's
+// default and never reading it at all — computes the same answer as a correct
+// one. delegatedChainWithDelegateHashAlg is the fixture that makes the two hops
+// disagree, and it is the same one TestTheDelegateHopReadsItsOwnHashAlgorithm
+// uses for the same reason on the verification side.
+func TestTheChainReferenceFollowsTheDelegatingHopsSDAlg(t *testing.T) {
+	chain := delegatedChainWithDelegateHashAlg(t, sdjwt.SHA384) // root stays at sha-256
+
+	got, err := chain.SDHash()
+	require.NoError(t, err, "sha-384 is one of the three algorithms this package computes, so a chain declaring it has to be nameable")
+
+	hop := delegateHopOf(t, chain)
+	want, err := sdjwt.SHA384.Digest(hop)
+	require.NoError(t, err, "the fixture is only meaningful if sha-384 is computable here")
+	assert.Equal(t, want, got,
+		"the delegating hop's own _sd_alg is what its digests were verified under, so it is what its reference is taken under too")
+
+	wrong, err := sdjwt.SHA256.Digest(hop)
+	require.NoError(t, err, "the root's algorithm has to be computable too, or the comparison below proves nothing")
+	assert.NotEqual(t, wrong, got,
+		"reading the algorithm off the root would silently produce this value, and two implementations would then reference the same chain by two different digests")
+}
+
+// TestAChainWhoseDelegatingPayloadIsNotAnObjectCannotNameItself is the one
+// failure Chain.SDHash has, and it is reachable rather than defensive.
+//
+// ParseChain checks that the delegating component is a JWT and never decodes its
+// payload, so a chain carrying a JSON array there parses cleanly and only fails
+// when something asks it a question about its claims. _sd_alg is the first such
+// question. Falling back to the default algorithm instead of refusing would
+// produce a reference computed under a declaration nobody read — a receipt
+// naming the chain by a digest a correct implementation never reaches.
+func TestAChainWhoseDelegatingPayloadIsNotAnObjectCannotNameItself(t *testing.T) {
+	delegateJWT, err := sdjwt.SignJWT(t.Context(), newHMACKey("delegate", "delegate"),
+		sdjwt.DelegateType, []any{"not", "an", "object"})
+	require.NoError(t, err, "signing is not what is under test here; the payload's shape is")
+
+	chain := chainFrom(t, issuedRoot(t), delegateJWT, nil)
+
+	_, err = chain.SDHash()
+	require.Error(t, err, "a delegating hop whose claims cannot be read has no algorithm to be digested under, and guessing one would invent the reference")
+	assert.ErrorIs(t, err, sdjwt.ErrMalformedChain,
+		"a chain of the wrong shape is a malformed chain, and the sentinel is what sends a reader to the hop rather than to the credential")
+}
+
+// delegateHopOf returns the part of a chain's wire form that begins at the
+// delegating JWT: everything after the empty component separating the hops.
+//
+// It cuts on "~~" rather than walking components, and that is sound for exactly
+// one reason worth writing down: a Disclosure can never be empty — ParseDisclosure
+// refuses one — so the first doubled separator in a chain that parsed is always
+// the hop boundary. Written here rather than taken from Chain, because a chain
+// handing out its own hop is what pkg/sdjwt deliberately declines to do, and a
+// test computing the expected value from the same accessor the code uses would
+// assert nothing.
+func delegateHopOf(t *testing.T, chain *sdjwt.Chain) string {
+	t.Helper()
+
+	_, hop, ok := strings.Cut(chain.String(), "~~")
+	require.True(t, ok, "a two-hop chain always carries the empty component that separates the hops")
+	return hop
+}
+
+// swapOneDelegatedDisclosure replaces the delegate hop's last Disclosure with a
+// different one, leaving the component count and every other part alone.
+//
+// Done on the wire form and re-parsed, without re-signing anything, for the
+// reason dropOneRootDisclosure gives about the same technique: this is what a
+// party that only relays a chain can do to it, and the reference has to notice
+// without a signer's cooperation.
+func swapOneDelegatedDisclosure(t *testing.T, chain *sdjwt.Chain) *sdjwt.Chain {
+	t.Helper()
+
+	other, err := sdjwt.NewArrayDisclosure("c2FsdC1zd2FwcGVkLWRpc2Nsb3N1cmU", map[string]any{"vct": "swapped.example"})
+	require.NoError(t, err, "the substitute has to be a well-formed Disclosure, or ParseChain refuses the result for the wrong reason")
+
+	parts := strings.Split(chain.String(), "~")
+	sep := -1
+	for i := 1; i < len(parts); i++ {
+		if parts[i] == "" {
+			sep = i
+			break
+		}
+	}
+	require.Greater(t, sep, 0, "the fixture must be a two-hop chain")
+
+	// parts[sep+1] is the delegating JWT and the final component is the trailing
+	// separator's empty string, so the hop's Disclosures are everything between.
+	last := len(parts) - 2
+	require.Greater(t, last, sep+1, "the delegate hop needs at least one Disclosure for this to swap")
+	parts[last] = other.String()
+
+	again, err := sdjwt.ParseChain(strings.Join(parts, "~"))
+	require.NoError(t, err, "substituting one Disclosure must not change the chain's shape")
+	return again
+}
+
 // delegatedChain is issuedRoot delegated to the named key. The root always
 // endorses "delegate" in its cnf; passing a different name is how the
 // unendorsed-key case is built.

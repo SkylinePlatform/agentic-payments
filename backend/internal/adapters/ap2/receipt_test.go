@@ -284,6 +284,184 @@ func TestAMisconfiguredReceiptIssuerIsNotTheMandatesFault(t *testing.T) {
 	}
 }
 
+// answerChain is answer for a delegation chain: the same call, with the other
+// shape Presented accepts.
+func answerChain(t *testing.T, f fixture, c *sdjwt.Chain, verdict error) generated.Receipt {
+	t.Helper()
+
+	token, err := ap2.IssueReceipt(t.Context(), c, verdict,
+		receiptOptions(f, generated.ReceiptMandateTypeCheckout))
+	require.NoError(t, err, "issuing the receipt")
+
+	got, err := ap2.VerifyReceipt(token, f.verifier)
+	require.NoError(t, err, "verifying the receipt this fixture just signed")
+	return got
+}
+
+// TestAReceiptAnswersADelegationChain is the Human Not Present shape of
+// TestAReceiptAnswersTheMandateItWasIssuedFor.
+//
+// Under Human Present the merchant is shown one SD-JWT. Under Human Not Present
+// it is shown two hops, and AP2 words the reference over those as "a hash over
+// the final SD-JWT in the chain" — the delegating hop, the one the agent signed.
+// Nothing else about the receipt changes, which is why the claims asserted here
+// are the ones that test asserts: a chain receipt a counterparty cannot route or
+// read like any other would be a second artefact wearing the first one's name.
+func TestAReceiptAnswersADelegationChain(t *testing.T) {
+	t.Parallel()
+
+	fx := chainFixture(t, 18900) // the price inside the cap; the verdict below is nil
+
+	_, err := ap2.AuthoriseCheckoutChain(fx.chain, fx.subject, fx.checkoutJWT, fx.opts)
+	require.NoError(t, err, "the success receipt below is only about a success if the chain actually authorised")
+
+	got := answerChain(t, fx.f, fx.chain, nil)
+
+	assert.Equal(t, merchantID, got.Issuer,
+		"a receipt naming nobody as having answered is not evidence of anybody having answered")
+	assert.Equal(t, generated.ReceiptResultSuccess, got.Result)
+	assert.Nil(t, got.Error, "a success carries no error; the schema forbids the pair")
+	assert.Equal(t, generated.ReceiptMandateTypeCheckout, got.MandateType)
+
+	assert.NoError(t, ap2.AnswersMandate(got, fx.chain),
+		"the reference is what ties a receipt to exactly one presented chain")
+}
+
+// TestARejectedChainStillGetsAReceipt is the rule slices 5 and 6 are blocked on.
+//
+// merchant.Service calls IssueReceipt unconditionally with the verdict as an
+// argument, precisely so a refusal cannot skip it — so a role that could not
+// issue a receipt for a chain could not refuse one either.
+//
+// Both cases below are refused inside sdjwt.VerifyChain, which is the half of
+// the requirement that actually decides anything: neither returns a verified
+// payload to the caller, so a reference that needed one could not be computed at
+// all and the failures most worth recording would be the ones that could not be
+// recorded. Chain.SDHash reads _sd_alg and digests the wire form without checking
+// a signature, which is what makes these answerable.
+func TestARejectedChainStillGetsAReceipt(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		// policy is the change to what the verifier brings that makes this case
+		// fail. The chain itself is faultless in both, which is what keeps the
+		// refusal attributable to the one thing each case names.
+		policy func(fx *checkoutChainFx)
+		want   generated.ErrorCode
+	}{
+		{
+			// The one that decides whether chain rejection receipts work at all:
+			// verification stops at the root's signature, before cnf has been
+			// resolved and before either hop's claims are trusted for anything.
+			name:   "the open mandate was signed by a key this verifier does not hold",
+			policy: func(fx *checkoutChainFx) { fx.opts.Issuer = newFixture(t).verifier },
+			want:   generated.ErrorCodeSignatureInvalid,
+		},
+		{
+			// A delegation carrying a nonce under the agent's own signature that
+			// this verifier never issued.
+			name:   "the delegation names a nonce this verifier did not issue",
+			policy: func(fx *checkoutChainFx) { fx.opts.Nonce = "n-a-transaction-nobody-started" },
+			want:   generated.ErrorCodeKeyBindingInvalid,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fx := chainFixture(t, 18900) // the price is not what fails here
+			tc.policy(fx)
+
+			_, verdict := ap2.AuthoriseCheckoutChain(fx.chain, fx.subject, fx.checkoutJWT, fx.opts)
+			require.Error(t, verdict, "this case has to actually fail, or it tests nothing")
+
+			got := answerChain(t, fx.f, fx.chain, verdict)
+
+			assert.Equal(t, generated.ReceiptResultError, got.Result)
+			require.NotNil(t, got.Error, "a rejection that does not name why is not a rejection anybody can act on")
+			assert.Equal(t, tc.want, *got.Error)
+			require.NotNil(t, got.ErrorDescription)
+			assert.NotEmpty(t, *got.ErrorDescription,
+				"the description is for the operator who has to go and look")
+
+			assert.NoError(t, ap2.AnswersMandate(got, fx.chain),
+				"a rejection receipt has to reference the chain it rejected, or #18 cannot assemble the dispute")
+		})
+	}
+}
+
+// TestAChainReceiptDoesNotAnswerAnotherChain is
+// TestAReceiptDoesNotAnswerAnotherMandate over the two-hop shape: the receipt is
+// genuine, and it answers exactly one delegation.
+//
+// The two chains here are built from the same offer, the same constraints and
+// the same closed mandate — chainFixture's amount argument reaches the subject
+// the verifier evaluates and never the chain, so passing two prices would have
+// been decoration. What differs is that each fixture stands up its own user and
+// agent keys, so the two delegations are separately signed. That is the case
+// worth refusing: everything a reader could compare by eye matches, and only the
+// digest tells them apart.
+func TestAChainReceiptDoesNotAnswerAnotherChain(t *testing.T) {
+	t.Parallel()
+
+	mine := chainFixture(t, 18900)
+	theirs := chainFixture(t, 18900)
+
+	got := answerChain(t, mine.f, mine.chain, nil)
+
+	require.NoError(t, ap2.AnswersMandate(got, mine.chain))
+	err := ap2.AnswersMandate(got, theirs.chain)
+	require.ErrorIs(t, err, ap2.ErrReceiptMismatch)
+	assert.Equal(t, generated.ErrorCodeMandateMalformed, ap2.CodeOf(err))
+}
+
+// TestANilMandateInsideANonNilPresentedIsStillNoMandate is the trap widening
+// these two entry points to an interface introduced.
+//
+// Before the widening, `sd == nil` was the compiler's own comparison against a
+// pointer and covered every caller. After it, a caller holding a nil
+// *sdjwt.SDJWT — Dispute.VerifyCheckoutReceipt takes exactly that, from whoever
+// is adjudicating — hits the interface conversion first, and the result is an
+// interface value carrying a type but no value. It is not equal to nil, so a
+// guard written as `sd == nil` waves it through and SDHash panics on the
+// dereference: a nil mandate turns from a named refusal into a crash in the
+// middle of issuing evidence.
+//
+// The variables below are declared at their concrete types and left nil, which is
+// what builds the trap. A literal nil argument takes the other branch entirely
+// and would pass whether or not the guard understood the difference.
+func TestANilMandateInsideANonNilPresentedIsStillNoMandate(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	var (
+		noMandate *sdjwt.SDJWT
+		noChain   *sdjwt.Chain
+	)
+
+	for _, tc := range []struct {
+		name string
+		sd   ap2.Presented
+	}{
+		{"a nil mandate", noMandate},
+		{"a nil chain", noChain},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.False(t, tc.sd == nil,
+				"this test is only about anything if the interface is non-nil while what it holds is not; assert.Nil answers reflectively and would say the opposite")
+
+			_, err := ap2.IssueReceipt(t.Context(), tc.sd, nil,
+				receiptOptions(f, generated.ReceiptMandateTypeCheckout))
+			assertMisconfigured(t, err)
+
+			assertMisconfigured(t, ap2.AnswersMandate(generated.Receipt{}, tc.sd))
+		})
+	}
+}
+
 // decodeSegment decodes one base64url segment of a compact JWS.
 func decodeSegment(t *testing.T, segment string) string {
 	t.Helper()

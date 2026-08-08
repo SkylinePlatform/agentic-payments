@@ -77,6 +77,70 @@ func TestGoldenDelegatePayloadWithoutSDAlg(t *testing.T) {
 		"the delegate payload's array disclosure is the first component after the delegating JWT; an _sd_alg surviving into it changes those bytes and the digest the JWT carries over them")
 }
 
+// TestGoldenChainReceiptReference pins the byte sequence Chain.SDHash digests,
+// and the digest of it.
+//
+// This is the value AP2 puts in a receipt's reference claim when the thing being
+// answered is a delegation chain — "a hash over the final SD-JWT in the chain" —
+// so two implementations that disagree about which bytes go in produce receipts
+// that reference nothing the other can match, while both look perfectly well
+// formed. That makes the input string, not the digest, the thing to read first.
+//
+// It is the tail of the chain above, and the assertion below says so in the form
+// a reader can act on: the serialisation is the root's own serialisation, one
+// separator, then the input. Everything before the delegating JWT is out.
+//
+// **Three things this vector does not pin, each with where they are pinned
+// instead.**
+//
+// The digest covers the delegating JWT's signature bytes, and this chain is
+// signed with a fixed HMAC key — which is the only reason a digest is
+// reproducible here at all. Under the ECDSA a real AP2 deployment signs with, no
+// two issuances of the same claims share a reference, so what a second
+// implementation reproduces from this vector is the input string and the rule,
+// never the digest of a chain it minted itself. That is the same caveat
+// TestGoldenReceiptEncoding records in internal/adapters/ap2 for a single
+// mandate's reference.
+//
+// This chain's root carries no Disclosures, so the root's trailing separator and
+// the hop separator sit adjacent as "~~", and there is no root Disclosure here
+// for the input to be seen leaving out.
+// TestTheChainReferenceCoversTheDelegatingHopAlone is where that is exercised,
+// over a root that has one.
+//
+// _sd_alg here is sha-256, which is also the default a missing declaration falls
+// back to, so this cannot tell reading the delegating hop's declaration apart
+// from assuming the default. TestTheChainReferenceFollowsTheDelegatingHopsSDAlg
+// is what does, over a hop at sha-384.
+func TestGoldenChainReceiptReference(t *testing.T) {
+	chain := delegatedChain(t, "delegate")
+
+	// The delegating JWT, a tilde, its one Disclosure, a tilde. The trailing
+	// separator is part of the digested bytes and not punctuation the serialiser
+	// happens to add — RFC 9901 §4.3.1 terminates every component with one, and
+	// an implementation that trims it digests a different string.
+	const input = "eyJhbGciOiJIUzI1NiIsInR5cCI6ImtiK3NkLWp3dCIsImtpZCI6ImRlbGVnYXRlIn0.eyJfc2RfYWxnIjoic2hhLTI1NiIsImF1ZCI6Imh0dHBzOi8vbWVyY2hhbnQuZXhhbXBsZSIsImRlbGVnYXRlX3BheWxvYWQiOlt7Ii4uLiI6InJxemYyaS1LNVdtQnkwdmloNWNtbHdFS3RfdVowTFp1UXJQX2hzX2xwVWsifV0sImlhdCI6MTc3NzMyNjE4OSwibm9uY2UiOiJuLTEiLCJzZF9oYXNoIjoidnN0dFBkTkJTemJyRzhQSUl6aFJiOUlFbW1mRndFSzhyVnpsV29zVGZNNCJ9.aABQ0MDCxzSqFnaOtZ3gejb_7zZ0-xKApxcNjvNuWPA~WyJBUUlEQkFVR0J3Z0pDZ3NNRFE0UEVBIix7ImNoZWNrb3V0X2hhc2giOiJhYmMiLCJ2Y3QiOiJjbG9zZWQuZXhhbXBsZSJ9XQ~"
+
+	// issuedRoot rebuilds the very root this chain was delegated from — same
+	// salts, same HMAC key, so byte for byte the same — which is what lets the
+	// input be located in the wire form rather than asserted against a second
+	// copy of itself.
+	assert.Equal(t, issuedRoot(t).String()+"~"+input, chain.String(),
+		"the digested bytes are the tail of the chain, starting after the empty component that separates the hops; a reader who cannot find them in the serialisation cannot reproduce the reference")
+
+	digest, err := sdjwt.SHA256.Digest(input)
+	require.NoError(t, err, "sha-256 is the algorithm this chain's delegating hop declares; nothing below compares if it cannot be computed")
+
+	const want = "9E5UNkaEksJPj-krEyJngUwa_ij70FXSGAw9cVXuJNk"
+	assert.Equal(t, want, digest,
+		"the digest of the pinned input, so a reader who reproduces the bytes can check their hashing without building a chain")
+
+	got, err := chain.SDHash()
+	require.NoError(t, err, "a chain built by this package must be able to name itself, or no receipt can answer it")
+	assert.Equal(t, want, got,
+		"Chain.SDHash has to digest exactly the pinned input; a receipt whose reference is computed over anything else answers a chain nobody presented")
+}
+
 // TestGoldenDelegateTypeStrings pins the two "typ" header values the draft
 // defines, so that a refactor cannot quietly slide DelegateType over to RFC
 // 9901's kb+jwt — a permissive verifier would accept that and reject nothing,

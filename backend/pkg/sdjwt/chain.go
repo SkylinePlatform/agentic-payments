@@ -184,6 +184,25 @@ func (c *Chain) String() string {
 	return strings.Join(parts, separator)
 }
 
+// sdPart returns the serialisation this hop's digest is computed over: the
+// delegating JWT, a tilde, and each Disclosure carried with it followed by a
+// tilde.
+//
+// It is SDJWT.sdPart one hop along, and the shape is the same because RFC 9901
+// §4.3.1 digests a run of components each terminated by the separator — a
+// delegating hop is that same run, further down the chain. The two together
+// account for the whole of String: a chain's serialisation is the root's own
+// serialisation, a separator, and this.
+func (d delegation) sdPart() string {
+	parts := make([]string, 0, len(d.disclosures)+2)
+	parts = append(parts, d.jwt)
+	for _, disc := range d.disclosures {
+		parts = append(parts, disc.String())
+	}
+	parts = append(parts, "")
+	return strings.Join(parts, separator)
+}
+
 // There is deliberately no accessor for either hop.
 //
 // One was written and removed unused. It returned the Issuer-signed hop, on the
@@ -199,16 +218,91 @@ func (c *Chain) String() string {
 // it needs, the right accessor goes in then and is shaped by that need rather
 // than guessed ahead of it.
 //
-// **That caller has since arrived, and this paragraph is what it was held to.**
-// AP2's selective disclosure minimisation needs to know whether a Holder
-// narrowed the root's constraints array to nothing, which step 3.d makes
-// invisible in the processed payload. Shaped by that need, the answer is
-// Verified.RootSigned — one field, populated only after the root's signature
-// has been checked — and not an accessor returning the hop. A hop accessor
-// would hand out the whole credential, unverified, to answer a question about
-// one array; it would also still be the wrong shape for the *delegating*-hop
-// digest the paragraph above predicts, so it would have been the second
-// accessor nobody needed rather than the first anybody did.
+// **Both callers this paragraph anticipated have since arrived, and neither
+// took a hop.**
+//
+// The first was AP2's selective disclosure minimisation, which needs to know
+// whether a Holder narrowed the root's constraints array to nothing — something
+// step 3.d makes invisible in the processed payload. Shaped by that need, the
+// answer is Verified.RootSigned — one field, populated only after the root's
+// signature has been checked — and not an accessor returning the hop. A hop
+// accessor would hand out the whole credential, unverified, to answer a
+// question about one array; it would also still be the wrong shape for the
+// *delegating*-hop digest the paragraph above predicts, so it would have been
+// the second accessor nobody needed rather than the first anybody did.
+//
+// The second is the receipt reference, which is the caller that paragraph names
+// outright. Shaped by that need, the answer is SDHash below: one string,
+// digested over the delegating hop, with the hop itself still not handed out.
+// An accessor would have left every caller to reimplement the serialisation the
+// digest is taken over, and the first one to get the trailing separator wrong
+// would have produced a reference no other implementation reproduces, with
+// nothing anywhere to say so.
+
+// SDHash returns the digest that names this chain: sd_hash over the delegating
+// hop's presentation — the delegating JWT, a tilde, and each Disclosure carried
+// with it followed by a tilde — under the _sd_alg that hop declares.
+//
+// It is SDJWT.SDHash one hop along, and the two agree on a rule rather than on
+// bytes: each digests the final SD-JWT of the presentation it is called on,
+// where a bare SD-JWT is a chain of one. AP2 words a receipt's reference over a
+// chain as "a hash over the final SD-JWT in the chain", and that is this hop,
+// not the root.
+//
+// **The name collides with a claim that means something else, and the collision
+// is worth saying out loud.** A delegating JWT carries an sd_hash claim of its
+// own — or issuer_jwt_hash in its place — and that one points backwards, at the
+// root it was signed over. This method points at the delegating hop itself. Both
+// obey one rule, that an sd_hash is the digest of the presentation the thing
+// carrying it sits on top of; they differ only in which hop is doing the
+// carrying.
+//
+// **The root's bytes are not in the input**, so a chain re-presented over a
+// different root has the same value here. That is the weaker half of a trade the
+// binding claims already make, not something this digest adds. Under sd_hash —
+// the binding Delegate emits — such a chain does not verify at all: the
+// delegating JWT commits to the root as presented and verifyBinding recomputes
+// it, so for a chain this package built, two presentations differing in the
+// root's Disclosures carry two different delegating JWTs and so two different
+// references. Under issuer_jwt_hash, which this package accepts but never
+// writes, the commitment covers the root's JWT alone, and a root Disclosure
+// dropped after the fact leaves the binding and this value both intact.
+//
+// The *delegated* Disclosures are covered, exactly as RFC 9901's sd_hash covers
+// an SD-JWT's own, so a delegation presented with one withheld has a different
+// reference from the same delegation presented whole — which is what stops
+// evidence of having seen everything from answering a presentation that showed
+// less.
+//
+// It needs no verified payload. _sd_alg is read without checking any signature,
+// on the terms HashAlg sets out, because the caller with most use for a
+// reference is the one answering a chain that did not verify.
+func (c *Chain) SDHash() (string, error) {
+	// The parse cannot fail for a Chain that exists — ParseChain checks this
+	// component is a JWT and Delegate has just signed it — and it is still
+	// written out rather than ignored, because the decode below is a live
+	// failure and the two are one line apart. Neither constructor looks at the
+	// payload, so a delegating JWT whose payload is not a JSON object reaches
+	// here and has to come back as a chain that cannot name itself, not as a
+	// digest over a hop nobody could read.
+	jwt, err := parseJWT(c.delegate.jwt)
+	if err != nil {
+		return "", fmt.Errorf("%w: delegating JWT: %w", ErrMalformedChain, err)
+	}
+	claims, err := jwt.claims()
+	if err != nil {
+		return "", fmt.Errorf("%w: delegating JWT: %w", ErrMalformedChain, err)
+	}
+	// The delegating hop's own declaration, never the root's. The digests this
+	// hop's Disclosures are hidden behind were computed under it, and draft §6
+	// step 3.1 is what keeps the two hops free to disagree — see
+	// Verified.DelegatedHashAlg.
+	alg, err := hashAlgOf(claims)
+	if err != nil {
+		return "", err
+	}
+	return alg.Digest(c.delegate.sdPart())
+}
 
 // Delegate signs a delegating KB-JWT over this presentation and returns the
 // two-hop chain.

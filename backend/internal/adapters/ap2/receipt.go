@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"reflect"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
@@ -32,6 +33,38 @@ const (
 // are told apart only by their claims — and a verifier that reads the claims it
 // expected and ignores the rest will accept the wrong artefact without noticing.
 const ReceiptType = "ap2-receipt+jwt"
+
+// Presented is what a receipt can answer: a single presented mandate, or a
+// delegation chain. Both name themselves by the digest AP2 calls sd_hash.
+//
+// It is an interface rather than a second pair of functions because everything
+// about the receipt is the same either way — the claims, the signature, the
+// verdict it carries — and the one thing that is not, which bytes the reference
+// is a digest of, is a question only the presented artefact can answer.
+// *sdjwt.SDJWT digests the Issuer-signed JWT and the Disclosures shown with it;
+// *sdjwt.Chain digests the delegating hop, which is what AP2 means by "the final
+// SD-JWT in the chain".
+//
+// One method and no more, for the reason joseVerifier exposes only Algorithm: a
+// receipt has no business reading anything else out of what it answers, and an
+// interface that offered a claim accessor would make it expressible to take the
+// reference from inside the mandate rather than from a digest over it — letting
+// the party being judged choose what the receipt points at.
+//
+// **No chain is passed here by anything in this repository yet**, and that is
+// worth saying rather than leaving a reader to check. Every existing call site —
+// merchant, credprovider, mpp, dispute.go and the tests — hands over a
+// *sdjwt.SDJWT, and not one of them changed when this widened. The chain callers
+// arrive with the role entry points of #119 and #120, which are blocked on this
+// existing: a role that cannot issue a receipt for a chain cannot refuse one
+// either, and merchant.Service calls IssueReceipt unconditionally with the
+// verdict as an argument precisely so that a refusal cannot skip it. Until then
+// the chain half is exercised by this package's own tests and nowhere else.
+type Presented interface {
+	// SDHash returns the digest a receipt's reference claim carries for this
+	// presentation.
+	SDHash() (string, error)
+}
 
 // ReceiptOptions is what a verifier brings to IssueReceipt.
 type ReceiptOptions struct {
@@ -65,14 +98,15 @@ type ReceiptOptions struct {
 // sd is the presentation as it arrived, and it does not have to be one that
 // verified. That is the requirement the whole design turns on: the failures most
 // worth recording are the ones where the mandate did not verify, so a rejection
-// receipt has to be issuable for a mandate whose signature is bad. See reference.
+// receipt has to be issuable for a mandate whose signature is bad, and for a
+// chain whose delegation does not hold. See reference.
 func IssueReceipt(
 	ctx context.Context,
-	sd *sdjwt.SDJWT,
+	sd Presented,
 	verdict error,
 	opts ReceiptOptions,
 ) (string, error) {
-	if sd == nil {
+	if nothingToAnswer(sd) {
 		return "", fmt.Errorf("%w: no mandate to answer", ErrMisconfigured)
 	}
 	if opts.Signer == nil || opts.Clock == nil {
@@ -141,8 +175,8 @@ func VerifyReceipt(token string, verifier authz.Verifier) (generated.Receipt, er
 // The comparison is against a reference recomputed here, never against one the
 // receipt supplies about itself — the same recompute-never-trust rule the
 // checkout binding follows, for the same reason.
-func AnswersMandate(r generated.Receipt, sd *sdjwt.SDJWT) error {
-	if sd == nil {
+func AnswersMandate(r generated.Receipt, sd Presented) error {
+	if nothingToAnswer(sd) {
 		return fmt.Errorf("%w: no mandate to check the receipt against", ErrMisconfigured)
 	}
 	want, err := reference(sd)
@@ -175,13 +209,54 @@ func AnswersMandate(r generated.Receipt, sd *sdjwt.SDJWT) error {
 // signature is bad, whose vct is wrong, or whose binding does not hold. Had it
 // required a verified payload, rejection receipts would have been impossible for
 // exactly the failures most worth having a receipt for.
-func reference(sd *sdjwt.SDJWT) (string, error) {
+//
+// Both properties carry over to a chain unchanged, and the second is what makes
+// the chain entry points of #119 and #120 answerable at all: sdjwt.Chain.SDHash
+// digests the delegating hop without verifying anything either, so a delegation
+// signed by a key the open mandate never endorsed still has a name to be refused
+// under.
+func reference(sd Presented) (string, error) {
 	hash, err := sd.SDHash()
 	if err != nil {
 		return "", fmt.Errorf("%w: the mandate has no computable reference: %w",
 			ErrMandateMalformed, err)
 	}
 	return hash, nil
+}
+
+// nothingToAnswer reports whether sd holds no presentation at all.
+//
+// A plain nil interface is the easy half. The other half is a nil *sdjwt.SDJWT —
+// or a nil *sdjwt.Chain — inside a non-nil Presented: an interface value
+// carrying a type but no value is not equal to nil, so `sd == nil` is false, and
+// the SDHash call that follows dereferences the nil and panics.
+//
+// Widening these entry points from *sdjwt.SDJWT to an interface is what opened
+// that gap, and it opened it on a live path rather than a hypothetical one.
+// Dispute.VerifyCheckoutReceipt and Dispute.VerifyPaymentReceipt take a
+// *sdjwt.SDJWT from whoever is adjudicating and hand it to AnswersMandate; a nil
+// one used to meet the compiler's own nil comparison there and now meets an
+// interface conversion first. Refusing it here as ErrMisconfigured is what keeps
+// those callers' answer the one they already had.
+//
+// reflect is what it takes, because the question is "does this interface hold a
+// nil pointer" and Go has no operator for that. IsNil panics on a kind that
+// cannot be nil, hence the switch: a Presented implemented by a value type is
+// not something this package builds, but it is something an interface permits,
+// and it has to read as "there is a presentation here" rather than as a panic.
+// reflect.Interface is absent from the list on purpose — ValueOf reports the
+// dynamic type stored in the interface, which is never itself an interface.
+func nothingToAnswer(sd Presented) bool {
+	if sd == nil {
+		return true
+	}
+	v := reflect.ValueOf(sd)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.UnsafePointer:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 // decodeReceipt reads the verified claims into the canonical type.
