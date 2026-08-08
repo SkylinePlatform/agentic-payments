@@ -581,12 +581,20 @@ tolerable. Every role in the flow would otherwise see the whole transaction.
 
 ```mermaid
 flowchart TB
-    FULL["issued mandate — all disclosures<br/>route · price cap · window · instrument · passenger"]
-    FULL -->|"presented to"| M["Merchant sees:<br/>route, price cap"]
-    FULL -->|"presented to"| CP["Credential Provider sees:<br/>amount, instrument"]
-    M -.->|"never sees"| X1["instrument, passenger"]
-    CP -.->|"never sees"| X2["route, passenger"]
+    FULL["open mandate — four constraints<br/>price cap · booking window · origin · destination"]
+    FULL -->|"open Checkout Mandate<br/>presented to"| M["Merchant applies:<br/>all four"]
+    FULL -->|"open Payment Mandate<br/>presented to"| CP["Credential Provider applies:<br/>price cap, booking window"]
+    CP -.->|"never sees"| X["origin, destination"]
 ```
+
+The Merchant's side of that diagram used to read *"Merchant sees: route, price
+cap"*, with an instrument and a passenger it never sees. That was illustrative
+of AP2 in general and it is not true of this implementation, so it is gone
+rather than left to mislead: **a Merchant issued the checkout, so there is no
+fact in our constraint vocabulary it cannot state, and minimising an open
+Checkout Mandate withholds nothing.** An instrument and a passenger are not
+things a constraint can read here at all. Everything the diagram now claims is
+`TestEveryFactIsPlacedWithAVerifier`.
 
 The specification makes minimisation an obligation, not an option. Issue #14
 records it as: Shopping Agents MUST present only those disclosures from the
@@ -621,16 +629,28 @@ and the two spec sentences it rests on are in
 **And the trap on the other side, which the issue does not name.** Withholding
 too much means a verifier cannot enforce a limit the user set, and the purchase
 proceeds while misrepresenting what was approved — the same outcome as silently
-skipping an unknown constraint type, reached by a different route. A verifier
-cannot detect a withheld disclosure, because RFC 9901 makes a withheld digest
-and a decoy indistinguishable by design. What it can do is name the facts it
-will not proceed without having seen constrained and refuse a presentation that
-names none of them, which is `disclosure_insufficient`.
+skipping an unknown constraint type, reached by a different route.
 
-Selective disclosure hides the *content* of what was withheld and not its
-shape: the signed payload carries one digest per constraint whether or not it
-is disclosed, so a verifier can count how many were withheld from it and see
-which positions they held.
+Be precise about what a verifier can do here, because the two halves point
+opposite ways.
+
+- **Which constraint was withheld, and what it said, are unrecoverable.** RFC
+  9901 makes an undisclosed digest opaque by design, and §7.1 step 3.d removes
+  the element from the processed array rather than leaving a hole.
+- **That some were withheld is computable.** The signed payload commits to one
+  digest per constraint whether or not a disclosure accompanies it, so counting
+  the digests and subtracting the disclosures gives the number exactly. Decoys
+  do not muddy it: this implementation adds them to `_sd` arrays only and never
+  to arrays of values, precisely so that an application counting elements is not
+  reading a number the issuer invented.
+
+Both are used. The count settles the one case that needs no policy — *the
+mandate committed to constraints and disclosed none of them*, which is not the
+same thing as a mandate that set no limits, and is refused outright. Beyond that
+a count says nothing about whether the missing one mattered, so a verifier names
+the facts it will not proceed without having seen constrained and refuses a
+presentation that names none of them. Both refusals are
+`disclosure_insufficient`.
 
 ## Receipts
 
@@ -674,7 +694,8 @@ part worth re-reading before writing code.
 | An unknown constraint type must be rejected, never silently ignored | Constraints |
 | Constraints are evaluated by the verifier, never by the agent | Constraints |
 | Presenting every disclosure passes every test and defeats SD-JWT entirely | Selective disclosure |
-| Withholding too much leaves a limit nobody enforces, and no verifier can detect it — a withheld digest and a decoy are indistinguishable | Selective disclosure |
+| Withholding too much leaves a limit nobody enforces; *which* constraint went is unrecoverable, but *that* some went is a count the signed payload gives you | Selective disclosure |
+| Disclosure granularity is the top-level constraint, so one `all` group is all-or-nothing to a verifier that cannot state every fact in it | Selective disclosure |
 | A rejection must still produce a signed receipt | Receipts |
 | A second open mandate may not be presented before a rejection receipt arrives | The rejection-receipt rule |
 | The Trusted Surface must be non-agentic | The five roles |
