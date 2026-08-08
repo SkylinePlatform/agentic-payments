@@ -112,8 +112,19 @@ const (
 	// ForCheckout is a Merchant deciding a closed Checkout Mandate.
 	ForCheckout Evaluation = "checkout"
 
-	// ForPayment is a Credential Provider or a Network deciding a closed
-	// Payment Mandate.
+	// ForPayment is a Credential Provider, a Network or a Merchant Payment
+	// Processor deciding a closed Payment Mandate.
+	//
+	// Three verifiers, one row, and the third is the one to be careful about.
+	// AP2 names all three — contracts/authz/payment_mandate.json says so — and
+	// this row credits them with what a *Credential Provider* holds, which is
+	// the narrowest of the three. An MPP sits merchant-side and may well hold
+	// the checkout, in which case this row withholds constraints it could have
+	// enforced. That is the safe direction and it is not the right one; the
+	// spec records it as a gap rather than a decision, because nothing in this
+	// package routes an MPP through a chain today — MPPRules.VerifyCredential
+	// answers a different question entirely, about a credential rather than a
+	// mandate.
 	ForPayment Evaluation = "payment"
 )
 
@@ -185,7 +196,7 @@ var evaluations = map[Evaluation]evaluation{
 		attributes: true,
 	},
 	ForPayment: {
-		who: "a Credential Provider or Network, which is sent the Payment Mandate and nothing else",
+		who: "a Credential Provider, Network or Merchant Payment Processor, credited here with what the first of those holds: the Payment Mandate and nothing else",
 		states: map[string]bool{
 			"amount":      true,
 			"at":          true,
@@ -385,33 +396,79 @@ func audienceFor(signed map[string]any) (evaluation, error) {
 // none disclosed. sdjwt.Verified.RootSigned is where that count comes from, and
 // it exists because of this check.
 //
-// So this fires only on a presentation nobody has a legitimate reason to send,
-// which is why it is always on where RequireConstrained is policy. It is a
-// floor and not a ceiling: a mandate narrowed from six constraints to one
-// passes here, and only a verifier saying what it needs catches that.
-func requireSomeConstraintDisclosed(committed int, disclosed []generated.Constraint) error {
+// # When the count is unreadable, which is a refusal and not a zero
+//
+// An Issuer may make the whole constraints claim selectively disclosable rather
+// than only its elements — RFC 9901 §4.2.6, which sdjwt.Blinder implements by
+// applying paths deepest first, so Blind(claims, "constraints[]",
+// "constraints") produces exactly it. The signed payload then carries no
+// top-level constraints key at all: there is a digest in _sd, and the array
+// with its own element digests lives inside a Disclosure. A Holder that
+// discloses that claim and withholds every element inside it reaches the state
+// above — nothing to evaluate — while the signed payload commits to nothing
+// this can see.
+//
+// **An earlier version answered zero here and let that through**, on the stated
+// reasoning that the decoder beside it refuses a missing claim anyway. The
+// reasoning was wrong in a way worth recording rather than quietly fixing: the
+// decoder reads the *processed* payload and this reads the *signed* one, and in
+// this exact case they disagree — the processed payload has the disclosed array
+// and the signed one has nothing. A Credential Provider funded $5,000 against a
+// $200 cap through that gap, with err == nil.
+//
+// So a missing commitment is unanswerable rather than absent, and unanswerable
+// refuses. The cost is availability against an Issuer that hides the whole
+// claim, which is not a shape this package mints — blindPaths asks for
+// "constraints[]" and nothing else — and it is the safe direction.
+//
+// # What it still does not do
+//
+// It is a floor and not a ceiling: a mandate narrowed from six constraints to
+// one passes here, and only a verifier saying what it needs catches that.
+//
+// The count is also exact only for an Issuer that does not pad. RFC 9901 §4.2.5
+// permits decoy digests in an array of values, and sdjwt.Blinder deliberately
+// declines to put them there — but a foreign Issuer may, and its padding
+// inflates this number. A mandate that set no limits and carries two decoys
+// reads as committing to two and disclosing none, which is a refusal rather
+// than a pass: padding costs availability, never safety.
+func requireSomeConstraintDisclosed(who string, signed map[string]any, disclosed []generated.Constraint) error {
+	raw, present := signed[claimConstraints]
+	if !present {
+		return fmt.Errorf(
+			"%w: %s was shown no signed %s array, so how many constraints this mandate placed cannot be established, and a presentation of none of them cannot be told from a mandate that set none",
+			ErrDisclosureInsufficient, who, claimConstraints)
+	}
+	elements, ok := raw.([]any)
+	if !ok {
+		// Shape rather than disclosure, so a different sentinel.
+		//
+		// **This arm cannot fire through either caller, and that is recorded
+		// rather than left for somebody to find while hunting untested
+		// branches** — the same courtesy Dispute.Verify's own unreachable arms
+		// get. To reach it the signed payload would have to hold a non-array
+		// under this claim while the processed payload held a usable one, and
+		// the two cannot disagree that way: a claim published in the clear is
+		// in both, and RFC 9901 §7.1 step 3.c.ii.3 makes a Disclosure that
+		// would overwrite one a rejection rather than a precedence rule. So a
+		// non-array here is a non-array there, and decodeConstraints has
+		// already refused it.
+		//
+		// It stays because handling it is correct for any caller whose
+		// preconditions are weaker, and because the alternative — letting the
+		// type assertion answer zero elements — is the fail-open this whole
+		// function was rewritten to remove.
+		return fmt.Errorf("%w: %s must be an array, got %T",
+			ErrMandateMalformed, claimConstraints, raw)
+	}
+
+	committed := len(elements)
 	if committed == 0 || len(disclosed) > 0 {
 		return nil
 	}
 	return fmt.Errorf(
-		"%w: the open mandate commits to %d constraints and this presentation disclosed none of them, which is not the same thing as a mandate that set no limits",
-		ErrDisclosureInsufficient, committed)
-}
-
-// committedConstraints counts the elements the Issuer signed into the
-// constraints array, disclosed or withheld.
-//
-// A claim that is absent, or is not an array, answers zero rather than an
-// error. Both states are already refused by the decoder that runs beside this —
-// decodeOpenCheckout requires the claim and decodeConstraints requires an array
-// — so raising a second, differently-worded failure here would only decide
-// which of two checks reported the same defect.
-func committedConstraints(signed map[string]any) int {
-	elements, ok := signed[claimConstraints].([]any)
-	if !ok {
-		return 0
-	}
-	return len(elements)
+		"%w: this mandate's %s commits to %d constraints and the presentation shown to %s disclosed none of them, which is not the same thing as a mandate that set no limits",
+		ErrDisclosureInsufficient, claimConstraints, committed, who)
 }
 
 // requireConstrained refuses a presentation whose disclosed constraints say
@@ -515,7 +572,11 @@ func decodeOpenPresented[M any](
 		var zero M
 		return zero, fmt.Errorf("%w: %w", ErrMandateMalformed, err)
 	}
-	return m, requireSomeConstraintDisclosed(committedConstraints(signed), constraintsOf(m))
+	audience, err := audienceFor(signed)
+	if err != nil {
+		return m, err
+	}
+	return m, requireSomeConstraintDisclosed(audience.who, signed, constraintsOf(m))
 }
 
 // constraintsOf reads the constraints off either open mandate.
@@ -528,12 +589,20 @@ func decodeOpenPresented[M any](
 // **A case missing here fails closed, not open**, and that is worth stating
 // because the opposite is the natural guess — this comment claimed it until a
 // mutation said otherwise. The default returns nil, which reads as "nothing was
-// disclosed", so the floor refuses *every* presentation of that mandate type
-// rather than passing them. A third open mandate landing without a case here
-// therefore stops working loudly and immediately; it does not quietly lose its
-// floor. TestTheFloorCoversBothOpenMandates covers the two that exist, and
-// removing either case reddens that test together with every round-trip test
-// for the type.
+// disclosed", so the floor refuses a presentation of that mandate type wherever
+// its mandate committed to any constraint. Not *every* presentation: a mandate
+// that set no limits commits to none, and the committed == 0 arm short-circuits
+// ahead of the disclosed one. So a third open mandate landing without a case
+// here stops working loudly for every mandate anybody actually uses, and does
+// not quietly lose its floor.
+//
+// The test that catches it is TestTheFloorCoversBothOpenMandates' positive
+// control — the subtest that presents a mandate with its constraints *disclosed*
+// and requires it to verify. The refusal subtests do not catch it, and that is
+// worth knowing rather than assuming: they present a mandate narrowed to
+// nothing and assert a refusal, so a mutant that refuses for the wrong reason
+// still satisfies them. This comment named those subtests until a mutation
+// showed the payment case could be deleted with both of them green.
 func constraintsOf(m any) []generated.Constraint {
 	switch v := m.(type) {
 	case generated.OpenCheckoutMandate:

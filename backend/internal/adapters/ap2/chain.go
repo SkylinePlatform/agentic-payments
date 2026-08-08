@@ -75,10 +75,13 @@ type ChainOptions struct {
 	// not authorise without having been shown a constraint on.
 	//
 	// It is this verifier's policy against an over-minimised presentation, and
-	// requireConstrained's own comment sets out why the check has to be shaped
-	// this way round rather than as "nothing was withheld": an undisclosed
-	// digest and a decoy are indistinguishable by design, so a verifier can
-	// state what it needs and cannot detect what it was denied.
+	// requireConstrained's own comment sets out why it is shaped as a
+	// requirement rather than as a detection: *which* constraint was withheld,
+	// and what it said, is unrecoverable, so a verifier can state what it needs
+	// and cannot inspect what it was denied. It can nonetheless count — the
+	// signed payload commits to one digest per constraint — and
+	// requireSomeConstraintDisclosed spends that count on the one case a count
+	// settles: none of them at all.
 	//
 	// The names are constraint field names — "amount", "merchant.id" — and a
 	// name this verifier's own parser does not know is a policy that can never
@@ -96,9 +99,11 @@ type ChainOptions struct {
 	// It is optional anyway because there is no verifier-independent right
 	// answer — what a Merchant insists on seeing constrained is not what a
 	// Credential Provider does — and because the case that has one is handled
-	// without configuration: requireSomeConstraintDisclosed always refuses a
-	// presentation narrowed to nothing. That is the floor. This is the ceiling,
-	// and a verifier that leaves it empty has chosen the floor alone.
+	// without configuration: requireSomeConstraintDisclosed refuses a
+	// presentation that disclosed none of the constraints its mandate committed
+	// to, and refuses one whose commitment it cannot read. That is the floor,
+	// no caller can turn either arm of it into a pass, and this is the ceiling.
+	// A verifier that leaves this empty has chosen the floor alone.
 	RequireConstrained []string
 }
 
@@ -248,7 +253,7 @@ func AuthoriseCheckoutChain(
 		return zero, err
 	}
 	if err := requireSomeConstraintDisclosed(
-		committedConstraints(verified.RootSigned), open.Constraints); err != nil {
+		evaluations[ForCheckout].who, verified.RootSigned, open.Constraints); err != nil {
 		return CheckoutAuthorisation{Open: open}, err
 	}
 	if err := requireConstrained(open.Constraints, opts.RequireConstrained); err != nil {
@@ -331,7 +336,7 @@ func AuthorisePaymentChain(
 		return zero, err
 	}
 	if err := requireSomeConstraintDisclosed(
-		committedConstraints(verified.RootSigned), open.Constraints); err != nil {
+		evaluations[ForPayment].who, verified.RootSigned, open.Constraints); err != nil {
 		return PaymentAuthorisation{Open: open}, err
 	}
 	if err := requireConstrained(open.Constraints, opts.RequireConstrained); err != nil {

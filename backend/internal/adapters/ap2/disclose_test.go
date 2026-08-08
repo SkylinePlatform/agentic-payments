@@ -471,6 +471,80 @@ func TestAGroupOneVerifierCannotDecideIsWithheldWholeAndTheFloorCatchesIt(t *tes
 	})
 }
 
+// TestAMandateHidingTheWholeConstraintsClaimIsRefusedRatherThanCountedAsZero is
+// the regression for the route by which the floor was walked straight past.
+//
+// RFC 9901 §4.2.6 lets an Issuer make the *whole* constraints claim selectively
+// disclosable rather than only its elements, and sdjwt.Blinder mints exactly
+// that from Blind(claims, "constraints[]", "constraints") — paths are applied
+// deepest first. The signed payload then has keys [vct cnf _sd _sd_alg] and no
+// constraints array at all.
+//
+// The floor read the signed payload, found no array, answered zero, and passed.
+// The processed payload meanwhile had the disclosed array, so the decoder was
+// perfectly happy. Two different maps, disagreeing in exactly this case, and the
+// comment that authorised the fail-open cited the decoder as though they were
+// the same one.
+//
+// What that bought an agent: a $5,000 payment funded against the $200 cap the
+// user signed, err == nil, on a mandate nobody had to tamper with.
+func TestAMandateHidingTheWholeConstraintsClaimIsRefusedRatherThanCountedAsZero(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	agentSigner, agentVerifier := agentKeys(t, f.clock)
+
+	key := agentJWK(t)
+	// One `all` group, so a Credential Provider that cannot state a route
+	// withholds the whole thing — including the price cap inside it.
+	claims := map[string]any{
+		"vct": ap2.VCTPaymentOpen,
+		"cnf": map[string]any{"jwk": map[string]any{
+			"kty": key.Kty, "crv": *key.Crv, "x": *key.X, "y": *key.Y, "kid": *key.Kid}},
+		"constraints": []any{map[string]any{
+			"type": ap2.ConstraintType,
+			"expression": map[string]any{"op": "all", "of": []any{
+				map[string]any{"op": "lte", "field": "amount",
+					"value": map[string]any{"amount": 20000, "currency": "USD"}},
+				map[string]any{"op": "eq", "field": "item.attr.route.origin", "value": "BEG"}}}}},
+	}
+
+	// Deepest first: each element, then the claim that holds them.
+	payload, disclosures, err := f.blinder.Blind(claims, "constraints[]", "constraints")
+	require.NoError(t, err, "this is a shape RFC 9901 defines and this repository's own Blinder produces")
+	require.NotContains(t, payload, "constraints",
+		"the fixture is only the fixture if the signed payload really does hide the claim; a top-level array here would test nothing")
+
+	root, err := sdjwt.Issue(t.Context(), ap2.JOSESigner(f.signer), payload, disclosures)
+	require.NoError(t, err)
+
+	narrowed := minimise(t, root)
+	hash, err := f.blinder.HashAlg().Digest(merchantCheckout)
+	require.NoError(t, err)
+	closedPayload, closedDisclosures, err := f.blinder.Blind(map[string]any{
+		"vct": ap2.VCTPaymentClosed, "transaction_id": hash,
+		"payee":              map[string]any{"id": pinnedPayee, "name": "Demo Merchant"},
+		"payment_amount":     map[string]any{"amount": 500000, "currency": "USD"},
+		"payment_instrument": map[string]any{"id": "card-tok-1", "type": "card"}})
+	require.NoError(t, err)
+
+	chain, err := narrowed.Delegate(t.Context(), ap2.JOSESigner(agentSigner), f.blinder,
+		sdjwt.KeyBinding{Nonce: chainNonce, Audience: chainAudience, IssuedAt: f.clock.Now()},
+		closedPayload, closedDisclosures)
+	require.NoError(t, err)
+
+	expensive := credentialProviderSubject()
+	expensive.Amount = generated.Amount{Amount: 500000, Currency: "USD"}
+
+	_, err = ap2.AuthorisePaymentChain(chain, expensive, ap2.ChainOptions{
+		Issuer: f.verifier, AgentKey: resolveTo(agentVerifier), Clock: f.clock,
+		Audience: chainAudience, Nonce: chainNonce})
+	require.Error(t, err,
+		"a commitment this verifier cannot read is unanswerable, and unanswerable must refuse: answering zero funds $5,000 against a $200 cap")
+	assert.ErrorIs(t, err, ap2.ErrDisclosureInsufficient,
+		"refusing an Issuer that hides the whole claim costs availability against a shape this package never mints, which is the safe direction")
+}
+
 // TestAMandateThatSetNoLimitsIsNotAPresentationNarrowedToNothing is the
 // negative control the floor needs, and the reason it reads the signed payload
 // rather than counting what it was shown.
@@ -534,6 +608,8 @@ func TestTheFloorCoversBothChainEntryPoints(t *testing.T) {
 			"a Merchant shown none of the four constraints the user signed would otherwise authorise the purchase against an empty report, which is Satisfied")
 		assert.ErrorIs(t, err, ap2.ErrDisclosureInsufficient)
 		assert.Empty(t, got.Report.Results)
+		assert.Contains(t, err.Error(), "Merchant",
+			"the refusal has to name which verifier was under-disclosed to; an operator reading this in a receipt is looking at a five-role flow")
 	})
 
 	t.Run("payment chain", func(t *testing.T) {
@@ -544,19 +620,50 @@ func TestTheFloorCoversBothChainEntryPoints(t *testing.T) {
 		fx := paymentChainOver(t, route, true)
 
 		_, err := ap2.AuthorisePaymentChain(fx.chain, credentialProviderSubject(), fx.opts)
-		assert.ErrorIs(t, err, ap2.ErrDisclosureInsufficient,
+		require.ErrorIs(t, err, ap2.ErrDisclosureInsufficient,
 			"narrowing correctly for a Credential Provider can still empty a mandate, and an empty one must not read as a mandate with no limits")
+		assert.Contains(t, err.Error(), "Credential Provider",
+			"and it names this verifier rather than the Merchant, which is the whole reason the reach table carries a `who` at all")
 	})
 }
 
 // TestTheFloorCoversBothOpenMandates pins what constraintsOf's type switch is
-// for: a case missing from it returns nil, which disables the floor silently
-// for that mandate type.
+// for: a case missing from it returns nil, which reads as "nothing was
+// disclosed" and makes the floor refuse every presentation of that type whose
+// mandate placed any limit at all. Fail-closed, not silent — an earlier version
+// of this docstring said the opposite of the source it was testing.
 //
-// Both are driven through the standalone verifier rather than a chain, because
-// that is the call site the switch serves.
+// **The positive controls are the subtests that catch it**, and they are here
+// because the refusal subtests do not. Those present a mandate narrowed to
+// nothing and assert a refusal, so a mutant refusing for the wrong reason
+// satisfies them and the payment case could be deleted with both green.
+// Requiring a fully-disclosed mandate to *verify* is what fails.
+//
+// All four are driven through the standalone verifier rather than a chain,
+// because that is the call site the switch serves.
 func TestTheFloorCoversBothOpenMandates(t *testing.T) {
 	t.Parallel()
+
+	full := []generated.Constraint{constraintFrom(t,
+		`{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}`)}
+
+	t.Run("open payment mandate, fully disclosed, verifies", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t)
+		got := verifyOpenPayment(t, f, minimise(t, openPaymentOver(t, f, full)))
+		assert.Len(t, got.Constraints, 1,
+			"a mandate whose constraints all reached the verifier must pass the floor; a constraintsOf that cannot read this type refuses it here")
+	})
+
+	t.Run("open checkout mandate, fully disclosed, verifies", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFixture(t)
+		got := verifyOpenCheckout(t, f, minimise(t, openCheckoutOver(t, f, full)))
+		assert.Len(t, got.Constraints, 1,
+			"the same, for the type a Merchant is the audience of")
+	})
 
 	route := []generated.Constraint{constraintFrom(t,
 		`{"op":"eq","field":"item.attr.route.origin","value":"BEG"}`)}

@@ -132,11 +132,24 @@ var (
 	// exists to conclude. The difference is what was missing — there a document
 	// to recompute a hash against, here a limit the user set.
 	//
-	// It is emphatically not "a constraint was withheld", and the distinction
-	// is the one requireConstrained's comment argues at length: a verifier
-	// cannot tell a withheld disclosure from a decoy, so no error here could
-	// mean that. It means a fact this verifier named as required is one no
-	// disclosed constraint mentions.
+	// Its two producers mean two different things, and an earlier version of
+	// this comment denied that the second was possible — "no error here could
+	// mean 'a constraint was withheld'", on the grounds that a withheld
+	// disclosure and a decoy are indistinguishable. The commit that added
+	// requireSomeConstraintDisclosed made it possible and left the sentence
+	// standing.
+	//
+	//   - requireConstrained: a fact this verifier named as required is one no
+	//     disclosed constraint mentions. It says nothing about what was
+	//     withheld, because nothing can.
+	//   - requireSomeConstraintDisclosed: the signed payload commits to
+	//     constraints and this presentation disclosed none of them — which *is*
+	//     "constraints were withheld", counted rather than guessed. Or the
+	//     commitment could not be read at all, which is unanswerable and
+	//     refuses on the same terms.
+	//
+	// What stays true is the narrower claim: *which* constraint went, and what
+	// it said, is unrecoverable. The count is not.
 	ErrDisclosureInsufficient = errors.New("ap2: a constraint this verifier requires was not disclosed")
 )
 
