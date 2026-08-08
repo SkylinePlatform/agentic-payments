@@ -21,6 +21,21 @@ import (
 // not be tested without one listening, nor pointed at a different one. The same
 // reasoning that makes the verification rules injectable applies here: the
 // party is a dependency, not an implementation detail.
+// # Two methods, and the second is not a wider version of the first
+//
+// The Human Present and Human Not Present legs are separate methods here for
+// the reason ap2 declares CheckoutVerifier and CheckoutChainVerifier as
+// separate interfaces rather than growing one an optional argument: a single
+// entry point taking whichever string the merchant happens to hold is one where
+// the receiving end has to work out which shape arrived, and working it out
+// means guessing from the bytes. purchase, on this merchant's own endpoint,
+// keeps the same promise in the other direction — named fields, never a search
+// for the "~~" a chain happens to contain — and an interface that undid it here
+// would leave the promise kept on the way in and broken on the way out.
+//
+// The merchant reads neither presentation. It is the audience of neither the
+// processor's chain nor the processor's nonce, so it could establish nothing by
+// parsing either, and the method name is what carries the shape.
 type Processor interface {
 	// InitiatePayment presents the payment side of a purchase and returns the
 	// processor's signed answer. A refusal is not an error — the receipt is the
@@ -28,6 +43,30 @@ type Processor interface {
 	InitiatePayment(
 		ctx context.Context,
 		paymentMandate string,
+		credential generated.PaymentCredential,
+	) (receipt string, settled bool, err error)
+
+	// InitiatePaymentChain is the same call for a Human Not Present purchase,
+	// where what is presented is a delegation chain: the open Payment Mandate
+	// the user signed and the closed one the agent signed under it, addressed to
+	// the processor.
+	//
+	// nonce is the challenge that chain's delegating hop is bound to, and it is
+	// the *processor's* rather than this merchant's. A delegation is a key
+	// binding, and a key binding is checked by the verifier that issued the
+	// value it names — so the agent fetches this one from the processor's own
+	// GET /nonce and hands it here beside the chain it belongs to. The merchant
+	// forwards it unread for exactly the reason it forwards the chain unread: it
+	// is not the party that can say whether the challenge is good.
+	//
+	// It is a parameter rather than something the merchant supplies, because
+	// there is nothing correct it could supply. Passing its own nonce would be
+	// presenting the processor a value the processor never issued, and minting a
+	// fresh one would be inventing a challenge nobody asked for.
+	InitiatePaymentChain(
+		ctx context.Context,
+		paymentChain string,
+		nonce string,
 		credential generated.PaymentCredential,
 	) (receipt string, settled bool, err error)
 }
@@ -55,10 +94,62 @@ func (p *HTTPProcessor) InitiatePayment(
 	paymentMandate string,
 	credential generated.PaymentCredential,
 ) (string, bool, error) {
-	body, err := json.Marshal(map[string]any{
+	return p.present(ctx, map[string]any{
 		"mandate":    paymentMandate,
 		"credential": credential,
 	})
+}
+
+// InitiatePaymentChain sends the delegated Payment Mandate, the challenge it is
+// bound to and the credential to the processor.
+//
+// The chain travels under its own member, never under "mandate", which is the
+// same promise merchant.purchase makes on its own endpoint: a role must not have
+// to look inside a string to learn which shape it was handed.
+//
+// The member is "chain" and not "payment_chain", and the asymmetry with this
+// merchant's own request shape is deliberate rather than an inconsistency. Three
+// distinct documents arrive here together and have to be told apart, so they are
+// named for which is which; the processor receives exactly one and a qualifier
+// would be distinguishing it from nothing.
+//
+// Both names are checkable in this tree rather than agreed in a conversation,
+// which is the only kind of claim worth making about somebody else's wire
+// format: internal/roles/mpp's settlement tags a Chain field as chain and a
+// Nonce field as nonce, and internal/roles/credprovider tags the same pair. So a
+// reader meets one name twice rather than two names once, and can confirm it
+// with a grep instead of taking this comment's word for it.
+//
+// That was not true when this method was written. The chain branch on both
+// payment roles arrived with #120, and until it did, a chain sent here was
+// answered with a refusal rather than settled — which is worth recording
+// because the two halves of this hop were written on separate branches, and a
+// member name is exactly the kind of thing that agrees in a conversation and
+// disagrees in the code. TestTheProcessorIsSentTheMembersItReads is what keeps
+// this side from drifting now that both exist.
+func (p *HTTPProcessor) InitiatePaymentChain(
+	ctx context.Context,
+	paymentChain string,
+	nonce string,
+	credential generated.PaymentCredential,
+) (string, bool, error) {
+	return p.present(ctx, map[string]any{
+		"chain":      paymentChain,
+		"nonce":      nonce,
+		"credential": credential,
+	})
+}
+
+// present posts one settlement body and reads the processor's answer.
+//
+// Shared by the two entry points because nothing about the call differs between
+// them except which member carries the presentation: same path, same
+// idempotency key derivation, same correlating client, same reading of the
+// answer. Two copies would be two places for the 5xx rule below to drift.
+func (p *HTTPProcessor) present(
+	ctx context.Context, payload map[string]any,
+) (string, bool, error) {
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", false, fmt.Errorf("encoding the settlement: %w", err)
 	}
