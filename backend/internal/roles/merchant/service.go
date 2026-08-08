@@ -13,6 +13,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
@@ -91,6 +92,16 @@ type Service struct {
 	// merchant initiate payment, so this call is the merchant's rather than the
 	// agent's — the agent never talks to the processor at all.
 	Processor Processor
+	// Challenge issues the nonces this merchant's Human Not Present
+	// verification checks a delegation's key binding against.
+	//
+	// Optional, and absent means the route is not registered at all rather
+	// than answering something nobody checks — the same argument Catalogue
+	// makes. A merchant that only ever sees directly presented, Human Present
+	// mandates has no delegation to bind a nonce to, and an endpoint handing
+	// out challenges such a merchant would never compare against is a working
+	// verifier's shape with none of its behaviour.
+	Challenge *crypto.Challenger
 	// OfferLifetime is how long a quoted checkout stays purchasable.
 	OfferLifetime time.Duration
 	// Events records the moments this role owns: its verdict on a presented
@@ -182,6 +193,9 @@ func (s *Service) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /checkout", s.settle)
 	if s.Catalogue != nil {
 		mux.HandleFunc("GET /search", s.search)
+	}
+	if s.Challenge != nil {
+		mux.Handle("GET "+roles.NoncePath, roles.Nonce(s.Challenge))
 	}
 	return roles.Middleware(s.Clock, mux)
 }

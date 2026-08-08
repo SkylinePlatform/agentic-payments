@@ -15,6 +15,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
@@ -36,6 +37,11 @@ type Service struct {
 	Keys authz.KeySetPublisher
 	// Clock stamps receipts.
 	Clock authz.Clock
+	// Challenge issues the nonces this processor's Human Not Present
+	// verification checks a delegation's key binding against. Optional; when it
+	// is absent the route is not registered, on the terms the merchant's
+	// identical field sets out.
+	Challenge *crypto.Challenger
 	// Events records the moments this role owns: its verdict on the payment
 	// side of a purchase, and the receipt carrying it. Optional — a nil Emitter
 	// records nothing.
@@ -72,6 +78,9 @@ func (s *Service) Handler() (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.Handle("GET "+roles.JWKSPath, roles.JWKS(s.Keys))
 	mux.HandleFunc("POST /payment", s.settle)
+	if s.Challenge != nil {
+		mux.Handle("GET "+roles.NoncePath, roles.Nonce(s.Challenge))
+	}
 	return roles.Middleware(s.Clock, mux)
 }
 
