@@ -218,6 +218,15 @@ func TestAChainOutsideItsConstraintsIsRefusedByTheVerifier(t *testing.T) {
 		"the returned Report has to record the violation itself, not just the error — a rejection receipt reads Report.Violations(), not the error string")
 	assert.Equal(t, generated.ErrorCodeConstraintViolated, authz.CodeOf(err),
 		"the receipt has to name which rule was broken, since that is what the agent acts on when it comes back with a lower price")
+	// The same code, asked the way a receipt asks it. IssueReceipt reads
+	// ap2.CodeOf and nothing else, so the line above proved the domain had the
+	// right answer while the artefact carried verifier_unavailable — the
+	// merchant reporting an internal fault where the truth is that the agent
+	// tried to spend more than the user approved. That was #111, and this is
+	// the assertion it was missing: the two functions must agree, at the one
+	// call site where the disagreement becomes a signed artefact.
+	assert.Equal(t, generated.ErrorCodeConstraintViolated, ap2.CodeOf(err),
+		"the demo's central beat is the verifier refusing a purchase that broke the user's limits, and a receipt blaming the verifier's own uptime teaches the opposite of what the beat exists to teach")
 }
 
 // TestAChainMayNotVouchForItsOwnBinding is TestAMandateMayNotVouchForItsOwnBinding's

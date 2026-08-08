@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/evidence"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
@@ -92,6 +94,95 @@ func TestTheSecuringFormatsFailuresAreNameableToo(t *testing.T) {
 			t.Parallel()
 
 			assert.Equal(t, tc.want, ap2.CodeOf(fmt.Errorf("verifying: %w", tc.err)))
+		})
+	}
+}
+
+// TestTheAuthorisationDomainsVerdictsKeepTheirOwnCodes is the third population,
+// and the one whose absence was the defect in #111.
+//
+// Every error here collapsed to verifier_unavailable before the delegation in
+// CodeOf existed — so a merchant refusing a purchase because it broke the
+// user's spending limit issued a receipt saying the merchant had a fault of its
+// own. The two readings send a dispute to different places, and they tell an
+// agent to do opposite things: verifier_unavailable reads as *retry*, where the
+// correct behaviour is *come back with a lower price*.
+//
+// Spelled out rather than derived, for the reason TestEveryFailureHasACode
+// gives, and here there is a second one: the wanted codes below are written from
+// the three outcomes constraint.CodeOf documents and the verdicts authz.CodeOf
+// documents, not from either function. A test that called them would agree with
+// them by construction — including agreeing that a sentinel nobody delegated is
+// answered by the default arm.
+func TestTheAuthorisationDomainsVerdictsKeepTheirOwnCodes(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		err  error
+		want generated.ErrorCode
+	}{
+		// Read, evaluated, and the answer was no. This is the demo's central
+		// beat, and the one code an agent acts on.
+		{constraint.ErrViolated, generated.ErrorCodeConstraintViolated},
+		// The verifier could not form a view at all, because it does not hold
+		// the field or the operator. Distinct from the row above precisely so a
+		// counterparty is not told the limits were checked when they were not.
+		{constraint.ErrUnknownField, generated.ErrorCodeConstraintTypeUnknown},
+		{constraint.ErrUnknownOperator, generated.ErrorCodeConstraintTypeUnknown},
+		// The constraint could not be read.
+		{constraint.ErrTypeMismatch, generated.ErrorCodeMandateMalformed},
+		{constraint.ErrMalformed, generated.ErrorCodeMandateMalformed},
+		{constraint.ErrTooDeep, generated.ErrorCodeMandateMalformed},
+		{constraint.ErrCurrencyMismatch, generated.ErrorCodeMandateMalformed},
+
+		{authz.ErrAgentKeyMismatch, generated.ErrorCodeAgentKeyMismatch},
+		{authz.ErrNoEndorsedKey, generated.ErrorCodeAgentKeyMismatch},
+		// The open mandate's own life, not the securing format's. sdjwt.ErrExpired
+		// carries the same code from the other side, which is correct: whether the
+		// envelope or the authorisation ran out, what the holder must do is get a
+		// new one.
+		{authz.ErrExpired, generated.ErrorCodeMandateExpired},
+		{authz.ErrNotYetValid, generated.ErrorCodeMandateNotYetValid},
+		// A pinned value is a limit of the strictest kind, so a closed mandate
+		// that rewrote one is a violation rather than a malformed document.
+		{authz.ErrPinnedFieldChanged, generated.ErrorCodeConstraintViolated},
+		{authz.ErrMalformedMandate, generated.ErrorCodeMandateMalformed},
+		{authz.ErrOpenMandateOutstanding, generated.ErrorCodeOpenMandateOutstanding},
+		{authz.ErrMandateSpent, generated.ErrorCodeOpenMandateOutstanding},
+	} {
+		t.Run(tc.err.Error(), func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tc.want, ap2.CodeOf(tc.err))
+			assert.Equal(t, tc.want, ap2.CodeOf(fmt.Errorf("authorising: %w", tc.err)),
+				"AuthoriseCheckoutChain hands these back wrapped in context, so the wrapped form is the one a receipt is built from")
+		})
+	}
+}
+
+// TestAnAgentsOwnBookkeepingIsNotACounterpartysProblem covers the two sentinels
+// authz.CodeOf answers with the empty code on purpose.
+//
+// They are the agent refusing itself — a receipt applied where no presentation
+// is outstanding, a state the machine does not define — and authz declines to
+// name a code because there is no verdict about anybody's artefact to name.
+// This function cannot pass that on: "" is not in the enum, and a rejection
+// carrying it is the hole CodeOf exists to prevent. So the two rules do not
+// contradict each other, they meet here, and what they agree on is
+// verifier_unavailable: an error of this kind reaching a receipt at all means a
+// verifier's own bookkeeping went wrong, which is a fault of its own and
+// nothing to do with the mandate it was shown.
+func TestAnAgentsOwnBookkeepingIsNotACounterpartysProblem(t *testing.T) {
+	t.Parallel()
+
+	for _, err := range []error{authz.ErrNoPresentationOutstanding, authz.ErrUnknownTransition} {
+		t.Run(err.Error(), func(t *testing.T) {
+			t.Parallel()
+
+			assert.Empty(t, authz.CodeOf(err),
+				"the owning package still declines to name one; this test is worthless if that changes silently")
+			assert.Equal(t, generated.ErrorCodeVerifierUnavailable, ap2.CodeOf(err),
+				"whatever the domain declines to name, a receipt still has to carry something in the enum")
 		})
 	}
 }

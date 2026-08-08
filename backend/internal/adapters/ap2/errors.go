@@ -3,6 +3,8 @@ package ap2
 import (
 	"errors"
 
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/evidence"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
@@ -199,12 +201,105 @@ func codeFor(err error) generated.ErrorCode {
 	return ""
 }
 
+// authzOwned lists the sentinels internal/core/authz and its constraint
+// subpackage declare. It is a list of errors and not, like adapterCodes, a
+// table of errors and codes — because the code is not this package's to state.
+// Each match is answered by asking authz.CodeOf, which is the function those
+// two packages already agree on: its default arm delegates to
+// constraint.CodeOf, so one call covers both populations and a code that
+// changes there changes here without this file being touched. Two tables would
+// be free to drift, and the drift would be silent.
+//
+// Why membership has to be listed at all, rather than calling authz.CodeOf on
+// anything the tables above did not match: authz.CodeOf is total over every
+// error in existence, because constraint.CodeOf's default arm is
+// mandate_malformed. Delegating unconditionally would therefore answer
+// mandate_malformed for every failure this package has never heard of — a
+// verifier telling a counterparty their mandate is bad when the truth is that
+// the verifier failed for a reason of its own it cannot name.
+// TestNoFailureIsNameless is what fails on that.
+//
+// The two lifecycle sentinels authz.CodeOf deliberately answers with the empty
+// code — ErrNoPresentationOutstanding and ErrUnknownTransition — are not here,
+// and their absence is the decision rather than an omission. Its own comment
+// says why: they are the agent refusing itself over its own bookkeeping, they
+// never travel to a counterparty, and there is no verdict about anybody's
+// artefact for a code to name. Reaching CodeOf at all would mean one had
+// escaped towards a receipt, and verifier_unavailable — which its default arm
+// gives them — is then the true answer, because a verifier's own bookkeeping
+// mistake is precisely a fault of its own. Listing them would produce the same
+// outcome by a longer route, since CodeOf discards an empty code from every one
+// of its three sources.
+var authzOwned = []error{
+	// The constraint package's three outcomes, in the order its own CodeOf
+	// separates them, and they stay separate all the way into the receipt: read
+	// and evaluated and the answer was no; no view could be formed because the
+	// field or the operator is unknown; the constraint could not be read at all.
+	// A caller told the first when the second is true would believe the user's
+	// limits had been checked.
+	constraint.ErrViolated,
+
+	constraint.ErrUnknownField,
+	constraint.ErrUnknownOperator,
+
+	constraint.ErrTypeMismatch,
+	constraint.ErrMalformed,
+	constraint.ErrTooDeep,
+	constraint.ErrCurrencyMismatch,
+
+	// authz's verdicts about the mandate itself, before and around evaluation.
+	authz.ErrAgentKeyMismatch,
+	authz.ErrNoEndorsedKey,
+	authz.ErrExpired,
+	authz.ErrNotYetValid,
+	authz.ErrPinnedFieldChanged,
+	authz.ErrMalformedMandate,
+
+	// The rejection-receipt rule's two refusals that are a verdict about a
+	// presentation rather than about the caller's own bookkeeping. See
+	// authz.CodeOf, which maps both to open_mandate_outstanding.
+	authz.ErrOpenMandateOutstanding,
+	authz.ErrMandateSpent,
+}
+
+// authzCodeOf maps the authorisation domain's verdicts — the answers to "was
+// this agent allowed to make this purchase, within these limits, right now".
+//
+// They reach a caller of this package because AuthoriseCheckoutChain and
+// AuthorisePaymentChain return authz.AuthoriseCheckout's and
+// authz.AuthorisePayment's errors unchanged, which is the right thing for them
+// to do: a verdict about the user's limits is not something an adapter should
+// restate in its own words. What the adapter does owe is the code, because
+// IssueReceipt reads it from here.
+//
+// Empty means "not one of theirs", on the same terms as codeFor and
+// sdjwtCodeOf, so CodeOf's default still catches everything.
+func authzCodeOf(err error) generated.ErrorCode {
+	for _, sentinel := range authzOwned {
+		if is(err, sentinel) {
+			return authz.CodeOf(err)
+		}
+	}
+	return ""
+}
+
 // CodeOf maps a verification failure to the canonical error code a rejection
 // receipt and an RFC 9457 response carry.
 //
-// Failures raised by pkg/sdjwt travel through here too, because a caller
-// verifying an AP2 mandate should not have to know which layer refused it in
-// order to answer with a receipt.
+// Failures raised by pkg/sdjwt travel through here too, and so do the
+// authorisation domain's own verdicts, because a caller verifying an AP2
+// mandate should not have to know which layer refused it in order to answer
+// with a receipt.
+//
+// Three populations, asked in order, and the order is not load-bearing: no
+// error is a member of two, so the first non-empty answer is the only answer.
+// What each contributes is worth stating, because only one of the three has its
+// codes written down in this file. This package's own sentinels are mapped by
+// adapterCodes here; the authorisation domain's are answered by the package
+// that declared them, through authzCodeOf; the securing format's are mapped by
+// sdjwtCodeOf, which is this package's reading of pkg/sdjwt rather than
+// pkg/sdjwt's own, because a library implementing a public standard has no
+// business knowing AP2's error vocabulary.
 //
 // A non-nil error never yields the empty string. Empty is not a member of the
 // ErrorCode enum, so it is not a code a receipt or a Problem Details response
@@ -219,6 +314,9 @@ func CodeOf(err error) generated.ErrorCode {
 		return ""
 	}
 	if code := codeFor(err); code != "" {
+		return code
+	}
+	if code := authzCodeOf(err); code != "" {
 		return code
 	}
 	if code := sdjwtCodeOf(err); code != "" {
