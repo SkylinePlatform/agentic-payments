@@ -243,11 +243,17 @@ func (d delegation) sdPart() string {
 // hop's presentation — the delegating JWT, a tilde, and each Disclosure carried
 // with it followed by a tilde — under the _sd_alg that hop declares.
 //
-// It is SDJWT.SDHash one hop along, and the two agree on a rule rather than on
-// bytes: each digests the final SD-JWT of the presentation it is called on,
-// where a bare SD-JWT is a chain of one. AP2 words a receipt's reference over a
-// chain as "a hash over the final SD-JWT in the chain", and that is this hop,
-// not the root.
+// **It is not SDJWT.SDHash applied one hop along**, and the resemblance is worth
+// disarming before it misleads somebody. The shapes match — both digest a run of
+// components each terminated by a separator — and the coverage does not.
+// SDJWT.SDHash covers the whole credential it is called on, which is precisely
+// why Delegate calls it on the *root* to fill in the delegating JWT's own sd_hash
+// claim. This covers the last hop and stops. A reader carrying the first across
+// to the second concludes the root's bytes are in here, and they are not.
+//
+// What the two genuinely share is the rule AP2 states: a reference is a hash over
+// the final SD-JWT of the presentation being answered. For a bare mandate that is
+// the whole of it; for a chain it is the delegating hop.
 //
 // **The name collides with a claim that means something else, and the collision
 // is worth saying out loud.** A delegating JWT carries an sd_hash claim of its
@@ -267,6 +273,20 @@ func (d delegation) sdPart() string {
 // references. Under issuer_jwt_hash, which this package accepts but never
 // writes, the commitment covers the root's JWT alone, and a root Disclosure
 // dropped after the fact leaves the binding and this value both intact.
+//
+// **Digesting the whole chain was the alternative, and it would have been the
+// stronger input.** It puts the root's bytes in outright, so the issuer_jwt_hash
+// case above could not arise at all. It is not what this returns because AP2
+// words the reference as a hash over the final SD-JWT *in* the chain rather than
+// over the chain, and a reference a conformant counterparty cannot reproduce is
+// worth less than one narrower than it might have been. That is a decision taken
+// on the specification's wording, not a claim that the narrower input is safer.
+//
+// The order of the Disclosures is wire order, and it is load-bearing rather than
+// incidental: a digest resolves its Disclosure wherever that Disclosure sits, so
+// an implementation emitting the run sorted or in map order builds a chain that
+// verifies everywhere and references differently everywhere.
+// TestGoldenChainReceiptReferenceOverSeveralDisclosures pins it.
 //
 // The *delegated* Disclosures are covered, exactly as RFC 9901's sd_hash covers
 // an SD-JWT's own, so a delegation presented with one withheld has a different

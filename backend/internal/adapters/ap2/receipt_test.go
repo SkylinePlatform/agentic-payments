@@ -384,8 +384,13 @@ func TestARejectedChainStillGetsAReceipt(t *testing.T) {
 			assert.NotEmpty(t, *got.ErrorDescription,
 				"the description is for the operator who has to go and look")
 
+			// AnswersMandate, and deliberately not Dispute.VerifyCheckoutReceipt:
+			// receiptAnswering still takes a *sdjwt.SDJWT, so the arbiter cannot
+			// check a chain receipt yet. Widening it is #110's, and until then the
+			// link this asserts is the one a dispute will be built on rather than
+			// one it already walks.
 			assert.NoError(t, ap2.AnswersMandate(got, fx.chain),
-				"a rejection receipt has to reference the chain it rejected, or #18 cannot assemble the dispute")
+				"a rejection receipt has to reference the chain it rejected, or there is nothing for a dispute to tie the refusal to")
 		})
 	}
 }

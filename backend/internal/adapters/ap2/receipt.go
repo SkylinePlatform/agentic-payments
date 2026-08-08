@@ -241,22 +241,22 @@ func reference(sd Presented) (string, error) {
 //
 // reflect is what it takes, because the question is "does this interface hold a
 // nil pointer" and Go has no operator for that. IsNil panics on a kind that
-// cannot be nil, hence the switch: a Presented implemented by a value type is
-// not something this package builds, but it is something an interface permits,
-// and it has to read as "there is a presentation here" rather than as a panic.
-// reflect.Interface is absent from the list on purpose — ValueOf reports the
-// dynamic type stored in the interface, which is never itself an interface.
+// cannot be nil, so the kind has to be established first either way.
+//
+// **Only Pointer is treated as nothing**, and the narrower list is the honest
+// one. A nil map, slice or channel is a perfectly usable method receiver — a
+// Presented implemented by one would answer SDHash without dereferencing
+// anything — so reporting those as "no mandate" would refuse a presentation that
+// works. A nil pointer is the case where the method body reaches through the
+// receiver, which is what both implementations here do. reflect.Interface is
+// absent for a different reason again: ValueOf reports the dynamic type stored in
+// the interface, which is never itself an interface.
 func nothingToAnswer(sd Presented) bool {
 	if sd == nil {
 		return true
 	}
 	v := reflect.ValueOf(sd)
-	switch v.Kind() {
-	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.UnsafePointer:
-		return v.IsNil()
-	default:
-		return false
-	}
+	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
 // decodeReceipt reads the verified claims into the canonical type.

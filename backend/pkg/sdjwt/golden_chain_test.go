@@ -2,7 +2,6 @@ package sdjwt_test
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,26 +49,10 @@ func TestGoldenDelegateChainSerialisation(t *testing.T) {
 // the only place the difference is observable: the claim would be inside the
 // array disclosure, changing its bytes and so its digest.
 func TestGoldenDelegatePayloadWithoutSDAlg(t *testing.T) {
-	root := issuedRoot(t)
-
-	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	require.NoError(t, err, "the vector below is pinned to the salt sequence this blinder produces, so nothing here is comparable without it")
-
 	// One path blinded, which is what makes Blind write _sd_alg at all.
-	closed, disclosures, err := blinder.Blind(map[string]any{
-		"vct":           "closed.example",
-		"checkout_hash": "abc",
-	}, "checkout_hash")
-	require.NoError(t, err, "the delegated content is the closed mandate; if it cannot be blinded there is nothing to delegate")
+	chain, closed := delegatedChainDisclosing(t, "checkout_hash")
 	require.Contains(t, closed, "_sd_alg",
 		"this is the only vector whose delegated payload carries one, and without it the strip it exists to pin has nothing to remove")
-
-	chain, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
-		Nonce:    "n-1",
-		Audience: "https://merchant.example",
-		IssuedAt: time.Unix(1_777_326_189, 0),
-	}, closed, disclosures)
-	require.NoError(t, err, "delegation is what this vector serialises; there is nothing to compare if it cannot be built")
 
 	const want = "eyJhbGciOiJIUzI1NiIsImtpZCI6Imlzc3VlciJ9.eyJjbmYiOnsiandrIjp7ImsiOiJkZWxlZ2F0ZSIsImt0eSI6Im9jdCJ9fSwidmN0Ijoib3Blbi5leGFtcGxlIn0.EyzAZyWfpF7KtuzmU1BAlrzPvMlQQn1X4lUpi4Rjv9U~~eyJhbGciOiJIUzI1NiIsInR5cCI6ImtiK3NkLWp3dCIsImtpZCI6ImRlbGVnYXRlIn0.eyJfc2RfYWxnIjoic2hhLTI1NiIsImF1ZCI6Imh0dHBzOi8vbWVyY2hhbnQuZXhhbXBsZSIsImRlbGVnYXRlX3BheWxvYWQiOlt7Ii4uLiI6Ik9Objl5WG55TDU1Z0FsdTJyZWNiUHc5N1FobS1RWFQ3bURENW8wdmVEUVEifV0sImlhdCI6MTc3NzMyNjE4OSwibm9uY2UiOiJuLTEiLCJzZF9oYXNoIjoidnN0dFBkTkJTemJyRzhQSUl6aFJiOUlFbW1mRndFSzhyVnpsV29zVGZNNCJ9.8qAc6PuZ_f_RldbLW10Ai9qrt0bOSi5LcFJb_PQjJLk~WyJFUklURkJVV0Z4Z1pHaHNjSFI0ZklBIix7Il9zZCI6WyJTMEJJamJuY2IwNW5rUnVScGxaVUZIbk50N3hPVGY3WkxHVEg5dzI5Sk1RIl0sInZjdCI6ImNsb3NlZC5leGFtcGxlIn1d~WyJBUUlEQkFVR0J3Z0pDZ3NNRFE0UEVBIiwiY2hlY2tvdXRfaGFzaCIsImFiYyJd~"
 
@@ -90,8 +73,18 @@ func TestGoldenDelegatePayloadWithoutSDAlg(t *testing.T) {
 // a reader can act on: the serialisation is the root's own serialisation, one
 // separator, then the input. Everything before the delegating JWT is out.
 //
-// **Three things this vector does not pin, each with where they are pinned
+// **Four things this vector does not pin, each with where they are pinned
 // instead.**
+//
+// The delegating hop here carries exactly one Disclosure — delegatedChain blinds
+// no paths, so Delegate appends the delegate payload's wrapper and nothing else
+// — and a run of one is the same string in any order. Nothing here can therefore
+// see how a multi-Disclosure run is sequenced, which is the interop break this
+// vector otherwise exists to prevent: an implementation emitting the run sorted,
+// or in map order, computes a different reference for the same chain and every
+// receipt it issues references something nobody else can match.
+// TestGoldenChainReceiptReferenceOverSeveralDisclosures, below, is where the
+// order is pinned.
 //
 // The digest covers the delegating JWT's signature bytes, and this chain is
 // signed with a fixed HMAC key — which is the only reason a digest is
@@ -139,6 +132,57 @@ func TestGoldenChainReceiptReference(t *testing.T) {
 	require.NoError(t, err, "a chain built by this package must be able to name itself, or no receipt can answer it")
 	assert.Equal(t, want, got,
 		"Chain.SDHash has to digest exactly the pinned input; a receipt whose reference is computed over anything else answers a chain nobody presented")
+}
+
+// TestGoldenChainReceiptReferenceOverSeveralDisclosures pins the one thing the
+// vector above cannot: the order a delegating hop's Disclosures are digested in.
+//
+// The chain is TestGoldenDelegatePayloadWithoutSDAlg's, whose wire form that test
+// already pins in full, so the input below can be read straight off it — the two
+// components after the delegating JWT, in the order they appear there. That order
+// is Delegate's own: the delegate payload's wrapper first, then the Disclosures it
+// was handed, in the sequence it was handed them.
+//
+// **Nothing about that order is forced by the shape of the data**, which is the
+// whole reason it needs pinning rather than deriving. The digests inside the
+// delegating JWT do not say where their Disclosures sit; the run could be sorted,
+// or emitted in the iteration order of a map, and every disclosure would still
+// resolve. An implementation that does either produces a well-formed chain that
+// verifies perfectly and computes a different reference for it — and then
+// AnswersMandate returns ErrReceiptMismatch for a genuine receipt in both
+// directions, with nothing in either party's suite able to say why.
+//
+// The second constant is the same run reversed. It is pinned as a value rather
+// than left implicit because the point is not merely that the two digests differ:
+// it is that the difference is the only thing standing between two conformant
+// implementations, so a reader porting this should be able to check which of the
+// two orders they produced.
+func TestGoldenChainReceiptReferenceOverSeveralDisclosures(t *testing.T) {
+	chain, _ := delegatedChainDisclosing(t, "checkout_hash")
+
+	// The delegating JWT, the delegate payload's wrapper, then checkout_hash's own
+	// Disclosure — each followed by a tilde.
+	const input = "eyJhbGciOiJIUzI1NiIsInR5cCI6ImtiK3NkLWp3dCIsImtpZCI6ImRlbGVnYXRlIn0.eyJfc2RfYWxnIjoic2hhLTI1NiIsImF1ZCI6Imh0dHBzOi8vbWVyY2hhbnQuZXhhbXBsZSIsImRlbGVnYXRlX3BheWxvYWQiOlt7Ii4uLiI6Ik9Objl5WG55TDU1Z0FsdTJyZWNiUHc5N1FobS1RWFQ3bURENW8wdmVEUVEifV0sImlhdCI6MTc3NzMyNjE4OSwibm9uY2UiOiJuLTEiLCJzZF9oYXNoIjoidnN0dFBkTkJTemJyRzhQSUl6aFJiOUlFbW1mRndFSzhyVnpsV29zVGZNNCJ9.8qAc6PuZ_f_RldbLW10Ai9qrt0bOSi5LcFJb_PQjJLk~WyJFUklURkJVV0Z4Z1pHaHNjSFI0ZklBIix7Il9zZCI6WyJTMEJJamJuY2IwNW5rUnVScGxaVUZIbk50N3hPVGY3WkxHVEg5dzI5Sk1RIl0sInZjdCI6ImNsb3NlZC5leGFtcGxlIn1d~WyJBUUlEQkFVR0J3Z0pDZ3NNRFE0UEVBIiwiY2hlY2tvdXRfaGFzaCIsImFiYyJd~"
+
+	assert.Equal(t, issuedRoot(t).String()+"~"+input, chain.String(),
+		"the decomposition has to hold for a hop with two Disclosures exactly as it does for one, or the boundary a second implementation looks for moves with the disclosure count")
+
+	const (
+		want     = "xEITW4Cm5_splKo6BizQWN4BNspje3uzmi9ijS8RgOA"
+		reversed = "ieeOp5LN6ATd_1IthQrZ-rHp_8MvxUbhKK8DBcBDnm8"
+	)
+
+	digest, err := sdjwt.SHA256.Digest(input)
+	require.NoError(t, err, "sha-256 is what this hop declares; nothing below compares if it cannot be computed")
+	assert.Equal(t, want, digest,
+		"the digest of the pinned input, checkable without building a chain at all")
+
+	got, err := chain.SDHash()
+	require.NoError(t, err, "a chain built by this package must be able to name itself, or no receipt can answer it")
+	assert.Equal(t, want, got,
+		"wire order, not sorted and not whatever order a map produced; an implementation reordering the run references the same chain by a digest nobody else computes")
+	assert.NotEqual(t, reversed, got,
+		"pinned as the value the other plausible order produces, so a reader whose port disagrees can tell reordering apart from any other difference")
 }
 
 // TestGoldenDelegateTypeStrings pins the two "typ" header values the draft

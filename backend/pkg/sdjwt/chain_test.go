@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -735,6 +736,72 @@ func TestTheChainReferenceCoversTheDelegatedDisclosures(t *testing.T) {
 		"two presentations of one delegation that disclose different things must not share a reference, or one receipt would answer both")
 }
 
+// TestTheChainReferenceDependsOnTheOrderOfTheDelegatedDisclosures is the
+// property TestGoldenChainReceiptReferenceOverSeveralDisclosures pins as bytes,
+// stated as behaviour so that a reader meets it without decoding base64.
+//
+// The two chains below carry the same delegating JWT and the same two
+// Disclosures. Only the order differs, and both verify — reordering the run
+// changes nothing about which digest each Disclosure matches, which is exactly
+// why the reference has to be the thing that notices. Asserting that the
+// reordered chain still verifies is half the test: without it this would pass
+// for a chain that had simply been corrupted.
+func TestTheChainReferenceDependsOnTheOrderOfTheDelegatedDisclosures(t *testing.T) {
+	chain, _ := delegatedChainDisclosing(t, "checkout_hash")
+
+	before, err := chain.SDHash()
+	require.NoError(t, err, "the chain in wire order is the value the reordered one is compared against")
+
+	reordered := reverseDelegatedDisclosures(t, chain)
+
+	_, err = sdjwt.VerifyChain(reordered, chainOptions(t))
+	require.NoError(t, err,
+		"a Disclosure resolves by digest and not by position, so a reordered run is a valid presentation of the same chain — which is the whole reason the reference is where the order has to bite")
+
+	after, err := reordered.SDHash()
+	require.NoError(t, err, "a chain that verifies must certainly be nameable")
+
+	assert.NotEqual(t, before, after,
+		"an implementation emitting the run sorted, or in map order, would compute this second value for the same chain, and every receipt either party issued would reference something the other cannot match")
+}
+
+// TestAHopWithNoDisclosuresStillEndsInTheSeparator covers the run length the
+// fixtures otherwise skip, which is zero.
+//
+// Delegate always appends the delegate payload's wrapper, so no chain this
+// package builds has an empty delegated run — only ParseChain can produce one,
+// and such a chain can never verify, because draft §6 step 3.2 requires exactly
+// one disclosed element and there is nothing to disclose it with. That makes it
+// precisely a refusal, which is the case Chain.SDHash exists to make answerable:
+// a verifier has to name what it just turned down.
+//
+// The separator after the delegating JWT is what is actually at stake. Nothing
+// else in the suite would notice it being emitted only for a non-empty run,
+// because every other fixture has one — and a rejection receipt referencing a
+// string with the trailing tilde trimmed is the same interop break as any other,
+// arriving on the artefact least likely to be compared until a dispute.
+func TestAHopWithNoDisclosuresStillEndsInTheSeparator(t *testing.T) {
+	chain := delegatedChainWithElements(t, []any{}) // no elements, so no Disclosures
+
+	_, err := sdjwt.VerifyChain(chain, chainOptions(t))
+	require.Error(t, err, "a chain disclosing no delegate payload cannot verify; this is the refusal being named")
+	assert.ErrorIs(t, err, sdjwt.ErrDelegatePayloadInvalid)
+
+	hop := delegateHopOf(t, chain)
+	require.True(t, strings.HasSuffix(hop, "~"),
+		"the hop is the delegating JWT and a trailing separator, with nothing between them")
+	require.NotContains(t, strings.TrimSuffix(hop, "~"), "~",
+		"if there were a second component here this would be testing a run of one, which every other fixture already covers")
+
+	want, err := sdjwt.SHA256.Digest(hop)
+	require.NoError(t, err, "sha-256 is what this hand-built hop declares")
+
+	got, err := chain.SDHash()
+	require.NoError(t, err, "a refusal that cannot be named cannot be answered with a receipt, which is the requirement this slice exists for")
+	assert.Equal(t, want, got,
+		"the separator terminates the delegating JWT whether or not a Disclosure follows it; dropping it for an empty run would reference a string no other implementation computes")
+}
+
 // TestTheChainReferenceFollowsTheDelegatingHopsSDAlg pins which hop's
 // declaration decides the digest.
 //
@@ -802,6 +869,39 @@ func delegateHopOf(t *testing.T, chain *sdjwt.Chain) string {
 	return hop
 }
 
+// reverseDelegatedDisclosures re-presents a chain with the delegate hop's
+// Disclosure run in the opposite order, changing nothing else.
+//
+// A permutation rather than a substitution, so that the resulting chain is a
+// presentation of the very same content — same digests, same delegating JWT —
+// and the only thing a verifier or a reference can be reacting to is sequence.
+// Done on the wire form and re-parsed, without re-signing anything, for the
+// reason dropOneRootDisclosure gives about the same technique: this is what a
+// party that merely relays a chain can do to it.
+func reverseDelegatedDisclosures(t *testing.T, chain *sdjwt.Chain) *sdjwt.Chain {
+	t.Helper()
+
+	parts := strings.Split(chain.String(), "~")
+	sep := -1
+	for i := 1; i < len(parts); i++ {
+		if parts[i] == "" {
+			sep = i
+			break
+		}
+	}
+	require.Greater(t, sep, 0, "the fixture must be a two-hop chain")
+
+	// parts[sep+1] is the delegating JWT and the final component is the trailing
+	// separator's empty string, so the run is everything between the two.
+	run := parts[sep+2 : len(parts)-1]
+	require.Greater(t, len(run), 1, "a run of one is the same string reversed, so the fixture has to carry at least two")
+	slices.Reverse(run)
+
+	again, err := sdjwt.ParseChain(strings.Join(parts, "~"))
+	require.NoError(t, err, "reordering the run must not change the chain's shape")
+	return again
+}
+
 // swapOneDelegatedDisclosure replaces the delegate hop's last Disclosure with a
 // different one, leaving the component count and every other part alone.
 //
@@ -834,6 +934,42 @@ func swapOneDelegatedDisclosure(t *testing.T, chain *sdjwt.Chain) *sdjwt.Chain {
 	again, err := sdjwt.ParseChain(strings.Join(parts, "~"))
 	require.NoError(t, err, "substituting one Disclosure must not change the chain's shape")
 	return again
+}
+
+// delegatedChainDisclosing is a delegation over issuedRoot(t) with the named
+// paths of the closed content blinded, so the delegating hop carries one
+// Disclosure for each on top of the delegate payload's own wrapper.
+//
+// It exists because delegatedChain blinds nothing, which leaves that wrapper as
+// the hop's only Disclosure — and a run of one is the same string in any order,
+// so nothing built on delegatedChain can see how a run is sequenced. Pass a path
+// and there are two.
+//
+// The blinded payload comes back alongside the chain because
+// TestGoldenDelegatePayloadWithoutSDAlg asserts it carries _sd_alg before
+// Delegate lifts that claim out, and by the time there is a chain the claim is
+// gone from everything the chain exposes.
+func delegatedChainDisclosing(t *testing.T, paths ...string) (*sdjwt.Chain, map[string]any) {
+	t.Helper()
+
+	root := issuedRoot(t)
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err, "the vectors over this chain are pinned to the salt sequence this blinder produces, so nothing here is comparable without it")
+
+	closed, disclosures, err := blinder.Blind(map[string]any{
+		"vct":           "closed.example",
+		"checkout_hash": "abc",
+	}, paths...)
+	require.NoError(t, err, "the delegated content stands in for the closed mandate; if it cannot be blinded there is nothing to delegate")
+
+	chain, err := root.Delegate(t.Context(), newHMACKey("delegate", "delegate"), blinder, sdjwt.KeyBinding{
+		Nonce:    "n-1",
+		Audience: "https://merchant.example",
+		IssuedAt: time.Unix(1_777_326_189, 0),
+	}, closed, disclosures)
+	require.NoError(t, err, "delegation is what the vectors over this fixture serialise; there is nothing to compare if it cannot be built")
+	return chain, closed
 }
 
 // delegatedChain is issuedRoot delegated to the named key. The root always
