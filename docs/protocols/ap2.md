@@ -607,6 +607,31 @@ SD-JWT instructions, so the two annotations are `x-disclosable` and
 constraint array as independently withholdable, which is what minimisation over
 a constraint list needs.
 
+**Which constraints are "relevant" is decided by which facts the receiving
+verifier can state.** A Merchant issued the checkout and can state every fact
+the constraint vocabulary knows; a Credential Provider is sent the Payment
+Mandate and nothing else, so it holds an amount, a payee and its own clock and
+can say nothing about an item. A constraint reading a fact its verifier cannot
+state is not enforced by presenting it — `constraint.Evaluate` reports the fact
+as unstated and refuses, on every transaction — so withholding it is
+correctness as much as privacy. The full argument, the field-by-verifier table
+and the two spec sentences it rests on are in
+[the minimisation spec](../specs/2026-08-08-selective-disclosure-minimisation.md).
+
+**And the trap on the other side, which the issue does not name.** Withholding
+too much means a verifier cannot enforce a limit the user set, and the purchase
+proceeds while misrepresenting what was approved — the same outcome as silently
+skipping an unknown constraint type, reached by a different route. A verifier
+cannot detect a withheld disclosure, because RFC 9901 makes a withheld digest
+and a decoy indistinguishable by design. What it can do is name the facts it
+will not proceed without having seen constrained and refuse a presentation that
+names none of them, which is `disclosure_insufficient`.
+
+Selective disclosure hides the *content* of what was withheld and not its
+shape: the signed payload carries one digest per constraint whether or not it
+is disclosed, so a verifier can count how many were withheld from it and see
+which positions they held.
+
 ## Receipts
 
 A receipt is a verifier's signed answer to a closed mandate. Issue #7 states
@@ -649,6 +674,7 @@ part worth re-reading before writing code.
 | An unknown constraint type must be rejected, never silently ignored | Constraints |
 | Constraints are evaluated by the verifier, never by the agent | Constraints |
 | Presenting every disclosure passes every test and defeats SD-JWT entirely | Selective disclosure |
+| Withholding too much leaves a limit nobody enforces, and no verifier can detect it — a withheld digest and a decoy are indistinguishable | Selective disclosure |
 | A rejection must still produce a signed receipt | Receipts |
 | A second open mandate may not be presented before a rejection receipt arrives | The rejection-receipt rule |
 | The Trusted Surface must be non-agentic | The five roles |
