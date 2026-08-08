@@ -352,7 +352,14 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 // that moved the parse after the signing would have to give the mandates some
 // other source for their constraints first, which is a change a reader notices.
 //
-
+// What it does not make structural is the refusal. Deferring only the error
+// check past the signing still compiles, and because this returns nil on the
+// failure path the mandate would then be signed with no constraints at all —
+// unbounded rather than merely unenforceable. ap2.IssueOpenCheckout and
+// ap2.IssueOpenPayment refuse an empty set for that reason, which is what makes
+// that residual unexpressible; TestARefusedConstraintSetIsNeverSigned is what
+// makes it visible here.
+//
 // The parser is constraint.Parse — the verifier's own, reached directly. The
 // Trusted Surface may not import internal/agent/interpret, whose Validate runs
 // the same parser over the same slice: AP2 requires this role to be non-agentic

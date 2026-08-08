@@ -173,6 +173,87 @@ func TestAnOpenMandateWithAnUnusableAgentKeyIsRefusedAtIssuance(t *testing.T) {
 	}
 }
 
+// TestAnOpenMandateWithNoConstraintsIsRefusedAtIssuance is the sibling of the
+// table above and is table-driven for the same reason: two call sites asking
+// the identical question, free to drift apart, and this package has already
+// shipped that exact gap once for the key guard.
+//
+// The failure it prevents is worse than an unendorsed key. A mandate endorsing
+// nobody is at least refused by the first verifier that checks the delegation;
+// a mandate constraining nothing passes every check there is. A verifier
+// evaluating zero constraints finds zero violated and reports a satisfied
+// report, because that is the honest answer to the question it was asked. So
+// the only place the artefact can be stopped is where it is minted.
+//
+// Both shapes of "no constraints" are covered. A nil slice is what a caller
+// that never set the field passes, and what a helper returning an error
+// alongside a nil slice passes when its error goes unchecked — which is the
+// refactor this guard was added for. An empty non-nil slice is what a caller
+// that built a set and filtered everything out of it passes. They are the same
+// authorisation and a length check catches both, but a guard written as
+// `m.Constraints == nil` would accept the second.
+func TestAnOpenMandateWithNoConstraintsIsRefusedAtIssuance(t *testing.T) {
+	t.Parallel()
+
+	sets := []struct {
+		name string
+		cs   []generated.Constraint
+		why  string
+	}{
+		{
+			name: "nil",
+			cs:   nil,
+			why:  "a caller that never set the field, or one whose render step returned an error it did not check",
+		},
+		{
+			name: "empty",
+			cs:   []generated.Constraint{},
+			why:  "a caller that assembled a set and filtered every constraint out of it; a nil check alone would sign this",
+		},
+	}
+
+	mandates := []struct {
+		name  string
+		issue func(t *testing.T, f fixture, cs []generated.Constraint) error
+	}{
+		{
+			name: "open Checkout Mandate",
+			issue: func(t *testing.T, f fixture, cs []generated.Constraint) error {
+				_, err := ap2.IssueOpenCheckout(t.Context(), f.signer, generated.OpenCheckoutMandate{
+					AgentKey: agentJWK(t), Constraints: cs,
+				}, f.blinder)
+				return err
+			},
+		},
+		{
+			name: "open Payment Mandate",
+			issue: func(t *testing.T, f fixture, cs []generated.Constraint) error {
+				_, err := ap2.IssueOpenPayment(t.Context(), f.signer, generated.OpenPaymentMandate{
+					AgentKey: agentJWK(t), Constraints: cs,
+				}, f.blinder)
+				return err
+			},
+		},
+	}
+
+	for _, m := range mandates {
+		t.Run(m.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, s := range sets {
+				t.Run(s.name, func(t *testing.T) {
+					t.Parallel()
+
+					f := newFixture(t)
+					err := m.issue(t, f, s.cs)
+					require.Error(t, err, "%s", s.why)
+					assert.ErrorIs(t, err, ap2.ErrMandateMalformed)
+				})
+			}
+		})
+	}
+}
+
 func TestAClosedCheckoutMandateIsNotAnOpenOne(t *testing.T) {
 	t.Parallel()
 

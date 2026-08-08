@@ -89,6 +89,24 @@ func TestAnOpenMandatePairCarriesTheAgentsKey(t *testing.T) {
 	assert.Equal(t, checkout.Constraints, payment.Constraints,
 		"one decision, one set of limits; a payment half carrying fewer is authorised for more")
 
+	// And the limits are the ones that were sent. Everything above compares the
+	// mandates with each other or with a count, which a surface that rewrote
+	// every constraint on the way through would satisfy perfectly: the pair
+	// would agree, the sentences would faithfully describe the rewritten limits,
+	// and "at most 200" would have been signed as "at least 200". render is now
+	// the single funnel every signed constraint passes through, which makes it
+	// the one place such a rewrite would go and the one place nothing else looks.
+	//
+	// JSONEq rather than Equal because the round trip through JSON widens the
+	// numbers — money() builds an int and a verified mandate yields a float64 —
+	// so comparing Go values compares the encoding rather than the limits.
+	sent, err := json.Marshal(limits)
+	require.NoError(t, err)
+	signed, err := json.Marshal(checkout.Constraints)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(sent), string(signed),
+		"the surface signs the limits it was given; one it edited on the way through would be a limit nobody agreed to")
+
 	// The pair is one decision, so it has one window. Two would let the
 	// authorisation to pay outlive the authorisation to buy.
 	require.NotNil(t, checkout.ExpiresAt)
@@ -169,9 +187,15 @@ func TestASurfaceRefusesAConstraintNoVerifierCouldRead(t *testing.T) {
 // only trace of it is the moment the surface announced it. A signature that
 // exists and is discarded is still a signature the user's key made.
 //
-// mandate_constructed is emitted per mandate and after its own signature — see
-// approve, which established that — so a count of zero is the assertion that
-// nothing was signed.
+// The reading of a zero count rests on a premise, and it is worth naming
+// because nothing pins it: mandate_constructed is emitted per mandate and
+// *after* its own signature, which is the convention approve set and which no
+// test in this repository enforces. Move both Emit calls above their
+// IssueOpen* calls and the suite stays green. That direction is safe — an event
+// announcing a mandate that then failed to sign overstates, and the count here
+// would go up rather than down, so this test would fail rather than pass
+// wrongly — but "zero events means nothing was signed" is an inference from the
+// convention, not a measurement of it.
 func TestARefusedConstraintSetIsNeverSigned(t *testing.T) {
 	t.Parallel()
 
@@ -242,8 +266,13 @@ func TestTheEventLogCarriesTheCallersAccountOfThePrompt(t *testing.T) {
 			"the prompt's only job is to reach the log, where a screen can show what was said beside what was signed")
 	}
 
-	assert.NotContains(t, out.Rendered, said,
-		"the log is where the caller's words may appear; the response carries only what the signature covers")
+	// Substring, not element equality: a sentence that merely embedded the
+	// caller's words would satisfy assert.NotContains on a slice and is exactly
+	// the leak this is about.
+	for _, sentence := range out.Rendered {
+		assert.NotContains(t, sentence, said,
+			"the log is where the caller's words may appear; the response carries only what the signature covers")
+	}
 }
 
 // TestASurfaceRefusesAnOpenMandateWithNoLimits is the case an empty array makes
@@ -577,6 +606,16 @@ func TestBothOpenMandatesAreStampedFromOneReading(t *testing.T) {
 
 	require.NotNil(t, checkout.IssuedAt)
 	require.NotNil(t, payment.IssuedAt)
+
+	// The positive control, and this test is worthless without it. Everything
+	// below passes trivially against a clock that does not move, so a step of
+	// zero — one token — would turn the only test that can see a second reading
+	// into one that sees nothing, silently. nonagentic_test.go's
+	// TestTheGuardWouldNoticeAnInterpreter is the same shape, and names the same
+	// hazard: a check that would pass forever protects nothing.
+	assert.True(t, checkout.IssuedAt.After(base),
+		"the clock has to have moved before the equality below means anything")
+
 	assert.Equal(t, *checkout.IssuedAt, *payment.IssuedAt,
 		"a second reading of the clock between the two mandates makes them two decisions taken at two moments")
 	require.NotNil(t, checkout.ExpiresAt)
@@ -618,10 +657,11 @@ func (c *ticking) Now() time.Time {
 // and obs.MockSink could not be used from this package anyway: mocks_test.go is
 // compiled only into its own package's test binary.
 //
-// The drain function must be called from the test goroutine. Everything inside
-// it and inside the handler uses assert, never require, for the reason
-// AGENTS.md gives: a helper is safe at some call sites only until the next
-// caller puts it in a goroutine.
+// The setup below requires, matching newParty and theSurface in roles_test.go:
+// it is not asserting anything about the subject, and a test that continued
+// past a nil blinder would panic on the next line rather than report. The drain
+// function it returns uses assert, because that one is an assertion and could
+// plausibly be deferred — see authorise for the line between the two.
 func theWatchedSurface(t *testing.T, user party) (*httptest.Server, func() []obs.Event) {
 	t.Helper()
 
@@ -681,11 +721,15 @@ func count(events []obs.Event, kind obs.Kind) int {
 // authorise calls POST /authorise and requires it to have worked, so the tests
 // above read as assertions about the mandates rather than about the transport.
 //
-// assert rather than require despite being a helper called only from test
-// goroutines: a helper is safe at some call sites only until the next caller
-// puts it in one, and this repository has been bitten by exactly that. The
-// require that follows a failed call here is the caller's own, on a field it
-// cares about.
+// assert rather than require, and the line this file draws is worth stating
+// once because it has two helpers on opposite sides of it. This one makes an
+// assertion *about the subject* — whether the surface authorised — and a test
+// whose next line requires the mandate it wanted can survive learning that
+// assertion failed, so failing the goroutine here buys nothing and costs the
+// safety AGENTS.md describes: a helper is safe at some call sites only until the
+// next caller puts it in a goroutine. theWatchedSurface below requires, because
+// it is setup rather than assertion and a nil blinder makes the next line panic
+// — which is the same call newParty and theSurface in roles_test.go make.
 func authorise(t *testing.T, base string, key generated.PublicKey, cs ...generated.Constraint) authorisedBody {
 	t.Helper()
 

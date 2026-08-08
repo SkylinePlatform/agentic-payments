@@ -205,6 +205,29 @@ func decodeCnf(raw any) (generated.PublicKey, error) {
 // out gets ErrMandateMalformed rather than a mandate that quietly endorses
 // nothing.
 //
+// m.Constraints must not be empty, on the same grounds and for a failure that
+// is worse. A key naming no material endorses nobody; a constraint set naming
+// no limits authorises everybody's purchases — every amount, every merchant,
+// every item, for as long as the mandate lives. That is not a smaller
+// authorisation than a constrained one, it is an unbounded one, and it is the
+// single artefact an open mandate must never be. Nothing downstream can undo
+// it: a verifier evaluating zero constraints finds zero violated, so the
+// mandate passes every check that exists and the purchase proceeds.
+//
+// It is guarded here rather than only at the caller because here is where the
+// artefact is actually minted. A role's own guard answers with the right code
+// at the right layer and is worth keeping, but it protects that one handler and
+// any refactor that defers it routes around it — which is exactly what happened
+// to the Trusted Surface's, and is why this guard exists.
+//
+// The verifying side deliberately does not run the same test, and that
+// asymmetry is the point rather than a gap. VerifyOpenCheckout has to be able
+// to read a badly minted mandate in order to refuse it with a receipt naming
+// why, so refusing at decode would replace an answerable rejection with an
+// unparseable one. The floor on the verifying side is
+// requireSomeConstraintDisclosed, which refuses a presentation that disclosed
+// none of the constraints its mandate committed to.
+//
 // There is no binding to compute here, and that absence is not an omission.
 // An open mandate is not bound to a transaction — that is the definition of
 // open — so nothing in this function corresponds to checkout_hash, and
@@ -227,6 +250,11 @@ func IssueOpenCheckout(
 	if !authz.UsableKey(m.AgentKey) {
 		return nil, fmt.Errorf(
 			"%w: no usable agent key to endorse, so this mandate would authorise whoever holds it",
+			ErrMandateMalformed)
+	}
+	if len(m.Constraints) == 0 {
+		return nil, fmt.Errorf(
+			"%w: no constraints, so this mandate would authorise every purchase until it expires",
 			ErrMandateMalformed)
 	}
 
@@ -361,12 +389,14 @@ func decodeOpenCheckout(claims map[string]any) (generated.OpenCheckoutMandate, e
 
 // IssueOpenPayment builds an open Payment Mandate and signs it as an SD-JWT.
 //
-// signer and m.AgentKey are guarded exactly as IssueOpenCheckout guards them,
-// for the same reason: an open mandate is always user-signed, endorsing the
-// agent named in m.AgentKey rather than being signed by it, and a key naming
-// no material endorses nobody. See IssueOpenCheckout's comment on
-// authz.UsableKey — this calls the same function rather than re-deriving the
-// same test.
+// signer, m.AgentKey and m.Constraints are guarded exactly as
+// IssueOpenCheckout guards them, for the same reasons: an open mandate is
+// always user-signed, endorsing the agent named in m.AgentKey rather than being
+// signed by it; a key naming no material endorses nobody; and a constraint set
+// naming no limits authorises every purchase there is. See IssueOpenCheckout's
+// comment on both — this calls the same authz.UsableKey rather than re-deriving
+// the same test, and applies the same length check rather than leaving the
+// payment half of a pair mintable unbounded when the checkout half is not.
 //
 // Payee, PaymentAmount, PaymentInstrument and ExecutionDate are the values an
 // open Payment Mandate may pin outright rather than constrain — "pay this
@@ -401,6 +431,11 @@ func IssueOpenPayment(
 	if !authz.UsableKey(m.AgentKey) {
 		return nil, fmt.Errorf(
 			"%w: no usable agent key to endorse, so this mandate would authorise whoever holds it",
+			ErrMandateMalformed)
+	}
+	if len(m.Constraints) == 0 {
+		return nil, fmt.Errorf(
+			"%w: no constraints, so this mandate would authorise every purchase until it expires",
 			ErrMandateMalformed)
 	}
 
