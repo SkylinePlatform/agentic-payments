@@ -33,10 +33,39 @@ import (
 // that caused it, and in the one place a failure is a demonstration stopping
 // rather than a test going red.
 //
-// The names below are therefore pinned deliberately rather than described. They
-// are what internal/roles/mpp reads today ("mandate") and what #120 adds
-// ("chain", "nonce"); changing either side without the other is what this test
-// exists to make loud.
+// # What this buys, stated narrowly, because the obvious claim is wrong
+//
+// It does **not** catch the two sides disagreeing. It pins these names against
+// literals in this file and never reads internal/roles/mpp's struct tags, so if
+// the processor renamed a member tomorrow both files would be unchanged, both
+// would be green, and the failure would still surface in the demo. A test cannot
+// hold a contract whose other half it does not read.
+//
+// What it does hold is that **this** side cannot move silently — which is the
+// half that actually went wrong, and the half a single-package test can close.
+// Renaming an outbound member reddens this and nothing else in the repository,
+// so the change arrives with a failing test attached to the commit that made it
+// rather than three slices later.
+//
+// The other half is closed only where both roles are real, and **only for one
+// of the two legs today**. cmd/collector's TestAPurchaseArrivesOnTheStream
+// stands a merchant and an mpp up over HTTP with a genuine HTTPProcessor between
+// them, which is why the *direct* leg never had this hole: a renamed "mandate"
+// fails there immediately.
+//
+// It drives no chain. Nothing in this repository yet presents a delegated
+// purchase through a real HTTPProcessor to a real mpp — #120 gave both payment
+// roles their chain branch, but the cross-role test that would exercise this
+// method against it is the agent's round trip, #121, and the whole-stack run,
+// #122. Until one of those lands, the delegated leg has this file and the
+// processor's own tests, and nothing that reads both at once. That is a gap
+// worth knowing about rather than assuming closed, because it is precisely the
+// gap that let the names diverge in the first place.
+//
+// So the names below are pinned deliberately rather than described, and they are
+// checkable rather than asserted: "mandate" is what internal/roles/mpp's
+// settlement has always declared, and "chain" and "nonce" are what it and
+// internal/roles/credprovider both declare since #120.
 func TestTheProcessorIsSentTheMembersItReads(t *testing.T) {
 	t.Parallel()
 

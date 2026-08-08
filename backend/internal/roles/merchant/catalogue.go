@@ -323,9 +323,17 @@ func (c *Catalogue) priced(o Offer, at time.Time) PricedOffer {
 // could appear in a search that a mandate would then refuse to buy — or, worse,
 // the reverse — and **neither half could see it alone**: the search would look
 // correct against its own tests and so would the checkout.
-// TestTheSubjectAMerchantBuildsIsTheSubjectItsSearchMatched runs one offer
-// through both and compares, which is what makes them one answer rather than
-// two that happen to agree today.
+//
+// **What makes them one answer is that this is one function, and no test can
+// stand in for that.** TestTheSubjectAMerchantBuildsIsTheSubjectItsSearchMatched
+// compares Subject(a) against Subject(b), so a field dropped from the struct
+// below is dropped from both sides and the comparison still holds — measured,
+// not assumed: seven mutations inside this function leave that test green. What
+// it does catch is the two callers feeding in different *arguments*, which is a
+// real and separate way for them to diverge, and the only half a comparison of
+// two calls can hold. The behavioural claim — that a search and a checkout reach
+// the same verdict — is held instead by driving both endpoints, in that test's
+// second subtest.
 //
 // # Every line of it is a decision
 //

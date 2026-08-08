@@ -111,16 +111,22 @@ func (p *HTTPProcessor) InitiatePayment(
 // merchant's own request shape is deliberate rather than an inconsistency. Three
 // distinct documents arrive here together and have to be told apart, so they are
 // named for which is which; the processor receives exactly one and a qualifier
-// would be distinguishing it from nothing. "chain" is also what the Credential
-// Provider reads, so a reader meets one name twice rather than two names once.
+// would be distinguishing it from nothing.
 //
-// **The mock Merchant Payment Processor does not read either member yet.** Its
-// POST /payment takes "mandate" and parses it with sdjwt.Parse, so a chain sent
-// today is answered with a refusal rather than settled. That is slice 6's to
-// close — issue #120 adds the chain branch to mpp.settle, reading "chain" and
-// "nonce", which is where both names come from — and it is stated here rather
-// than left for a reader to discover, because between now and then this method
-// is correct and the round trip it belongs to is not complete.
+// Both names are checkable in this tree rather than agreed in a conversation,
+// which is the only kind of claim worth making about somebody else's wire
+// format: internal/roles/mpp's settlement tags a Chain field as chain and a
+// Nonce field as nonce, and internal/roles/credprovider tags the same pair. So a
+// reader meets one name twice rather than two names once, and can confirm it
+// with a grep instead of taking this comment's word for it.
+//
+// That was not true when this method was written. The chain branch on both
+// payment roles arrived with #120, and until it did, a chain sent here was
+// answered with a refusal rather than settled — which is worth recording
+// because the two halves of this hop were written on separate branches, and a
+// member name is exactly the kind of thing that agrees in a conversation and
+// disagrees in the code. TestTheProcessorIsSentTheMembersItReads is what keeps
+// this side from drifting now that both exist.
 func (p *HTTPProcessor) InitiatePaymentChain(
 	ctx context.Context,
 	paymentChain string,

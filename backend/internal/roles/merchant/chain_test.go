@@ -577,20 +577,21 @@ func TestAChainOverThePriceTheUserApprovedIsRefusedWithAReceipt(t *testing.T) {
 
 	assert.Equal(t, generated.ReceiptResultError, receipt.Result)
 	require.NotNil(t, receipt.Error)
-	// **This assertion is red on this branch, and the defect is not here.**
-	// ap2.CodeOf carries no mapping for constraint.ErrViolated, so every
-	// constraint verdict reaches a receipt as verifier_unavailable — the merchant
-	// blaming itself for a limit the user set. That is issue #111, it is fixed on
-	// a sibling branch, and it is deliberately not fixed here: the correct code is
-	// asserted so that the merge lands green rather than leaving a wrong answer
-	// pinned by a test. Everything else in this file passes.
+	// constraint_violated and not verifier_unavailable, which is the difference
+	// between the merchant reporting the user's limit and the merchant blaming
+	// itself for one. ap2.CodeOf answered the second for every constraint verdict
+	// until #111; correcting the answer is what makes this assertion mean
+	// anything, and it is why a reader tempted to "fix" a surprising code here
+	// should change nothing — an agent reads this to decide whether coming back
+	// with a lower price is worth trying, and verifier_unavailable tells it to
+	// retry the same purchase against a merchant it thinks is broken.
 	assert.Equal(t, generated.ErrorCodeConstraintViolated, *receipt.Error,
 		"the receipt has to name which rule was broken, since that is what the agent acts "+
 			"on when it comes back with a lower price")
 	require.NotNil(t, receipt.ErrorDescription)
 	assert.Contains(t, *receipt.ErrorDescription, "amount",
 		"a rejection that does not say which limit was exceeded is one the agent cannot act "+
-			"on; this half holds whether or not #111 has landed")
+			"on: the code says a limit was broken and this says which")
 	assert.Equal(t, generated.ReceiptMandateTypeCheckout, receipt.MandateType,
 		"the limit was on the Checkout Mandate's chain, and a receipt naming the payment "+
 			"side would send a reader to the mandate that was fine")
@@ -1289,8 +1290,15 @@ func TestAMerchantThatDoesNotVerifyChainsRefusesOneRatherThanIgnoringIt(t *testi
 }
 
 // TestTheHumanPresentPathIsUntouched is the property this slice most had to
-// avoid breaking, and the existing suites in service_test.go and roles_test.go
-// are the rest of it — unchanged, and passing.
+// avoid breaking, and the existing suites are the rest of it.
+//
+// service_test.go is unchanged, byte for byte, and passing — which is the
+// stronger of the two statements and the one worth making. roles_test.go gained
+// eleven lines, and none of them is an assertion: refusingProcessor grew the
+// second method the Processor interface now declares, because a stub that does
+// not satisfy an interface does not compile. Saying "unchanged" of both was
+// true when written and stopped being true in the same commit that widened the
+// interface.
 //
 // What this adds is the case they cannot cover: a merchant that *also* accepts
 // delegations still settles a directly signed purchase, through the direct
