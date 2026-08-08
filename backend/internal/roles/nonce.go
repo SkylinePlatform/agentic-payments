@@ -20,13 +20,14 @@ const NoncePath = "/nonce"
 
 // ChallengeTTL is how long a challenge stays good for.
 //
-// Two minutes. Long enough for an agent to mint four delegations and make the
-// three round trips a purchase takes, and short enough that the replay window
-// crypto.Challenger does not close — see its doc comment, which says so
-// plainly — is a visible sliver rather than a shrug. It is a demo's number
-// rather than a deployment's: the honest lower bound is however long the flow
-// takes, and the honest upper bound is however long an unspent challenge may
-// sit in a log.
+// Two minutes, and chosen rather than measured — the agent that will spend
+// these is #15's last slice and does not exist yet, so nothing here has timed
+// a purchase. What the number is bounded by at each end is nonetheless clear.
+// Below: an attempt mints a delegation per verifier and makes a round trip per
+// hop, and a window shorter than that refuses honest purchases. Above: this is
+// exactly the interval in which crypto.Challenger does not stop a replay — its
+// own doc comment says so plainly — so every second added is a second of that
+// window, and two minutes keeps it a visible sliver rather than a shrug.
 const ChallengeTTL = 2 * time.Minute
 
 // challenge is what GET /nonce answers with.
