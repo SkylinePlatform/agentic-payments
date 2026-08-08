@@ -48,9 +48,9 @@
 // # Nothing here calls a model yet
 //
 // ScriptedInterpreter maps fixed prompts to fixed constraint sets. It is what
-// every test uses, and what the demo will use once the agent leg of #15 gives
-// it a caller, because no test may depend on a live model or on an external
-// network call. A model-backed implementation satisfies the same interface,
+// every test uses and what the demo runs — cmd/agent's -watch mode builds
+// interpret.Demo() — because no test may depend on a live model or on an
+// external network call. A model-backed implementation satisfies the same interface,
 // calls Validate on what came back, and lives beside it rather than replacing
 // it.
 //

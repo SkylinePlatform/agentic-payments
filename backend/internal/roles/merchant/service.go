@@ -66,8 +66,8 @@ type Service struct {
 	// Optional, and absent means this merchant does not accept delegated
 	// purchases at all — the Human Present flow every existing test exercises.
 	// cmd/merchant sets it, so a running demonstration has both entry points
-	// live; nothing presents a chain to it yet, because the agent that would is
-	// #121. It is not independently optional:
+	// live, and internal/agent's watch loop is what presents a chain to it.
+	// It is not independently optional:
 	// Handler refuses a merchant that sets this without ChainPayments, Challenge
 	// and Catalogue, because a merchant that could verify the chain and not the
 	// nonce, or could not say what it was selling, would be a verifier with a
@@ -475,11 +475,18 @@ func (s *Service) Handler() (http.Handler, error) {
 // be asked to price.
 //
 // ItemParam and QuantityParam are exported because whoever builds this URL is
-// outside this package. Today that is only this package's own tests; the agent
-// that will build it in production arrives with #121. from and to are not
-// exported, because they predate this and nothing outside spells them — which
-// is worth noticing rather than tidying, since the route path is the one an
-// agent already talks to by hand.
+// outside this package: this package's own tests, and internal/agent's watch
+// loop, which polls this endpoint for the price it waits on. That agent spells
+// the two strings itself rather than importing this package — a client that
+// linked the seller's catalogue and verification rules to read two constants
+// would be a dependency it does not have — and its
+// TestTheAgentSpellsTheMerchantsQueryParameters compares its copies against
+// these, from a test import, which is what keeps the two honest without putting
+// this package in its build graph.
+//
+// from and to are not exported, because they predate this and nothing outside
+// spells them — which is worth noticing rather than tidying, since the route
+// path is the one an agent already talks to by hand.
 const (
 	// ItemParam names a catalogue offer — the same string a mandate's item.id
 	// names, which is what lets a constraint on "this bicycle" be evaluated

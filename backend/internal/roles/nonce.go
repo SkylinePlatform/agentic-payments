@@ -20,9 +20,9 @@ const NoncePath = "/nonce"
 
 // ChallengeTTL is how long a challenge stays good for.
 //
-// Two minutes, and chosen rather than measured — the agent that will spend
-// these is #15's last slice and does not exist yet, so nothing here has timed
-// a purchase. What the number is bounded by at each end is nonetheless clear.
+// Two minutes, and chosen rather than measured — internal/agent's watch loop
+// spends these now, but nothing has timed a purchase against a real network.
+// What the number is bounded by at each end is nonetheless clear.
 // Below: an attempt mints a delegation per verifier and makes a round trip per
 // hop, and a window shorter than that refuses honest purchases. Above: this is
 // exactly the interval in which crypto.Challenger does not stop a replay — its

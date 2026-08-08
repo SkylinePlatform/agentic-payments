@@ -52,14 +52,12 @@ import (
 // later at a verifier that can say nothing more useful than that the delegation
 // was signed by an unendorsed key.
 //
-// No production code calls it yet, and that is worth saying rather than leaving
-// a reader to discover it. Its caller is the agent, which has no key to publish
-// until the slice that gives it one runs — #121. The Human Not Present tests in
-// this package do call it, and they are the closest thing to a demonstration
-// there is today: they endorse a key the test's agent then really signs a
-// delegation with, and AgentKey below reads it back out of cnf at the verifier.
-// That round trip is the whole contract between the two functions, and until
-// #121 it is the only place either end is exercised against the other.
+// Its caller is the agent: cmd/agent reads its own key set through this before
+// asking the Trusted Surface to authorise a watch, and AgentKey below reads the
+// same key back out of cnf at each verifier. That round trip is the whole
+// contract between the two functions, and it is exercised end to end by
+// internal/agent's Human Not Present tests and by the ones in this package,
+// which endorse a key the test's agent then really signs a delegation with.
 func PublicKey(ctx context.Context, keys authz.KeySetPublisher) (generated.PublicKey, error) {
 	var zero generated.PublicKey
 	if keys == nil {

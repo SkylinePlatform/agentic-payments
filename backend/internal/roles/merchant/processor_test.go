@@ -53,14 +53,13 @@ import (
 // them, which is why the *direct* leg never had this hole: a renamed "mandate"
 // fails there immediately.
 //
-// It drives no chain. Nothing in this repository yet presents a delegated
-// purchase through a real HTTPProcessor to a real mpp — #120 gave both payment
-// roles their chain branch, but the cross-role test that would exercise this
-// method against it is the agent's round trip, #121, and the whole-stack run,
-// #122. Until one of those lands, the delegated leg has this file and the
-// processor's own tests, and nothing that reads both at once. That is a gap
-// worth knowing about rather than assuming closed, because it is precisely the
-// gap that let the names diverge in the first place.
+// It drives no chain, and **that hole is closed elsewhere now rather than still
+// open**. internal/agent's TestTheWatchBuysWhenTheMerchantsPriceComesIntoRange
+// runs a delegated purchase through a real merchant, a real HTTPProcessor and a
+// real mpp, so a renamed member on this hop fails there — which is what #121
+// was expected to bring and did. cmd/collector's own end-to-end test still
+// drives the direct leg only, so the chain leg is covered by internal/agent
+// rather than by the collector's stream test.
 //
 // So the names below are pinned deliberately rather than described, and they are
 // checkable rather than asserted: "mandate" is what internal/roles/mpp's

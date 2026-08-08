@@ -74,12 +74,16 @@ import (
 // is a Key Binding JWT inside a ~~-joined sdjwt.Chain, verified through
 // MerchantRules.AuthoriseCheckoutChain and
 // CredentialProviderRules.AuthorisePaymentChain rather than through
-// VerifyCheckout and VerifyPayment — and no Human Not Present purchase exists to
-// assemble a bundle from, because internal/agent implements the Human Present
-// flow and the autonomous loop is issue #15's. Bundle's fields are strings, and
-// a chain is a compact serialisation like a presentation is, so that arrives as
-// a discrimination inside Verify rather than as a change to the bundle. It is
-// deliberately not written ahead of a caller.
+// VerifyCheckout and VerifyPayment. **A Human Not Present purchase now exists to
+// assemble a bundle from and there is still no way to assemble one**, which is
+// worth stating as the gap it is: internal/agent's watch loop produces four
+// chains per attempt rather than two mandates, agent.Delegated says in its own
+// comment why it does not reuse Purchase, and nothing turns those chains into a
+// Bundle. Bundle's fields are strings, and a chain is a compact serialisation
+// like a presentation is, so that arrives as a discrimination inside Verify
+// rather than as a change to the bundle — and choosing which of the three
+// payment chains a bundle carries is a decision nobody has needed to make yet.
+// It is deliberately not written ahead of a caller.
 type Dispute struct {
 	// CheckoutMandates is the Merchant's rule set, or its delegate's.
 	CheckoutMandates CheckoutVerifierAsOf

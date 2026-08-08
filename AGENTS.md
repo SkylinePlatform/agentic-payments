@@ -193,12 +193,12 @@ These are enforced, not advisory.
    file is reachable only from its own package's test binary, so `cmd/agent`
    could not construct one.
 
-   **Nothing imports the package yet**, and that is worth saying rather than
-   leaving a reader to discover it: the only occurrence of its import path
-   outside itself is in `roles/surface/nonagentic_test.go`, which names it to
-   prove the Trusted Surface does *not* reach it. The caller arrives with the
-   Human Not Present flow. Until then this rule binds by forbidding the
-   alternative, not by pointing at a live call site.
+   **The Human Not Present flow is what imports it.** `internal/agent`'s
+   `Client.Authorise` calls an `IntentInterpreter` once, before the user signs,
+   and `cmd/agent -watch` supplies `interpret.Demo()` — the scripted table — as
+   the implementation. Two other packages name its import path without using it:
+   `roles/surface/nonagentic_test.go`, which names it to prove the Trusted
+   Surface does *not* reach it, and `internal/agent`'s own import-graph test.
 
    Whatever ends up behind `IntentInterpreter` must call `interpret.Validate`
    on what it is about to return. A constraint naming a field the verifier does
@@ -216,6 +216,13 @@ These are enforced, not advisory.
    close that is a shared conformance test the model-backed interpreter has to
    pass, which is #17's to add, because that is when there is a second
    implementation to hold to it.
+
+   The *caller* side is enforced: `internal/agent`'s `Client.Authorise` calls
+   `Validate` on what it was handed, and
+   `TestTheAgentValidatesWhatItsInterpreterReturned` drives it with an
+   interpreter answering `price` where the registry says `amount`. That covers an
+   implementation that forgot the call; it does not cover one that made it and
+   got a different answer, which is what the conformance test is for.
 
 5. **Time goes through the injected clock.** Never call `time.Now()` directly, or
    signature expiry becomes untestable. Enforced by `forbidigo`;

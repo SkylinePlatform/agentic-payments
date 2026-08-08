@@ -37,11 +37,13 @@ import (
 // already spent is replaying, and a replay is refused by somebody who is not
 // the agent: the verifier-side nonce store of issue #27.
 //
-// **Nothing in this repository calls Next yet**, which is worth saying rather
-// than leaving a reader to find out. The Human Not Present loop that will is
-// issue #15's; internal/agent has no autonomous path today. Until it does, this
-// is the one place the sequence is written down and checked, not a rule that
-// runs on any purchase.
+// **One caller steps this machine**: internal/agent's Tracker, which holds one
+// of these per open mandate and steps both together. It is the Human Not Present
+// watch loop's, added by #121, and it is the only place Next is called outside
+// this package's own tests — see Tracker's comment for the three arrangements
+// that keep it so. The Human Present flow in the same package steps nothing,
+// because the user approves each purchase at the moment of purchase and there is
+// no standing authorisation for a second attempt to spend twice.
 //
 // # What it does not track
 //
@@ -89,11 +91,14 @@ import (
 // **Nothing here makes that true, and the distinction is the same one AGENTS.md
 // draws for interpret.Validate: an obligation, not an enforcement.** This type
 // sees no verifiers, no hops and no purchases. It counts calls to Next, and
-// whether one call corresponds to one attempt is entirely the caller's doing —
-// #15's, when it wires Fund and Settle. An agent that steps the machine once
-// per verifier gets the bug described above and gets it silently, because from
-// in here the two are the same three calls. What closes that is the caller's
-// own test, not a guard this package can write.
+// whether one call corresponds to one attempt is entirely the caller's doing.
+// An agent that steps the machine once per verifier gets the bug described above
+// and gets it silently, because from in here the two are the same three calls.
+// What closes that is the caller's own test, not a guard this package can write
+// — and the caller wrote it: internal/agent's
+// TestTheCredentialProvidersReceiptDoesNotSpendTheMandate drives one attempt
+// across both hops and asserts that the Credential Provider's receipt leaves the
+// mandate awaiting a receipt rather than spent.
 //
 // # Single use
 //
@@ -347,8 +352,8 @@ var transitions = map[transition]outcome{
 //
 // # It returns the new state rather than moving one
 //
-// This package keeps nothing per mandate; the caller does, and #15's tracker is
-// what will. The consequence is worth stating plainly rather than leaving to be
+// This package keeps nothing per mandate; the caller does, and internal/agent's
+// Tracker is the one that does. The consequence is worth stating plainly rather than leaving to be
 // discovered: a caller that drops the returned state has not applied the
 // transition, and its next attempt will be permitted. That is the same contract
 // append has, and the reason for it is that the alternative — a machine that
