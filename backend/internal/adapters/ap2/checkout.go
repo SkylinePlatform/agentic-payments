@@ -173,7 +173,7 @@ func VerifyCheckout(sd *sdjwt.SDJWT, opts CheckoutOptions) (generated.CheckoutMa
 	if err != nil {
 		return zero, err
 	}
-	if err := verifyBinding(alg, m.CheckoutHash, checkout); err != nil {
+	if err := verifyBinding(alg, m.CheckoutHash, checkout, ErrCheckoutHashMismatch); err != nil {
 		return zero, err
 	}
 	return m, nil

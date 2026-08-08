@@ -152,8 +152,13 @@ func newWorldEmitting(t *testing.T, events emitters) *world {
 	// because the two need each other's addresses and only one can be first.
 	merchantSvc := &merchant.Service{
 		ID: "air-serbia", Inventory: inventory,
-		Rules:  ap2.MerchantRules{Issuer: w.user.verifier, Clock: clk},
-		Signer: w.shop.signer, Own: w.shop.verifier, Keys: w.shop.keys, Clock: clk,
+		Rules: ap2.MerchantRules{Issuer: w.user.verifier, Clock: clk},
+		// The user signs both closed mandates in Human Present mode, so the
+		// merchant checks the payment side against the same key it checks the
+		// Checkout Mandate with. It needs it to compare the amount against the
+		// offer it made — see ap2.AmountMatches.
+		Payments: ap2.CredentialProviderRules{Issuer: w.user.verifier, Clock: clk},
+		Signer:   w.shop.signer, Own: w.shop.verifier, Keys: w.shop.keys, Clock: clk,
 		Processor: &merchant.HTTPProcessor{},
 		Events:    events.merchant,
 	}
@@ -189,15 +194,37 @@ func (w *world) client() *agent.Client {
 	return &agent.Client{Endpoints: w.endpoints, Events: w.agentEvents}
 }
 
-func paymentContent() generated.PaymentMandate {
+// paymentContent is the payment side of a purchase, at the price the merchant
+// quoted for it.
+//
+// The price is a parameter rather than a constant because the merchant now
+// refuses a Payment Mandate that pays something else, and a literal here would
+// be whatever the demo schedule happened to start at — which is exactly the
+// defect issue #88 records: a hardcoded $189.00 settling against a live $240.00
+// offer. Every caller quotes first and passes what it was told.
+func paymentContent(price generated.Amount) generated.PaymentMandate {
 	return generated.PaymentMandate{
 		// Deliberately wrong: the surface recomputes it from the offer. A test
 		// that seeded the right value could not tell recomputation from copying.
 		CheckoutHash:      "not-the-hash",
 		Payee:             generated.Merchant{ID: "air-serbia", Name: "Air Serbia"},
-		PaymentAmount:     generated.Amount{Amount: 18900, Currency: "USD"},
+		PaymentAmount:     price,
 		PaymentInstrument: generated.PaymentInstrument{ID: "card-4242", Type: "CARD"},
 	}
+}
+
+// quotedPrice asks the merchant what a route costs, so a test can build a
+// payment naming that price.
+//
+// The clock is a Fake and nothing here advances it, so the quote a caller then
+// makes through Buy is the same one — the schedule steps on time and time does
+// not move by itself.
+func quotedPrice(t *testing.T, c *agent.Client, from, to string) generated.Amount {
+	t.Helper()
+
+	var p agent.Purchase
+	require.NoError(t, c.Quote(t.Context(), from, to, &p), "asking the merchant for a price")
+	return p.Price
 }
 
 // TestTheHumanPresentFlowRunsEndToEnd is issue #10's first box, and the first
@@ -206,8 +233,10 @@ func TestTheHumanPresentFlowRunsEndToEnd(t *testing.T) {
 	t.Parallel()
 
 	w := newWorld(t)
+	c := w.client()
 
-	bought, err := w.client().Buy(t.Context(), "BEG", "PMI", paymentContent())
+	bought, err := c.Buy(t.Context(), "BEG", "PMI",
+		paymentContent(quotedPrice(t, c, "BEG", "PMI")))
 	require.NoError(t, err, "a purchase nobody objected to was refused")
 
 	assert.NotEmpty(t, bought.Offer, "the merchant has to have quoted something")
@@ -279,7 +308,7 @@ func TestEveryRejectionPointAnswersWithAReceipt(t *testing.T) {
 
 		var p agent.Purchase
 		require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &p))
-		require.NoError(t, c.Approve(t.Context(), paymentContent(), &p))
+		require.NoError(t, c.Approve(t.Context(), paymentContent(p.Price), &p))
 
 		// Nobody misbehaved: the user approved, and then the world moved on.
 		w.clock.Advance(24 * time.Hour)
@@ -300,7 +329,7 @@ func TestEveryRejectionPointAnswersWithAReceipt(t *testing.T) {
 
 		var p agent.Purchase
 		require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &p))
-		require.NoError(t, c.Approve(t.Context(), paymentContent(), &p))
+		require.NoError(t, c.Approve(t.Context(), paymentContent(p.Price), &p))
 		require.NoError(t, c.Fund(t.Context(), &p))
 
 		// A second genuine offer from the same merchant. It has to be genuine:
@@ -326,7 +355,7 @@ func TestEveryRejectionPointAnswersWithAReceipt(t *testing.T) {
 
 		var p agent.Purchase
 		require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &p))
-		require.NoError(t, c.Approve(t.Context(), paymentContent(), &p))
+		require.NoError(t, c.Approve(t.Context(), paymentContent(p.Price), &p))
 		require.NoError(t, c.Fund(t.Context(), &p))
 
 		// A credential for somebody else's purchase, swapped in after the
@@ -399,7 +428,9 @@ func TestARealPurchaseIsDisputable(t *testing.T) {
 	t.Parallel()
 
 	w := newWorld(t)
-	bought, err := w.client().Buy(t.Context(), "BEG", "PMI", paymentContent())
+	c := w.client()
+	bought, err := c.Buy(t.Context(), "BEG", "PMI",
+		paymentContent(quotedPrice(t, c, "BEG", "PMI")))
 	require.NoError(t, err, "a purchase nobody objected to was refused")
 
 	b := bought.Evidence()
@@ -447,7 +478,7 @@ func TestARefusedPurchaseIsStillDisputable(t *testing.T) {
 
 	var p agent.Purchase
 	require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &p))
-	require.NoError(t, c.Approve(t.Context(), paymentContent(), &p))
+	require.NoError(t, c.Approve(t.Context(), paymentContent(p.Price), &p))
 	require.NoError(t, c.Fund(t.Context(), &p))
 
 	elsewhere, err := sdjwt.SHA256.Digest("a different offer entirely")
@@ -487,7 +518,7 @@ func TestARetriedPurchaseIsDisputedOnItsLatestAnswer(t *testing.T) {
 
 	var p agent.Purchase
 	require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &p))
-	require.NoError(t, c.Approve(t.Context(), paymentContent(), &p))
+	require.NoError(t, c.Approve(t.Context(), paymentContent(p.Price), &p))
 	require.NoError(t, c.Fund(t.Context(), &p))
 
 	// The first attempt, with the credential pointed at somebody else's
@@ -538,7 +569,7 @@ func TestAnAbandonedPurchaseAssemblesIntoAnIncompleteBundle(t *testing.T) {
 
 	var p agent.Purchase
 	require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &p))
-	require.NoError(t, c.Approve(t.Context(), paymentContent(), &p))
+	require.NoError(t, c.Approve(t.Context(), paymentContent(p.Price), &p))
 	require.NoError(t, c.Fund(t.Context(), &p))
 
 	b := p.Evidence()
@@ -579,6 +610,124 @@ func receiptFrom(t *testing.T, p agent.Purchase, from string) string {
 	return ""
 }
 
+// TestTheMerchantRefusesAPaymentForAnotherPrice is issue #88 stated as a test,
+// and "everything else is valid" is the whole of it.
+//
+// The Checkout Mandate is genuine, the Payment Mandate is genuinely signed by
+// the user at the Trusted Surface, and the surface recomputed checkout_hash
+// from the offer — so the two are correctly bound to one purchase and every
+// signature in the story verifies. The only thing wrong is the number, which is
+// exactly what AP2's binding does not cover: it proves the two mandates name
+// one checkout and says nothing about whether they agree on what it costs. A
+// test that also broke the binding would prove nothing about this check, because
+// checkout_hash_mismatch would be the answer either way.
+//
+// See ap2.AmountMatches for why the refusal is ours rather than the
+// specification's, and why the merchant is the role positioned to make it.
+func TestTheMerchantRefusesAPaymentForAnotherPrice(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		pays    func(quoted generated.Amount) generated.Amount
+		settles bool
+	}{
+		{
+			// One minor unit short. The finding was $189.00 paid against a
+			// $240.00 offer, and a check that only caught a gap that size would
+			// be a plausibility band rather than a comparison — so this asks for
+			// the smallest difference the model can express.
+			name: "a minor unit less than the price quoted",
+			pays: func(q generated.Amount) generated.Amount {
+				return generated.Amount{Amount: q.Amount - 1, Currency: q.Currency}
+			},
+		},
+		{
+			// And one more, because the rule is symmetric and a `>=` written by
+			// somebody who thought of this as a floor would pass every other
+			// case here. Overpaying is not the merchant's windfall to accept: it
+			// is the user's money moving on an amount the merchant never quoted,
+			// which is the same disagreement as underpaying.
+			name: "a minor unit more than the price quoted",
+			pays: func(q generated.Amount) generated.Amount {
+				return generated.Amount{Amount: q.Amount + 1, Currency: q.Currency}
+			},
+		},
+		{
+			// The same integer, in different money. Amounts here are minor units
+			// of an ISO 4217 currency, so the number on its own is not a price,
+			// and a comparison reading only the integer would call this a match.
+			name: "the price quoted, in another currency",
+			pays: func(q generated.Amount) generated.Amount {
+				return generated.Amount{Amount: q.Amount, Currency: "EUR"}
+			},
+		},
+		{
+			// The mirror, and it is not ceremony: the two cases above are also
+			// satisfied by a merchant that refuses every purchase put to it.
+			name:    "the price quoted",
+			pays:    func(q generated.Amount) generated.Amount { return q },
+			settles: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newWorld(t)
+			c := w.client()
+
+			var p agent.Purchase
+			require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &p))
+			require.NoError(t, c.Approve(t.Context(), paymentContent(tc.pays(p.Price)), &p),
+				"the surface signs what it is shown; noticing this is not its job")
+			require.NoError(t, c.Fund(t.Context(), &p),
+				"the Credential Provider is sent the Payment Mandate and no checkout, "+
+					"so it cannot see this and must not be what stops it")
+
+			err := c.Settle(t.Context(), &p)
+
+			if tc.settles {
+				require.NoError(t, err, "a purchase that pays what it was quoted must go through")
+				assert.True(t, p.Settled)
+
+				receipt, err := ap2.VerifyReceipt(receiptFrom(t, p, "merchant"), w.shop.verifier)
+				require.NoError(t, err)
+				assert.Equal(t, generated.ReceiptResultSuccess, receipt.Result,
+					"a check that refused this one would be refusing everything, "+
+						"which the two cases above cannot tell apart from working")
+				return
+			}
+
+			require.ErrorIs(t, err, agent.ErrRefused)
+			assert.False(t, p.Settled,
+				"the merchant refused, so it must not have gone on to ask for the money")
+
+			receipt := verifyReceipt(t, p, "merchant", w.shop.verifier)
+			require.NotNil(t, receipt.Error)
+			assert.Equal(t, generated.ErrorCodePaymentAmountMismatch, *receipt.Error,
+				"constraint_violated would be wrong here — no constraint was violated, and "+
+					"on the Human Present path there is no open mandate to hold one")
+
+			// The receipt is about the Payment Mandate, because that is what was
+			// refused. internal/roles/merchant is where that property is stated
+			// across every way the payment side can fail; here it is checked on
+			// the one code that is ours, since a merchant answering our own
+			// divergence against the wrong digest is the version of the bug that
+			// would be hardest to notice.
+			assert.Equal(t, generated.ReceiptMandateTypePayment, receipt.MandateType)
+			paying, err := sdjwt.Parse(p.PaymentMandate)
+			require.NoError(t, err)
+			assert.NoError(t, ap2.AnswersMandate(receipt, paying),
+				"the receipt has to reference the mandate that failed")
+
+			assert.Empty(t, receiptFrom(t, p, "mpp"),
+				"no processor receipt came back — which is weaker than it looks, and is why "+
+					"internal/roles/merchant counts the call itself: a merchant that asked "+
+					"for the money and dropped the answer would look exactly like this")
+		})
+	}
+}
+
 // TestAPurchaseSurvivesACollectorThatIsNotThere is ADR 0003's constraint stated
 // as a test rather than as a paragraph.
 //
@@ -608,7 +757,9 @@ func TestAPurchaseSurvivesACollectorThatIsNotThere(t *testing.T) {
 	events := allEmitting(t, obs.NewHTTPSink(url))
 	w := newWorldEmitting(t, events)
 
-	bought, err := w.client().Buy(t.Context(), "BEG", "PMI", paymentContent())
+	c := w.client()
+	bought, err := c.Buy(t.Context(), "BEG", "PMI",
+		paymentContent(quotedPrice(t, c, "BEG", "PMI")))
 	require.NoError(t, err, "a purchase must not fail because nobody is collecting its events")
 	assert.True(t, bought.Settled, "the money still has to move")
 	assert.Len(t, bought.Receipts, 3, "and every verifier still has to answer with one")

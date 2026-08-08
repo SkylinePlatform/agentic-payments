@@ -38,6 +38,7 @@ func TestEveryFailureHasACode(t *testing.T) {
 		{ap2.ErrWrongMandateType, generated.ErrorCodeMandateVersionUnsupported},
 		{ap2.ErrCheckoutHashMismatch, generated.ErrorCodeCheckoutHashMismatch},
 		{ap2.ErrPaymentBindingMismatch, generated.ErrorCodePaymentBindingMismatch},
+		{ap2.ErrPaymentAmountMismatch, generated.ErrorCodePaymentAmountMismatch},
 		{ap2.ErrReceiptMismatch, generated.ErrorCodeMandateMalformed},
 		{ap2.ErrCredentialScopeMismatch, generated.ErrorCodeCredentialScopeMismatch},
 		{ap2.ErrCredentialExpired, generated.ErrorCodeMandateExpired},

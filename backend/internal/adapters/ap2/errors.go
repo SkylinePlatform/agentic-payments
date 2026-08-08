@@ -67,6 +67,23 @@ var (
 	// valid — only that they do not belong together.
 	ErrPaymentBindingMismatch = errors.New("ap2: payment and checkout mandates name different checkouts")
 
+	// ErrPaymentAmountMismatch means a Payment Mandate authorises an amount the
+	// checkout it is bound to does not cost.
+	//
+	// This is the one sentinel in this file that no AP2 rule produces. The
+	// specification defines transaction_id as the hash of the Checkout JWT and
+	// stops there, so the binding proves the two documents name one purchase and
+	// proves nothing about the number — see AmountMatches, which is where the
+	// divergence is argued, and docs/protocols/ap2.md, which is where it is
+	// recorded for a reader who is not in this package.
+	//
+	// Separate from ErrPaymentBindingMismatch for the same reason that one is
+	// separate from ErrCheckoutHashMismatch: the binding may be perfect and the
+	// price still wrong, and a receipt that reported the two as one failure
+	// would send a reader looking for a substituted purchase when what happened
+	// was a substituted price.
+	ErrPaymentAmountMismatch = errors.New("ap2: payment amount is not what the checkout costs")
+
 	// ErrCredentialScopeMismatch means the payment credential is good for a
 	// different purchase from the one being paid for.
 	//
@@ -127,6 +144,7 @@ var adapterCodes = []struct {
 	{ErrWrongMandateType, generated.ErrorCodeMandateVersionUnsupported},
 	{ErrCheckoutHashMismatch, generated.ErrorCodeCheckoutHashMismatch},
 	{ErrPaymentBindingMismatch, generated.ErrorCodePaymentBindingMismatch},
+	{ErrPaymentAmountMismatch, generated.ErrorCodePaymentAmountMismatch},
 	{ErrReceiptMismatch, generated.ErrorCodeMandateMalformed},
 	{ErrCredentialScopeMismatch, generated.ErrorCodeCredentialScopeMismatch},
 	{ErrCredentialExpired, generated.ErrorCodeMandateExpired},

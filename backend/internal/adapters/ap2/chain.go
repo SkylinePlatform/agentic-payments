@@ -218,7 +218,7 @@ func AuthoriseCheckoutChain(
 	if err != nil {
 		return CheckoutAuthorisation{Open: open, Closed: closed}, err
 	}
-	if err := verifyBinding(verified.DelegatedHashAlg, closed.CheckoutHash, checkout); err != nil {
+	if err := verifyBinding(verified.DelegatedHashAlg, closed.CheckoutHash, checkout, ErrCheckoutHashMismatch); err != nil {
 		return CheckoutAuthorisation{Open: open, Closed: closed}, err
 	}
 

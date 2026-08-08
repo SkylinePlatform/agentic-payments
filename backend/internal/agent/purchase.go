@@ -240,10 +240,13 @@ func (c *Client) Settle(ctx context.Context, p *Purchase) error {
 		PaymentReceipt string `json:"payment_receipt"`
 		Settled        bool   `json:"settled"`
 	}
-	// One event for the Checkout Mandate, which is the one the merchant will
-	// decide about. The Payment Mandate travels in the same body and is not
-	// presented to the merchant for a verdict — the merchant passes it on, and
-	// emits its own presentation when it does.
+	// One event, for the Checkout Mandate. The Payment Mandate travels in the
+	// same body and the merchant does now reach a verdict on it — signature,
+	// vct, the binding, and the price against the offer it made, per #88 — but
+	// the agent is not the party to say so: it emits what it presented, and
+	// every verdict in this flow is emitted by whoever reached it. The merchant
+	// emits its own presentation again when it passes the mandate to the
+	// processor, which is the hop the agent has no part in.
 	c.Events.Emit(ctx, obs.KindMandatePresented, "Checkout Mandate presented to the merchant")
 
 	body := map[string]any{
