@@ -3,6 +3,7 @@ package ap2
 import (
 	"errors"
 
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/evidence"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
@@ -199,12 +200,89 @@ func codeFor(err error) generated.ErrorCode {
 	return ""
 }
 
+// authzCodeOf maps the authorisation domain's verdicts — the answers to "was
+// this agent allowed to make this purchase, within these limits, right now".
+//
+// Membership is asked of authz rather than listed here, and that is the whole
+// design of this function. A list in this file would be a copy of a set that
+// lives in another package across four files, free to drift, and silent when it
+// does: an authz sentinel nobody added here would answer verifier_unavailable,
+// which is #111 all over again in the code that fixed it. adapterCodes above
+// can be a list precisely because it sits directly below the sentinels it maps,
+// where a gap is visible at a glance. This one cannot have that property, so it
+// does not try to.
+//
+// Two steps rather than one, because authz.CodeOf is total: its default arm
+// reaches constraint.CodeOf, whose own default is mandate_malformed, so calling
+// it unguarded would answer mandate_malformed for every failure this package
+// has never heard of — a verifier telling a counterparty their mandate is bad
+// when the truth is that the verifier failed for a reason of its own it cannot
+// name. TestNoFailureIsNameless is what fails on that.
+//
+// An owned error whose code is the empty string keeps that emptiness, which
+// CodeOf then treats as "no answer from this population" — see authz.Owns on
+// why those two lifecycle sentinels are members with no code, and CodeOf below
+// on where they land instead.
+//
+// # How these errors get here
+//
+// Not by one route. AuthoriseCheckoutChain and AuthorisePaymentChain return
+// authz.AuthoriseCheckout's and authz.AuthorisePayment's errors unchanged, which
+// is the obvious one and is right — a verdict about the user's limits is not
+// something an adapter should restate in its own words. But this package raises
+// them directly too: wrapAgentKey returns authz.ErrAgentKeyMismatch for a cnf
+// naming no usable material, decodeConstraints returns
+// constraint.ErrUnknownField for an unrecognised constraint type, and
+// requireConstrained returns whatever constraint.Parse gave it. Believing the
+// single-route story is what hid the dual membership CodeOf's precedence rule
+// now settles.
+func authzCodeOf(err error) generated.ErrorCode {
+	if !authz.Owns(err) {
+		return ""
+	}
+	return authz.CodeOf(err)
+}
+
 // CodeOf maps a verification failure to the canonical error code a rejection
 // receipt and an RFC 9457 response carry.
 //
-// Failures raised by pkg/sdjwt travel through here too, because a caller
-// verifying an AP2 mandate should not have to know which layer refused it in
-// order to answer with a receipt.
+// Failures raised by pkg/sdjwt travel through here too, and so do the
+// authorisation domain's own verdicts, because a caller verifying an AP2
+// mandate should not have to know which layer refused it in order to answer
+// with a receipt.
+//
+// Three populations, and only one of the three has its codes written down in
+// this file. This package's own sentinels are mapped by adapterCodes here; the
+// authorisation domain's are answered by the package that declared them,
+// through authzCodeOf; the securing format's are mapped by sdjwtCodeOf, which
+// is this package's reading of pkg/sdjwt rather than pkg/sdjwt's own, because a
+// library implementing a public standard has no business knowing AP2's error
+// vocabulary.
+//
+// # The order is load-bearing: the most specific verdict wins
+//
+// An error can belong to two populations at once, so "first non-empty answer
+// wins" is a real precedence rule and not an incidental one. The route that
+// produces it is ordinary rather than exotic: wrapAgentKey hands
+// authz.ErrAgentKeyMismatch to sdjwt.VerifyChain's delegate-key resolver, and
+// resolveHolderKey wraps whatever a resolver returns in ErrKeyBindingInvalid.
+// The result satisfies errors.Is for both, and the two populations have
+// different answers for it:
+//
+//	agent_key_mismatch    — the cnf endorsed nobody
+//	key_binding_invalid   — a key binding did not check out
+//
+// agent_key_mismatch is the one to carry, and the general rule it is an
+// instance of is that the innermost layer to form a view has the most specific
+// one. pkg/sdjwt knows a resolver refused; this package knows *why*, because it
+// is the layer that refused. So authzCodeOf precedes sdjwtCodeOf, and codeFor
+// precedes both — a sentinel this package declares is the most specific thing
+// there is about a failure it raised itself, which is what settles
+// ErrMandateMalformed arriving from decodeCnf wrapped in ErrKeyBindingInvalid
+// the same way.
+//
+// TestTheMostSpecificVerdictWins pins both. Swapping the two calls below leaves
+// every other test in this package green.
 //
 // A non-nil error never yields the empty string. Empty is not a member of the
 // ErrorCode enum, so it is not a code a receipt or a Problem Details response
@@ -219,6 +297,9 @@ func CodeOf(err error) generated.ErrorCode {
 		return ""
 	}
 	if code := codeFor(err); code != "" {
+		return code
+	}
+	if code := authzCodeOf(err); code != "" {
 		return code
 	}
 	if code := sdjwtCodeOf(err); code != "" {

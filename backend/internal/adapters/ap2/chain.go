@@ -184,6 +184,62 @@ func verifyDelegationChain(c *sdjwt.Chain, opts ChainOptions) (sdjwt.Verified, e
 		Nonce:            opts.Nonce,
 		MaxKeyBindingAge: opts.MaxAge,
 		Clock:            joseClockOf(opts.Clock),
+
+		// The AP2 profile of a general-purpose library, and not a caller's
+		// choice — which is why it is set here rather than exposed on
+		// ChainOptions above.
+		//
+		// pkg/sdjwt accepts either binding because the draft defines both. AP2
+		// cannot, because in AP2 the root hop is the open mandate and its
+		// Disclosures are *the constraints the user set*.
+		//
+		// # What this closes, stated precisely
+		//
+		// Not withholding. **Unattributable withholding.**
+		//
+		// The difference matters more than it looks, and getting it wrong is how
+		// somebody standing up the next role talks themselves out of setting
+		// RequireConstrained. A holder may narrow an open mandate perfectly
+		// legitimately — Minimise exists for it — and may do so by calling
+		// Present before delegating, in which case sd_hash covers the narrowed
+		// root and this check has nothing to say. A purchase over the user's cap
+		// then authorises, with the amount constraint simply not shown. That is
+		// not a defect and it is not closed here; disclose.go argues it at
+		// length, and requireConstrained is the answer to it. Every role in
+		// cmd/ sets RequireConstrained: []string{"amount"} for exactly this
+		// reason, and a role that leaves it empty has chosen the floor alone.
+		//
+		// What sd_hash buys is that the agent *signed* the narrowing. Its
+		// signature covers the root exactly as presented, so the presentation it
+		// chose is attributable to it afterwards, in the evidence a dispute
+		// reads — requireConstrained's own comment is where that argument lives.
+		// issuer_jwt_hash destroys precisely that: the delegation covers the
+		// Issuer-signed JWT alone, so one signed delegation answers every
+		// narrowing of the root, and anyone downstream who merely relays the
+		// chain can drop a constraint that nobody signed for and nobody can
+		// attribute. The agent's signature stops being evidence of what it
+		// presented.
+		//
+		// requireSomeConstraintDisclosed does not reach that either. The floor
+		// refuses a presentation disclosing *none* of the constraints its mandate
+		// committed to; withholding one of four leaves three, which is an
+		// ordinary minimised presentation, and counting cannot tell the two
+		// apart.
+		//
+		// # Why here rather than in pkg/sdjwt
+		//
+		// The weaker binding is legitimate in the draft and useful to somebody
+		// whose root disclosures are attributes rather than limits; deleting it
+		// from the library would make this repository's SD-JWT implementation
+		// non-conformant to prevent a problem only AP2 has. This is the profile
+		// narrowing the library, the shape used throughout — the same reason
+		// RequireConstrained is a verifier's policy and not a rule in Verify.
+		//
+		// Nothing here ever emits the weaker binding either: sdjwt.Delegate
+		// always writes sd_hash. So this refuses a shape this repository accepts
+		// on the way in and produces nowhere, which is what made it a latent
+		// defect rather than a broken feature.
+		RequireSDHashBinding: true,
 	})
 }
 

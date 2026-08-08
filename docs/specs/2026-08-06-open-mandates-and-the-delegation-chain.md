@@ -293,10 +293,38 @@ fail rather than be skipped.
 
 - **dSD-JWT+KB**, and chains of more than one delegation. AP2 uses two hops.
 - **JSON serialisation** of either form. Compact only.
-- **`issuer_jwt_hash` on the issuing side.** Verification accepts either hash,
-  because a chain we did not build may use either; this implementation emits
-  `sd_hash`, which is the stricter of the two — it commits to the disclosures as
-  well as the token.
+- **`issuer_jwt_hash` on the issuing side.** `pkg/sdjwt` accepts either hash by
+  default, because a chain we did not build may use either; this implementation
+  emits `sd_hash`, which is the stricter of the two — it commits to the
+  disclosures as well as the token.
+
+  **The AP2 adapter accepts only `sd_hash`.** It sets
+  `sdjwt.ChainOptions.RequireSDHashBinding`, so a chain reaching
+  `AuthoriseCheckoutChain` or `AuthorisePaymentChain` bound by `issuer_jwt_hash`
+  is refused as `ErrKeyBindingInvalid`. The reason is what the root's Disclosures
+  *are* here: under AP2 they are the constraints the user set.
+
+  **What that closes is not withholding — it is *unattributable* withholding**,
+  and the distinction is the one to carry away. A holder may narrow an open
+  mandate legitimately: `Minimise` exists for it, and a holder that calls
+  `Present` *before* delegating produces a chain whose `sd_hash` covers the
+  narrowed root, verifies cleanly, and can authorise a purchase over a cap the
+  verifier was never shown. That is not closed by the binding and is not a
+  defect — `requireConstrained` is the answer to it, which is why every role
+  under `cmd/` sets `RequireConstrained: ["amount"]`.
+
+  What `sd_hash` buys is that the agent *signed* the presentation it chose, so
+  the narrowing is attributable to it in the evidence a dispute reads. Under
+  `issuer_jwt_hash` one signed delegation answers every narrowing of the root,
+  and anyone downstream who merely relays the chain can drop a constraint that
+  nobody signed for. `requireSomeConstraintDisclosed` does not reach it either:
+  withholding one of four still discloses three, and counting cannot tell an
+  ordinary minimised presentation from a stripped one.
+
+  The split is the shape used throughout: the library stays conformant to a
+  draft that defines both bindings, and the profile that treats receipts as
+  evidence narrows it. See issue #124, and
+  `TestAChainBoundByIssuerJWTHashIsRefusedByTheAP2Profile`.
 
 Each is additive, and the draft is an individual Internet-Draft still subject to
 change. Implementing the parts nothing exercises would be guessing at a moving

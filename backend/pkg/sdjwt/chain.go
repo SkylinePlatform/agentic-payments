@@ -479,6 +479,35 @@ type ChainOptions struct {
 	// AllowedHashAlgs restricts which _sd_alg values are accepted, at both hops.
 	AllowedHashAlgs []HashAlg
 
+	// RequireSDHashBinding refuses a delegation bound by issuer_jwt_hash,
+	// accepting only sd_hash.
+	//
+	// The draft permits both and verifyBinding implements both, because they
+	// answer different needs — see its own comment for what each covers. The
+	// difference that matters to a policy is that sd_hash commits to the root
+	// *as presented*, disclosures included, and issuer_jwt_hash commits only to
+	// the Issuer-signed JWT. Under the weaker one an intermediate party can drop
+	// a root Disclosure and the delegation still verifies, which is the
+	// behaviour TestIssuerJWTHashBindsWithoutCoveringDisclosures records and is
+	// correct for what the claim says.
+	//
+	// Whether that is acceptable is not this package's judgement to make. It
+	// depends entirely on what the root's disclosures mean: withholding a
+	// nice-to-have attribute is minimisation working as designed, and
+	// withholding a limit the user set is that limit going unenforced while the
+	// presentation still verifies. A library implementing a securing format
+	// cannot tell those apart. A profile can, which is why this is a field a
+	// caller sets rather than a rule written into verifyBinding.
+	//
+	// False — the zero value — accepts both, on the same terms as an empty
+	// AllowedHashAlgs accepting every algorithm implemented here and a zero
+	// MaxKeyBindingAge leaving replay protection to the nonce. The convention
+	// throughout these options is that the zero value is the draft as written
+	// and a caller narrows from there; a default that refused what the draft
+	// permits would make this package's own conformance a matter of remembering
+	// to switch a field off.
+	RequireSDHashBinding bool
+
 	// Clock supplies the current time. Required.
 	Clock Clock
 }
@@ -624,7 +653,7 @@ func VerifyChain(c *Chain, opts ChainOptions) (Verified, error) {
 	if err != nil {
 		return Verified{}, fmt.Errorf("%w: %w", ErrKeyBindingInvalid, err)
 	}
-	if err := c.verifyBinding(claims); err != nil {
+	if err := c.verifyBinding(claims, opts.RequireSDHashBinding); err != nil {
 		return Verified{}, err
 	}
 	if err := verifyDelegateFreshness(claims, opts); err != nil {
@@ -701,9 +730,15 @@ func VerifyChain(c *Chain, opts ChainOptions) (Verified, error) {
 // with it*, so a delegation cannot survive its root being narrowed after the
 // fact. issuer_jwt_hash covers only the JWT, which lets an intermediate party
 // withhold a disclosure without invalidating the delegation — useful, and
-// weaker. This implementation emits the stronger one and accepts either,
-// because a chain it did not build may legitimately use the other.
-func (c *Chain) verifyBinding(claims map[string]any) error {
+// weaker. This implementation emits the stronger one and accepts either by
+// default, because a chain it did not build may legitimately use the other.
+//
+// requireSD is ChainOptions.RequireSDHashBinding, and it is the one thing here
+// a caller decides. Note where it is checked: after the "both" and "neither"
+// arms, so a chain that names two bindings or none is still answered by the
+// message describing what is actually wrong with it rather than by a policy
+// refusal that would be true but unhelpful.
+func (c *Chain) verifyBinding(claims map[string]any, requireSD bool) error {
 	sdHash, hasSD := claims[sdHashClaim]
 	issuerHash, hasIssuer := claims[issuerJWTHashClaim]
 
@@ -722,6 +757,10 @@ func (c *Chain) verifyBinding(claims map[string]any) error {
 			return err
 		}
 		return compareBinding(sdHashClaim, sdHash, want)
+	case requireSD:
+		return fmt.Errorf(
+			"%w: the delegation is bound by %s, and this verifier accepts only %s, which covers the root's disclosures as presented",
+			ErrKeyBindingInvalid, issuerJWTHashClaim, sdHashClaim)
 	default:
 		alg, err := c.root.HashAlg()
 		if err != nil {
