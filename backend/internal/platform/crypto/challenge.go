@@ -185,16 +185,23 @@ func (c *Challenger) Issue() (string, error) {
 //
 // The order is structure, then MAC, then window. The MAC before the window is
 // a classification decision rather than a safety one, and an earlier version of
-// this comment overstated it — reordering the two lets nothing wrong through,
-// because the MAC still runs and still refuses anything this verifier did not
-// issue. Computing the age first, or returning on the window first, both leave
-// the suite green. What they cost is the answer: an expired forgery would come
-// back ErrChallengeExpired, sending whoever reads it after a stale challenge
-// rather than after an attacker, and the two sentinels exist precisely to keep
-// those apart. The stronger claim — that an unauthenticated stamp would let any
-// token whose first eight bytes said "now" through — follows from *removing*
-// the MAC check, not from moving it, and that mutation is the one the tamper
-// cases in TestAChallengeThisVerifierDidNotIssueIsRefused kill.
+// this comment overstated it: reordering lets nothing wrong through, because the
+// MAC still runs and still refuses everything this verifier did not issue. The
+// stronger claim — that an unauthenticated stamp would admit any token whose
+// first eight bytes said "now" — follows from *removing* the MAC check, not from
+// moving it, and the tamper cases in
+// TestAChallengeThisVerifierDidNotIssueIsRefused are what kill that one.
+//
+// What the order does buy is which sentinel comes back, and the two are not
+// interchangeable to whoever reads the refusal. Returning on the window first
+// answers a stale forgery with ErrChallengeExpired — "ask me for another one" —
+// when the truthful answer is that this verifier never issued it.
+// TestAForgeryOutsideTheWindowIsReportedAsAForgery holds that, so the ordering
+// is enforced rather than merely explained here.
+//
+// Merely *computing* the age earlier is unobservable and stays that way; there
+// is nothing to pin, because a value nobody has returned on yet has no reader
+// to mislead.
 func (c *Challenger) Check(nonce string) error {
 	// Kept, and kept documented, on the same terms as the length check below:
 	// no input can reach this and go on to be accepted, because a nonce with no

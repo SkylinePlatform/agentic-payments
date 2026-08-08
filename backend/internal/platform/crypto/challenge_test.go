@@ -236,6 +236,41 @@ func TestOneChallengeHasExactlyOneSpelling(t *testing.T) {
 	}
 }
 
+// TestAForgeryOutsideTheWindowIsReportedAsAForgery pins the one thing the
+// order of Check's two refusals buys.
+//
+// Both facts are true of this nonce at once — the MAC does not hold, and the
+// stamp is stale — so which sentinel comes back is decided purely by which
+// check runs first. Nothing unsafe follows from getting it wrong: the MAC still
+// runs either way and the challenge is refused either way. What follows is a
+// misdirected reader. ErrChallengeExpired means "ask me for another one", and
+// answering a forgery with it sends whoever is looking after a timing problem
+// instead of after whoever minted this.
+//
+// The stamp is deliberately the genuine one, untouched. Tampering with it as
+// well would leave the window check with nothing stale to fire on, and the test
+// would pass under either ordering.
+func TestAForgeryOutsideTheWindowIsReportedAsAForgery(t *testing.T) {
+	t.Parallel()
+
+	c, clk := newChallenger(t)
+
+	issued, err := c.Issue()
+	require.NoError(t, err)
+
+	payload, mac, ok := strings.Cut(issued, ".")
+	require.True(t, ok)
+	forged := payload + "." + changeFirstCharacter(mac)
+
+	clk.Advance(window + time.Second)
+
+	err = c.Check(forged)
+	assert.ErrorIs(t, err, crypto.ErrChallengeInvalid,
+		"the truthful answer is that this verifier never issued it, and that is the one a reader can act on")
+	assert.NotErrorIs(t, err, crypto.ErrChallengeExpired,
+		"reporting a forgery as stale invites a retry against a verifier that will refuse every attempt for the same reason it refused this one")
+}
+
 // TestTwoChallengersDoNotAcceptEachOthers is what keeps the nonce and the
 // audience two defences rather than one stated twice.
 //
