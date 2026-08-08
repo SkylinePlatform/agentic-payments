@@ -366,6 +366,31 @@ type PaymentAuthorisation struct {
 	Open   generated.OpenPaymentMandate
 	Closed generated.PaymentMandate
 	Report constraint.Report
+
+	// Binding is the closed mandate's transaction_id paired with the algorithm
+	// the delegating hop declared, so that a caller holding the checkout can run
+	// Binding.PaysFor against it.
+	//
+	// It is handed over rather than left for the caller to build, and that is
+	// forced rather than convenient. BindingOf takes a *sdjwt.SDJWT and reads
+	// _sd_alg off it; there is no such thing to read here. sdjwt.Chain exposes
+	// no hop and the algorithm that governs is the *delegating* hop's — draft §6
+	// step 3.1 keeps _sd_alg there and out of the Delegate Payload — so
+	// sdjwt.Verified.DelegatedHashAlg, read inside this function, is the only
+	// correct source and it does not otherwise leave. A caller left to guess
+	// would reach for sha-256, and a chain minted with sha-384 would then be
+	// refused as payment_binding_mismatch: the agent is paying for something
+	// else, reported about a disagreement over a default. Binding exists to make
+	// exactly that unrepresentable.
+	//
+	// It is populated whenever the closed mandate decoded, error or not, on the
+	// same terms as Report — and is the zero Binding otherwise, which
+	// Binding.recomputable refuses rather than treating as a passed check.
+	//
+	// This does **not** fold the binding check in. See this function's own
+	// comment on why the check stays the caller's: what is supplied here is the
+	// two values the comparison needs, not the comparison.
+	Binding Binding
 }
 
 // AuthorisePaymentChain is AuthoriseCheckoutChain's counterpart for a Payment
@@ -383,12 +408,27 @@ type PaymentAuthorisation struct {
 // That last omission is forced by the protocol rather than chosen here: a
 // closed Payment Mandate never carries the document it binds to —
 // VerifyPayment's own doc comment sets out why at length, and the reasoning
-// is unchanged by there being a chain above it. A caller that holds the
-// merchant's checkout, or the paired CheckoutAuthorisation, still has
-// BindingOf and Binding.Covers / Binding.Same available on the decoded
-// PaymentMandate — this function does not fold that check in and quietly
-// skip it, it leaves it out so a caller cannot mistake its own inaction for a
-// passed check.
+// is unchanged by there being a chain above it. This function does not fold
+// that check in and quietly skip it; it leaves it out so a caller cannot
+// mistake its own inaction for a passed check.
+//
+// What it does supply is the two values that check needs, in
+// PaymentAuthorisation.Binding, because a caller cannot assemble them itself:
+// BindingOf reads _sd_alg off a *sdjwt.SDJWT and a chain is not one. **A caller
+// holding the merchant's checkout is the only one that can close the loop
+// today** — it runs Binding.PaysFor against that document, and
+// merchant.Service.decideChain is that caller.
+//
+// A caller holding the paired CheckoutAuthorisation and not the checkout cannot,
+// and the shape of that dead end is worth stating so nobody rediscovers it as a
+// missing feature. Binding.Same would be the comparison, and there is no second
+// Binding to pass it: CheckoutAuthorisation carries Open, Closed and Report and
+// no binding of its own, Binding's fields are unexported, and sdjwt.Chain
+// exposes no hop to read _sd_alg from. The two ways out of that are both wrong —
+// widening sdjwt.Chain undoes the encapsulation this field exists to preserve,
+// and recomputing under a hardcoded sha-256 is the bug Binding was introduced to
+// make unrepresentable. If such a caller arrives, the fix is to give
+// CheckoutAuthorisation the same field from the same verified source, here.
 //
 // # It takes no subject, and that is not a convenience
 //
@@ -447,6 +487,11 @@ func AuthorisePaymentChain(
 	if err != nil {
 		return PaymentAuthorisation{Open: open}, err
 	}
+	// Built here and not by the caller, for the reason the field states: this is
+	// the only place both halves are in scope at once. decodePayment has already
+	// refused a mandate carrying no transaction_id, so the hash is non-empty
+	// whenever this line runs.
+	binding := Binding{hash: closed.CheckoutHash, alg: verified.DelegatedHashAlg}
 
 	// One reading of the clock, spent on both halves of the same question: the
 	// instant this authority is being exercised at, and the instant the mandate
@@ -454,7 +499,7 @@ func AuthorisePaymentChain(
 	// judge one purchase as of two moments.
 	now := opts.Clock.Now()
 	report, err := authz.AuthorisePayment(open, closed, PaymentSubject(closed, now), now)
-	result := PaymentAuthorisation{Open: open, Closed: closed, Report: report}
+	result := PaymentAuthorisation{Open: open, Closed: closed, Report: report, Binding: binding}
 	if err != nil {
 		return result, err
 	}

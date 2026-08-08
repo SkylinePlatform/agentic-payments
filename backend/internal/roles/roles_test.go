@@ -655,3 +655,14 @@ func (refusingProcessor) InitiatePayment(
 ) (string, bool, error) {
 	return "", false, nil
 }
+
+// InitiatePaymentChain refuses on the same terms. It is a second method for the
+// same reason the interface has one — a chain and a single mandate are read by
+// different code — and it is spelled out here rather than aliased to the first
+// so that a test reaching the wrong leg does not silently pass through the
+// right one.
+func (refusingProcessor) InitiatePaymentChain(
+	context.Context, string, generated.PaymentCredential,
+) (string, bool, error) {
+	return "", false, nil
+}

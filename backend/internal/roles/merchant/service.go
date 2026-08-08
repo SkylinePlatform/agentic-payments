@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
@@ -50,6 +52,25 @@ type Service struct {
 	Catalogue *Catalogue
 	// Rules decide whether a presented Checkout Mandate is acceptable.
 	Rules ap2.CheckoutVerifier
+	// ChainRules decide the same question about a delegation chain, which is
+	// what arrives instead under Human Not Present: a closed Checkout Mandate
+	// the agent signed, authorised by the open one the user signed.
+	//
+	// A second field rather than a wider Rules, and that is the same argument
+	// ap2 makes for CheckoutChainVerifier being a separate interface from
+	// CheckoutVerifier: there is then no single entry point a caller could hand
+	// a chain to by mistake and have it silently evaluate no constraints. A
+	// merchant that reached one method for both would be one refactor away from
+	// exactly that.
+	//
+	// Optional, and absent means this merchant does not accept delegated
+	// purchases at all — the Human Present flow every existing test exercises,
+	// and what `make demo` ran before #119. It is not independently optional:
+	// Handler refuses a merchant that sets this without ChainPayments, Challenge
+	// and Catalogue, because a merchant that could verify the chain and not the
+	// nonce, or could not say what it was selling, would be a verifier with a
+	// hole in the middle of it rather than a smaller one.
+	ChainRules ap2.CheckoutChainVerifier
 	// Payments verify the Payment Mandate travelling beside it.
 	//
 	// AP2 does not give the Merchant this mandate to verify — it names the
@@ -79,6 +100,17 @@ type Service struct {
 	// checked when you supply one", and a merchant that checks the price only
 	// when asked does not check the price.
 	Payments ap2.PaymentVerifier
+	// ChainPayments is Payments' Human Not Present half, on the terms ChainRules
+	// states.
+	//
+	// The audience is this merchant and not the Credential Provider, which is
+	// the fact that makes this a separate document rather than the same one
+	// forwarded: sdjwt.Delegate writes aud and sdjwt.VerifyChain compares it, so
+	// a closed mandate is minted per *verifier*. One purchase therefore carries
+	// a payment chain addressed here, another addressed to the Credential
+	// Provider, and a third addressed to the processor — which is why settle
+	// takes the last of those as its own field and forwards it unread.
+	ChainPayments ap2.PaymentChainVerifier
 	// Signer holds the merchant's key: it signs offers and receipts.
 	Signer authz.Signer
 	// Own verifies the merchant's own signature, so it can tell an offer it
@@ -131,6 +163,18 @@ type signedOffer struct {
 }
 
 // purchase is what POST /checkout takes.
+//
+// # The chain arrives in its own fields and is never sniffed for
+//
+// ap2 gives the two flows different interfaces — CheckoutVerifier and
+// CheckoutChainVerifier — precisely so that there is no single entry point a
+// caller could hand a chain to by mistake and have it silently evaluate no
+// constraints. This shape keeps that promise at the wire: a delegation travels
+// in fields of its own, and which flow is being presented is decided by which
+// fields are populated rather than by looking inside a string for the "~~" a
+// chain happens to contain. A merchant that guessed from the bytes would be one
+// malformed mandate away from verifying a Human Not Present purchase down the
+// Human Present path, where no constraint is read at all.
 type purchase struct {
 	// Mandate is the closed Checkout Mandate in SD-JWT compact serialisation.
 	Mandate string `json:"mandate"`
@@ -140,6 +184,34 @@ type purchase struct {
 	// processor, which is a leg the agent has no part in.
 	Payment    string                      `json:"payment"`
 	Credential generated.PaymentCredential `json:"credential"`
+
+	// MandateChain and PaymentChain are the Human Not Present pair: two
+	// delegation chains, each an open mandate the user signed and the closed one
+	// the agent signed under it, both addressed to this merchant.
+	MandateChain string `json:"mandate_chain"`
+	PaymentChain string `json:"payment_chain"`
+
+	// ProcessorPaymentChain is a third chain, addressed to the Merchant Payment
+	// Processor, which this merchant forwards without reading.
+	//
+	// It is a separate document rather than PaymentChain forwarded, and that is
+	// forced by the protocol rather than chosen: sdjwt.Delegate writes the
+	// verifier's identifier into aud and sdjwt.VerifyChain compares it, so a
+	// closed mandate is per verifier. Presenting the merchant's copy to the
+	// processor would be refused on the audience, correctly.
+	//
+	// The merchant does not parse it, and that is deliberate. It is not the
+	// audience, so it could establish nothing by trying — the same reasoning
+	// that has it pass the processor's receipt back unaltered. What it does do
+	// is refuse a Human Not Present purchase that omits one, because a merchant
+	// that reached the payment leg with nothing to present would have verified a
+	// purchase it then could not settle.
+	ProcessorPaymentChain string `json:"processor_payment_chain"`
+
+	// Nonce is the challenge this merchant issued from GET /nonce and the
+	// delegating hops are bound to. Human Not Present only: a directly presented
+	// mandate carries no key binding for a nonce to be part of.
+	Nonce string `json:"nonce"`
 
 	// Checkout is the merchant's own offer, echoed back. The merchant does not
 	// have to be told this — it could look the offer up — but a mock that stored
@@ -152,6 +224,73 @@ type purchase struct {
 	// it says nothing about where the document came from, and on its own would
 	// let a caller name its own price.
 	Checkout string `json:"checkout"`
+}
+
+// presentation is which of AP2's two flows a request is presenting.
+//
+// An explicit state, decided once, rather than a chain of ifs discovering it
+// again at each step — which is the standing rule about state machines, and here
+// it earns its keep twice over. The flow decides which verifier runs and which
+// document is forwarded to the processor, and those two decisions are made in
+// different functions: read independently they could disagree, and a merchant
+// that verified a chain and then forwarded a Human Present mandate would settle
+// something nobody had authorised.
+type presentation int
+
+const (
+	// noPresentation is the zero value, and it names nothing this merchant will
+	// act on. It exists so that the zero value of the type is not silently one
+	// of the two real flows — a function returning it by mistake reaches
+	// settle's default arm rather than the Human Present path.
+	noPresentation presentation = iota
+
+	// humanPresent is a directly signed pair: the user signed both closed
+	// mandates, at the Trusted Surface.
+	humanPresent
+
+	// humanNotPresent is a delegation: the agent signed both closed mandates,
+	// under open ones the user signed.
+	humanNotPresent
+)
+
+// presentation classifies the request, refusing anything that is neither flow
+// or both.
+//
+// Both is refused rather than resolved by precedence, for the reason the wire
+// shape exists at all: a request carrying a direct mandate and a chain has two
+// authorisations in it, and a merchant that picked one would be choosing which
+// of two things the user approved to hold the purchase to.
+//
+// A chain arriving without its partner is refused here too, before anything is
+// parsed. All three chain fields are needed and none substitutes for another —
+// the checkout chain says the purchase was authorised, the payment chain
+// addressed here says the price was, and the processor's is what actually moves
+// the money.
+func (p purchase) presentation() (presentation, error) {
+	direct := p.Mandate != "" || p.Payment != ""
+	chained := p.MandateChain != "" || p.PaymentChain != "" || p.ProcessorPaymentChain != ""
+
+	switch {
+	case direct && chained:
+		return noPresentation, errors.New(
+			"this purchase carries both a directly signed mandate and a delegation chain; " +
+				"they are two authorisations and a merchant that chose between them would be " +
+				"choosing what the user approved")
+	case chained:
+		if p.MandateChain == "" || p.PaymentChain == "" || p.ProcessorPaymentChain == "" {
+			return noPresentation, errors.New(
+				"a delegated purchase needs mandate_chain, payment_chain and " +
+					"processor_payment_chain: one closed mandate per verifier, because a " +
+					"delegation names its audience and cannot be presented to another")
+		}
+		return humanNotPresent, nil
+	case direct:
+		return humanPresent, nil
+	default:
+		return noPresentation, errors.New(
+			"nothing was presented to buy this offer with: send a mandate and a payment, " +
+				"or the three chains a delegated purchase needs")
+	}
 }
 
 // answer is what both outcomes of POST /checkout return: the receipt.
@@ -186,6 +325,19 @@ func (s *Service) Handler() (http.Handler, error) {
 			"merchant: a Service needs inventory, checkout rules, payment rules, a signer, " +
 				"its own verifier, a key set, a clock and a payment processor")
 	}
+	// The Human Not Present half stands or falls together. A merchant holding
+	// only some of it would build, serve, and refuse every delegated purchase
+	// for a reason that reads as the caller's fault: no nonce to check the key
+	// binding against, or no catalogue to say what the item being constrained
+	// actually is. Refusing here is the difference between a wiring bug and a
+	// verifier that looks like it works.
+	if (s.ChainRules != nil) != (s.ChainPayments != nil) ||
+		(s.ChainRules != nil && (s.Challenge == nil || s.Catalogue == nil)) {
+		return nil, errors.New(
+			"merchant: a Service that verifies delegation chains needs chain rules for both " +
+				"mandates, a challenger to issue the nonce they are bound to, and a catalogue " +
+				"to say what is being bought")
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET "+roles.JWKSPath, roles.JWKS(s.Keys))
@@ -200,15 +352,61 @@ func (s *Service) Handler() (http.Handler, error) {
 	return roles.Middleware(s.Clock, mux)
 }
 
-// quote prices a route and signs the offer.
+// The query parameters GET /checkout reads, one set per thing this merchant can
+// be asked to price.
+//
+// ItemParam and QuantityParam are exported because an agent has to build the
+// URL and a test has to assert on it; from and to are not, because they predate
+// this and nothing outside spells them.
+const (
+	// ItemParam names a catalogue offer — the same string a mandate's item.id
+	// names, which is what lets a constraint on "this bicycle" be evaluated
+	// against the checkout without a translation table.
+	ItemParam = "item"
+
+	// QuantityParam is how many. Absent means one.
+	QuantityParam = "quantity"
+)
+
+// quote prices what the caller named and signs the offer.
+//
+// Two paths, and which one runs is decided by whether the caller named an item.
+// They are not two endpoints because they answer one question — what will you
+// sell me this for, and will you put your signature on that — and a caller
+// polling a price should not have to know which kind of thing it is watching.
+//
+// They are also not one path, and the difference is the whole of #119. A route
+// offer names no item, so the checkout it signs carries nothing a constraint on
+// item.id, item.category or item.attr.* can be evaluated against; a catalogue
+// offer names one, and that is what makes a delegation chain decidable here at
+// all. Merging them would mean either inventing an item for the flight the
+// inventory sells or leaving the claim optional and unread, and the second is
+// how a limit stops limiting.
 func (s *Service) quote(w http.ResponseWriter, r *http.Request) {
-	route := Route{
-		Origin:      r.URL.Query().Get("from"),
-		Destination: r.URL.Query().Get("to"),
+	query := r.URL.Query()
+	item := query.Get(ItemParam)
+	from, to := query.Get("from"), query.Get("to")
+
+	switch {
+	case item != "" && (from != "" || to != ""):
+		// Refused rather than resolved by precedence. A caller that named both
+		// has two different purchases in mind and would be sold whichever this
+		// handler happened to prefer.
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			"name an "+ItemParam+" or a route, never both — they are two different purchases")
+	case item != "":
+		s.quoteItem(w, r, item, query.Get(QuantityParam))
+	default:
+		s.quoteRoute(w, r, Route{Origin: from, Destination: to})
 	}
+}
+
+// quoteRoute prices a flight the inventory sells. This is the Human Present
+// path, unchanged.
+func (s *Service) quoteRoute(w http.ResponseWriter, r *http.Request, route Route) {
 	if !route.Valid() {
 		roles.Fail(w, generated.ErrorCodeRequestMalformed,
-			"from and to must each be a three-letter IATA code")
+			"from and to must each be a three-letter IATA code, or name an "+ItemParam+" instead")
 		return
 	}
 
@@ -222,7 +420,9 @@ func (s *Service) quote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	checkout, err := s.sign(r.Context(), quoted)
+	checkout, err := s.sign(r.Context(), quoted.Price, map[string]any{
+		claimRoute: quoted.Route.String(),
+	})
 	if err != nil {
 		roles.Fail(w, generated.ErrorCodeVerifierUnavailable,
 			fmt.Sprintf("signing the offer: %v", err))
@@ -232,6 +432,68 @@ func (s *Service) quote(w http.ResponseWriter, r *http.Request) {
 	roles.OK(w, http.StatusOK, signedOffer{
 		Checkout:   checkout,
 		Price:      quoted.Price,
+		Step:       quoted.Step,
+		Final:      quoted.Final,
+		ObservedAt: quoted.ObservedAt,
+	})
+}
+
+// quoteItem prices a catalogue offer, in the quantity asked for, and signs a
+// checkout that says which offer and how many.
+//
+// The price on the wire and in the signed document is the *line* price — what
+// the whole purchase costs — because that is the number a mandate's amount
+// constraint bounds and the number the Payment Mandate has to pay. Publishing
+// the unit price here and leaving the multiplication to the caller would put
+// the arithmetic that decides whether a cap is exceeded outside the party that
+// enforces it.
+func (s *Service) quoteItem(w http.ResponseWriter, r *http.Request, item, rawQuantity string) {
+	if s.Catalogue == nil {
+		// Not a 404: the route exists and this merchant answers it, it simply
+		// sells nothing by name. See the Catalogue field on why a merchant may
+		// legitimately have none.
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			"this merchant sells no catalogue items; ask it for a route instead")
+		return
+	}
+
+	quantity := 1
+	if rawQuantity != "" {
+		parsed, err := strconv.Atoi(rawQuantity)
+		if err != nil {
+			roles.Fail(w, generated.ErrorCodeRequestMalformed,
+				fmt.Sprintf("%s must be a whole number: %v", QuantityParam, err))
+			return
+		}
+		quantity = parsed
+	}
+
+	quoted, err := s.Catalogue.Quote(item, quantity)
+	if err != nil {
+		if errors.Is(err, ErrNoSuchOffer) {
+			roles.Fail(w, generated.ErrorCodeRequestMalformed, err.Error())
+			return
+		}
+		// A quantity of zero, or one large enough to overflow the price. Both
+		// are the caller's, and both are refused by Quote rather than here so
+		// that a direct caller gets the same answer this endpoint does.
+		roles.Fail(w, generated.ErrorCodeRequestMalformed, err.Error())
+		return
+	}
+
+	checkout, err := s.sign(r.Context(), quoted.LinePrice, map[string]any{
+		claimItem:     quoted.ID,
+		claimQuantity: quoted.Quantity,
+	})
+	if err != nil {
+		roles.Fail(w, generated.ErrorCodeVerifierUnavailable,
+			fmt.Sprintf("signing the offer: %v", err))
+		return
+	}
+
+	roles.OK(w, http.StatusOK, signedOffer{
+		Checkout:   checkout,
+		Price:      quoted.LinePrice,
 		Step:       quoted.Step,
 		Final:      quoted.Final,
 		ObservedAt: quoted.ObservedAt,
@@ -314,7 +576,36 @@ func (s *Service) search(w http.ResponseWriter, r *http.Request) {
 	roles.OK(w, http.StatusOK, results)
 }
 
-// sign produces the merchant-signed Checkout JWT.
+// The claims a merchant's own offer carries.
+//
+// iss, amount, currency, iat and exp are on every offer. route is on one the
+// inventory priced and item/quantity on one the catalogue did, and **no offer
+// carries both** — which is what ownOffer relies on to tell the two apart
+// without being told which endpoint made it.
+//
+// They are constants rather than string literals at the four sites that spell
+// them because signing and reading back are two halves of one agreement, and a
+// typo in either half is an offer this merchant cannot recognise as its own.
+const (
+	claimIssuer   = "iss"
+	claimAmount   = "amount"
+	claimCurrency = "currency"
+	claimIssuedAt = "iat"
+	claimExpiry   = "exp"
+	claimRoute    = "route"
+	claimItem     = "item"
+	claimQuantity = "quantity"
+)
+
+// sign produces the merchant-signed Checkout JWT for a price, together with
+// whatever names the thing being sold.
+//
+// names is the difference between the two quote paths and is deliberately the
+// only difference: the price, the issuer and the window are one merchant's
+// commitment however the offer was reached, so they are written here rather
+// than assembled twice. They are also written *after* names, so nothing a
+// caller passes can displace them — a route or an item is what varies, and the
+// terms of the offer are not.
 //
 // ECDSA, and that is a protocol requirement rather than a house preference: the
 // mandate publishes checkout_hash in the clear, a checkout is a low-entropy
@@ -322,16 +613,20 @@ func (s *Service) search(w http.ResponseWriter, r *http.Request) {
 // plausible checkouts worth building. The key comes from crypto.Store, which
 // mints ES256 — so this is satisfied by construction rather than by a check
 // here, and the note exists so nobody "simplifies" the store later.
-func (s *Service) sign(ctx context.Context, q Quote) (string, error) {
+func (s *Service) sign(
+	ctx context.Context, price generated.Amount, names map[string]any,
+) (string, error) {
 	now := s.Clock.Now()
-	return sdjwt.SignJWT(ctx, ap2.JOSESigner(s.Signer), checkoutType, map[string]any{
-		"iss":      s.ID,
-		"route":    q.Route.String(),
-		"amount":   q.Price.Amount,
-		"currency": q.Price.Currency,
-		"iat":      now.Unix(),
-		"exp":      now.Add(s.offerLifetime()).Unix(),
-	})
+
+	claims := make(map[string]any, len(names)+5)
+	maps.Copy(claims, names)
+	claims[claimIssuer] = s.ID
+	claims[claimAmount] = price.Amount
+	claims[claimCurrency] = price.Currency
+	claims[claimIssuedAt] = now.Unix()
+	claims[claimExpiry] = now.Add(s.offerLifetime()).Unix()
+
+	return sdjwt.SignJWT(ctx, ap2.JOSESigner(s.Signer), checkoutType, claims)
 }
 
 func (s *Service) offerLifetime() time.Duration {
@@ -363,9 +658,23 @@ func (s *Service) offerLifetime() time.Duration {
 // where refusing without a receipt is already the rule, rather than deeper in
 // where the only receipt available would have named the Checkout Mandate for a
 // failure that was not the Checkout Mandate's.
+//
+// Which flow is being presented is settled once, before any of that, and the
+// two flows then differ in exactly two places: which verifier reaches a verdict
+// (examineDirect against examineChain) and which document is presented to the
+// processor afterwards (initiate). Everything between — the receipt, the events,
+// the status, the rule that a refusal asks for no money — is one path, which is
+// what stops the Human Not Present flow being a second merchant wearing the
+// first one's name.
 func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	var req purchase
 	if !roles.DecodeJSON(w, r, &req) {
+		return
+	}
+
+	mode, err := req.presentation()
+	if err != nil {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed, err.Error())
 		return
 	}
 	if req.Checkout == "" {
@@ -390,34 +699,27 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	presented, err := sdjwt.Parse(req.Mandate)
-	if err != nil {
-		roles.Fail(w, generated.ErrorCodeMandateMalformed,
-			fmt.Sprintf("the mandate is not a readable SD-JWT: %v", err))
+	var answered answered
+	var examined bool
+	switch mode {
+	case humanPresent:
+		answered, examined = s.examineDirect(w, req, quoted)
+	case humanNotPresent:
+		answered, examined = s.examineChain(w, req, quoted)
+	case noPresentation:
+		// Unreachable: presentation() returns this only with a non-nil error,
+		// which the guard above has already answered on. It is here rather than
+		// folded into a default arm because a state machine that silently treats
+		// an unhandled state as one of the real ones is the thing being avoided,
+		// and an empty 200 is what this handler would otherwise send.
+		roles.Fail(w, generated.ErrorCodeVerifierUnavailable,
+			"this merchant could not tell what was presented to it")
+		return
+	}
+	if !examined {
 		return
 	}
 
-	if req.Payment == "" {
-		// The merchant initiates payment, so it cannot proceed without this and
-		// must not pretend the purchase was refused on its merits. Named
-		// separately from the parse below because "you did not send one" and
-		// "the one you sent is unreadable" send a caller to different places.
-		roles.Fail(w, generated.ErrorCodeRequestMalformed,
-			"the Payment Mandate has to be presented with the Checkout Mandate; "+
-				"AP2 gives the merchant the payment leg, not the agent")
-		return
-	}
-	paying, err := sdjwt.Parse(req.Payment)
-	if err != nil {
-		roles.Fail(w, generated.ErrorCodeMandateMalformed,
-			fmt.Sprintf("the Payment Mandate is not a readable SD-JWT: %v", err))
-		return
-	}
-
-	// The verdict, whatever it is, is what the receipt carries. IssueReceipt
-	// takes it as an argument rather than being called on one branch, which is
-	// what makes "answer a rejection with a receipt" structural here.
-	answered := s.decide(presented, paying, req.Checkout, quoted)
 	if answered.err != nil {
 		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(answered.err)),
 			"the purchase was refused: "+answered.err.Error())
@@ -466,8 +768,7 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	s.Events.Emit(r.Context(), obs.KindMandatePresented,
 		"Payment Mandate presented to the Merchant Payment Processor")
 
-	paymentReceipt, settled, err := s.Processor.InitiatePayment(
-		r.Context(), req.Payment, req.Credential)
+	paymentReceipt, settled, err := s.initiate(r.Context(), mode, req)
 	if err != nil {
 		roles.Fail(w, generated.ErrorCodeVerifierUnavailable,
 			fmt.Sprintf("initiating payment: %v", err))
@@ -485,6 +786,38 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	roles.OK(w, status, answer{
 		Receipt: receipt, PaymentReceipt: paymentReceipt, Settled: settled,
 	})
+}
+
+// initiate presents the payment side to the processor, in whichever form this
+// purchase was authorised in.
+//
+// The two forms are two methods on Processor rather than one taking whatever
+// string the merchant happens to hold, on the grounds CheckoutChainVerifier
+// gives for the same choice one layer up: the processor has to know which it is
+// being handed, because a chain and a single mandate are read by different code
+// and there must be no entry point where guessing decides. HTTPProcessor sends
+// them under different members for the same reason.
+//
+// The document forwarded under a chain is never the one this merchant verified.
+// PaymentChain is addressed to this merchant and would be refused by the
+// processor on its audience, correctly — see purchase.ProcessorPaymentChain.
+func (s *Service) initiate(
+	ctx context.Context, mode presentation, req purchase,
+) (string, bool, error) {
+	switch mode {
+	case humanPresent:
+		return s.Processor.InitiatePayment(ctx, req.Payment, req.Credential)
+	case humanNotPresent:
+		return s.Processor.InitiatePaymentChain(ctx, req.ProcessorPaymentChain, req.Credential)
+	case noPresentation:
+		fallthrough
+	default:
+		// Unreachable from settle, which has already refused this state. It is
+		// an error rather than a silent nil so that a future caller reaching it
+		// stops rather than settling a purchase it presented nothing for.
+		return "", false, fmt.Errorf(
+			"merchant: no payment can be presented for a purchase in state %d", mode)
+	}
 }
 
 // answered is a verdict together with the mandate it is about.
@@ -505,26 +838,154 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 // receipt's reference against the artefact that failed for every way the payment
 // side can fail — a hand-built mismatch fails it. The constructors make the
 // right thing the easy thing; the test is what makes it the only passing thing.
+//
+// subject is ap2.Presented rather than *sdjwt.SDJWT because a Human Not Present
+// verdict is about a chain, and the receipt names it by the digest of its
+// delegating hop — "a hash over the final SD-JWT in the chain", which is what
+// that interface's one method answers for either shape. Nothing else about this
+// type changes between the flows, which is the point: the rule that a refusal is
+// answered with a receipt naming the artefact that failed is one rule, not one
+// per flow.
 type answered struct {
 	// subject is the mandate the receipt references, and kind is what it is.
-	subject *sdjwt.SDJWT
+	subject ap2.Presented
 	kind    generated.ReceiptMandateType
 	// err is the verdict: nil when the purchase may proceed.
 	err error
 }
 
 // aboutCheckout and aboutPayment are the only ways to make an answered, which
-// is what pairs each kind with the mandate it can name.
-func aboutCheckout(sd *sdjwt.SDJWT) answered {
+// is what pairs each kind with the mandate it can name. Both take either shape,
+// so the chain path cannot reach a receipt by a route that skips the pairing.
+func aboutCheckout(sd ap2.Presented) answered {
 	return answered{subject: sd, kind: generated.ReceiptMandateTypeCheckout}
 }
 
-func aboutPayment(sd *sdjwt.SDJWT) answered {
+func aboutPayment(sd ap2.Presented) answered {
 	return answered{subject: sd, kind: generated.ReceiptMandateTypePayment}
 }
 
 // refusing returns this answer with a verdict attached.
 func (a answered) refusing(err error) answered { a.err = err; return a }
+
+// examineDirect reads a Human Present purchase and returns the merchant's
+// verdict on it.
+//
+// It reports false when it has already answered the caller, which is the set of
+// refusals that come before any mandate has been examined: no Payment Mandate,
+// or either of the two failing to parse into an SD-JWT at all. Those get Problem
+// Details rather than a receipt, per rule #7 — there is nothing to reference,
+// and a receipt whose reference points at nothing is worse than none. Everything
+// past them has a verdict, and a verdict is always answered with a receipt.
+func (s *Service) examineDirect(
+	w http.ResponseWriter, req purchase, quoted offered,
+) (answered, bool) {
+	presented, err := sdjwt.Parse(req.Mandate)
+	if err != nil {
+		roles.Fail(w, generated.ErrorCodeMandateMalformed,
+			fmt.Sprintf("the mandate is not a readable SD-JWT: %v", err))
+		return answered{}, false
+	}
+
+	if req.Payment == "" {
+		// The merchant initiates payment, so it cannot proceed without this and
+		// must not pretend the purchase was refused on its merits. Named
+		// separately from the parse below because "you did not send one" and
+		// "the one you sent is unreadable" send a caller to different places.
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			"the Payment Mandate has to be presented with the Checkout Mandate; "+
+				"AP2 gives the merchant the payment leg, not the agent")
+		return answered{}, false
+	}
+	paying, err := sdjwt.Parse(req.Payment)
+	if err != nil {
+		roles.Fail(w, generated.ErrorCodeMandateMalformed,
+			fmt.Sprintf("the Payment Mandate is not a readable SD-JWT: %v", err))
+		return answered{}, false
+	}
+
+	return s.decide(presented, paying, req.Checkout, quoted.Price), true
+}
+
+// examineChain reads a Human Not Present purchase and returns the merchant's
+// verdict on it.
+//
+// It reports false on the same terms examineDirect does, and the set is larger
+// by three, each of which is a statement about the request rather than about a
+// mandate:
+//
+//   - This merchant does not verify delegations at all. Handler keeps the four
+//     fields that make it able to together, so this is one condition and not
+//     four.
+//   - The offer names no item. An offer quoted on the route path carries a route
+//     and a price and nothing a constraint on item.id, item.category or
+//     item.attr.* can be evaluated against — and the narrowing an agent applies
+//     when it picks something to buy always names one. Refusing says so out
+//     loud, which keeps the two offer shapes from quietly merging into one that
+//     is decidable for some purchases and not others.
+//   - The nonce is not one this merchant issued. This is the first half of the
+//     nonce split, and it belongs here rather than inside chain verification: a
+//     value this merchant never handed out proves nothing about anybody, and no
+//     mandate has been examined at the point it can be established. The other
+//     half — a nonce this merchant *did* issue but which disagrees with the one
+//     signed into the delegating hop — is a chain-verification failure and gets
+//     a receipt, because by then a mandate has been read.
+func (s *Service) examineChain(
+	w http.ResponseWriter, req purchase, quoted offered,
+) (answered, bool) {
+	if s.ChainRules == nil || s.ChainPayments == nil || s.Challenge == nil || s.Catalogue == nil {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			"this merchant does not accept delegated purchases; present a mandate the user signed")
+		return answered{}, false
+	}
+
+	if quoted.Item == "" {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			"this offer names no item, so there is nothing for a mandate's constraints on what "+
+				"is being bought to be evaluated against; quote the item from the catalogue "+
+				"rather than the route")
+		return answered{}, false
+	}
+
+	if err := s.Challenge.Check(req.Nonce); err != nil {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			fmt.Sprintf("this delegation is bound to a challenge this merchant did not issue: %v", err))
+		return answered{}, false
+	}
+
+	presented, err := sdjwt.ParseChain(req.MandateChain)
+	if err != nil {
+		roles.Fail(w, generated.ErrorCodeMandateMalformed,
+			fmt.Sprintf("the mandate chain is not a readable delegate SD-JWT: %v", err))
+		return answered{}, false
+	}
+	paying, err := sdjwt.ParseChain(req.PaymentChain)
+	if err != nil {
+		roles.Fail(w, generated.ErrorCodeMandateMalformed,
+			fmt.Sprintf("the payment chain is not a readable delegate SD-JWT: %v", err))
+		return answered{}, false
+	}
+
+	// The catalogue supplies what the offer is, and the signed offer supplies
+	// what it costs and how many. Neither substitutes for the other: an offer's
+	// category and attributes are fixed at construction and cannot have moved,
+	// while its price moves on a schedule and the one that governs is the one
+	// this merchant committed to in the document it signed.
+	offer, err := s.Catalogue.Find(quoted.Item)
+	if err != nil {
+		// This merchant signed an offer for something its own catalogue does not
+		// list. Not the caller's doing, so verifier_unavailable rather than a
+		// refusal: an immutable catalogue cannot produce it within one process,
+		// and a restart with a different catalogue while an offer is still live
+		// can.
+		roles.Fail(w, generated.ErrorCodeVerifierUnavailable,
+			fmt.Sprintf("this merchant signed an offer it can no longer describe: %v", err))
+		return answered{}, false
+	}
+	subject := s.Catalogue.Subject(offer, quoted.Price, quoted.Quantity, s.Clock.Now())
+
+	return s.decideChain(presented, paying, req.Checkout, quoted.Price, subject, req.Nonce), true
+}
 
 // decide is the merchant's answer about one presented purchase.
 //
@@ -598,28 +1059,122 @@ func (s *Service) decide(
 	return checkout
 }
 
+// decideChain is decide's Human Not Present counterpart: the same three
+// questions, asked of two delegation chains instead of two presented mandates.
+//
+// The order is decide's and the reasoning for it is decide's, unchanged — each
+// question is worth asking only once the one before it has held, and the amount
+// check, which is ours rather than AP2's, stays last so that
+// payment_amount_mismatch never lands on a receipt whose real problem was a
+// protocol failure.
+//
+// What is new is subject, and it is the whole reason this slice needed a
+// catalogue. Under Human Present the user signed a mandate naming this exact
+// checkout, so there is nothing left to compare against limits; under Human Not
+// Present the agent signed it, and what makes that safe is the open mandate's
+// constraints being evaluated here — against a description of the purchase this
+// merchant builds. **The verifier builds it, never the agent**, and it is built
+// by Catalogue.Subject, the same function a search runs, so a purchase is
+// judged against the facts a search said it had.
+//
+// nonce is the challenge this merchant issued, already established as its own by
+// examineChain. What each chain's verification does with it is compare it
+// against the value signed into that chain's delegating hop — a different
+// question, with a different answer: this one gets a receipt.
+//
+// **The subject reaches only the checkout chain**, and the asymmetry is the
+// protocol rather than an omission here. AuthorisePaymentChain derives its own,
+// with ap2.PaymentSubject, from the closed Payment Mandate inside the chain —
+// because a payment-side verifier holds no checkout and its only source for the
+// amount and the payee is that mandate. This merchant could have supplied one
+// and the argument was removed in #120 precisely because no caller could supply
+// it honestly: filling it meant reproducing the row of facts a payment verifier
+// can state, by hand, with nothing checking that it had.
+//
+// That the merchant's richer subject no longer reaches the payment side costs
+// nothing. The open Payment Mandate presented here has been narrowed for a
+// payment-side audience, so its surviving constraints read only amount, at and
+// merchant.id — the three facts ap2.PaymentSubject fills, from the mandate the
+// user's own signature covers rather than from anything this merchant asserts.
+func (s *Service) decideChain(
+	presented, paying *sdjwt.Chain,
+	checkoutJWT string,
+	quoted generated.Amount,
+	subject constraint.Subject,
+	nonce string,
+) answered {
+	checkout := aboutCheckout(presented)
+	if _, err := s.ChainRules.AuthoriseCheckoutChain(presented, subject, checkoutJWT, nonce); err != nil {
+		return checkout.refusing(err)
+	}
+
+	payment := aboutPayment(paying)
+	authorised, err := s.ChainPayments.AuthorisePaymentChain(paying, nonce)
+	if err != nil {
+		return payment.refusing(err)
+	}
+
+	// The binding, which AuthorisePaymentChain deliberately does not check —
+	// a closed Payment Mandate never carries the document it binds to, so only a
+	// party holding the checkout can close that loop, and this merchant wrote
+	// it. The Binding comes back from the authorisation rather than being read
+	// off the chain here, because the algorithm it has to be recomputed under is
+	// the delegating hop's and there is no way to read that from outside.
+	if err := authorised.Binding.PaysFor(checkoutJWT); err != nil {
+		return payment.refusing(err)
+	}
+
+	if err := ap2.AmountMatches(authorised.Closed, quoted); err != nil {
+		return payment.refusing(err)
+	}
+	return checkout
+}
+
+// offered is what the merchant reads back out of an offer it signed: the price
+// it committed to, and what that price is for.
+//
+// Item and Quantity are empty and zero together, on an offer the inventory
+// priced — a route names no item, and that is the whole of why a delegation
+// cannot be presented against one. They are populated together on an offer the
+// catalogue priced. ownOffer refuses any other combination rather than carrying
+// half of one forward, because a quantity with nothing to count and an item with
+// no count are both offers this merchant cannot describe a purchase from.
+type offered struct {
+	// Price is what the whole purchase costs — the line price, not the price of
+	// one. It is what a Payment Mandate has to pay and what an amount constraint
+	// is compared against.
+	Price generated.Amount
+
+	// Item is the catalogue identifier this offer is for, and it is deliberately
+	// the same string a mandate's item.id names.
+	Item string
+
+	// Quantity is how many of Item the price covers.
+	Quantity int
+}
+
 // ownOffer establishes that the checkout presented is one this merchant signed
-// and that it has not expired, and returns the price it commits to.
+// and that it has not expired, and returns what it commits to.
 //
 // The signature answers "did I make this offer"; exp answers "is it still the
 // offer I am making". Both are needed and neither implies the other: a genuine
 // offer from last week is genuinely the merchant's and genuinely stale, and
 // accepting it would sell at whatever the price was then.
 //
-// The price comes back from here rather than from a second read of the same
-// document, and that is the coupling worth having: an offer's price means
-// nothing until the offer has been established as this merchant's, so there is
-// no way to reach the number without having checked. Nothing else in this
-// package can read it, because the claims never leave this function.
-func (s *Service) ownOffer(checkout string) (generated.Amount, error) {
-	var quoted generated.Amount
+// What it commits to comes back from here rather than from a second read of the
+// same document, and that is the coupling worth having: an offer's price and its
+// item mean nothing until the offer has been established as this merchant's, so
+// there is no way to reach either without having checked. Nothing else in this
+// package can read them, because the claims never leave this function.
+func (s *Service) ownOffer(checkout string) (offered, error) {
+	var quoted offered
 
 	claims, err := sdjwt.VerifyJWT(checkout, checkoutType, ap2.JOSEVerifier(s.Own))
 	if err != nil {
 		return quoted, fmt.Errorf("this is not an offer this merchant made: %w", err)
 	}
 
-	raw, ok := claims["exp"]
+	raw, ok := claims[claimExpiry]
 	if !ok {
 		return quoted, errors.New("the offer carries no expiry, so it cannot be known to be current")
 	}
@@ -638,23 +1193,82 @@ func (s *Service) ownOffer(checkout string) (generated.Amount, error) {
 		return quoted, errors.New("this offer has expired; ask for the current price")
 	}
 
-	// The two claims sign puts there, read back the way exp was: UseNumber means
-	// every number in this map is a json.Number, so this is the same assertion
-	// and not a second convention.
-	minor, ok := claims["amount"].(json.Number)
+	// The two claims sign always puts there, read back the way exp was:
+	// UseNumber means every number in this map is a json.Number, so this is the
+	// same assertion and not a second convention.
+	minor, ok := claims[claimAmount].(json.Number)
 	if !ok {
 		return quoted, fmt.Errorf("the offer's amount is %T, not a number of minor units",
-			claims["amount"])
+			claims[claimAmount])
 	}
 	value, err := minor.Int64()
 	if err != nil {
 		return quoted, fmt.Errorf("the offer's amount is not a whole number of minor units: %w", err)
 	}
-	currency, ok := claims["currency"].(string)
+	currency, ok := claims[claimCurrency].(string)
 	if !ok {
 		return quoted, fmt.Errorf("the offer's currency is %T, not an ISO 4217 code",
-			claims["currency"])
+			claims[claimCurrency])
+	}
+	quoted.Price = generated.Amount{Amount: int(value), Currency: currency}
+
+	if err := readItem(claims, &quoted); err != nil {
+		return offered{}, err
+	}
+	return quoted, nil
+}
+
+// readItem reads the pair of claims a catalogue offer carries and a route offer
+// does not.
+//
+// Both or neither, and the "neither" is what makes a route offer readable at all
+// — it is not a defective catalogue offer, it is the other shape, and the
+// difference is what examineChain refuses a delegation against. Half of one is
+// refused rather than repaired: an item with no quantity would be sold in a
+// number nobody stated, and a quantity with no item counts nothing.
+//
+// The quantity is required to be at least one for the reason Catalogue.Quote
+// refuses a smaller one at issuance: a quantity of zero makes the subject a
+// purchase of nothing, which every constraint on quantity and amount is
+// satisfied by. Checking it again here is not redundant — this merchant is
+// reading a document back, and the only thing establishing it is one this
+// merchant produced is a signature, which says nothing about what code produced
+// it. A future quote path with a bug of its own would be caught here.
+func readItem(claims map[string]any, into *offered) error {
+	rawItem, hasItem := claims[claimItem]
+	rawQuantity, hasQuantity := claims[claimQuantity]
+
+	switch {
+	case !hasItem && !hasQuantity:
+		return nil
+	case !hasItem:
+		return errors.New("the offer states a quantity and names nothing to count")
+	case !hasQuantity:
+		return errors.New("the offer names an item and no quantity, so it prices an unstated number of them")
 	}
 
-	return generated.Amount{Amount: int(value), Currency: currency}, nil
+	item, ok := rawItem.(string)
+	if !ok {
+		return fmt.Errorf("the offer's item is %T, not an identifier", rawItem)
+	}
+	if item == "" {
+		return errors.New("the offer's item is empty, which names nothing a constraint can be evaluated against")
+	}
+
+	number, ok := rawQuantity.(json.Number)
+	if !ok {
+		return fmt.Errorf("the offer's quantity is %T, not a number", rawQuantity)
+	}
+	quantity, err := number.Int64()
+	if err != nil {
+		return fmt.Errorf("the offer's quantity is not a whole number: %w", err)
+	}
+	if quantity < 1 {
+		return fmt.Errorf("the offer is for %d of %s, and a purchase of none of something is not a smaller purchase",
+			quantity, item)
+	}
+
+	into.Item = item
+	into.Quantity = int(quantity)
+	return nil
 }

@@ -65,6 +65,27 @@ func main() {
 			return nil, err
 		}
 
+		// One rule set per mandate, held twice each: once behind the interface
+		// the Human Present entry point takes and once behind the chain one.
+		// Building each once rather than writing the literal twice is what stops
+		// this merchant enforcing a different policy depending on which flow a
+		// caller reached it through — a divergence nothing would fail on, since
+		// each flow's tests would keep passing against its own copy.
+		checkoutRules := ap2.MerchantRules{
+			Issuer:             user,
+			Clock:              role.Clock,
+			AgentKey:           roles.AgentKey,
+			Audience:           *id,
+			RequireConstrained: []string{"amount"},
+		}
+		paymentRules := ap2.CredentialProviderRules{
+			Issuer:             user,
+			Clock:              role.Clock,
+			AgentKey:           roles.AgentKey,
+			Audience:           *id,
+			RequireConstrained: []string{"amount"},
+		}
+
 		service := &merchant.Service{
 			ID:        *id,
 			Inventory: inventory,
@@ -75,10 +96,12 @@ func main() {
 			//
 			// All three chain fields are read by AuthoriseCheckoutChain and by
 			// nothing else — VerifyCheckout, which is the whole of the Human
-			// Present flow this binary serves today, ignores every one of them —
-			// so setting them changes no behaviour yet. Nothing can present a
-			// chain here until merchant.Service grows a chain entry point, which
-			// is #119.
+			// Present flow, ignores every one of them. The same value is handed
+			// to Rules and to ChainRules below, which is what makes both flows
+			// this one merchant's rather than two merchants' opinions: a
+			// MerchantRules satisfies CheckoutVerifier and CheckoutChainVerifier
+			// both, and the fields are separate so that neither entry point can
+			// be reached by a caller that meant the other.
 			//
 			// AgentKey is roles.AgentKey: the cnf claim of the open mandate,
 			// turned into the one Verifier the delegating hop is ever checked
@@ -91,13 +114,8 @@ func main() {
 			// nothing about the amount. Leaving it empty would not select a
 			// different check — ChainOptions.RequireConstrained says so — it
 			// would fall back to trusting whatever narrowing the agent chose.
-			Rules: ap2.MerchantRules{
-				Issuer:             user,
-				Clock:              role.Clock,
-				AgentKey:           roles.AgentKey,
-				Audience:           *id,
-				RequireConstrained: []string{"amount"},
-			},
+			Rules:      checkoutRules,
+			ChainRules: checkoutRules,
 			// The Payment Mandate travelling beside it, verified so that the
 			// merchant can compare what it pays against what this checkout
 			// costs. Same key: in Human Present mode the user signs both closed
@@ -108,19 +126,14 @@ func main() {
 			// closed mandate is minted for one verifier, so the payment chain
 			// presented here is a different document from the one presented for
 			// funding, and carries this identifier.
-			Payments: ap2.CredentialProviderRules{
-				Issuer:             user,
-				Clock:              role.Clock,
-				AgentKey:           roles.AgentKey,
-				Audience:           *id,
-				RequireConstrained: []string{"amount"},
-			},
-			Own:       role.Verifier,
-			Signer:    role.Signer,
-			Keys:      role.Keys,
-			Clock:     role.Clock,
-			Events:    role.Events,
-			Challenge: challenge,
+			Payments:      paymentRules,
+			ChainPayments: paymentRules,
+			Own:           role.Verifier,
+			Signer:        role.Signer,
+			Keys:          role.Keys,
+			Clock:         role.Clock,
+			Events:        role.Events,
+			Challenge:     challenge,
 			// The merchant initiates payment, not the agent.
 			Processor: &merchant.HTTPProcessor{Base: *processor},
 		}

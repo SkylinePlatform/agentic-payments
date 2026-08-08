@@ -52,6 +52,11 @@ type Results struct {
 // and the two disagree while both look correct in isolation, which is what
 // TestAProductAppearsExactlyWhenAMandateWouldAuthoriseBuyingIt exists to catch.
 //
+// That adapter is Catalogue.Subject, and it is deliberately the same function
+// the merchant runs at the moment of purchase rather than a search-shaped copy
+// of it — see its own doc comment, and the "exactly when" above, which is a
+// claim about two code paths and is only true while there is one.
+//
 // # Why the set is parsed before any offer is judged
 //
 // A constraint that cannot be read is refused once, for the whole search,
@@ -89,7 +94,10 @@ func (c *Catalogue) Search(constraints []generated.Constraint) (Results, error) 
 	results := Results{Offers: make([]PricedOffer, 0, len(c.offers)), ObservedAt: now}
 	for _, o := range c.offers {
 		priced := c.priced(o, now)
-		if !satisfies(expressions, c.subject(priced, now)) {
+		// One unit, so the line price and the unit price are the same number —
+		// which is why this call can hand Subject the schedule's price directly
+		// and the checkout, quoting a basket, cannot. See Subject.
+		if !satisfies(expressions, c.Subject(priced.Offer, priced.Price, 1, now)) {
 			continue
 		}
 		results.Offers = append(results.Offers, priced)
@@ -112,41 +120,7 @@ func satisfies(expressions []constraint.Expression, subject constraint.Subject) 
 	return true
 }
 
-// subject describes buying one of a priced offer, in the vocabulary the
-// verifier evaluates against.
-//
-// This is the whole adapter, and every line of it is a decision:
-//
-//   - Amount is the offer's price at this instant, so a cap is compared against
-//     what the purchase would actually cost rather than against a list price.
-//   - At is the same instant, from the injected clock. A mandate whose booking
-//     window has closed authorises nothing, and a search run today should say
-//     so rather than offering something that will be refused at checkout.
-//   - Item carries only ID, Category and Attributes. Nothing descriptive
-//     crosses — see Offer.
-//   - Merchant is who operates this catalogue, not the offer's Retailer. A
-//     mandate constraining merchant.id is constraining who is being paid.
-//
-// Quantity is one, and that is a genuine narrowing worth stating. A search asks
-// whether a single unit of this could be bought, so "two tickets, up to $160
-// all in" matches a $75 ticket — one is at most two — while a hypothetical
-// mandate demanding at least four of something would match nothing here. Basket
-// size is a checkout decision and the catalogue does not have one to offer; the
-// alternative, taking a quantity on the request, puts a number the user never
-// said into the query that decides what they are shown.
-//
-// The attributes map handed to the evaluator is the copy priced already made
-// for the result, so nothing a caller holds is what a search matched against.
-func (c *Catalogue) subject(o PricedOffer, at time.Time) constraint.Subject {
-	return constraint.Subject{
-		Amount:   o.Price,
-		At:       at,
-		Quantity: 1,
-		Item: constraint.Item{
-			Category:   o.Category,
-			ID:         o.ID,
-			Attributes: o.Attributes,
-		},
-		Merchant: c.merchant,
-	}
-}
+// Subject used to live here, as a private search-only adapter. It is
+// Catalogue.Subject now, in catalogue.go, because the checkout needs the same
+// answer and two of them is the drift this endpoint's whole claim rests on not
+// having.

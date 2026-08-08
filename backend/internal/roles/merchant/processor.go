@@ -30,6 +30,24 @@ type Processor interface {
 		paymentMandate string,
 		credential generated.PaymentCredential,
 	) (receipt string, settled bool, err error)
+
+	// InitiatePaymentChain is the same call for a Human Not Present purchase,
+	// where what is presented is a delegation chain: the open Payment Mandate
+	// the user signed and the closed one the agent signed under it, addressed to
+	// the processor.
+	//
+	// A second method rather than a wider first one, and the reasoning is
+	// ap2.PaymentChainVerifier's rather than a new one: the two are read by
+	// different code, and a single entry point taking whichever string the
+	// merchant happens to hold is one where the receiving end has to guess. The
+	// merchant does not parse what it passes here — it is not the audience, so
+	// it could establish nothing by trying — which makes the method name the
+	// only thing saying which shape this is.
+	InitiatePaymentChain(
+		ctx context.Context,
+		paymentChain string,
+		credential generated.PaymentCredential,
+	) (receipt string, settled bool, err error)
 }
 
 // HTTPProcessor talks to a Merchant Payment Processor over HTTP.
@@ -55,10 +73,46 @@ func (p *HTTPProcessor) InitiatePayment(
 	paymentMandate string,
 	credential generated.PaymentCredential,
 ) (string, bool, error) {
-	body, err := json.Marshal(map[string]any{
+	return p.present(ctx, map[string]any{
 		"mandate":    paymentMandate,
 		"credential": credential,
 	})
+}
+
+// InitiatePaymentChain sends the delegated Payment Mandate and the credential
+// to the processor.
+//
+// The chain travels under its own member, never under "mandate", which is the
+// same promise merchant.purchase makes on its own endpoint: a role must not have
+// to look inside a string to learn which shape it was handed.
+//
+// **The mock Merchant Payment Processor does not read this member yet.** Its
+// POST /payment takes "mandate" and parses it with sdjwt.Parse, so a chain sent
+// today is answered with a refusal rather than settled. That is slice 6's to
+// close — issue #120 adds the chain branch to mpp.settle — and it is stated here
+// rather than left for a reader to discover, because between now and then this
+// method is correct and the round trip it belongs to is not complete.
+func (p *HTTPProcessor) InitiatePaymentChain(
+	ctx context.Context,
+	paymentChain string,
+	credential generated.PaymentCredential,
+) (string, bool, error) {
+	return p.present(ctx, map[string]any{
+		"mandate_chain": paymentChain,
+		"credential":    credential,
+	})
+}
+
+// present posts one settlement body and reads the processor's answer.
+//
+// Shared by the two entry points because nothing about the call differs between
+// them except which member carries the presentation: same path, same
+// idempotency key derivation, same correlating client, same reading of the
+// answer. Two copies would be two places for the 5xx rule below to drift.
+func (p *HTTPProcessor) present(
+	ctx context.Context, payload map[string]any,
+) (string, bool, error) {
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", false, fmt.Errorf("encoding the settlement: %w", err)
 	}
