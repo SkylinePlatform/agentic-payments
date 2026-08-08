@@ -21,11 +21,15 @@ import (
 // read endorses.
 //
 // Neither function names a crypto/ecdsa, crypto/ed25519 or crypto/rsa type, and
-// neither needs to. generated.PublicKey's JSON tags are exactly the JWK member
-// names of RFC 7517 §6, so both directions are decoding rather than
-// translation, and the key material itself stays where depguard's
-// key-material-containment rule keeps it — inside internal/platform/crypto,
-// behind an authz.Verifier that can check a signature and cannot yield a key.
+// neither needs to. generated.PublicKey's JSON tags are JWK member names —
+// kty, kid and alg from RFC 7517 §4, and crv, x, y, n and e from RFC 7518 §6 —
+// so both directions are decoding rather than translation, and the key material
+// itself stays where depguard's key-material-containment rule keeps it: inside
+// internal/platform/crypto, behind an authz.Verifier that can check a signature
+// and cannot yield a key.
+//
+// The tags are a subset of the members RFC 7517 defines, not all of them. What
+// that costs is set out on PublicKey below.
 
 // PublicKey reads the single key a publisher publishes, in the canonical
 // model's own form.
@@ -58,11 +62,23 @@ func PublicKey(ctx context.Context, keys authz.KeySetPublisher) (generated.Publi
 		return zero, fmt.Errorf("publishing the key set: %w", err)
 	}
 
-	// The published entries carry members this type does not model — "use" and
-	// "key_ops" among them — and encoding/json drops what a struct has no field
-	// for. That is the right direction to be lossy in: what an open mandate has
-	// to carry is the material a verifier reconstructs the key from, and a
-	// publication hint is not part of it.
+	// generated.PublicKey models the material and not the usage rules, so this
+	// decode drops "use" — the one member beyond its fields that
+	// crypto.publish writes, always as "sig". encoding/json drops what a
+	// struct has no field for.
+	//
+	// That is a real gap rather than a tidy omission, and worth stating where
+	// somebody reasoning from this code will meet it. crypto.ParseJWKS treats
+	// "use" as a refusal criterion, not a hint: it skips a key published for
+	// anything but signing. So a P-256 key marked "use":"enc" is refused by
+	// AgentKey when it arrives in a cnf directly, and accepted through
+	// PublicKey → cnf → AgentKey, because by then the member is gone. Nothing
+	// in this repository publishes such a key — crypto.publish always writes
+	// "sig" — so the two verdicts cannot disagree in practice today. Closing it
+	// properly means the canonical model carrying the usage rules, which is a
+	// contracts/ change and not this function's to make.
+	//
+	// It does not carry "key_ops": crypto.publish never emits one.
 	var set struct {
 		Keys []generated.PublicKey `json:"keys"`
 	}

@@ -109,15 +109,25 @@ type approved struct {
 // parser before anything is signed, and AgentKey is refused by
 // ap2.IssueOpenCheckout unless it carries material that could endorse anybody.
 type authorisation struct {
-	// Prompt is what the user typed.
+	// Prompt is the caller's account of what the user typed.
+	//
+	// Not the user's words — this endpoint is called by the agent, which is the
+	// party the whole role exists to be unable to be talked round by. Nothing
+	// reaching this struct has been anywhere near the user; the string is
+	// unsigned, unbound, and chosen by whoever made the request.
 	//
 	// It is never signed and never returned, and that is the security property
 	// this whole endpoint exists to keep: the user signs the interpretation,
 	// not their own words, so that the sentence on the consent screen and the
-	// sentence a verifier evaluates cannot differ. The only place it travels is
-	// the detail of the two events emitted below, which is the event log —
-	// observability, never evidence — and which is where a screen showing
-	// "typed" beside "signed" gets the first of the two.
+	// sentence a verifier evaluates cannot differ.
+	//
+	// The only place it travels is the detail of the two events emitted below,
+	// which is the event log — observability, never evidence. A screen showing
+	// "typed" beside "signed" is what that is for, and whether the first half
+	// may be labelled as the user's own words is an open question rather than a
+	// settled one: docs/specs/2026-08-06-hnp-screen-brief.md §2 raises it and
+	// nothing answers it yet. What this endpoint guarantees is the "signed"
+	// half.
 	Prompt string `json:"prompt"`
 	// Constraints are the limits, as the interpretation produced them.
 	Constraints []generated.Constraint `json:"constraints"`
@@ -251,7 +261,7 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rendered, err := render(req.Constraints)
+	rendered, checked, err := render(req.Constraints)
 	if err != nil {
 		// constraint.CodeOf rather than ap2.CodeOf: this failure is the
 		// constraint package's own verdict and ap2 maps none of its sentinels,
@@ -269,14 +279,24 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 	now := s.Clock.Now()
 	expiry := now.Add(openMandateLifetime)
 
-	// The same constraint set goes into both. The user approved one set of
-	// limits, not one set for buying and another for paying; which of them a
-	// given verifier can state — and therefore which it is shown — is decided at
-	// presentation, by the disclosure minimisation in internal/adapters/ap2, not
-	// by signing two different sets here.
+	// checked rather than req.Constraints, in both mandates. It is the same
+	// slice, and taking it from render's return value is what makes two things
+	// structural rather than a matter of statement order: a mandate here cannot
+	// be built out of constraints nobody parsed, and the two mandates cannot
+	// come to carry different sets without somebody first inventing a second
+	// local to build the second one from.
+	//
+	// The second of those is the one worth naming, because the tempting edit is
+	// close by. The user approved one set of limits, not one for buying and
+	// another for paying; which of them a given verifier can state — and
+	// therefore which it is shown — is decided at presentation, by the
+	// disclosure minimisation in internal/adapters/ap2. Filtering here instead
+	// would leave the Credential Provider evaluating an open mandate with fewer
+	// limits in it than the merchant's, which is not a smaller authorisation
+	// but a different one.
 	checkout := generated.OpenCheckoutMandate{
 		AgentKey:    req.AgentKey,
-		Constraints: req.Constraints,
+		Constraints: checked,
 		IssuedAt:    &now,
 		ExpiresAt:   &expiry,
 	}
@@ -293,7 +313,7 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 	instrument := s.Instrument
 	payment := generated.OpenPaymentMandate{
 		AgentKey:    req.AgentKey,
-		Constraints: req.Constraints,
+		Constraints: checked,
 		// Pinned, so the closed mandate has to reproduce it unchanged.
 		PaymentInstrument: &instrument,
 		// Payee is deliberately left unpinned. Pinning it would say the user
@@ -321,8 +341,18 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// render parses every constraint and says what each one means.
+// render parses every constraint, says what each one means, and hands the
+// constraints back.
 //
+// Handing them back is the point of the second return value, and it is not a
+// convenience: it is what makes the mandates downstream products of the parse
+// rather than things assembled beside it. checked is cs unchanged — the same
+// backing array, not a copy — and the only thing that has happened to it is
+// that every element is now known to be readable by a verifier. A later edit
+// that moved the parse after the signing would have to give the mandates some
+// other source for their constraints first, which is a change a reader notices.
+//
+
 // The parser is constraint.Parse — the verifier's own, reached directly. The
 // Trusted Surface may not import internal/agent/interpret, whose Validate runs
 // the same parser over the same slice: AP2 requires this role to be non-agentic
@@ -337,16 +367,16 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 // constraint.ErrUnknownField and constraint.CodeOf still maps it to
 // constraint_type_unknown — the same code the verifier would put in the
 // rejection receipt an hour later. Same failure, same name, refused earlier.
-func render(cs []generated.Constraint) ([]string, error) {
+func render(cs []generated.Constraint) (sentences []string, checked []generated.Constraint, err error) {
 	out := make([]string, 0, len(cs))
 	for i, c := range cs {
 		parsed, err := constraint.Parse(c)
 		if err != nil {
-			return nil, fmt.Errorf("constraint %d of %d: %w", i+1, len(cs), err)
+			return nil, nil, fmt.Errorf("constraint %d of %d: %w", i+1, len(cs), err)
 		}
 		out = append(out, parsed.Render())
 	}
-	return out, nil
+	return out, cs, nil
 }
 
 // openMandateLifetime is how long a signed open mandate stays usable.

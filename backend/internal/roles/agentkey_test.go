@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +18,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/surface"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
@@ -41,7 +45,11 @@ func TestAnOpenMandatePairCarriesTheAgentsKey(t *testing.T) {
 	agentKey, err := roles.PublicKey(t.Context(), agent.keys)
 	require.NoError(t, err, "an agent that cannot name its own key has nothing to be endorsed as")
 
-	out := authorise(t, srv.URL, agentKey, priceCap())
+	// Two constraints, not one. With a single constraint a mandate carrying a
+	// truncated set is indistinguishable from one carrying the whole of it, and
+	// truncation is the failure the equality below exists to catch.
+	limits := []generated.Constraint{priceCap(), ladders()}
+	out := authorise(t, srv.URL, agentKey, limits...)
 	require.NotEmpty(t, out.OpenCheckoutMandate)
 	require.NotEmpty(t, out.OpenPaymentMandate)
 
@@ -69,6 +77,18 @@ func TestAnOpenMandatePairCarriesTheAgentsKey(t *testing.T) {
 	assert.True(t, authz.UsableKey(checkout.AgentKey),
 		"a key carrying no material endorses nobody, and would authorise whoever holds the mandate")
 
+	// The pair carries one set of limits. This is the assertion that stops the
+	// payment half being signed with fewer — an open Payment Mandate carrying a
+	// subset is not a smaller authorisation than the Checkout Mandate beside it,
+	// it is a different one, and the Credential Provider and the merchant would
+	// then be evaluating two different decisions under one signature. Filtering
+	// by field is what disclosure minimisation does at presentation, and doing
+	// it here instead is the tempting edit this closes.
+	require.Len(t, checkout.Constraints, len(limits),
+		"the mandate has to carry every limit the user was shown, or the screen and the signature disagree")
+	assert.Equal(t, checkout.Constraints, payment.Constraints,
+		"one decision, one set of limits; a payment half carrying fewer is authorised for more")
+
 	// The pair is one decision, so it has one window. Two would let the
 	// authorisation to pay outlive the authorisation to buy.
 	require.NotNil(t, checkout.ExpiresAt)
@@ -79,6 +99,18 @@ func TestAnOpenMandatePairCarriesTheAgentsKey(t *testing.T) {
 		"the holder acts on the expiry in the response, so it has to be the one in the mandate")
 	assert.Equal(t, base.Add(time.Hour), checkout.ExpiresAt.UTC(),
 		"an open mandate's lifetime is its blast radius; this is the number that has to be argued for")
+
+	// iat, which nothing else pins. authz.Endorsement.CanAuthorise refuses a
+	// mandate used before its issued_at, so an open mandate that states none is
+	// one whose near bound cannot be checked — and a wrong one moves the
+	// boundary a verifier will hold the agent to.
+	require.NotNil(t, checkout.IssuedAt,
+		"an open mandate with no issued_at has no near bound for a verifier to check")
+	require.NotNil(t, payment.IssuedAt)
+	assert.Equal(t, base, checkout.IssuedAt.UTC(),
+		"the mandate is issued at the instant the surface read from its clock, not at some other one")
+	assert.Equal(t, *checkout.IssuedAt, *payment.IssuedAt,
+		"halves of one decision that begin at different moments are two decisions")
 }
 
 // TestASurfaceRefusesAConstraintNoVerifierCouldRead is the check that turns a
@@ -126,6 +158,92 @@ func TestASurfaceRefusesAConstraintNoVerifierCouldRead(t *testing.T) {
 		"the payment half is signed after the checkout half, so it is the weaker of the two assertions and still has to hold")
 	assert.Empty(t, out.Rendered,
 		"a sentence for a constraint nobody could parse is the screen this endpoint exists to prevent")
+}
+
+// TestARefusedConstraintSetIsNeverSigned is the ordering half of the test
+// above, and it needs the event log because nothing else can see it.
+//
+// A response carrying no mandate is not the same claim as no mandate having
+// been made. Move the parse to after ap2.IssueOpenCheckout and the user's key
+// signs an open Checkout Mandate over a limit no verifier can read, and the
+// only trace of it is the moment the surface announced it. A signature that
+// exists and is discarded is still a signature the user's key made.
+//
+// mandate_constructed is emitted per mandate and after its own signature — see
+// approve, which established that — so a count of zero is the assertion that
+// nothing was signed.
+func TestARefusedConstraintSetIsNeverSigned(t *testing.T) {
+	t.Parallel()
+
+	user := newParty(t, "user")
+	agent := newParty(t, "agent")
+	srv, collected := theWatchedSurface(t, user)
+
+	agentKey, err := roles.PublicKey(t.Context(), agent.keys)
+	require.NoError(t, err)
+
+	var out struct {
+		Code generated.ErrorCode `json:"code"`
+	}
+	status := post(t, srv.URL+"/authorise", map[string]any{
+		"prompt":      "buy it if it drops below 200 dollars",
+		"constraints": []generated.Constraint{{Op: "lte", Field: field("price"), Value: money(20000)}},
+		"agent_key":   agentKey,
+	}, &out)
+	require.Equal(t, http.StatusForbidden, status)
+	require.Equal(t, generated.ErrorCodeConstraintTypeUnknown, out.Code)
+
+	assert.Zero(t, count(collected(), obs.KindMandateConstructed),
+		"the refusal has to come before the signature, not merely before the response")
+}
+
+// TestTheEventLogCarriesTheCallersAccountOfThePrompt pins the one job the
+// prompt has.
+//
+// It is unsigned and never returned, so the event detail is the whole of where
+// it goes. Left untested, the field would be one the endpoint accepts and drops
+// while its own comment claims otherwise — and the screen that comment proposes
+// would be built on a claim nothing checks.
+//
+// What the test cannot say is that the string came from the user. It came from
+// whoever called the endpoint, which is the agent, and the naming here follows
+// the field's own comment rather than softening it.
+func TestTheEventLogCarriesTheCallersAccountOfThePrompt(t *testing.T) {
+	t.Parallel()
+
+	user := newParty(t, "user")
+	agent := newParty(t, "agent")
+	srv, collected := theWatchedSurface(t, user)
+
+	agentKey, err := roles.PublicKey(t.Context(), agent.keys)
+	require.NoError(t, err)
+
+	// Distinctive enough that it cannot appear by coincidence in a detail
+	// string somebody wrote.
+	const said = "a ladder, under two hundred, before Friday"
+	var out authorisedBody
+	require.Equal(t, http.StatusOK, post(t, srv.URL+"/authorise", map[string]any{
+		"prompt":      said,
+		"constraints": []generated.Constraint{priceCap()},
+		"agent_key":   agentKey,
+	}, &out))
+
+	events := collected()
+	constructed := make([]obs.Event, 0, 2)
+	for _, e := range events {
+		if e.Kind == obs.KindMandateConstructed {
+			constructed = append(constructed, e)
+		}
+	}
+	require.Len(t, constructed, 2,
+		"one event per mandate, after its own signature — a pair announced as one moment cannot be told from a half-signed pair")
+	for _, e := range constructed {
+		assert.Contains(t, e.Detail, said,
+			"the prompt's only job is to reach the log, where a screen can show what was said beside what was signed")
+	}
+
+	assert.NotContains(t, out.Rendered, said,
+		"the log is where the caller's words may appear; the response carries only what the signature covers")
 }
 
 // TestASurfaceRefusesAnOpenMandateWithNoLimits is the case an empty array makes
@@ -365,11 +483,19 @@ func TestACnfNoVerifierCanUseIsRefused(t *testing.T) {
 		// reason — the private-key entry below would also fail on its empty
 		// coordinates, which is a different bug being caught by accident.
 		wants error
-		why   string
+		// says is a fragment the message must carry, for the case with no
+		// sentinel to name. Deleting the guard that produces it does not make
+		// the call succeed; it makes it fail as an unsupported algorithm, which
+		// sends a reader looking at the key rather than at the claim that names
+		// none. Which of two refusals happens is the thing under test, so the
+		// wording is the only handle there is.
+		says string
+		why  string
 	}{
 		{
 			name: "no jwk member",
 			cnf:  `{"kid":"some-key"}`,
+			says: "no jwk member",
 			why: "RFC 7800 also lets cnf name a key by reference, and resolving one from a name " +
 				"means trusting a directory the user's signature does not cover",
 		},
@@ -396,8 +522,160 @@ func TestACnfNoVerifierCanUseIsRefused(t *testing.T) {
 			if tc.wants != nil {
 				assert.ErrorIs(t, err, tc.wants, "%s", tc.why)
 			}
+			if tc.says != "" {
+				assert.ErrorContains(t, err, tc.says, "%s", tc.why)
+				assert.NotErrorIs(t, err, authz.ErrUnsupportedAlgorithm,
+					"this cnf names no key at all, and reporting it as an algorithm nobody supports points at the wrong thing")
+			}
 		})
 	}
+}
+
+// TestBothOpenMandatesAreStampedFromOneReading is the property the fake clock
+// cannot see.
+//
+// clock.Fake does not move on its own, so a surface that read the time twice
+// would produce two identical instants and every assertion about them would
+// pass. This one drives it with a clock that moves on every reading, which is
+// what makes "one instant for both mandates" a measurable claim rather than a
+// statement about the source. Two readings there would let the authorisation to
+// pay begin and end after the authorisation to buy.
+func TestBothOpenMandatesAreStampedFromOneReading(t *testing.T) {
+	t.Parallel()
+
+	user := newParty(t, "user")
+	agent := newParty(t, "agent")
+
+	// The user's own key and key set, on a clock that ticks. Verification below
+	// uses the fake at base, which is inside the mandates' window either way:
+	// sdjwt checks exp and nbf, and neither an open mandate here nor this test
+	// writes an nbf.
+	moving := &ticking{at: base, step: time.Second}
+	blinder, err := sdjwt.NewBlinder()
+	require.NoError(t, err)
+	svc := &surface.Service{
+		Signer: user.signer, Keys: user.keys, Clock: moving,
+		Blinder: blinder, Instrument: pinnedInstrument,
+	}
+	handler, err := svc.Handler()
+	srv := serve(t, handler, err)
+
+	agentKey, err := roles.PublicKey(t.Context(), agent.keys)
+	require.NoError(t, err)
+
+	out := authorise(t, srv.URL, agentKey, priceCap())
+
+	checkoutSD, err := sdjwt.Parse(out.OpenCheckoutMandate)
+	require.NoError(t, err)
+	checkout, err := ap2.VerifyOpenCheckout(checkoutSD, ap2.OpenOptions{Issuer: user.verifier, Clock: user.clock})
+	require.NoError(t, err)
+
+	paymentSD, err := sdjwt.Parse(out.OpenPaymentMandate)
+	require.NoError(t, err)
+	payment, err := ap2.VerifyOpenPayment(paymentSD, ap2.OpenOptions{Issuer: user.verifier, Clock: user.clock})
+	require.NoError(t, err)
+
+	require.NotNil(t, checkout.IssuedAt)
+	require.NotNil(t, payment.IssuedAt)
+	assert.Equal(t, *checkout.IssuedAt, *payment.IssuedAt,
+		"a second reading of the clock between the two mandates makes them two decisions taken at two moments")
+	require.NotNil(t, checkout.ExpiresAt)
+	require.NotNil(t, payment.ExpiresAt)
+	assert.Equal(t, *checkout.ExpiresAt, *payment.ExpiresAt,
+		"and it makes one half outlive the other, which is what an attacker holding the surviving half wants")
+}
+
+// ticking is a clock that moves on every reading.
+//
+// It computes rather than records, so it is hand-written for the reason
+// clock.Fake is: a generated double returning canned values would delete
+// exactly the thing the test above proves. It is not in internal/platform/clock
+// because nothing outside this test wants a clock that cannot be held still.
+//
+// Safe for concurrent use: the surface reads it from the server's goroutine
+// while the test drives the request from its own.
+type ticking struct {
+	mu   sync.Mutex
+	at   time.Time
+	step time.Duration
+}
+
+func (c *ticking) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	was := c.at
+	c.at = c.at.Add(c.step)
+	return was.UTC()
+}
+
+// theWatchedSurface stands up a surface whose events are captured, and returns
+// the server and a function that drains the emitter and hands back what arrived.
+//
+// A real obs.HTTPSink against a real httptest server, rather than a double.
+// Nothing here records a call to a collaborator — it is the collector's own end
+// of the wire — so there is no interaction double for .mockery.yml to generate,
+// and obs.MockSink could not be used from this package anyway: mocks_test.go is
+// compiled only into its own package's test binary.
+//
+// The drain function must be called from the test goroutine. Everything inside
+// it and inside the handler uses assert, never require, for the reason
+// AGENTS.md gives: a helper is safe at some call sites only until the next
+// caller puts it in a goroutine.
+func theWatchedSurface(t *testing.T, user party) (*httptest.Server, func() []obs.Event) {
+	t.Helper()
+
+	var mu sync.Mutex
+	var seen []obs.Event
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch []obs.Event
+		// A decode failure leaves seen short and the caller's own count
+		// assertion reports it. Failing here would be failing off the test
+		// goroutine.
+		if err := json.NewDecoder(r.Body).Decode(&batch); err == nil {
+			mu.Lock()
+			seen = append(seen, batch...)
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(collector.Close)
+
+	events, err := obs.NewEmitter(user.clock, "surface", obs.WithSink(obs.NewHTTPSink(collector.URL)))
+	require.NoError(t, err, "building the emitter")
+	// Closing twice is safe, and this is what stops a test that never drains
+	// from leaking the emitter's goroutine into the rest of the suite.
+	t.Cleanup(func() { _ = events.Close(context.Background()) })
+
+	blinder, err := sdjwt.NewBlinder()
+	require.NoError(t, err, "building the blinder")
+
+	svc := &surface.Service{
+		Signer: user.signer, Keys: user.keys, Clock: user.clock,
+		Blinder: blinder, Instrument: pinnedInstrument, Events: events,
+	}
+	handler, err := svc.Handler()
+	srv := serve(t, handler, err)
+
+	return srv, func() []obs.Event {
+		// Close drains, so everything emitted before this line has been sent
+		// and answered by the time it returns. Nothing here sleeps.
+		assert.NoError(t, events.Close(context.Background()), "draining the emitter")
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(seen)
+	}
+}
+
+// count says how many of the events are of one kind.
+func count(events []obs.Event, kind obs.Kind) int {
+	n := 0
+	for _, e := range events {
+		if e.Kind == kind {
+			n++
+		}
+	}
+	return n
 }
 
 // authorise calls POST /authorise and requires it to have worked, so the tests
