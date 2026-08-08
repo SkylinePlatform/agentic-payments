@@ -3,6 +3,7 @@ package constraint
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 )
@@ -98,6 +99,63 @@ type Expression struct {
 
 // Op returns what this node does.
 func (e Expression) Op() Op { return e.op }
+
+// Fields lists the facts this expression reads, deduplicated and sorted.
+//
+// # Why an expression has to be able to answer this
+//
+// A holder of a mandate may show a verifier some of its constraints and
+// withhold others, and something has to decide which. That decision cannot be
+// made from the constraint's text — "the amount is at most 200 USD" and "the
+// origin is BEG" are the same shape — so it is made from the facts each one
+// reads, against the facts the verifier being presented to can state. A
+// verifier that cannot state a fact does not enforce a constraint about it; it
+// reports the fact as unstated and refuses, every time, which is a refusal made
+// in ignorance rather than a limit being applied.
+//
+// So this is the question the caller doing that narrowing asks, and it lives
+// here because it is a question about a constraint. Nothing in this package
+// knows what a presentation is, which verifier exists, or which of them holds
+// what — the answer is a list of field names, and what to do with it belongs to
+// whoever knows the audience.
+//
+// # What the list contains
+//
+// Leaf nodes contribute the field they compare; groups contribute the union of
+// their children's. An expression that did not come from Parse contributes
+// nothing, on the same grounds Evaluate refuses one: it has no field to read.
+//
+// Names come back exactly as the constraint wrote them, which means an item
+// attribute appears in its addressed form — "item.attr.route.origin", not
+// "route.origin". A caller matching these against the registry should note that
+// FieldNames covers only the closed part of the vocabulary: Parse admits a
+// leaf's field name only if the registry holds it or it carries the
+// item-attribute prefix, so a name here that FieldNames does not list is an
+// item attribute, and there is no third case.
+func (e Expression) Fields() []string {
+	read := make(map[string]struct{})
+	e.collectFields(read)
+
+	out := make([]string, 0, len(read))
+	for name := range read {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func (e Expression) collectFields(into map[string]struct{}) {
+	if !e.parsed() {
+		return
+	}
+	if isGroup(e.op) {
+		for _, child := range e.children {
+			child.collectFields(into)
+		}
+		return
+	}
+	into[e.field.Name] = struct{}{}
+}
 
 // parsed reports whether this expression came from Parse rather than being
 // declared. A group needs children and a leaf needs a field to read; an

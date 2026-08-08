@@ -727,3 +727,97 @@ func TestVocabularyIsPublished(t *testing.T) {
 		}
 	}
 }
+
+// TestAnExpressionReportsTheFactsItReads covers Fields, which exists so that a
+// holder narrowing a presentation can decide per constraint whether the
+// verifier it is presenting to could reach a verdict on it at all.
+//
+// The cases that matter are the two a naive walk gets wrong: a group has no
+// field of its own and must report its children's, and a fact read twice is one
+// fact. Everything else here is the vocabulary — the two shapes a field name
+// comes in, and the zero value.
+func TestAnExpressionReportsTheFactsItReads(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want []string
+	}{
+		{
+			name: "a leaf reads one fact",
+			raw:  `{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}`,
+			want: []string{"amount"},
+		},
+		{
+			name: "an item attribute keeps its addressed form",
+			raw:  `{"op":"eq","field":"item.attr.route.origin","value":"BEG"}`,
+			want: []string{"item.attr.route.origin"},
+		},
+		{
+			name: "a group reads what its children read",
+			raw: `{"op":"all","of":[
+				{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}},
+				{"op":"eq","field":"item.category","value":"flights"}]}`,
+			want: []string{"amount", "item.category"},
+		},
+		{
+			name: "nesting is followed to the leaves",
+			raw: `{"op":"not","of":[{"op":"any","of":[
+				{"op":"eq","field":"merchant.id","value":"air-serbia"},
+				{"op":"gte","field":"quantity","value":4}]}]}`,
+			want: []string{"merchant.id", "quantity"},
+		},
+		{
+			name: "one fact read twice is one fact",
+			raw: `{"op":"all","of":[
+				{"op":"gte","field":"amount","value":{"amount":100,"currency":"USD"}},
+				{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}]}`,
+			want: []string{"amount"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e, err := constraint.Parse(node(t, tc.raw))
+			require.NoError(t, err, "the fixture must parse before it can report anything")
+			assert.Equal(t, tc.want, e.Fields(),
+				"a narrowing decision is made from this list, so a fact missing from it is a constraint withheld from a verifier that could have enforced it")
+		})
+	}
+}
+
+// TestAnUnparsedExpressionReadsNothing is the Fields half of
+// TestZeroExpressionDoesNotPanic, and the answer has to be empty rather than a
+// panic for the same reason: nothing stops a caller declaring an Expression,
+// and the zero value has no field to name.
+func TestAnUnparsedExpressionReadsNothing(t *testing.T) {
+	t.Parallel()
+
+	var zero constraint.Expression
+	assert.Empty(t, zero.Fields(),
+		"an expression nobody parsed reads no facts, and inventing one would put a name into a narrowing decision that no user ever signed")
+}
+
+// TestEveryFieldNameFieldsReportsIsOneTheRegistryOrTheAttributeFormExplains
+// pins the property Fields' own doc comment states and a caller relies on: a
+// name it reports either appears in FieldNames or is an item attribute, with no
+// third case. A narrowing caller uses exactly that to tell the closed part of
+// the vocabulary from the open one without keeping its own copy of the prefix.
+func TestEveryFieldNameFieldsReportsIsOneTheRegistryOrTheAttributeFormExplains(t *testing.T) {
+	t.Parallel()
+
+	known := constraint.FieldNames()
+	for _, raw := range []string{
+		`{"op":"lte","field":"amount","value":{"amount":1,"currency":"USD"}}`,
+		`{"op":"eq","field":"merchant.category","value":"airline"}`,
+		`{"op":"eq","field":"item.attr.route.destination","value":"PMI"}`,
+	} {
+		e, err := constraint.Parse(node(t, raw))
+		require.NoError(t, err)
+		for _, name := range e.Fields() {
+			assert.True(t, slices.Contains(known, name) || strings.HasPrefix(name, "item.attr."),
+				"a caller that cannot place %q in one of the two halves of the vocabulary has no basis to decide whether a verifier can state it", name)
+		}
+	}
+}
