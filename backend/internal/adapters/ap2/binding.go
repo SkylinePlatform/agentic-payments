@@ -56,6 +56,40 @@ func bindingAlg(blinder *sdjwt.Blinder, blinds bool) sdjwt.HashAlg {
 	return sdjwt.SHA256
 }
 
+// bindClosed writes the claim that ties a closed mandate to the merchant's
+// document, and is verifyBinding's counterpart at issuance: one recomputes the
+// digest to check it, this one computes it to make it.
+//
+// name is a parameter because the two closed mandates spell one fact
+// differently — checkout_hash on a Checkout Mandate, transaction_id on a
+// Payment Mandate; see claims.go. Passing the wrong one produces a mandate the
+// matching decoder refuses outright, since each requires its own.
+//
+// What no caller passes is a digest. Both mandate types carry a CheckoutHash
+// field and all four issuers ignore it, because accepting one would put the
+// single value the mandate exists to establish under the control of whoever is
+// least placed to be trusted with it. Recomputing has a second effect worth as
+// much: a Checkout Mandate and the Payment Mandate for the same purchase agree
+// by construction rather than by an issuer remembering to copy one string into
+// both.
+//
+// alg is the algorithm the verifier of this presentation will recompute under.
+// It is bindingAlg's to decide and the four callers do not all reach the same
+// answer — see DelegateCheckout, where a delegating hop declares one
+// unconditionally and a standalone mandate does not.
+func bindClosed(claims map[string]any, name string, alg sdjwt.HashAlg, checkoutJWT string) error {
+	if checkoutJWT == "" {
+		return fmt.Errorf("%w: no checkout to bind to, so %s cannot be computed",
+			ErrMandateMalformed, name)
+	}
+	hash, err := checkoutHash(alg, checkoutJWT)
+	if err != nil {
+		return err
+	}
+	claims[name] = hash
+	return nil
+}
+
 // verifyBinding recomputes the hash of checkout and compares it to claimed.
 //
 // It never compares the claim against itself. The whole reason this function

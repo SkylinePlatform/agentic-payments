@@ -36,12 +36,39 @@ func IssuePayment(
 	if blinder == nil {
 		return nil, fmt.Errorf("%w: no blinder", ErrMisconfigured)
 	}
-	if checkoutJWT == "" {
-		return nil, fmt.Errorf(
-			"%w: no checkout to bind to, so transaction_id cannot be computed",
-			ErrMandateMalformed)
+
+	claims, paths, err := paymentClaims(m)
+	if err != nil {
+		return nil, err
 	}
 
+	// The binding is computed last, and against bindingAlg rather than the
+	// Blinder, because what a verifier will recompute with depends on whether
+	// anything ends up blinded at all. transaction_id is not withholdable, so
+	// adding it after the paths are settled changes nothing about them.
+	if err := bindClosed(claims, claimTransactionID,
+		bindingAlg(blinder, len(paths) > 0), checkoutJWT); err != nil {
+		return nil, err
+	}
+
+	payload, disclosures, err := blinder.Blind(claims, paths...)
+	if err != nil {
+		return nil, err
+	}
+	return sdjwt.Issue(ctx, JOSESigner(signer), payload, disclosures)
+}
+
+// paymentClaims turns a closed Payment Mandate into the claims it travels as,
+// together with the withholdable paths this particular mandate actually has
+// something at — checkoutClaims' counterpart, shared by IssuePayment and
+// DelegatePayment on exactly the terms that one records.
+//
+// It takes no checkout. The document is not a claim of a Payment Mandate at all
+// — that is the whole difference from a Checkout Mandate, and the reason this
+// mandate carries transaction_id and never the thing it is a digest of — so the
+// only use it could have had here is refusing a caller that holds none, and
+// bindClosed is where that refusal sits, next to the value it is about.
+func paymentClaims(m generated.PaymentMandate) (map[string]any, []string, error) {
 	claims := map[string]any{
 		vctClaim:               closedPayment.vct,
 		claimPayee:             m.Payee,
@@ -63,25 +90,9 @@ func IssuePayment(
 
 	declared, err := blindPaths("PaymentMandate")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	paths := presentPaths(claims, declared)
-
-	// The binding is computed last, and against bindingAlg rather than the
-	// Blinder, because what a verifier will recompute with depends on whether
-	// anything ends up blinded at all. transaction_id is not withholdable, so
-	// adding it after the paths are settled changes nothing about them.
-	hash, err := checkoutHash(bindingAlg(blinder, len(paths) > 0), checkoutJWT)
-	if err != nil {
-		return nil, err
-	}
-	claims[claimTransactionID] = hash
-
-	payload, disclosures, err := blinder.Blind(claims, paths...)
-	if err != nil {
-		return nil, err
-	}
-	return sdjwt.Issue(ctx, JOSESigner(signer), payload, disclosures)
+	return claims, presentPaths(claims, declared), nil
 }
 
 // PaymentOptions is what a verifier brings to VerifyPayment.
