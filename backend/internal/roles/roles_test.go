@@ -261,6 +261,7 @@ func TestTheMerchantAnswersARejectionWithAReceipt(t *testing.T) {
 
 	var approved struct {
 		CheckoutMandate string `json:"checkout_mandate"`
+		PaymentMandate  string `json:"payment_mandate"`
 	}
 	require.Equal(t, http.StatusOK, post(t, surfaceSrv.URL+"/approve", map[string]any{
 		"checkout": signed,
@@ -276,8 +277,16 @@ func TestTheMerchantAnswersARejectionWithAReceipt(t *testing.T) {
 		Receipt string `json:"receipt"`
 	}
 	// Presented against a real offer that is not the one it was signed for.
+	//
+	// The Payment Mandate is sent, and genuine. Without it the merchant refuses
+	// the request before reaching any verdict, and this would stop being a test
+	// of the rejection receipt — it would be a test of the missing-mandate
+	// guard. Sending it also puts the ordering under test: the payment side is
+	// bound to a different offer too, and the Checkout Mandate's verdict is the
+	// one that has to be reported.
 	status := post(t, srv.URL+"/checkout", map[string]any{
 		"mandate":  approved.CheckoutMandate,
+		"payment":  approved.PaymentMandate,
 		"checkout": elsewhere,
 	}, &answer)
 
@@ -455,15 +464,19 @@ func TestTheMerchantRefusesAnOfferItNeverMade(t *testing.T) {
 	// offerJWT is a plausible-looking document nobody in this test signed.
 	var approved struct {
 		CheckoutMandate string `json:"checkout_mandate"`
+		PaymentMandate  string `json:"payment_mandate"`
 	}
 	require.Equal(t, http.StatusOK, post(t, surfaceSrv.URL+"/approve", map[string]any{
 		"checkout": offerJWT,
 		"payment":  paymentBody(),
 	}, &approved), "the surface signs what it is shown; catching this is the merchant's job")
 
+	// Both mandates, genuinely signed and correctly bound to each other. The
+	// only thing wrong with this purchase is the document they are bound to.
 	var body map[string]any
 	status := post(t, srv.URL+"/checkout", map[string]any{
 		"mandate":  approved.CheckoutMandate,
+		"payment":  approved.PaymentMandate,
 		"checkout": offerJWT,
 	}, &body)
 

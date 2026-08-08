@@ -458,6 +458,17 @@ func TestTheMerchantRefusesAPaymentForAnotherPrice(t *testing.T) {
 			},
 		},
 		{
+			// And one more, because the rule is symmetric and a `>=` written by
+			// somebody who thought of this as a floor would pass every other
+			// case here. Overpaying is not the merchant's windfall to accept: it
+			// is the user's money moving on an amount the merchant never quoted,
+			// which is the same disagreement as underpaying.
+			name: "a minor unit more than the price quoted",
+			pays: func(q generated.Amount) generated.Amount {
+				return generated.Amount{Amount: q.Amount + 1, Currency: q.Currency}
+			},
+		},
+		{
 			// The same integer, in different money. Amounts here are minor units
 			// of an ISO 4217 currency, so the number on its own is not a price,
 			// and a comparison reading only the integer would call this a match.
@@ -512,9 +523,22 @@ func TestTheMerchantRefusesAPaymentForAnotherPrice(t *testing.T) {
 				"constraint_violated would be wrong here — no constraint was violated, and "+
 					"on the Human Present path there is no open mandate to hold one")
 
+			// The receipt is about the Payment Mandate, because that is what was
+			// refused. internal/roles/merchant is where that property is stated
+			// across every way the payment side can fail; here it is checked on
+			// the one code that is ours, since a merchant answering our own
+			// divergence against the wrong digest is the version of the bug that
+			// would be hardest to notice.
+			assert.Equal(t, generated.ReceiptMandateTypePayment, receipt.MandateType)
+			paying, err := sdjwt.Parse(p.PaymentMandate)
+			require.NoError(t, err)
+			assert.NoError(t, ap2.AnswersMandate(receipt, paying),
+				"the receipt has to reference the mandate that failed")
+
 			assert.Empty(t, receiptFrom(t, p, "mpp"),
-				"the processor was never asked, which is what makes this a refusal rather "+
-					"than a payment the merchant complained about afterwards")
+				"no processor receipt came back — which is weaker than it looks, and is why "+
+					"internal/roles/merchant counts the call itself: a merchant that asked "+
+					"for the money and dropped the answer would look exactly like this")
 		})
 	}
 }

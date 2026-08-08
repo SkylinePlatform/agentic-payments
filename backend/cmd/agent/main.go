@@ -196,8 +196,8 @@ func buyOnce(
 
 // steps is Buy without the quote, run against a purchase that has one already.
 //
-// The four steps are exported individually as well as composed, so this costs
-// nothing but the three lines; purchase.go records why they are.
+// Approve, Fund and Settle are exported individually as well as composed, so
+// this costs nothing but the three lines; purchase.go records why they are.
 func steps(
 	ctx context.Context, c *agent.Client, payment generated.PaymentMandate, p *agent.Purchase,
 ) error {

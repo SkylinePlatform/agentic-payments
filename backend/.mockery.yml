@@ -35,6 +35,16 @@ packages:
     interfaces:
       Sink:
 
+  # The merchant's Processor. What its tests are about is whether the money was
+  # asked for at all: the merchant refuses a purchase before initiating payment,
+  # and the response shape cannot show that — a refusal omits the payment
+  # receipt, so a merchant that called the processor and dropped the answer
+  # looks identical from outside. Only a double that counts the call can tell
+  # those apart.
+  github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant:
+    interfaces:
+      Processor:
+
   # net/http's own interface, so InterfaceDir is GOROOT and the defaults above
   # cannot apply: both the destination and the package name have to be said
   # out loud. The middleware under test wraps an http.Handler, and what these

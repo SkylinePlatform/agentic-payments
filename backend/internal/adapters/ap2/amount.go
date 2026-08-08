@@ -6,8 +6,13 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 )
 
-// AmountMatches reports whether a Payment Mandate pays what the checkout it is
-// bound to costs.
+// AmountMatches reports whether a Payment Mandate pays what a checkout costs.
+//
+// It compares two amounts and establishes nothing about which checkout the
+// mandate is bound to — Binding.PaysFor does that, and a caller runs it first,
+// as merchant.Service.decide does. Folding the two together here would let a
+// caller believe it had checked a link it never looked at, which is the same
+// mistake VerifyPayment refuses to make about the binding.
 //
 // # This check is ours, not AP2's
 //
@@ -21,10 +26,11 @@ import (
 // associated with this". That is the whole of the binding. No language in the
 // specification requires any verifier to compare payment_amount against what
 // the checkout costs, none describes what happens when the two differ, and no
-// role is assigned the comparison. The only amount rule AP2 states is the
-// Amount Range constraint, which bounds payment_amount against a min and max
-// carried by the open mandate — the mandate against itself, not against the
-// document it references.
+// role is assigned the comparison. AP2 does state amount rules — payment.amount_range
+// bounds payment_amount between a min and a max and pins its currency to the
+// constraint's, and payment.budget bounds the request plus everything previously
+// spent — but every one of them measures the mandate against itself or its own
+// history. None reaches the document the mandate references.
 //
 // So a Payment Mandate saying "pay 1 USD", correctly bound by hash to a
 // checkout priced at 189 USD, is a conforming mandate. Issue #88 is the finding
@@ -60,7 +66,11 @@ func AmountMatches(m generated.PaymentMandate, quoted generated.Amount) error {
 		// put the blame on the one party that did nothing wrong. An empty
 		// currency on the *mandate* is a different thing and is not treated this
 		// way — a mandate that does not say what it pays in belongs in the
-		// mismatch below.
+		// mismatch below. In a merchant's verification path it never gets there:
+		// generated.Amount enforces the ISO 4217 pattern on the way in, so
+		// decodePayment refuses that mandate as ErrMandateMalformed before
+		// VerifyPayment returns. The branch is reachable by a direct caller, and
+		// AmountMatches answers it rather than assuming its one caller.
 		return fmt.Errorf("%w: no quoted price to compare the payment against",
 			ErrMisconfigured)
 	}

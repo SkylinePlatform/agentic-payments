@@ -442,10 +442,14 @@ AP2 defines `transaction_id` as the *"base64url-encoded hash of the
 this"* — a digest of a document, and that is the whole of it. No language in the
 specification requires any verifier to compare the Payment Mandate's
 `payment_amount` against what that checkout costs, none describes what happens
-when the two differ, and no role is assigned the comparison. The only amount
-rule AP2 states is the Amount Range constraint, which bounds `payment_amount`
-between a `min` and a `max` carried by the open mandate — the mandate measured
-against itself, never against the document it references.
+when the two differ, and no role is assigned the comparison. AP2 does state
+amount rules, and every one of them measures the mandate against itself or its
+own history rather than against the document it references: `payment.amount_range`
+bounds `payment_amount` between a `min` and a `max` carried by the open mandate
+and requires the currency to match that constraint's, and `payment.budget`
+requires the requested amount plus the sum of previously closed Payment Mandates
+to stay within a `max`. A user can therefore cap what an agent spends. Nothing
+ties any of it to what the merchant is charging.
 
 So a Payment Mandate saying **pay 1 USD**, correctly bound by hash to a checkout
 priced at **189 USD**, is a *conforming* mandate. Both carry the same digest,
@@ -471,6 +475,18 @@ signed receipt naming why. That code is ours: it is the one entry in
 the file marks it as such. `backend/internal/adapters/ap2/amount.go` is where
 the comparison and the argument for it live. Issue #88 is the finding and the
 decision.
+
+**The half AP2 does require is checked in the same place, and until #88 it was
+not checked anywhere.** The merchant recomputes the Payment Mandate's
+`transaction_id` against the offer it holds and refuses a mismatch as
+`payment_binding_mismatch`, before comparing any amount — paying for a different
+purchase and paying the wrong price for the right one are different findings,
+and the first is the more fundamental. The adapter had carried `Binding.Covers`
+and `Binding.Same` since #6 with tests behind them and **no production caller**,
+so two genuine mandates from two different purchases would settle against each
+other. That is a plain gap rather than a divergence, and it is named here
+because the paragraph above would otherwise claim more care about the binding
+than the code took.
 
 Two limits on that, both worth stating because a reader who assumed either
 would be wrong. It is the *merchant's* check and nobody else's — the Credential

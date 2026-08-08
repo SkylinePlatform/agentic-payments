@@ -188,9 +188,10 @@ func (w *world) flush(t *testing.T) {
 // quoted for it.
 //
 // The price is a parameter rather than a constant because the merchant refuses
-// a Payment Mandate that pays something else — see ap2.AmountMatches — and the
-// demo schedule the inventory is seeded with does not start at any one number a
-// literal here could name.
+// a Payment Mandate that pays something else — see ap2.AmountMatches — so what
+// belongs here is whatever the merchant just quoted rather than a number chosen
+// beside it. A literal would be a second statement of the schedule, correct
+// until the schedule moved.
 func paymentContent(price generated.Amount) generated.PaymentMandate {
 	return generated.PaymentMandate{
 		// Deliberately wrong: the surface recomputes it from the offer. A test

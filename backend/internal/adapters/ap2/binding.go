@@ -63,18 +63,25 @@ func bindingAlg(blinder *sdjwt.Blinder, blinds bool) sdjwt.HashAlg {
 // a verifier that reads checkout_hash out of the mandate and believes it has
 // established nothing an attacker could not have written.
 //
+// mismatch is the sentinel a disagreement carries, and it is a parameter because
+// the same recomputation answers two different questions. See Covers and
+// PaysFor: one asks whether a mandate agrees with the document it was checked
+// against, the other whether a Payment Mandate names the checkout a Checkout
+// Mandate has already been verified against. Those are different findings and a
+// receipt has to be able to say which.
+//
 // The comparison is constant-time. These are digests of public documents and
 // nothing secret is being compared, so this buys no confidentiality — it is
 // here because a variable-time compare on a security decision is a habit worth
 // not having, and the cost is nil.
-func verifyBinding(alg sdjwt.HashAlg, claimed, checkout string) error {
+func verifyBinding(alg sdjwt.HashAlg, claimed, checkout string, mismatch error) error {
 	recomputed, err := checkoutHash(alg, checkout)
 	if err != nil {
 		return err
 	}
 	if subtle.ConstantTimeCompare([]byte(recomputed), []byte(claimed)) != 1 {
-		return fmt.Errorf("%w: the checkout presented hashes to %s, the mandate authorises %s",
-			ErrCheckoutHashMismatch, abbreviate(recomputed), abbreviate(claimed))
+		return fmt.Errorf("%w: the checkout presented hashes to %s, the mandate names %s",
+			mismatch, abbreviate(recomputed), abbreviate(claimed))
 	}
 	return nil
 }
@@ -127,6 +134,43 @@ func BindingOf(sd *sdjwt.SDJWT, checkoutHash string) (Binding, error) {
 // This is the recompute-never-trust rule as a method: the mandate's claim is
 // compared against a digest taken here, over a document the caller supplies.
 func (b Binding) Covers(checkoutJWT string) error {
+	if err := b.recomputable(checkoutJWT); err != nil {
+		return err
+	}
+	return verifyBinding(b.alg, b.hash, checkoutJWT, ErrCheckoutHashMismatch)
+}
+
+// PaysFor reports whether this Payment Mandate's binding names the checkout a
+// Checkout Mandate has already been verified against.
+//
+// It is the same recomputation Covers performs, under a different name because
+// a failure means something different. Covers answers "does this mandate agree
+// with the document it was checked against", and disagreement is
+// checkout_hash_mismatch — one mandate against one document. A caller reaches
+// PaysFor only after the Checkout Mandate has been verified against the very
+// same checkoutJWT, so a disagreement here cannot be the document being wrong:
+// it says the two mandates name different purchases, which is
+// payment_binding_mismatch. Reporting checkout_hash_mismatch would send whoever
+// reads the receipt to the mandate that was fine.
+//
+// This is also what Binding.Same tells a caller to do when it cannot answer.
+// Same compares two digests and refuses outright when they were made by
+// different algorithms — the ordinary case for these two mandates, since a
+// Checkout Mandate always blinds checkout_jwt and a closed Payment Mandate
+// usually blinds nothing, so bindingAlg gives them different defaults. A party
+// holding the document does not need that comparison at all; it recomputes,
+// which is what this does.
+func (b Binding) PaysFor(checkoutJWT string) error {
+	if err := b.recomputable(checkoutJWT); err != nil {
+		return err
+	}
+	return verifyBinding(b.alg, b.hash, checkoutJWT, ErrPaymentBindingMismatch)
+}
+
+// recomputable refuses the two states in which neither Covers nor PaysFor is
+// answering a question about a mandate at all: a Binding nobody read out of one,
+// and a caller with no document to recompute against.
+func (b Binding) recomputable(checkoutJWT string) error {
 	if b.hash == "" {
 		return fmt.Errorf("%w: this binding was never read from a mandate", ErrMisconfigured)
 	}
@@ -135,7 +179,7 @@ func (b Binding) Covers(checkoutJWT string) error {
 			"%w: no checkout was supplied to recompute the binding against",
 			ErrBindingUnverifiable)
 	}
-	return verifyBinding(b.alg, b.hash, checkoutJWT)
+	return nil
 }
 
 // Same reports whether two mandates are bound to the same checkout.
