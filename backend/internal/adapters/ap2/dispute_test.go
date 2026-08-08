@@ -211,7 +211,7 @@ func TestARefusedPurchaseStillHasAnIntactChain(t *testing.T) {
 // discloses rather than against a copy the verifier holds.
 //
 // AP2 permits a role to delegate its verification, so an arbiter can be handed
-// one of these — CheckoutVerifier is an interface precisely so it can be. What
+// one of these — CheckoutVerifierAsOf is an interface precisely so it can be. What
 // this exists to prove is that the chain does not inherit a delegate's
 // shortcuts: without VerifySamePurchase's own Covers anchor, two mandates
 // agreeing on a digest of a different document would carry the whole chain.
@@ -248,7 +248,13 @@ type tamperCase struct {
 	is   error
 	code generated.ErrorCode
 	// delegated marks a row whose tamper also swaps the arbiter's
-	// CheckoutVerifier for laxCheckoutVerifier, which exists only in this file.
+	// CheckoutVerifierAsOf for laxCheckoutVerifier, which exists only in this
+	// file.
+	//
+	// A row that does not set it **cannot** reach the arbiter, rather than
+	// merely not doing so: those tampers take the Dispute as `_ *ap2.Dispute`
+	// and have no name to reconfigure it through. The published set is
+	// therefore bundle-only by compilation and not by anybody remembering.
 	//
 	// Such a row is **not published** in testdata/dispute.json, and the reason
 	// is what a conformance vector means: a second implementation reads a tamper
@@ -341,6 +347,36 @@ func tamperCases() []tamperCase {
 			broke: evidence.StepCheckoutAnswered,
 			is:    ap2.ErrReceiptMismatch,
 			code:  generated.ErrorCodeMandateMalformed,
+		},
+		{
+			// The checkout half of the expiry pair, and the earlier and more
+			// consequential of the two: a Checkout Mandate that was already dead
+			// when it was presented means the merchant accepted an authorisation
+			// that had lapsed, which is a finding against the merchant before
+			// anything about the payment is reached.
+			//
+			// It is also what pins link 1's instant from the near side. Without
+			// it, an implementation judging the Checkout Mandate as of a few
+			// hours before the transaction passes every other row in this file —
+			// this mandate is alive three hours early and dead at the
+			// transaction, so only a row with a mandate that lapsed *before* the
+			// purchase can tell the two apart.
+			name:   "the Checkout Mandate had already expired when it was presented",
+			vector: "checkout_mandate_expired_before_presentation",
+			tamper: func(t *testing.T, fx disputeFx, _ *ap2.Dispute, b *evidence.Bundle) {
+				dead := mandate()
+				signed := fx.at.Add(-2 * time.Hour)
+				lapsed := fx.at.Add(-time.Hour)
+				dead.IssuedAt = &signed
+				dead.ExpiresAt = &lapsed
+				cm := reparse(t, issue(t, fx.user, dead))
+
+				b.CheckoutMandate = cm.String()
+				b.CheckoutReceipt = receiptOver(t, fx.merchant, merchantID, cm, checkoutKind, nil)
+			},
+			broke: evidence.StepCheckoutAuthorised,
+			is:    sdjwt.ErrExpired,
+			code:  generated.ErrorCodeMandateExpired,
 		},
 		{
 			// Expiry as a finding against somebody, which is the only form of it
@@ -781,10 +817,15 @@ func TestAHoldingChainSaysNothingAboutWhoIssuedTheOffer(t *testing.T) {
 // TestTwoPairsOverOneOfferCrossVerify is the reason Dispute says "one document"
 // rather than "one transaction".
 //
-// Two Checkout Mandates and two Payment Mandates, all four over the same
-// merchant offer, all four genuine. A bundle taking one mandate from each pair
-// holds, because the digest is the same in all four and the digest is what links
-// 1 and 4 compare. Nothing here is wrong; the claim would be.
+// The fixture's own Checkout Mandate is paired with a second, separately issued
+// Payment Mandate over the same merchant offer. Both are genuine, neither was
+// issued alongside the other, and the chain holds — because the digest is
+// identical in both and the digest is all links 1 and 4 compare. Nothing here is
+// wrong; the claim "one transaction" would be.
+//
+// Three mandates rather than four: a second Checkout Mandate would make the
+// symmetry prettier and would test nothing the swapped Payment Mandate does not
+// already, since a crossed pair is crossed once whichever side is moved.
 func TestTwoPairsOverOneOfferCrossVerify(t *testing.T) {
 	t.Parallel()
 

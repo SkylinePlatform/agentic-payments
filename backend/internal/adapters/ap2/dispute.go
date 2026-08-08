@@ -44,14 +44,31 @@ import (
 // resolves any of them — they arrive already chosen.
 //
 // The two rule-set fields are the AsOf interfaces rather than the plain
-// CheckoutVerifier and PaymentVerifier a role holds, and that is the whole of
-// what stops a dispute being judged against today. A rule set carries its own
+// CheckoutVerifier and PaymentVerifier a role holds. A rule set carries its own
 // clock, and Dispute holds it behind an interface it cannot reach into, so a
 // Dispute over the plain pair could not have pinned the instant however carefully
 // it was documented — the obligation would have sat on whoever built the rule
 // sets, which is a rule nobody enforces. MerchantRules and CredentialProviderRules
 // satisfy both pairs, so delegation is untouched: a delegate implements the AsOf
 // method and is handed the instant like anybody else.
+//
+// **Be clear about what that buys, because it is narrower than it looks.** Two
+// things: a rule set's own clock can no longer reach a verdict silently, and the
+// instant is named at every call site rather than defaulted. What it does not
+// buy is a correct instant. Verify(b, someClock.Now()) compiles, and a service
+// wiring an arbiter from the clock it already holds will write exactly that —
+// every other call in such a file passes s.clock — and get mandate_expired
+// against a blameless counterparty on every dispute it hears. That is the
+// original defect, reachable in production vocabulary, and this package cannot
+// stop it: nothing here can tell a wrong instant from a right one, because the
+// only things that could are the artefacts, and those belong to the parties
+// being judged. Passing the right instant is the caller's obligation, and it is
+// an obligation rather than a guarantee.
+//
+// The property is also weaker for a delegate than for the rule sets here. A
+// delegate's VerifyCheckoutAsOf is as free to ignore at and read a clock of its
+// own as it is to honour it; what the interface buys there is that the instant
+// was offered, not that it was used.
 //
 // This is Human Present evidence only. Under Human Not Present a closed mandate
 // is a Key Binding JWT inside a ~~-joined sdjwt.Chain, verified through

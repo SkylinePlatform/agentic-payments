@@ -228,28 +228,34 @@ func (r MerchantRules) VerifyCheckout(
 // clock, the epoch, now — would answer a question nobody asked, and the answer
 // it would give for a real bundle is "every mandate here expired", against
 // counterparties who did nothing.
+//
+// **Everything after that guard is VerifyCheckout's**, reached by copying this
+// rule set with its clock pinned. That is the only correct shape: the two entry
+// points differ in *when* the question is asked and in nothing else, so a second
+// body would be a second answer to one question, drifting the moment either side
+// is tightened. It was two bodies for one commit, and the copy of the empty-
+// checkout guard was already unreachable by any test — which is exactly how that
+// drift begins. A rule added to VerifyCheckout now reaches disputes for free,
+// and the replay store issue #27 will add is the case that makes it matter: it
+// lands on the role path, and a dispute is the one path where nobody is watching
+// a live transaction fail.
+//
+// The copy carries every field forward rather than naming Issuer alone, so a
+// field VerifyCheckout starts reading is not silently dropped here.
 func (r MerchantRules) VerifyCheckoutAsOf(
 	at time.Time,
 	sd *sdjwt.SDJWT,
 	checkoutJWT string,
 ) (generated.CheckoutMandate, error) {
-	var zero generated.CheckoutMandate
 	if at.IsZero() {
-		return zero, fmt.Errorf(
+		return generated.CheckoutMandate{}, fmt.Errorf(
 			"%w: no instant to judge this checkout as of, and a mandate is live or expired only relative to one",
 			ErrMisconfigured)
 	}
-	if checkoutJWT == "" {
-		return zero, fmt.Errorf(
-			"%w: a merchant verifies against the checkout it issued, and none was supplied",
-			ErrMisconfigured)
-	}
 
-	return VerifyCheckout(sd, CheckoutOptions{
-		Issuer:   r.Issuer,
-		Clock:    fixedClock(at),
-		Checkout: checkoutJWT,
-	})
+	pinned := r
+	pinned.Clock = fixedClock(at)
+	return pinned.VerifyCheckout(sd, checkoutJWT)
 }
 
 // AuthoriseCheckoutChain runs the Merchant's rules against a delegation
@@ -368,8 +374,9 @@ func (r CredentialProviderRules) VerifyPayment(sd *sdjwt.SDJWT) (generated.Payme
 
 // VerifyPaymentAsOf runs the Credential Provider's rules as they stood at a
 // stated moment. See MerchantRules.VerifyCheckoutAsOf for why the instant
-// replaces r.Clock rather than being checked against it, and why a zero one is
-// refused rather than defaulted.
+// replaces r.Clock rather than being checked against it, why a zero one is
+// refused rather than defaulted, and why everything past that guard is
+// VerifyPayment's own body reached through a clock-pinned copy of this rule set.
 func (r CredentialProviderRules) VerifyPaymentAsOf(
 	at time.Time,
 	sd *sdjwt.SDJWT,
@@ -380,10 +387,9 @@ func (r CredentialProviderRules) VerifyPaymentAsOf(
 			ErrMisconfigured)
 	}
 
-	return VerifyPayment(sd, PaymentOptions{
-		Issuer: r.Issuer,
-		Clock:  fixedClock(at),
-	})
+	pinned := r
+	pinned.Clock = fixedClock(at)
+	return pinned.VerifyPayment(sd)
 }
 
 // AuthorisePaymentChain runs the Credential Provider's rules against a

@@ -39,7 +39,14 @@ Two things, and neither of them is in the bundle.
 party being judged pick the key it is judged against.
 
 **The instant the transaction happened.** `Verify` takes it as a parameter and
-judges every expiry in the bundle against it, rather than reading a clock.
+judges the two mandates' expiry against it, rather than reading a clock.
+
+Their expiry and no other, which is worth naming because the bundle contains one
+more. `Bundle.Checkout` is itself a JWT carrying an `exp` — `merchant.Service`'s
+`ownOffer` refuses an offer without one — and the chain never reads it. That
+follows from treating the offer as opaque bytes rather than parsing it, the same
+decision that leaves the chain with no link over the offer's provenance, and it
+is a limit rather than an oversight.
 
 The second follows from the first. Every artefact in a bundle is a claim by a
 party to the dispute, so a transaction time read out of one would be a timestamp
@@ -88,14 +95,50 @@ alternatives:
 - **Delegation survives untouched.** A delegate implements the `AsOf` method and
   is handed the instant like anybody else. `Dispute` still never constructs a
   rule set from raw keys, which is #8's second criterion.
-- **Nothing outside `internal/adapters/ap2` changed.** `merchant.Service` still
-  calls `VerifyCheckout`, and `credprovider.Service` and `mpp.Service` still call
-  `VerifyPayment`, with the signatures they always had. A role verifies as it
-  goes; only the arbiter looks backwards.
-- **The bug is unexpressible rather than documented.** The alternative — a
-  required field on `Dispute` plus an obligation on the caller to pin its rule
-  sets' clocks — is a rule nobody enforces, which is how this defect arrived. A
-  `Dispute` cannot now be built from a rule set that judges as of today.
+- **No role service changed.** `merchant.Service` still calls `VerifyCheckout`,
+  and `credprovider.Service` and `mpp.Service` still call `VerifyPayment`, with
+  the signatures they always had. A role verifies as it goes; only the arbiter
+  looks backwards. Two things outside the adapter did change, and are the whole
+  of it: `evidence.Verifier` grew the parameter, and `internal/agent` passes one.
+- **A rule set's clock can no longer reach a verdict silently.** The alternative
+  — a required field on `Dispute` plus an obligation on the caller to pin its
+  rule sets' clocks — is a rule nobody enforces, which is how this defect
+  arrived. A `Dispute` cannot now be built from a rule set that judges as of
+  today, and the instant is named at every call site rather than defaulted.
+
+### What this does not buy, stated plainly
+
+**A correct instant.** `Verify(b, someClock.Now())` compiles and reproduces the
+original defect exactly — `Holds() == false`, `Broke = checkout_authorised`,
+`Code = mandate_expired`, zero links held, against a counterparty who did
+nothing. `purchase_test.go` contains that very line on purpose, to show the
+answer an arbiter must not give.
+
+The failure is not hypothetical. A service wiring an arbiter from the clock it
+already holds writes `Verify(b, s.clock.Now())` because every other call in that
+file passes `s.clock`, and then finds against a blameless counterparty on every
+dispute it hears. **Passing the right instant is the caller's obligation, and it
+is an obligation rather than a guarantee.**
+
+Nothing in this package can close it. Telling a wrong instant from a right one
+would take a second source for the transaction time, and the only candidates are
+the artefacts — which belong to the parties being judged, and which is why the
+instant does not come from them in the first place. That is the residual of the
+decision rather than an oversight: **whoever supplies `at` controls every expiry
+verdict in the report.**
+
+The guarantee is also weaker for a delegate than for the rule sets here. A
+delegate's `VerifyCheckoutAsOf` is as free to ignore `at` and read a clock of its
+own as `laxCheckoutVerifier` is to honour its arguments; what the interface buys
+there is that the instant was offered, not that it was used.
+
+**What would make a wrong instant harder to pass, if it is ever worth it.** A
+named parameter type — `type TransactionTime time.Time` on the port — would turn
+`Verify(b, s.clock.Now())` into a compile error and force
+`TransactionTime(s.clock.Now())`, which is at least a deliberate act a reviewer
+can see. It is not built. It costs a domain type that exists only to be awkward,
+it does not stop the conversion being written anyway, and an honest limit is
+worth more here than a second mechanism that stops short of the same place.
 
 Separate methods rather than a nullable instant on the existing ones, for the
 reason `CheckoutChainVerifier` gives for the same choice: an optional argument
@@ -147,9 +190,9 @@ flowchart TD
 
 | Link | Establishes | Reuses |
 |---|---|---|
-| `StepCheckoutAuthorised` | the Checkout Mandate is genuine, live, of the right type, and binds the document in the bundle | `CheckoutVerifier.VerifyCheckout` — `MerchantRules` |
+| `StepCheckoutAuthorised` | the Checkout Mandate is genuine, live **as of the transaction instant**, of the right type, and binds the document in the bundle | `CheckoutVerifierAsOf.VerifyCheckoutAsOf` — `MerchantRules` |
 | `StepCheckoutAnswered` | the Checkout Receipt is the merchant's, is labelled as a Checkout Receipt, and answers *this presentation* | `VerifyReceipt` + `AnswersMandate` |
-| `StepPaymentAuthorised` | the Payment Mandate is genuine, live, of the right type | `PaymentVerifier.VerifyPayment` — `CredentialProviderRules` |
+| `StepPaymentAuthorised` | the Payment Mandate is genuine, live as of the transaction instant, of the right type | `PaymentVerifierAsOf.VerifyPaymentAsOf` — `CredentialProviderRules` |
 | `StepOnePurchase` | both mandates name one purchase, and that purchase is the document in the bundle | `BindingOf`, `Binding.Same`, `Binding.Covers` |
 | `StepPaymentAnswered` | the Payment Receipt is the answerer's, is labelled as a Payment Receipt, and answers *this presentation* | `VerifyReceipt` + `AnswersMandate` |
 
@@ -212,7 +255,7 @@ sha-384.
 Links 1, 2, 3, 5 and the *payment* half of link 4's anchor all refuse first for
 some bundle against an arbiter holding `MerchantRules` and
 `CredentialProviderRules`. The *checkout* half of the anchor — `checkout.Covers`
-inside the `ErrBindingUnverifiable` arm — does not: under every `CheckoutVerifier`
+inside the `ErrBindingUnverifiable` arm — does not: under every checkout rule set
 this repository ships, link 1 has already established that same equality, and the
 two tests that reach it get there through `laxCheckoutVerifier`. It is kept
 because a delegate is permitted and the anchor is what a delegate's shortcuts
@@ -311,6 +354,17 @@ chain and a presentation are both compact serialisations, so the HNP variant is 
 discrimination inside `Dispute.Verify` when there is a caller for it — not a
 change to the type and not a second bundle. A chain path written now would be
 speculative, and #90's `Chain.Root()` was deleted for exactly that.
+
+**One thing that is worth writing down now, while `Dispute` is the only
+implementor of the port and the signature is still cheap to shape.** The instant
+extends to Human Not Present cleanly — `fixedClock` drops into
+`ChainOptions.Clock` exactly as it does into `CheckoutOptions.Clock` — but the
+instant is not what will need adding. `AuthoriseCheckoutChain` also requires a
+`constraint.Subject` and the merchant's remembered nonce, and neither is in
+`Bundle` nor derivable from it. So `Verify(b, at)` will need a third shape, and
+an options struct or a second method is the form that takes it as an addition
+rather than as a second signature change on the same port. Not built, and not
+designed further than this sentence.
 
 ## The decisions worth arguing with
 
@@ -441,12 +495,19 @@ heard it. Neither value is ours to choose: the link names come from
 
 **The published set is narrower than the tamper matrix, on purpose.** A vector
 says: apply this tamper to the *bundle*, and the first link to refuse must be
-this one. Two rows in the matrix also swap the arbiter's `CheckoutVerifier` for
-`laxCheckoutVerifier` in order to reach link 4 at all — under `MerchantRules`,
+this one. Two rows in the matrix also swap the arbiter's `CheckoutVerifierAsOf`
+for `laxCheckoutVerifier` in order to reach link 4 at all — under `MerchantRules`,
 which is what `cmd/merchant` and every production wiring hold, the same bundles
 refuse at `checkout_authorised`. Publishing those would judge a correct
 implementation non-conformant for being right, so the `tamperCase.delegated` flag
 keeps them out of the file while leaving them as ordinary tests of the anchor.
+
+**A flag would be a convention; this is a compile error.** A row that does not
+set `delegated` takes the arbiter as `_ *ap2.Dispute` and so has no name to
+reconfigure it through — it can edit the bundle and nothing else. The published
+set is bundle-only because the other rows cannot express anything more, not
+because anybody remembered to set a field.
+
 The golden test asserts the published set is exactly the undelegated rows, in
 both directions, so neither list can drift.
 

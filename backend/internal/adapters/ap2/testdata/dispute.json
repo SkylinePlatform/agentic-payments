@@ -35,6 +35,10 @@
       "step": "checkout_answered",
       "code": "mandate_malformed"
     },
+    "checkout_mandate_expired_before_presentation": {
+      "step": "checkout_authorised",
+      "code": "mandate_expired"
+    },
     "payment_mandate_expired_before_presentation": {
       "step": "payment_authorised",
       "code": "mandate_expired"

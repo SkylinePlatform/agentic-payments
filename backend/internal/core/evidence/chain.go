@@ -151,8 +151,14 @@ func (r Report) Holds() bool { return r.Err == nil }
 //
 // # The arbiter brings the instant
 //
-// at is the moment the transaction happened, and every expiry in the bundle is
-// judged against it rather than against now.
+// at is the moment the transaction happened, and every expiry a verifier reads
+// is judged against it rather than against now.
+//
+// Every expiry it reads, which is not the same as every expiry present. Which
+// timestamps an implementation looks at is its own business — the AP2 chain
+// reads the two mandates' and not the offer document's, because it treats that
+// document as opaque bytes — so this says what at means, and not that a bundle
+// has no unexamined dates in it.
 //
 // **The bundle cannot supply it.** Every artefact in a bundle is a claim by a
 // party to the dispute, so a transaction time read out of one would be a
