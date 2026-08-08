@@ -284,6 +284,27 @@ type CheckoutAuthorisation struct {
 //     recompute-never-trust check VerifyCheckout runs.
 //  8. authz.AuthoriseCheckout(open, subject, opts.Clock.Now()), and turn an
 //     unsatisfied report into a rejection with report.Err().
+//
+// # Why this takes a subject and AuthorisePaymentChain does not
+//
+// The two signatures differ, and a reader meeting this one first should not
+// have to guess whether that is an oversight. It is the protocol showing
+// through.
+//
+// A Merchant's subject is read off the catalogue and the checkout it issued —
+// the item, the quantity, the category, the price. This package never sees
+// either: checkoutJWT arrives here as an opaque string that is only ever
+// hashed, never parsed, and nothing in internal/core/generated models a cart.
+// So there is no CheckoutSubject to write, because there is nothing for one to
+// be a pure function of. Keeping the row in evaluations[ForCheckout] in step
+// with what a Merchant actually fills in is therefore the Merchant's
+// obligation, and internal/roles/merchant is where it is discharged.
+//
+// A payment-side verifier is in the opposite position: its only source is the
+// closed mandate inside the chain, which it cannot read until that chain has
+// verified. AuthorisePaymentChain therefore derives the subject after
+// verification, and PaymentSubject is that derivation, tied field by field to
+// the row it implements. See both for the argument in full.
 func AuthoriseCheckoutChain(
 	c *sdjwt.Chain,
 	subject constraint.Subject,
@@ -386,7 +407,9 @@ type PaymentAuthorisation struct {
 // evaluations[ForPayment].states by hand, with nothing checking that it had,
 // and the only code that ever did was a test helper whose own comment admitted
 // the gap. A pure function of what this function already holds is strictly
-// better than an argument no caller can supply honestly.
+// better than an argument no caller can supply honestly — and it is a function
+// a test can hold to the row, which an argument spread across call sites is
+// not.
 //
 // The instant reaches authz.AuthorisePayment and the subject's `at` from the
 // same opts.Clock.Now() call, so expiry and the user's booking window are

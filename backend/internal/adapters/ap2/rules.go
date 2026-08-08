@@ -71,6 +71,12 @@ type CredentialVerifier interface {
 // only be verified through a code path that knows it is one; there is no
 // single entry point a caller could hand a chain to by mistake and have it
 // silently evaluate no constraints.
+//
+// It takes a constraint.Subject where PaymentChainVerifier below does not, and
+// the asymmetry is deliberate: a Merchant builds its subject from the catalogue
+// and the checkout it issued, neither of which this package ever sees, while a
+// payment-side verifier reads its own out of the chain after verifying it.
+// AuthoriseCheckoutChain's doc comment argues it in full.
 type CheckoutChainVerifier interface {
 	AuthoriseCheckoutChain(c *sdjwt.Chain, subject constraint.Subject, checkoutJWT string, nonce string) (CheckoutAuthorisation, error)
 }

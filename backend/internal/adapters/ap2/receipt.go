@@ -58,8 +58,12 @@ const ReceiptType = "ap2-receipt+jwt"
 // so that a refusal cannot skip it, and both now hand over a *sdjwt.Chain on
 // their Human Not Present path — #120. The merchant's own chain caller is #119.
 //
-// Widening this changed no existing call site: every Human Present one still
-// passes a *sdjwt.SDJWT and not one of them was touched.
+// Two call sites still pass a *sdjwt.SDJWT and were never touched:
+// merchant.Service, which has no chain path until #119, and Dispute.Verify,
+// which reads Human Present bundles only. The two payment roles no longer have
+// a Human-Present-specific call site at all — each settles the mode first and
+// then issues one receipt from a shared tail, over whichever Presented came
+// back, which is what stops a mode acquiring an exit that skips the receipt.
 type Presented interface {
 	// SDHash returns the digest a receipt's reference claim carries for this
 	// presentation.

@@ -205,6 +205,34 @@ type funded struct {
 	Credential *generated.PaymentCredential `json:"credential"`
 }
 
+// settled is POST /payment's.
+type settledOutcome struct {
+	Receipt string `json:"receipt"`
+	Settled bool   `json:"settled"`
+}
+
+// mintCredential runs the funding leg so a settlement test has real money to
+// spend.
+//
+// The credential has to come from the provider rather than be assembled here:
+// what the processor checks is that its checkout hash matches the one inside
+// the chain, and a hash the test computed would be the test agreeing with
+// itself.
+func mintCredential(t *testing.T, d delegation) *generated.PaymentCredential {
+	t.Helper()
+
+	srv := theCredentialProvider(t, d.user, newParty(t, "credprovider"))
+	nonce := nonceFrom(t, srv)
+
+	var minted funded
+	require.Equal(t, http.StatusOK, post(t, srv.URL+"/credential", map[string]any{
+		"chain": d.chainFor(t, credProviderID, nonce, 18900),
+		"nonce": nonce,
+	}, &minted), "the funding leg has to succeed before there is money to spend")
+	require.NotNil(t, minted.Credential)
+	return minted.Credential
+}
+
 // TestFundingADelegatedPaymentMandateScopesTheCredentialToItsCheckout is the
 // Human Not Present counterpart of the funding leg.
 //
@@ -485,33 +513,75 @@ func TestAChainIsNeverSniffedOutOfTheMandateField(t *testing.T) {
 // It is the verifier's own gap and not the caller's mistake, so the code is
 // verifier_unavailable. Answering request_malformed would send the one party
 // that did nothing wrong away to debug a request that was fine.
+//
+// Two ways to be unable to answer, and the second is why the guard reads
+// `Chains == nil || Challenge == nil` rather than naming one. Narrowing it to
+// Chains alone reddens nothing by itself — which is exactly the state this
+// subtest exists to make visible: a provider holding chain rules and no
+// challenger would then nil-dereference inside Challenge.Check instead of
+// saying it cannot help.
 func TestAProviderThatServesHumanPresentOnlySaysSoRatherThanVerifyingNothing(t *testing.T) {
 	t.Parallel()
 
-	provider := newParty(t, "credprovider")
-	d := newDelegation(t, capOnAmount, pinOnPayee)
+	for _, tc := range []struct {
+		name string
+		svc  func(d delegation, provider party) *credprovider.Service
+	}{
+		{
+			// No Chains and no Challenge: exactly the service the Human Present
+			// tests in roles_test.go stand up.
+			name: "no chain rules",
+			svc: func(d delegation, provider party) *credprovider.Service {
+				challenge, err := crypto.NewChallenger(provider.clock, roles.ChallengeTTL)
+				require.NoError(t, err)
+				return &credprovider.Service{
+					ID:        credProviderID,
+					Rules:     ap2.CredentialProviderRules{Issuer: d.user.verifier, Clock: provider.clock},
+					Signer:    provider.signer,
+					Keys:      provider.keys,
+					Clock:     provider.clock,
+					Challenge: challenge,
+				}
+			},
+		},
+		{
+			name: "chain rules but no challenger",
+			svc: func(d delegation, provider party) *credprovider.Service {
+				rules := ap2.CredentialProviderRules{
+					Issuer: d.user.verifier, Clock: provider.clock,
+					AgentKey: roles.AgentKey, Audience: credProviderID,
+				}
+				return &credprovider.Service{
+					ID:     credProviderID,
+					Rules:  rules,
+					Chains: rules,
+					Signer: provider.signer,
+					Keys:   provider.keys,
+					Clock:  provider.clock,
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	// No Chains and no Challenge: exactly the service the Human Present tests
-	// in roles_test.go stand up.
-	svc := &credprovider.Service{
-		ID:     credProviderID,
-		Rules:  ap2.CredentialProviderRules{Issuer: d.user.verifier, Clock: provider.clock},
-		Signer: provider.signer,
-		Keys:   provider.keys,
-		Clock:  provider.clock,
+			provider := newParty(t, "credprovider")
+			d := newDelegation(t, capOnAmount, pinOnPayee)
+
+			handler, err := tc.svc(d, provider).Handler()
+			srv := serve(t, handler, err)
+
+			var body map[string]any
+			status := post(t, srv.URL+"/credential", map[string]any{
+				"chain": d.chainFor(t, credProviderID, "n-anything", 18900),
+				"nonce": "n-anything",
+			}, &body)
+
+			assert.Equal(t, http.StatusServiceUnavailable, status)
+			assert.Equal(t, string(generated.ErrorCodeVerifierUnavailable), body["code"],
+				"the request was well formed; this provider simply does not answer that question")
+		})
 	}
-	handler, err := svc.Handler()
-	srv := serve(t, handler, err)
-
-	var body map[string]any
-	status := post(t, srv.URL+"/credential", map[string]any{
-		"chain": d.chainFor(t, credProviderID, "n-anything", 18900),
-		"nonce": "n-anything",
-	}, &body)
-
-	assert.Equal(t, http.StatusServiceUnavailable, status)
-	assert.Equal(t, string(generated.ErrorCodeVerifierUnavailable), body["code"],
-		"the request was well formed; this provider simply does not answer that question")
 }
 
 // TestTheProcessorSettlesADelegatedPayment is the last link under Human Not
@@ -525,30 +595,18 @@ func TestAProviderThatServesHumanPresentOnlySaysSoRatherThanVerifyingNothing(t *
 func TestTheProcessorSettlesADelegatedPayment(t *testing.T) {
 	t.Parallel()
 
-	provider := newParty(t, "credprovider")
 	processor := newParty(t, "mpp")
 	d := newDelegation(t, capOnAmount, pinOnPayee)
+	credential := mintCredential(t, d)
 
-	providerSrv := theCredentialProvider(t, d.user, provider)
 	processorSrv := theProcessor(t, d.user, processor)
-
-	providerNonce := nonceFrom(t, providerSrv)
-	var minted funded
-	require.Equal(t, http.StatusOK, post(t, providerSrv.URL+"/credential", map[string]any{
-		"chain": d.chainFor(t, credProviderID, providerNonce, 18900),
-		"nonce": providerNonce,
-	}, &minted), "the funding leg has to succeed before there is money to spend")
-	require.NotNil(t, minted.Credential)
-
 	processorNonce := nonceFrom(t, processorSrv)
-	var out struct {
-		Receipt string `json:"receipt"`
-		Settled bool   `json:"settled"`
-	}
+
+	var out settledOutcome
 	status := post(t, processorSrv.URL+"/payment", map[string]any{
 		"chain":      d.chainFor(t, processorID, processorNonce, 18900),
 		"nonce":      processorNonce,
-		"credential": minted.Credential,
+		"credential": credential,
 	}, &out)
 
 	require.Equal(t, http.StatusOK, status)
@@ -578,10 +636,7 @@ func TestTheProcessorRefusesACredentialForAnotherPurchaseUnderAChain(t *testing.
 	require.NoError(t, err)
 
 	nonce := nonceFrom(t, srv)
-	var out struct {
-		Receipt string `json:"receipt"`
-		Settled bool   `json:"settled"`
-	}
+	var out settledOutcome
 	status := post(t, srv.URL+"/payment", map[string]any{
 		"chain": d.chainFor(t, processorID, nonce, 18900),
 		"nonce": nonce,
@@ -599,6 +654,202 @@ func TestTheProcessorRefusesACredentialForAnotherPurchaseUnderAChain(t *testing.
 	require.NotNil(t, receipt.Error)
 	assert.Equal(t, generated.ErrorCodeCredentialScopeMismatch, *receipt.Error,
 		"the mandates are fine and the money is wrong, which is its own rejection under a chain exactly as it is without one")
+}
+
+// TestTheProcessorGuardsItsChainBranchTheSameWay is F2 of the review, and the
+// reason it is worth its length is not symmetry.
+//
+// mpp/service.go is a near-copy of credprovider/service.go, and the realistic
+// failure is not either being written wrong today — the reviewer probed all
+// three of these and got the right answer from each. It is the *next* edit
+// touching one and not the other. Someone reorders mpp.examine's switch, a body
+// carrying both fields takes the mandate branch, and a chain-mode caller reaches
+// the entry point that evaluates no constraints — precisely what ap2's two
+// interfaces exist to make unexpressible — with a green suite, because every
+// test naming that guard stopped at the Credential Provider.
+//
+// So each subtest here is the mutation that would otherwise go unnoticed,
+// asserted at the processor.
+func TestTheProcessorGuardsItsChainBranchTheSameWay(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a body carrying both a mandate and a chain is refused", func(t *testing.T) {
+		t.Parallel()
+
+		// Otherwise settleable, on the lesson the Credential Provider's own
+		// version of this test had to learn: a request that would be refused
+		// anyway is refused with or without the guard, and a test built that
+		// way stays green while the guard is deleted.
+		processor := newParty(t, "mpp")
+		d := newDelegation(t, capOnAmount, pinOnPayee)
+		credential := mintCredential(t, d)
+
+		srv := theProcessor(t, d.user, processor)
+		nonce := nonceFrom(t, srv)
+
+		var body map[string]any
+		status := post(t, srv.URL+"/payment", map[string]any{
+			"mandate":    "a Human Present mandate nobody asked this processor to read",
+			"chain":      d.chainFor(t, processorID, nonce, 18900),
+			"nonce":      nonce,
+			"credential": credential,
+		}, &body)
+
+		assert.Equal(t, http.StatusBadRequest, status,
+			"the chain alone would have settled this; a request carrying both does not say which mode it means")
+		assert.Equal(t, string(generated.ErrorCodeRequestMalformed), body["code"])
+		assert.NotEqual(t, true, body["settled"],
+			"a processor that quietly picked the chain would have moved money here")
+	})
+
+	t.Run("a body carrying neither is refused", func(t *testing.T) {
+		t.Parallel()
+
+		processor := newParty(t, "mpp")
+		d := newDelegation(t, capOnAmount)
+		srv := theProcessor(t, d.user, processor)
+
+		var body map[string]any
+		status := post(t, srv.URL+"/payment", map[string]any{"nonce": "n"}, &body)
+
+		assert.Equal(t, http.StatusBadRequest, status, "there is nothing here to settle against")
+		assert.Equal(t, string(generated.ErrorCodeRequestMalformed), body["code"])
+		assert.NotContains(t, body, "receipt", "nothing was parsed, so nothing was examined")
+	})
+
+	t.Run("a challenge this processor never issued is refused before anything is read", func(t *testing.T) {
+		t.Parallel()
+
+		processor := newParty(t, "mpp")
+		d := newDelegation(t, capOnAmount, pinOnPayee)
+		credential := mintCredential(t, d)
+		srv := theProcessor(t, d.user, processor)
+
+		var body map[string]any
+		status := post(t, srv.URL+"/payment", map[string]any{
+			"chain":      d.chainFor(t, processorID, "n-invented-by-the-agent", 18900),
+			"nonce":      "n-invented-by-the-agent",
+			"credential": credential,
+		}, &body)
+
+		assert.Equal(t, http.StatusBadRequest, status)
+		assert.Equal(t, string(generated.ErrorCodeRequestMalformed), body["code"],
+			"the agent signed this nonce, so a processor that only compared the signature would accept a challenge it never issued")
+		assert.NotContains(t, body, "receipt")
+	})
+
+	t.Run("a processor not stood up for chains says so", func(t *testing.T) {
+		t.Parallel()
+
+		processor := newParty(t, "mpp")
+		d := newDelegation(t, capOnAmount, pinOnPayee)
+
+		// Two ways to be unable to answer, and both are the operator's omission
+		// rather than the caller's mistake. The second is the one no mutation
+		// finds on its own: narrowing the guard to PaymentChains alone leaves a
+		// processor holding rules and no challenger, which nil-dereferences
+		// inside Challenge.Check rather than answering anything.
+		for _, tc := range []struct {
+			name string
+			svc  func() *mpp.Service
+		}{
+			{
+				name: "no chain rules",
+				svc: func() *mpp.Service {
+					challenge, err := crypto.NewChallenger(processor.clock, roles.ChallengeTTL)
+					require.NoError(t, err)
+					return &mpp.Service{
+						ID:        processorID,
+						Payments:  ap2.CredentialProviderRules{Issuer: d.user.verifier, Clock: processor.clock},
+						Rules:     ap2.MPPRules{Clock: processor.clock},
+						Signer:    processor.signer,
+						Keys:      processor.keys,
+						Clock:     processor.clock,
+						Challenge: challenge,
+					}
+				},
+			},
+			{
+				name: "chain rules but no challenger",
+				svc: func() *mpp.Service {
+					payments := ap2.CredentialProviderRules{
+						Issuer: d.user.verifier, Clock: processor.clock,
+						AgentKey: roles.AgentKey, Audience: processorID,
+					}
+					return &mpp.Service{
+						ID:            processorID,
+						Payments:      payments,
+						PaymentChains: payments,
+						Rules:         ap2.MPPRules{Clock: processor.clock},
+						Signer:        processor.signer,
+						Keys:          processor.keys,
+						Clock:         processor.clock,
+					}
+				},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				handler, err := tc.svc().Handler()
+				srv := serve(t, handler, err)
+
+				var body map[string]any
+				status := post(t, srv.URL+"/payment", map[string]any{
+					"chain": d.chainFor(t, processorID, "n-anything", 18900),
+					"nonce": "n-anything",
+					"credential": generated.PaymentCredential{
+						Token: "tok_anything", CheckoutHash: "anything",
+					},
+				}, &body)
+
+				assert.Equal(t, http.StatusServiceUnavailable, status)
+				assert.Equal(t, string(generated.ErrorCodeVerifierUnavailable), body["code"],
+					"the request was well formed; this processor simply does not answer that question")
+			})
+		}
+	})
+}
+
+// TestAPaymentChainAddressedToTheCredentialProviderIsRefusedByTheProcessor is
+// the audience binding at the other end of the payment leg.
+//
+// It holds today only because both roles route through one function, which is
+// exactly why it needs saying here: the property a reader cares about is that
+// **this processor** refuses a proof addressed to somebody else, and a shared
+// implementation is a reason it currently works rather than a reason it will
+// keep working.
+//
+// The chain is otherwise perfect — the user's limits, the agent's signature,
+// this processor's own live challenge — and the credential really is scoped to
+// the purchase. The only thing wrong is the aud claim.
+func TestAPaymentChainAddressedToTheCredentialProviderIsRefusedByTheProcessor(t *testing.T) {
+	t.Parallel()
+
+	processor := newParty(t, "mpp")
+	d := newDelegation(t, capOnAmount, pinOnPayee)
+	credential := mintCredential(t, d)
+
+	srv := theProcessor(t, d.user, processor)
+	nonce := nonceFrom(t, srv)
+
+	var out settledOutcome
+	status := post(t, srv.URL+"/payment", map[string]any{
+		// Addressed to the Credential Provider, presented to the processor.
+		"chain":      d.chainFor(t, credProviderID, nonce, 18900),
+		"nonce":      nonce,
+		"credential": credential,
+	}, &out)
+
+	require.Equal(t, http.StatusUnprocessableEntity, status)
+	assert.False(t, out.Settled,
+		"one delegation spendable at every verifier that sees it is what aud exists to stop, and money is the last place to discover otherwise")
+
+	receipt, err := ap2.VerifyReceipt(out.Receipt, processor.verifier)
+	require.NoError(t, err,
+		"a chain has been examined by now, so the refusal is signed evidence rather than a Problem Details document")
+	require.NotNil(t, receipt.Error)
+	assert.Equal(t, generated.ErrorCodeKeyBindingInvalid, *receipt.Error)
 }
 
 // TestTheHumanPresentPathIsUntouched is the guard on everything above.

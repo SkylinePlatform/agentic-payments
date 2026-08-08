@@ -155,10 +155,16 @@ type evaluation struct {
 	// role populating less refuses in ignorance while one populating more has
 	// constraints withheld that it could have enforced. PaymentSubject is the
 	// ForPayment row written as code, and
-	// TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState holds
-	// the two together field by field over constraint.FieldNames — so for that
-	// audience the pair cannot drift silently, and no role has to be trusted to
-	// fill a subject correctly because AuthorisePaymentChain fills it for them.
+	// TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState reads
+	// this map to decide what to expect of it, field by field — so editing one
+	// without the other fails, in either direction, and no role has to be
+	// trusted to fill a subject correctly because AuthorisePaymentChain fills it
+	// for them.
+	//
+	// That the test *reads this map* rather than restating it is the whole of
+	// what makes it a check. It was written the other way first, with the three
+	// names spelled out a third time, and widening this row by one entry left
+	// the package green.
 	//
 	// ForCheckout has no counterpart, and the asymmetry is the protocol's rather
 	// than an omission here: a Merchant's subject is read off the checkout it
@@ -250,7 +256,10 @@ var evaluations = map[Evaluation]evaluation{
 // honoured this row by hand and said in its own comment that nothing checked
 // it; the check is now
 // TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState, which
-// walks constraint.FieldNames rather than a second copy of the three names.
+// **reads evaluations[ForPayment].states** to decide what to expect of this
+// function — so the row and this body cannot be edited apart. It walks
+// constraint.FieldNames as well, but that guards a different thing: a fact
+// added to core that neither reach list placed.
 //
 // # Where each value comes from, and why there is no fourth
 //

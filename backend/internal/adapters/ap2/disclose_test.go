@@ -269,113 +269,11 @@ func TestTheAudienceComesFromTheMandateAndNotTheCaller(t *testing.T) {
 		"the identical constraints in an open Payment Mandate reach a verifier that can state neither half of a route")
 }
 
-// TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState is the
-// check evaluations[ForPayment].states never had.
-//
-// The row says a payment-side verifier can supply `amount`, `at` and
-// `merchant.id`. Until #120 nothing tied that claim to a subject anybody
-// actually built: this file carried a helper that honoured the row by hand and
-// said so in its own comment, and every other caller of AuthorisePaymentChain
-// passed whatever subject was convenient. ap2.PaymentSubject is that row as
-// code, and this is what holds the two together.
-//
-// The table walks constraint.FieldNames rather than a second copy of the three
-// names, and refuses to run against a registry it does not cover — the same
-// shape TestEveryFactIsPlacedWithAVerifier uses, and for the same reason: a
-// fact added to core that this table did not enumerate would be a fact nobody
-// decided about, silently defaulted to unstated.
-//
-// Both columns matter and they fail differently. A field the row credits and
-// PaymentSubject leaves zero is a limit refused in ignorance on every
-// transaction, because constraint.Evaluate reads an unstated fact as
-// unsatisfied. A field the row withholds and PaymentSubject fills is worse and
-// quieter: Minimise has already dropped the constraints reading it, so the
-// value is never compared against anything and a user's limit goes unenforced
-// while the subject looks thorough.
-//
-// stated is written out per field rather than derived, because deriving it
-// would mean re-implementing constraint.Field.read — which is the thing under
-// test on the other side of the comparison.
-func TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState(t *testing.T) {
-	t.Parallel()
-
-	rows := map[string]struct {
-		canState bool
-		stated   func(constraint.Subject) bool
-		why      string
-	}{
-		"amount": {
-			canState: true,
-			stated:   func(s constraint.Subject) bool { return s.Amount.Currency != "" },
-			why:      "payment_amount is the one number a closed Payment Mandate is about",
-		},
-		"at": {
-			canState: true,
-			stated:   func(s constraint.Subject) bool { return !s.At.IsZero() },
-			why:      "every verifier has a clock, and the booking window is checked against it",
-		},
-		"merchant.id": {
-			canState: true,
-			stated:   func(s constraint.Subject) bool { return s.Merchant.ID != "" },
-			why:      "payee is on the mandate, so a constraint pinning the merchant is enforceable here",
-		},
-		"merchant.category": {
-			stated: func(s constraint.Subject) bool { return s.Merchant.Category != "" },
-			why:    "contracts/identity/merchant.json gives a Merchant no category to read one out of",
-		},
-		"quantity": {
-			stated: func(s constraint.Subject) bool { return s.Quantity != 0 },
-			why:    "a Payment Mandate carries an amount, not a basket",
-		},
-		"item.id": {
-			stated: func(s constraint.Subject) bool { return s.Item.ID != "" },
-			why:    "a Payment Mandate names no item",
-		},
-		"item.category": {
-			stated: func(s constraint.Subject) bool { return s.Item.Category != "" },
-			why:    "a Payment Mandate names no item",
-		},
-	}
-
-	names := make([]string, 0, len(rows))
-	for name := range rows {
-		names = append(names, name)
-	}
-	require.ElementsMatch(t, constraint.FieldNames(), names,
-		"a fact the vocabulary knows and this table does not is a fact nobody decided whether a payment-side verifier can state, and the subject would silently leave it zero")
-
-	got := ap2.PaymentSubject(generated.PaymentMandate{
-		CheckoutHash:      "irrelevant-here",
-		Payee:             generated.Merchant{ID: pinnedPayee, Name: "Demo Merchant"},
-		PaymentAmount:     generated.Amount{Amount: 18900, Currency: "USD"},
-		PaymentInstrument: generated.PaymentInstrument{ID: "card-tok-1", Type: "card"},
-	}, base)
-
-	for name, row := range rows {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			if row.canState {
-				assert.True(t, row.stated(got),
-					"evaluations[ForPayment] credits this verifier with %s — %s — and a subject leaving it unstated refuses every mandate constraining it, in ignorance rather than in judgement",
-					name, row.why)
-				return
-			}
-			assert.False(t, row.stated(got),
-				"this verifier cannot state %s — %s — so Minimise has already withheld the constraints reading it, and a value here is compared against nothing while the user's limit goes unenforced",
-				name, row.why)
-		})
-	}
-
-	// The values themselves, not only their presence: a subject stating three
-	// facts wrongly would satisfy every row above.
-	assert.Equal(t, generated.Amount{Amount: 18900, Currency: "USD"}, got.Amount,
-		"the amount has to be the one the closed mandate signed for, not one the verifier chose")
-	assert.Equal(t, pinnedPayee, got.Merchant.ID,
-		"the payee has to be the one the closed mandate names")
-	assert.Equal(t, base, got.At,
-		"and the moment has to be the clock's, which is what makes a booking window checkable at all")
-}
+// The field-by-field tie between evaluations[ForPayment].states and
+// PaymentSubject lives in disclose_internal_test.go, not here. It has to read
+// the reach table itself, and a copy of the three names in this package would
+// be a third statement of the row rather than a check on the other two — see
+// that file's own header.
 
 // minimisedChainFx is a Payment Mandate chain whose root was narrowed for the
 // Credential Provider before it was delegated over.

@@ -304,18 +304,31 @@ enforced. When this was written, nothing checked either direction —
 #120 closed it for the payment side by deleting the parameter that carried the
 problem. `ap2.PaymentSubject(closed, now)` is the `ForPayment` row as code, and
 `AuthorisePaymentChain` derives the subject with it after verification instead
-of taking one from its caller, which is what makes the pair checkable at all —
-`TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState` walks
-`constraint.FieldNames()` and asserts exactly three fields stated and four zero.
-The parameter had no correct filling in any case: a payment-side verifier's only
-source for the amount and the payee is the closed mandate *inside the chain*,
-which it cannot read until that chain has verified.
+of taking one from its caller. The parameter had no correct filling in any case:
+a payment-side verifier's only source for the amount and the payee is the closed
+mandate *inside the chain*, which it cannot read until that chain has verified.
+
+**Collapsing the two statements into one function is what makes a check
+possible; reading the row is what makes it a check.**
+`TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState` lives in
+`disclose_internal_test.go`, package `ap2`, for exactly that reason: it indexes
+`evaluations[ForPayment].states` to decide what to expect of `PaymentSubject`,
+so editing either apart from the other fails. Review caught the first version
+doing something weaker — spelling the three names out a third time, which agrees
+with whichever of the other two was written last. Widening the row by one entry
+left the package green.
+
+The test also walks `constraint.FieldNames()`, and that guards a different
+thing: a `Field` added to core that neither reach list placed. Worth keeping
+the two apart, because only the first is the tie.
 
 `ForCheckout` has no counterpart and the asymmetry is the protocol's. A
-Merchant's subject is read off the checkout it issued, a document
-`internal/adapters/ap2` never sees, so there is nothing for an equivalent
-function to be a pure function of; `AuthoriseCheckoutChain` still takes a
-subject and keeping that row in step is still its caller's obligation.
+Merchant's subject is read off the catalogue and the checkout it issued —
+neither of which `internal/adapters/ap2` ever sees, since `checkoutJWT` arrives
+as an opaque string that is only hashed and nothing in `generated` models a cart
+— so there is nothing for an equivalent function to be a pure function of.
+`AuthoriseCheckoutChain` still takes a subject, its doc comment says why in
+place, and keeping that row in step is `internal/roles/merchant`'s obligation.
 
 ## What this deliberately does not build
 
