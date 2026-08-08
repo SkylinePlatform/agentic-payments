@@ -84,12 +84,26 @@ const (
 //
 // # Why the payload is not the timestamp alone
 //
-// The salt is not decoration. Without it a challenge would be a pure function
-// of the second it was issued in, so every caller asking inside one second
-// would be handed the identical string — and the replay store #27 adds could
-// not mark one caller's challenge spent without spending everybody's. A
-// per-challenge value is the thing that has to exist before anything can be
-// recorded against it.
+// The salt is not decoration, and the reason that survives on its own is the
+// third one below rather than the first two.
+//
+// Without it a challenge is a pure function of the second it was issued in. So
+// **the entire live set is enumerable**: at any instant the accepted values are
+// one per second across the window — 241 of them at a two-minute TTL — and each
+// is obtainable by a single GET /nonce at the right moment. An agent could
+// harvest the whole set every two minutes and mint delegations from then on
+// without ever calling the endpoint again, which leaves the nonce checking that
+// the agent owns a clock. That failure needs nothing that does not exist yet.
+//
+// The other two do, and are worth stating in that order. Every caller asking
+// inside one second would be handed the identical string; and the replay store
+// #27 adds could not mark one caller's challenge spent without spending
+// everybody's, because a per-challenge value is what a spend is recorded
+// against. Both are real and both are contingent on #27 landing. The
+// enumeration is not.
+//
+// The salt only buys any of this if a challenge has one spelling, which the
+// decoder does not give for free — see decodeChallengeHalf.
 //
 // This lives in internal/platform/crypto because it holds a secret key, which
 // is what this package is for. It is not covered by the key-material-containment
@@ -150,18 +164,24 @@ func (c *Challenger) Issue() (string, error) {
 // unauthenticated stamp would accept any token whose first eight bytes said
 // "now".
 func (c *Challenger) Check(nonce string) error {
+	// Kept, and kept documented, on the same terms as the length check below:
+	// no input can reach this and go on to be accepted, because a nonce with no
+	// separator leaves an empty second half whose MAC cannot hold. So no
+	// mutation turns it red on its own. It stays because it is the one message
+	// that names the shape a caller got wrong, and because its absence would
+	// leave the two decodes reading halves nobody established were there.
 	encodedPayload, encodedMAC, ok := strings.Cut(nonce, ".")
 	if !ok {
 		return fmt.Errorf("%w: a challenge is two base64url halves separated by %q",
 			ErrChallengeInvalid, ".")
 	}
-	payload, err := base64.RawURLEncoding.DecodeString(encodedPayload)
+	payload, err := decodeChallengeHalf("payload", encodedPayload)
 	if err != nil {
-		return fmt.Errorf("%w: the first half is not base64url: %w", ErrChallengeInvalid, err)
+		return err
 	}
-	sum, err := base64.RawURLEncoding.DecodeString(encodedMAC)
+	sum, err := decodeChallengeHalf("MAC", encodedMAC)
 	if err != nil {
-		return fmt.Errorf("%w: the second half is not base64url: %w", ErrChallengeInvalid, err)
+		return err
 	}
 	// Structural, and worth being exact about what it is: the MAC below would
 	// refuse every value this refuses, because only a payload of this width is
@@ -191,13 +211,65 @@ func (c *Challenger) Check(nonce string) error {
 		// the future means that clock moved backwards, and a token issued
 		// under an instant this verifier no longer agrees with is not one it
 		// can honestly age.
+		//
+		// The construct saturates, in both places. time.Duration is an int64 of
+		// nanoseconds, so a stamp more than ~292 years ahead of this clock makes
+		// Sub return minDuration, and negating math.MinInt64 returns it
+		// unchanged — leaving age negative, under the comparison below, and the
+		// challenge accepted. It is unreachable without the key, since the stamp
+		// is under the MAC, and pkg/sdjwt/keybinding.go's own window is the same
+		// construct with the same corner. Noted rather than fixed here: a fix
+		// belongs to both at once, so it is an issue against the pair rather
+		// than a divergence introduced on one side.
 		age = -age
 	}
+	// Strictly greater: a challenge whose age is exactly the window is still
+	// inside it. That is a choice rather than an accident — the alternative
+	// spelling refuses at the instant the endpoint's own promise runs out — and
+	// TestAChallengeOutsideItsWindowIsRefused lands on the boundary from both
+	// sides so that the choice cannot be changed silently.
 	if age > c.ttl {
 		return fmt.Errorf("%w: issued %s ago, and the window is %s",
 			ErrChallengeExpired, age, c.ttl)
 	}
 	return nil
+}
+
+// decodeChallengeHalf decodes one half of a challenge and refuses every
+// spelling of those bytes but the one Issue would have produced.
+//
+// This is a guard, not a tidiness pass, and it is the guard the salt above is
+// worthless without. Go's base64 decoder is lenient in two ways that both
+// matter here: RawURLEncoding ignores a final character's unused trailing bits
+// unless Strict is set, and **both modes silently skip \r and \n anywhere in
+// the input**. Left alone, one issued challenge therefore has four spellings of
+// its MAC half — 32 bytes encode into 43 characters carrying 258 bits, so the
+// last character has two unused ones — plus a newline injected at any position
+// in either half, without limit.
+//
+// Which defeats exactly what the salt was added to enable. A per-challenge
+// value only lets #27's store record something if the value is one string: fetch
+// one challenge, mint a delegation per spelling, and each is a distinct store
+// key while sdjwt.checkFreshness matches every time, because it compares the
+// string the agent itself signed. One challenge, N spends, with the store
+// working precisely as designed.
+//
+// Strict closes the trailing-bit half and does nothing about the newlines,
+// which is why the re-encode is the load-bearing check rather than a belt on
+// top of one. Base64 is injective, so a value that re-encodes to the characters
+// it arrived as is the only spelling of itself, and both leniencies fall to the
+// same line.
+func decodeChallengeHalf(half, encoded string) ([]byte, error) {
+	raw, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the %s is not base64url: %w", ErrChallengeInvalid, half, err)
+	}
+	if b64(raw) != encoded {
+		return nil, fmt.Errorf(
+			"%w: the %s is a second spelling of its own bytes, and a challenge with more than one spelling is more than one value to record a spend against",
+			ErrChallengeInvalid, half)
+	}
+	return raw, nil
 }
 
 // mac is the tag over one payload.

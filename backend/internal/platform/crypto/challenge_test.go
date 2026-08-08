@@ -1,6 +1,7 @@
 package crypto_test
 
 import (
+	"bytes"
 	"encoding/base64"
 	"strings"
 	"testing"
@@ -34,9 +35,17 @@ func newChallenger(t *testing.T) (*crypto.Challenger, *clock.Fake) {
 // One character rather than one bit of the decoded value, because the decoded
 // value is what the test wants to differ while the encoding stays valid: the
 // result is a challenge this verifier did not issue, rather than a string that
-// fails to decode. Only the first character is touched — a base64url string's
-// last character may carry unused trailing bits, and altering that one can
-// produce a non-canonical encoding, which is a different rejection.
+// fails to decode.
+//
+// The **first** character, and the reason is the opposite of what an earlier
+// version of this comment said. A base64url string's last character may carry
+// unused trailing bits, and altering only those does not produce a different
+// value or a rejection — Go's decoder ignores them, so the result decodes to
+// the identical bytes. Before decodeChallengeHalf existed, Check returned nil
+// on it. It is refused now, but as a second spelling of the same challenge,
+// which is TestOneChallengeHasExactlyOneSpelling's subject rather than this
+// one's — so a case built on the last character would pass here while proving
+// something else. The first character has no such slack at either width.
 func changeFirstCharacter(s string) string {
 	altered := []byte(s)
 	if altered[0] == 'A' {
@@ -99,7 +108,20 @@ func TestAChallengeOutsideItsWindowIsRefused(t *testing.T) {
 	require.NoError(t, c.Check(issued),
 		"a challenge inside its window is the case the endpoint exists to serve, and a window that refused it would refuse every legitimate purchase")
 
-	clk.Advance(2 * time.Second)
+	// The boundary, from both sides and to the nanosecond. base is a whole
+	// second and Issue stamps whole seconds, so the age here is exactly the
+	// window. Without these two lines the test only catches a full second of
+	// widening: `>=` and `> ttl + time.Nanosecond` both survive a run that
+	// steps from window-1s to window+1s and never lands in between.
+	clk.Advance(time.Second)
+	require.NoError(t, c.Check(issued),
+		"a challenge whose age is exactly the window is inside it; which side of the boundary the design takes is a decision, and one nothing else in this suite pins")
+
+	clk.Advance(time.Nanosecond)
+	require.ErrorIs(t, c.Check(issued), crypto.ErrChallengeExpired,
+		"one nanosecond past is past, or the window is enforced to a coarser resolution than it is written in")
+
+	clk.Advance(time.Second)
 	stale := c.Check(issued)
 	assert.ErrorIs(t, stale, crypto.ErrChallengeExpired,
 		"past the window a challenge stops being current, and 'ask me for another' is what the caller has to be told")
@@ -109,10 +131,87 @@ func TestAChallengeOutsideItsWindowIsRefused(t *testing.T) {
 	// Backwards as well as forwards. The stamp came from this verifier's own
 	// clock, so a challenge from the future means that clock moved — and a
 	// challenge stamped at an instant this verifier no longer agrees with is
-	// one it cannot honestly age.
-	clk.Set(base.Add(-2 * window))
+	// one it cannot honestly age. Pinned at the boundary on this side too,
+	// because "symmetric" is a claim the production comment makes and a
+	// one-sided test would let the two sides drift apart.
+	clk.Set(base.Add(-window))
+	assert.NoError(t, c.Check(issued),
+		"the window is symmetric, so exactly one window early is inside it exactly as one window late is")
+
+	clk.Set(base.Add(-window - time.Nanosecond))
 	assert.ErrorIs(t, c.Check(issued), crypto.ErrChallengeExpired,
 		"a symmetric window is the same rule pkg/sdjwt applies to a key binding's iat, and for the same reason")
+}
+
+// TestOneChallengeHasExactlyOneSpelling is what makes the salt worth having.
+//
+// A per-challenge value only lets anything be recorded against it if the value
+// is one string, and Go's base64 decoder does not give that for free. It skips
+// \r and \n anywhere in the input in both strict and lenient modes, and outside
+// strict mode it ignores a final character's unused trailing bits — so an
+// issued challenge had at least four accepted spellings of its MAC half plus
+// unlimited newline injection, every one of which Check returned nil on.
+//
+// The consequence is a spend counted more than once. An agent fetches one
+// challenge, mints a delegation per spelling, and #27's store sees N distinct
+// keys while sdjwt.checkFreshness matches each time — it compares the string
+// the agent itself signed. The store would be working exactly as designed and
+// the replay would go through it.
+func TestOneChallengeHasExactlyOneSpelling(t *testing.T) {
+	t.Parallel()
+
+	c, _ := newChallenger(t)
+
+	issued, err := c.Issue()
+	require.NoError(t, err)
+	require.NoError(t, c.Check(issued), "the canonical spelling is the one that has to keep working")
+
+	payload, mac, ok := strings.Cut(issued, ".")
+	require.True(t, ok)
+
+	variants := map[string]string{
+		"a newline before the payload":      "\n" + payload + "." + mac,
+		"a newline inside the payload":      payload[:4] + "\n" + payload[4:] + "." + mac,
+		"a newline inside the MAC":          payload + "." + mac[:4] + "\n" + mac[4:],
+		"a carriage return after the MAC":   payload + "." + mac + "\r",
+		"a CRLF between the two halves":     payload + "\r\n." + mac,
+		"newlines in both halves at once":   payload + "\n." + "\n" + mac,
+		"the whole thing wrapped in blanks": "\n" + payload + "." + mac + "\n",
+	}
+
+	// The MAC is 32 bytes, which base64url spells in 43 characters carrying 258
+	// bits — the last character has two unused ones, so four characters encode
+	// the same MAC and three of them are not the one Issue produced. The
+	// payload is 24 bytes in exactly 32 characters and has no such slack, which
+	// is why only this half is scanned.
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	canonical, err := base64.RawURLEncoding.DecodeString(mac)
+	require.NoError(t, err)
+
+	alternates := 0
+	for _, char := range alphabet {
+		spelling := mac[:len(mac)-1] + string(char)
+		if spelling == mac {
+			continue
+		}
+		raw, err := base64.RawURLEncoding.DecodeString(spelling)
+		if err != nil || !bytes.Equal(raw, canonical) {
+			continue
+		}
+		alternates++
+		variants["the MAC's unused trailing bits spelled "+string(char)] = payload + "." + spelling
+	}
+	require.Positive(t, alternates,
+		"the scan has to find the alternate spellings it is here to refuse, or this test passes by finding nothing")
+
+	for name, variant := range variants {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assert.NotEqual(t, issued, variant, "a variant equal to the original tests nothing")
+			assert.ErrorIs(t, c.Check(variant), crypto.ErrChallengeInvalid,
+				"one challenge with several accepted spellings is several values for a replay store to record, which is a spend counted once per spelling")
+		})
+	}
 }
 
 // TestTwoChallengersDoNotAcceptEachOthers is what keeps the nonce and the
