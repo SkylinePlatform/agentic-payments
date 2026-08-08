@@ -30,6 +30,13 @@ import (
 // and not available to internal/agent — wire format is an adapter's job, and an
 // agent naming checkout_jwt would be the adapter's job done in the one package
 // forbidden to know it.
+//
+// Nothing in this repository calls either of them yet, and that is worth saying
+// rather than leaving a reader to discover it. Their caller is the agent's watch
+// loop, which is #121; until it lands the only exercise they get is their own
+// tests and the golden vector. What that means for a reader deciding whether a
+// change here is safe: the compiler will not find the call sites for you, and
+// the tests are the whole of the contract.
 
 // DelegateCheckout signs a closed Checkout Mandate as a delegation of the open
 // Checkout Mandate that endorsed the signer's key.
