@@ -54,14 +54,39 @@ import (
 // # One mandate, one state
 //
 // A value of this type belongs to one open mandate. An agent holding an open
-// Checkout Mandate and an open Payment Mandate keeps two of them.
+// Checkout Mandate and an open Payment Mandate keeps two of them, and an agent
+// holding open mandates for two products keeps one per product.
 //
 // That is a reading of "the previous one", which the specification leaves open,
-// and the alternative reading does not survive its own flow: one state shared
-// across every open mandate an agent holds would refuse to present the Payment
-// Mandate for a purchase because the Checkout Mandate for that same purchase
-// was still awaiting its receipt. Both mandates are presented for one purchase,
-// to two different verifiers, and are answered by two different receipts.
+// and it is the reading the sentence's own setting supports: it sits in the
+// autonomous section and exists to stop an agent approving several different
+// checkouts against one mandate. A single state shared across everything an
+// agent holds would refuse an attempt on one product's authorisation because
+// another product's was outstanding — two authorisations the user gave
+// separately, with the rule blocking a purchase it was never about.
+//
+// # An attempt, not a hop
+//
+// EventPresented is one **purchase attempt**, fanned out to however many
+// verifiers that attempt touches. It is not one verifier hop, and the
+// difference is not academic: one attempt presents the same Payment Mandate
+// more than once. internal/agent/purchase.go's Fund presents it to the
+// Credential Provider, which verifies it and signs a receipt; Settle then
+// presents it again to the merchant, which has verified it in its own right
+// since #88.
+//
+// A machine stepped per hop would therefore reach StateSpent when the
+// Credential Provider funded the purchase, and refuse Settle as
+// ErrMandateSpent — killing the purchase after the payment credential had been
+// issued and before the merchant was ever asked. The per-hop reading fails on
+// exactly the flow the shared-state reading was rejected for, one verifier
+// further along.
+//
+// So an attempt is outstanding from the moment the agent begins presenting it
+// until some verifier in it answers. It is rejected if any of them refuses —
+// the rejection receipt that licenses the retry is that verifier's — and
+// accepted when the purchase goes through. Which verifiers an attempt touches
+// is the caller's business; this machine counts attempts.
 //
 // # Single use
 //
@@ -70,10 +95,24 @@ import (
 //
 // That is this repository's reading of AP2's own answer, which is scope
 // reduction — "the agent reduces the scope of the open mandate based on the
-// receipt, often preventing future presentations entirely." Single use is the
-// degenerate case of that, chosen over general scope reduction because the
-// narrowing the specification describes is agent-side, which makes it the one
-// check no other party ever sees. There is no scope-reduction machinery here.
+// receipt, often preventing future presentations entirely", from the
+// specification's agent authorization page rather than from the specification
+// index AGENTS.md cites first. Single use is the degenerate case of that,
+// chosen over general scope reduction because the narrowing the specification
+// describes is agent-side, which makes it the one check no other party ever
+// sees. There is no scope-reduction machinery here.
+//
+// **The operative word in that quote is "often", and this machine has taken the
+// other branch off the table.** docs/business/use-cases.md describes a
+// Subscription in which "one open mandate, carrying a temporal recurrence
+// constraint, is reused across billing periods until it expires", whose whole
+// point is that authority ends by expiry rather than by use. Under a terminal
+// StateSpent the first accepted receipt ends it and every later billing period
+// is refused as ErrMandateSpent, so that use case is not representable here and
+// the expiry axis never gets to be the thing that ends a recurring mandate.
+// Making it representable is a source change — a recurrence-aware outcome for
+// {StateAwaitingReceipt, EventAccepted} — and not something a caller can
+// configure, which is the same posture the constraint matrix takes.
 //
 // # The zero value
 //
@@ -95,16 +134,33 @@ const (
 	// it, which is what lets the agent present against $189.
 	StateReady MandateState = iota
 
-	// StateAwaitingReceipt means this mandate has been presented and no receipt
-	// has come back, so presenting it again is refused.
+	// StateAwaitingReceipt means an attempt on this mandate is outstanding and
+	// no receipt has answered it, so beginning another attempt is refused.
 	//
-	// **This is waiting, not stalled**, and the difference matters because this
-	// name is what a consumer renders. The rule makes presentations sequential:
-	// if two prices drop at once the agent buys one, waits for its receipt, and
-	// then presents for the next. That sequencing is the rule working rather
-	// than a limitation of it — spending one authorisation against several
-	// checkouts at once is the thing being prevented — and a screen that draws
-	// this state as an error is misreporting a correct one.
+	// **While an answer can still arrive this is waiting, not stalled**, and the
+	// difference matters because this name is what a consumer renders. The rule
+	// makes attempts sequential: if two prices drop at once the agent buys one,
+	// waits for its receipt, and then attempts the next. That sequencing is the
+	// rule working rather than a limitation of it — spending one authorisation
+	// against several checkouts at once is the thing being prevented — and a
+	// screen that draws this state as an error is misreporting a correct one.
+	//
+	// # There is no exit but a receipt, and that is deliberate
+	//
+	// No timeout, no reset, no abandon event. The rule names a rejection receipt
+	// as the thing that licenses the next attempt, so an escape hatch would be
+	// its own bypass: "no answer came, so I may present again" is precisely the
+	// move that lets one authorisation reach two checkouts, and a machine
+	// offering it would enforce nothing an impatient agent could not opt out of.
+	//
+	// The cost is real and belongs next to the claim above. A dropped response
+	// or a verifier that never answers leaves the mandate here until its own
+	// expiry ends it, and this type cannot tell that apart from an answer that
+	// is merely slow — it holds no clock and no identity for the attempt. What
+	// an agent does about it is re-deliver the same presentation under the same
+	// idempotency key, which is the same attempt rather than a new one; what a
+	// screen does about it is a caller's decision, made with the clock and the
+	// request this package deliberately does not have.
 	StateAwaitingReceipt
 
 	// StateSpent means a receipt came back accepting the purchase. It is
@@ -123,16 +179,23 @@ const (
 type MandateEvent int
 
 const (
-	// EventPresented is the agent presenting this mandate to a verifier.
+	// EventPresented is the agent beginning one purchase attempt on this
+	// mandate.
+	//
+	// One attempt, however many verifiers it takes — see MandateState's "An
+	// attempt, not a hop". Presenting the same mandate again to the next
+	// verifier in the same attempt is not another EventPresented, and neither
+	// is re-delivering a presentation whose response was lost, which is the
+	// same attempt still outstanding.
 	EventPresented MandateEvent = iota
 
-	// EventRejected is a rejection receipt arriving for the outstanding
-	// presentation: a receipt whose result is error. It is what licenses
-	// another presentation.
+	// EventRejected is the outstanding attempt being refused: some verifier in
+	// it answered with a receipt whose result is error. It is what licenses the
+	// next attempt.
 	EventRejected
 
-	// EventAccepted is a successful receipt arriving for the outstanding
-	// presentation: a receipt whose result is success. It spends the mandate.
+	// EventAccepted is the outstanding attempt going through, answered by a
+	// receipt whose result is success. It spends the mandate.
 	EventAccepted
 )
 
@@ -168,9 +231,13 @@ var (
 	// them, and refusing is safe for that caller either way, because a refused
 	// event leaves the state exactly as it was.
 	//
-	// It has no canonical error code, and CodeOf does not map it. It is not a
-	// verdict about a mandate, and contracts/evidence/error_code.json carries
-	// none for a caller misapplying a receipt.
+	// CodeOf answers the empty code for it, by an arm of its own rather than by
+	// falling through. It is not a verdict about a mandate, and
+	// contracts/evidence/error_code.json carries none for a caller misapplying
+	// a receipt — while the arm it would otherwise reach answers
+	// mandate_malformed, which would tell a counterparty their mandate is bad
+	// because this caller's bookkeeping is. An empty code is not in the enum,
+	// so nothing can render it as a rejection.
 	ErrNoPresentationOutstanding = errors.New("authz: no presentation is outstanding for this receipt to answer")
 
 	// ErrUnknownTransition means the machine was handed a state or an event it
@@ -180,8 +247,8 @@ var (
 	// It refuses and leaves the state alone rather than guessing, because the
 	// alternative to refusing a state that cannot be read is permitting a
 	// presentation against one. Like ErrNoPresentationOutstanding it is a
-	// caller's bug rather than a verdict about a mandate, so CodeOf does not map
-	// it either.
+	// caller's bug rather than a verdict about a mandate, so CodeOf answers the
+	// empty code for it too, and for the same reasons.
 	ErrUnknownTransition = errors.New("authz: no transition for this state and event")
 )
 

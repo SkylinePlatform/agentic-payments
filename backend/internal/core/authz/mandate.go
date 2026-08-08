@@ -95,6 +95,15 @@ func CodeOf(err error) generated.ErrorCode {
 	// rejection receipt for the previous one, and there is none.
 	case errors.Is(err, ErrOpenMandateOutstanding), errors.Is(err, ErrMandateSpent):
 		return generated.ErrorCodeOpenMandateOutstanding
+	// The lifecycle's other two refusals are a caller's bug rather than a
+	// verdict about a mandate: a receipt applied where nothing is outstanding,
+	// and a state value the machine does not define. The vocabulary has no code
+	// for either, so this says so with the empty code instead of falling through
+	// to mandate_malformed, which would answer a caller's bookkeeping mistake by
+	// telling a counterparty their mandate is bad. An empty code is not in the
+	// enum, so nothing renders it as a rejection.
+	case errors.Is(err, ErrNoPresentationOutstanding), errors.Is(err, ErrUnknownTransition):
+		return ""
 	case errors.Is(err, ErrMalformedMandate):
 		return generated.ErrorCodeMandateMalformed
 	default:

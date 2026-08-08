@@ -18,12 +18,26 @@ import (
 func TestEveryTransitionOfTheRejectionReceiptRule(t *testing.T) {
 	t.Parallel()
 
+	// mentions is the per-cell half of a refusal message — the sentence the
+	// table authors, not the sentinel's own text. It is here because that
+	// sentence is the only thing telling a reader *which* cell refused, and six
+	// cells sharing four sentinels means a pair of messages could be swapped
+	// without any ErrorIs noticing.
+	//
+	// The sentinel's own wording is deliberately left free, and that asymmetry
+	// is the rule rather than an omission: pin what a consumer depends on
+	// byte-for-byte (the state names, which a screen renders), pin identity for
+	// what code branches on (the sentinels, which ErrorIs already covers more
+	// strongly than any string compare), and leave diagnostic prose editable.
+	// Pinning it too would make every wording improvement a test edit and buy
+	// nothing no assertion here already has.
 	for _, tc := range []struct {
-		name  string
-		from  authz.MandateState
-		event authz.MandateEvent
-		want  authz.MandateState
-		fails error
+		name     string
+		from     authz.MandateState
+		event    authz.MandateEvent
+		want     authz.MandateState
+		fails    error
+		mentions string
 	}{
 		{
 			name: "a mandate with nothing outstanding may be presented",
@@ -33,17 +47,17 @@ func TestEveryTransitionOfTheRejectionReceiptRule(t *testing.T) {
 		{
 			name: "a rejection for a mandate that was never presented answers nothing",
 			from: authz.StateReady, event: authz.EventRejected,
-			fails: authz.ErrNoPresentationOutstanding,
+			fails: authz.ErrNoPresentationOutstanding, mentions: "ready to present, so nothing has been presented for a rejection",
 		},
 		{
 			name: "an acceptance for a mandate that was never presented answers nothing",
 			from: authz.StateReady, event: authz.EventAccepted,
-			fails: authz.ErrNoPresentationOutstanding,
+			fails: authz.ErrNoPresentationOutstanding, mentions: "ready to present, so nothing has been presented for an acceptance",
 		},
 		{
 			name: "presenting again before the receipt arrives is the rule's whole point",
 			from: authz.StateAwaitingReceipt, event: authz.EventPresented,
-			fails: authz.ErrOpenMandateOutstanding,
+			fails: authz.ErrOpenMandateOutstanding, mentions: "rejection receipt for it has to arrive",
 		},
 		{
 			name: "a rejection receipt is what licenses the next presentation",
@@ -58,17 +72,17 @@ func TestEveryTransitionOfTheRejectionReceiptRule(t *testing.T) {
 		{
 			name: "a spent mandate may not be presented, because no rejection is coming for it",
 			from: authz.StateSpent, event: authz.EventPresented,
-			fails: authz.ErrMandateSpent,
+			fails: authz.ErrMandateSpent, mentions: "its presentation was accepted, and only a rejection licenses another",
 		},
 		{
 			name: "a rejection for a spent mandate answers nothing",
 			from: authz.StateSpent, event: authz.EventRejected,
-			fails: authz.ErrNoPresentationOutstanding,
+			fails: authz.ErrNoPresentationOutstanding, mentions: "spent, so nothing has been presented for a rejection",
 		},
 		{
 			name: "an acceptance for a spent mandate answers nothing",
 			from: authz.StateSpent, event: authz.EventAccepted,
-			fails: authz.ErrNoPresentationOutstanding,
+			fails: authz.ErrNoPresentationOutstanding, mentions: "spent, so nothing has been presented for an acceptance",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -79,6 +93,8 @@ func TestEveryTransitionOfTheRejectionReceiptRule(t *testing.T) {
 			if tc.fails != nil {
 				require.ErrorIs(t, err, tc.fails,
 					"the refusal has to name a reason a caller can act on, and these are not interchangeable: one is worth waiting out and one never becomes presentable")
+				assert.Contains(t, err.Error(), tc.mentions,
+					"the sentinel says which rule refused and this sentence says which cell did, which is the half a reader needs to find the transition they got wrong")
 				assert.Equal(t, tc.from, got,
 					"a refused event has to leave the mandate where it was, or a caller storing the result without reading the error would have applied a transition the machine refused")
 				return
@@ -91,18 +107,25 @@ func TestEveryTransitionOfTheRejectionReceiptRule(t *testing.T) {
 }
 
 // TestOneAuthorisationCannotBeSpentAgainstTwoCheckouts is the attack the rule
-// exists to stop, and it is issue #13's reason for being.
+// exists to stop, and it is issue #13's reason for being. An agent holding one
+// open mandate — one thing the user approved — begins a second purchase attempt
+// while the first is unanswered, which is how a single authorisation reaches two
+// different checkouts. The second attempt never leaves the agent.
 //
-// Two candidates are in front of the agent at once. It holds one open mandate —
-// one thing the user approved — and assembling a closed mandate against each,
-// then presenting both and taking whichever comes back accepted, would spend a
-// single authorisation against two different purchases. The second presentation
-// never leaves the agent.
+// **Be exact about what is being reproduced, because the machine is blunter
+// than the story.** MandateState holds no checkout identity and no attempt
+// identity, so there are not two candidates here: there is one value stepped
+// twice. What the machine refuses is a second attempt while one is outstanding,
+// and it cannot tell a deliberate double-spend from an honest retry after a
+// lost response — it refuses both identically, which is the conservative
+// direction and is why StateAwaitingReceipt has no timeout out of it. So the
+// attack is blocked in the sense that the second attempt is refused, and not in
+// the stronger sense of being recognised as an attack.
 //
-// The refusal here is the agent's own, not a verifier's, and that is the
-// property rather than a shortcoming of the test: a verifier is shown one
-// presentation with no record of the other, so there is no place but here for
-// this to be caught.
+// The refusal is the agent's own, not a verifier's, and that is the property
+// rather than a shortcoming of the test: a verifier is shown one presentation
+// with no record of the other, so there is no place but here for this to be
+// caught.
 func TestOneAuthorisationCannotBeSpentAgainstTwoCheckouts(t *testing.T) {
 	t.Parallel()
 
@@ -188,6 +211,8 @@ func TestAStateTheMachineDoesNotDefineRefusesEverything(t *testing.T) {
 			got, err := unknown.Next(event)
 			require.ErrorIs(t, err, authz.ErrUnknownTransition,
 				"an unreadable state has to refuse rather than fall through to whatever the zero value would permit")
+			assert.NotErrorIs(t, err, authz.ErrNoPresentationOutstanding,
+				"these say different things: one means the caller's bookkeeping is out of step, this one means the value it is holding is not a state at all, and only the second is a reason to stop trusting the value")
 			assert.Equal(t, unknown, got, "refusing must not silently repair the state into one the machine does define")
 		})
 	}
@@ -214,18 +239,60 @@ func TestTheStateNamesAreWhatAConsumerShows(t *testing.T) {
 	assert.Equal(t, "rejected", authz.EventRejected.String())
 	assert.Equal(t, "accepted", authz.EventAccepted.String())
 	assert.Equal(t, "mandate_event(9)", authz.MandateEvent(9).String())
+
+	// The negative side, pinned separately because it is a different guard and
+	// what it prevents is not cosmetic. These types index an array, so without
+	// the low bound a negative value fails in two ways at once, both verified
+	// by deleting it: called directly it panics with "index out of range [-1]",
+	// and reached through Next's own fmt.Errorf it is recovered by fmt into
+	// "%!s(PANIC=String method: runtime error: index out of range [-1])" — so
+	// the refusal survives as a message that no longer says which pair was
+	// refused. evidence.Step's spellings are pinned the same way.
+	assert.Equal(t, "mandate_state(-1)", authz.MandateState(-1).String(),
+		"a negative state has to render rather than panic, because Next formats whatever it was handed")
+	assert.Equal(t, "mandate_event(-1)", authz.MandateEvent(-1).String(),
+		"a negative event has to render rather than panic, for the same reason")
+
+	_, err := authz.MandateState(-1).Next(authz.MandateEvent(-1))
+	require.ErrorIs(t, err, authz.ErrUnknownTransition)
+	assert.Contains(t, err.Error(), "mandate_state(-1) on mandate_event(-1)",
+		"the refusal names the pair it was handed, which is the whole of what a caller has to go on here")
 }
 
-// TestARefusalThatIsNotTheRuleHasNoCanonicalCode records a decision rather than
-// a behaviour worth relying on. A receipt applied to a mandate with nothing
-// outstanding is a caller's bug, not a verdict about a mandate, and
-// contracts/evidence/error_code.json has no code for it — so CodeOf falls
-// through to its default arm, and the answer is not one to render.
+// TestARefusalThatIsNotTheRuleHasNoCanonicalCode pins the empty code, not
+// merely "some other code".
+//
+// A receipt applied where nothing is outstanding, and a state value the machine
+// does not define, are both a caller's bug rather than a verdict about a
+// mandate, and contracts/evidence/error_code.json has no code for either. The
+// arm that answers them exists so they do not reach the default, which answers
+// mandate_malformed — a 400 telling a counterparty their mandate is bad because
+// this caller's bookkeeping is. Asserting only that the code is *not*
+// open_mandate_outstanding would pass for mandate_malformed too, which is the
+// answer being ruled out.
 func TestARefusalThatIsNotTheRuleHasNoCanonicalCode(t *testing.T) {
 	t.Parallel()
 
-	_, err := authz.StateReady.Next(authz.EventAccepted)
-	require.Error(t, err)
-	assert.NotEqual(t, generated.ErrorCodeOpenMandateOutstanding, authz.CodeOf(err),
-		"a caller misapplying a receipt must not be reported as the rejection-receipt rule, which would name a violation nobody committed")
+	for _, tc := range []struct {
+		name string
+		call func() error
+	}{
+		{"a receipt with nothing to answer", func() error {
+			_, err := authz.StateReady.Next(authz.EventAccepted)
+			return err
+		}},
+		{"a state the machine does not define", func() error {
+			_, err := authz.MandateState(7).Next(authz.EventPresented)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tc.call()
+			require.Error(t, err)
+			assert.Equal(t, generated.ErrorCode(""), authz.CodeOf(err),
+				"a caller's own bug has no canonical code, and answering one would put a named protocol violation against a counterparty who did nothing")
+		})
+	}
 }
