@@ -70,6 +70,41 @@ type ChainOptions struct {
 	// MaxAge is how far the delegating hop's iat may sit from now, in either
 	// direction. Zero leaves replay protection to the nonce alone.
 	MaxAge time.Duration
+
+	// RequireConstrained names the facts about a purchase this verifier will
+	// not authorise without having been shown a constraint on.
+	//
+	// It is this verifier's policy against an over-minimised presentation, and
+	// requireConstrained's own comment sets out why it is shaped as a
+	// requirement rather than as a detection: *which* constraint was withheld,
+	// and what it said, is unrecoverable, so a verifier can state what it needs
+	// and cannot inspect what it was denied. It can nonetheless count — the
+	// signed payload commits to one digest per constraint — and
+	// requireSomeConstraintDisclosed spends that count on the one case a count
+	// settles: none of them at all.
+	//
+	// The names are constraint field names — "amount", "merchant.id" — and a
+	// name this verifier's own parser does not know is a policy that can never
+	// be satisfied, so it is worth writing them beside constraint.FieldNames
+	// rather than from memory.
+	//
+	// Empty is a verifier that has no such policy. It is worth being exact
+	// about how that differs from the other optional fields on this type,
+	// because the resemblance is superficial and flattering: an empty MaxAge
+	// degrades to the nonce still protecting replay, and an empty
+	// AllowedHashAlgs degrades to every algorithm the library implements being
+	// one it vetted. Both fall back to a different check. **This one falls back
+	// to trusting the agent's narrowing**, and nothing else.
+	//
+	// It is optional anyway because there is no verifier-independent right
+	// answer — what a Merchant insists on seeing constrained is not what a
+	// Credential Provider does — and because the case that has one is handled
+	// without configuration: requireSomeConstraintDisclosed refuses a
+	// presentation that disclosed none of the constraints its mandate committed
+	// to, and refuses one whose commitment it cannot read. That is the floor,
+	// no caller can turn either arm of it into a pass, and this is the ceiling.
+	// A verifier that leaves this empty has chosen the floor alone.
+	RequireConstrained []string
 }
 
 // wrapAgentKey adapts ChainOptions.AgentKey into the resolver
@@ -180,10 +215,18 @@ type CheckoutAuthorisation struct {
 //     authority that was already bound to a transaction, which is exactly
 //     the escalation the open/closed split exists to prevent.
 //  3. requireVCT(verified.Delegated, closedCheckout).
-//  4. Decode both hops into the canonical model.
-//  5. Verify the closed hop's binding against checkoutJWT, the same
+//  4. Decode the open hop into the canonical model.
+//  5. The two disclosure checks, which read the open hop alone and so sit here
+//     rather than after both are decoded. A presentation of an open mandate may
+//     disclose only some of its constraints — Minimise is how, and why — and
+//     this is where a verifier refuses one narrowed past what it needs.
+//     requireSomeConstraintDisclosed is the always-on floor: a mandate that
+//     committed to constraints and disclosed none of them is not a mandate with
+//     no limits. requireConstrained is this verifier's own policy on top.
+//  6. Decode the closed hop.
+//  7. Verify the closed hop's binding against checkoutJWT, the same
 //     recompute-never-trust check VerifyCheckout runs.
-//  6. authz.AuthoriseCheckout(open, subject, opts.Clock.Now()), and turn an
+//  8. authz.AuthoriseCheckout(open, subject, opts.Clock.Now()), and turn an
 //     unsatisfied report into a rejection with report.Err().
 func AuthoriseCheckoutChain(
 	c *sdjwt.Chain,
@@ -208,6 +251,13 @@ func AuthoriseCheckoutChain(
 	open, err := decodeOpenCheckout(verified.Root)
 	if err != nil {
 		return zero, err
+	}
+	if err := requireSomeConstraintDisclosed(
+		evaluations[ForCheckout].who, verified.RootSigned, open.Constraints); err != nil {
+		return CheckoutAuthorisation{Open: open}, err
+	}
+	if err := requireConstrained(open.Constraints, opts.RequireConstrained); err != nil {
+		return CheckoutAuthorisation{Open: open}, err
 	}
 	closed, err := decodeCheckout(verified.Delegated)
 	if err != nil {
@@ -246,6 +296,13 @@ type PaymentAuthorisation struct {
 // equivalent of (authz.AuthorisePayment runs it) and with no binding check at
 // all.
 //
+// opts.RequireConstrained is honoured here on the same terms and in the same
+// position, as is the floor beneath it, and it is this role that has the most
+// use for both: a Credential
+// Provider is the audience an open Payment Mandate is legitimately narrowed
+// hardest for, because AP2 sends it the Payment Mandate and nothing else, so
+// most of what a mandate can constrain is invisible to it. See Minimise.
+//
 // That last omission is forced by the protocol rather than chosen here: a
 // closed Payment Mandate never carries the document it binds to —
 // VerifyPayment's own doc comment sets out why at length, and the reasoning
@@ -277,6 +334,13 @@ func AuthorisePaymentChain(
 	open, err := decodeOpenPayment(verified.Root)
 	if err != nil {
 		return zero, err
+	}
+	if err := requireSomeConstraintDisclosed(
+		evaluations[ForPayment].who, verified.RootSigned, open.Constraints); err != nil {
+		return PaymentAuthorisation{Open: open}, err
+	}
+	if err := requireConstrained(open.Constraints, opts.RequireConstrained); err != nil {
+		return PaymentAuthorisation{Open: open}, err
 	}
 	closed, err := decodePayment(verified.Delegated)
 	if err != nil {

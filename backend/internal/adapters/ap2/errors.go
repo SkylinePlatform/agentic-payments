@@ -122,6 +122,35 @@ var (
 	// says only that whoever signed the mandate wrote a hash into it, which is
 	// exactly the assertion the recompute rule exists to distrust.
 	ErrBindingUnverifiable = errors.New("ap2: checkout binding cannot be verified")
+
+	// ErrDisclosureInsufficient means the presentation did not disclose a
+	// constraint on a fact this verifier requires to be constrained.
+	//
+	// It is the minimisation counterpart of ErrBindingUnverifiable, which is
+	// why both carry disclosure_insufficient: in each case the presentation
+	// verified perfectly and left the verifier unable to conclude the thing it
+	// exists to conclude. The difference is what was missing — there a document
+	// to recompute a hash against, here a limit the user set.
+	//
+	// Its two producers mean two different things, and an earlier version of
+	// this comment denied that the second was possible — "no error here could
+	// mean 'a constraint was withheld'", on the grounds that a withheld
+	// disclosure and a decoy are indistinguishable. The commit that added
+	// requireSomeConstraintDisclosed made it possible and left the sentence
+	// standing.
+	//
+	//   - requireConstrained: a fact this verifier named as required is one no
+	//     disclosed constraint mentions. It says nothing about what was
+	//     withheld, because nothing can.
+	//   - requireSomeConstraintDisclosed: the signed payload commits to
+	//     constraints and this presentation disclosed none of them — which *is*
+	//     "constraints were withheld", counted rather than guessed. Or the
+	//     commitment could not be read at all, which is unanswerable and
+	//     refuses on the same terms.
+	//
+	// What stays true is the narrower claim: *which* constraint went, and what
+	// it said, is unrecoverable. The count is not.
+	ErrDisclosureInsufficient = errors.New("ap2: a constraint this verifier requires was not disclosed")
 )
 
 // adapterCodes is the canonical code each of this package's failures carries
@@ -149,6 +178,7 @@ var adapterCodes = []struct {
 	{ErrCredentialScopeMismatch, generated.ErrorCodeCredentialScopeMismatch},
 	{ErrCredentialExpired, generated.ErrorCodeMandateExpired},
 	{ErrBindingUnverifiable, generated.ErrorCodeDisclosureInsufficient},
+	{ErrDisclosureInsufficient, generated.ErrorCodeDisclosureInsufficient},
 	// evidence.ErrIncomplete is the domain's, not this package's, and it is in
 	// this table because Dispute.Verify is the thing that reports it — a
 	// dispute bundle missing an artefact is the caller having assembled the

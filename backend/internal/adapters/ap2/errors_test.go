@@ -43,6 +43,14 @@ func TestEveryFailureHasACode(t *testing.T) {
 		{ap2.ErrCredentialScopeMismatch, generated.ErrorCodeCredentialScopeMismatch},
 		{ap2.ErrCredentialExpired, generated.ErrorCodeMandateExpired},
 		{ap2.ErrBindingUnverifiable, generated.ErrorCodeDisclosureInsufficient},
+		// The second failure carrying disclosure_insufficient, and the pair is
+		// not an accident: one is a document withheld from a binding check, the
+		// other a limit withheld from a constraint check, and in both the
+		// presentation verified perfectly and left the verifier unable to
+		// conclude. Two sentinels because the reader has to go to two different
+		// places; one code because the counterparty's next move is the same —
+		// present more.
+		{ap2.ErrDisclosureInsufficient, generated.ErrorCodeDisclosureInsufficient},
 		// The domain's, not this adapter's, and in the list because Dispute.Verify
 		// hands it back to a caller who has no other way to name it. Left
 		// unmapped it would arrive as verifier_unavailable, blaming the arbiter
