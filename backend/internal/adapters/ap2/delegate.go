@@ -162,18 +162,30 @@ func delegable(signer authz.Signer, open *sdjwt.SDJWT, blinder *sdjwt.Blinder) e
 // delegate blinds the closed mandate's claims, narrows the open one for the
 // verifier its own vct names, and signs the delegating hop over the result.
 //
-// want is the open mandate this closed one may be delegated from, and checking
-// it here is the pairing Minimise cannot make for itself. Minimise takes the
-// audience from the root's vct, so an open Payment Mandate handed to
-// DelegateCheckout would be narrowed for a Credential Provider's reach — the
-// route pins dropped — and the chain would then be refused by
-// AuthoriseCheckoutChain's own requireVCT for what reads as an unrelated reason.
-// Refusing it where the chain is minted names the actual mistake instead.
+// want is the open mandate this closed one may be delegated from, and it is
+// checked here rather than left to the verifier for one reason only: **it fails
+// in the agent's own process.** No request goes out, and the nonce a verifier
+// issued for this transaction is not spent on a chain that was never going to be
+// accepted.
 //
-// It is the one mistake catchable here and not the only one there is: a
-// delegation signed with a key the root's cnf does not endorse is minted just as
-// happily, because nothing at issuance can tell an endorsed Signer from an
-// unendorsed one. See DelegateCheckout.
+// It buys nothing else, and the temptation is to claim more. AuthoriseCheckoutChain
+// runs requireVCT over the same two mandate types, so the refusal downstream is
+// the *same sentence* — measured, not assumed: "wrong mandate type: this is a
+// open Payment Mandate (…), not a open Checkout Mandate". It also arrives before
+// any constraint is evaluated, so a mispaired chain discloses nothing and
+// misjudges nothing. Delete this guard and the only thing that changes is where
+// and when the same words appear.
+//
+// It also catches one mistake rather than every mistake. A delegation signed
+// with a key the root's cnf does not endorse is minted just as happily, because
+// nothing at issuance can tell an endorsed Signer from an unendorsed one — see
+// DelegateCheckout — and an open mandate every one of whose constraints its own
+// audience is unable to state narrows to nothing here and is refused downstream
+// as though the agent had chosen to withhold them.
+//
+// The position in this function is load-bearing even though the diagnosis is
+// not: it runs before Minimise, so no audience decision is ever made about a
+// mandate of the wrong kind.
 //
 // The vct is read from the Issuer-signed payload without checking the signature,
 // which is sound here for the reason Minimise gives for the identical read: this

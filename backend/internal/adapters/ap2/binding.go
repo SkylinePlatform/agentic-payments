@@ -78,6 +78,16 @@ func bindingAlg(blinder *sdjwt.Blinder, blinds bool) sdjwt.HashAlg {
 // answer — see DelegateCheckout, where a delegating hop declares one
 // unconditionally and a standalone mandate does not.
 func bindClosed(claims map[string]any, name string, alg sdjwt.HashAlg, checkoutJWT string) error {
+	// Reachable from the two Payment callers and dead for the two Checkout ones:
+	// checkoutClaims has already refused a mandate carrying no checkout_jwt,
+	// because it has to dereference the field to build the claim, and it says so
+	// in the same words this does. Two copies of one sentence with one of them
+	// dead for half the callers is the shape MerchantRules.VerifyCheckoutAsOf's
+	// comment warns about, and it is kept anyway: the alternative is a function
+	// that binds happily to nothing, correct only for as long as every caller
+	// remembers to check first. The mutation that deletes this line is caught by
+	// TestIssuingAPaymentMandateNeedsTheCheckoutItself and by
+	// TestADelegationCannotBeMadeFromNothing.
 	if checkoutJWT == "" {
 		return fmt.Errorf("%w: no checkout to bind to, so %s cannot be computed",
 			ErrMandateMalformed, name)
