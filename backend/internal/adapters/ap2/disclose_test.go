@@ -338,6 +338,51 @@ func TestANarrowedPresentationAuthorisesWhereTheFullOneCannot(t *testing.T) {
 	})
 }
 
+// openPaymentRoot signs the open hop these fixtures hang off.
+//
+// It goes through IssueOpenPayment for every constraint set but the empty one,
+// which that function refuses: an open mandate carrying no limits authorises
+// every purchase there is, and this package will not mint one. Strict in what we
+// produce, permissive in what we accept — the refusal is about issuing and
+// invents no rule for anybody else, while a verifier still has to accept what
+// the schema permits from any issuer and reach a verdict on it. That is what
+// TestAMandateThatSetNoLimitsIsNotAPresentationNarrowedToNothing is about, and
+// IssueOpenCheckout's own comment sets the asymmetry out in full.
+//
+// So for that one case the root is assembled here instead, from the same claims
+// IssueOpenPayment would write. That is not a way around the guard, it is the
+// scenario stated honestly: the artefact under test is one somebody else's
+// issuer produced, because ours no longer can.
+func openPaymentRoot(
+	t *testing.T, f fixture, cs []generated.Constraint, payee generated.Merchant,
+) *sdjwt.SDJWT {
+	t.Helper()
+
+	if len(cs) > 0 {
+		root, err := ap2.IssueOpenPayment(t.Context(), f.signer, generated.OpenPaymentMandate{
+			AgentKey:    agentJWK(t),
+			Constraints: cs,
+			Payee:       &payee,
+		}, f.blinder)
+		require.NoError(t, err, "issuing the open Payment Mandate")
+		return root
+	}
+
+	// No paths blinded, matching what IssueOpenPayment does when there is
+	// nothing in constraints to withhold.
+	payload, disclosures, err := f.blinder.Blind(map[string]any{
+		"vct":         ap2.VCTPaymentOpen,
+		"cnf":         map[string]any{"jwk": agentJWK(t)},
+		"constraints": []any{},
+		"payee":       payee,
+	})
+	require.NoError(t, err, "blinding an open Payment Mandate that sets no limits")
+
+	root, err := sdjwt.Issue(t.Context(), ap2.JOSESigner(f.signer), payload, disclosures)
+	require.NoError(t, err, "signing an open Payment Mandate that sets no limits")
+	return root
+}
+
 // paymentChainOver builds a Payment Mandate chain whose open hop carries cs,
 // narrowing the root for its own audience first when narrow is set.
 //
@@ -351,12 +396,7 @@ func paymentChainOver(t *testing.T, cs []generated.Constraint, narrow bool) *min
 	agentSigner, agentVerifier := agentKeys(t, f.clock)
 
 	payee := generated.Merchant{ID: pinnedPayee, Name: "Demo Merchant"}
-	root, err := ap2.IssueOpenPayment(t.Context(), f.signer, generated.OpenPaymentMandate{
-		AgentKey:    agentJWK(t),
-		Constraints: cs,
-		Payee:       &payee,
-	}, f.blinder)
-	require.NoError(t, err, "issuing the open Payment Mandate")
+	root := openPaymentRoot(t, f, cs, payee)
 
 	if narrow {
 		root = minimise(t, root)
@@ -561,8 +601,21 @@ func TestAMandateThatSetNoLimitsIsNotAPresentationNarrowedToNothing(t *testing.T
 
 	got, err := ap2.AuthorisePaymentChain(fx.chain, credentialProviderSubject(), fx.opts)
 	require.NoError(t, err,
-		"a user may sign an open mandate that places no limits, and refusing it would be inventing a rule the schema does not state")
+		"the floor asks what the mandate committed to, not how many constraints arrived; this one committed to none and is answerable on its own terms")
 	assert.True(t, got.Report.Satisfied())
+
+	// Which is a statement about verifying, not about issuing. IssueOpenPayment
+	// refuses to mint this artefact — see openPaymentRoot, which is why the
+	// fixture assembles it by hand — because an open mandate with no limits
+	// authorises every purchase until it expires. A verifier still has to be
+	// able to read one and say what it thinks of it, and what it thinks is
+	// exactly this: zero constraints committed to, zero violated. The refusal
+	// that matters for such a mandate belongs to whoever was asked to sign it.
+	_, err = ap2.IssueOpenPayment(t.Context(), newFixture(t).signer, generated.OpenPaymentMandate{
+		AgentKey: agentJWK(t),
+	}, newFixture(t).blinder)
+	assert.ErrorIs(t, err, ap2.ErrMandateMalformed,
+		"this package must not be the issuer that produced the artefact above")
 }
 
 // TestTheFloorCoversBothChainEntryPoints is the sibling of the test below, and

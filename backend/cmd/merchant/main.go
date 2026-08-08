@@ -14,6 +14,7 @@ import (
 	"net/http"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant"
 )
@@ -55,6 +56,15 @@ func main() {
 			return nil, err
 		}
 
+		// What GET /nonce hands out, and what this merchant checks a
+		// delegation's key binding against afterwards. It remembers nothing;
+		// crypto.Challenger's own doc comment is explicit about the replay that
+		// leaves open and about #27 being where it closes.
+		challenge, err := crypto.NewChallenger(role.Clock, roles.ChallengeTTL)
+		if err != nil {
+			return nil, err
+		}
+
 		service := &merchant.Service{
 			ID:        *id,
 			Inventory: inventory,
@@ -62,17 +72,55 @@ func main() {
 			// Handed in rather than constructed inside the service, which is
 			// what makes AP2's delegation allowance reachable: a merchant built
 			// with somebody else's CheckoutVerifier has delegated.
-			Rules: ap2.MerchantRules{Issuer: user, Clock: role.Clock},
+			//
+			// All three chain fields are read by AuthoriseCheckoutChain and by
+			// nothing else — VerifyCheckout, which is the whole of the Human
+			// Present flow this binary serves today, ignores every one of them —
+			// so setting them changes no behaviour yet. Nothing can present a
+			// chain here until merchant.Service grows a chain entry point, which
+			// is #119.
+			//
+			// AgentKey is roles.AgentKey: the cnf claim of the open mandate,
+			// turned into the one Verifier the delegating hop is ever checked
+			// with. That there is exactly one resolution, and no second key to
+			// compare it against by hand, is the property the whole delegation
+			// design turns on.
+			//
+			// RequireConstrained is a policy rather than a protocol rule: this
+			// merchant will not authorise a purchase against a mandate that says
+			// nothing about the amount. Leaving it empty would not select a
+			// different check — ChainOptions.RequireConstrained says so — it
+			// would fall back to trusting whatever narrowing the agent chose.
+			Rules: ap2.MerchantRules{
+				Issuer:             user,
+				Clock:              role.Clock,
+				AgentKey:           roles.AgentKey,
+				Audience:           *id,
+				RequireConstrained: []string{"amount"},
+			},
 			// The Payment Mandate travelling beside it, verified so that the
 			// merchant can compare what it pays against what this checkout
 			// costs. Same key: in Human Present mode the user signs both closed
 			// mandates, so the surface's key is whose signature both checks.
-			Payments: ap2.CredentialProviderRules{Issuer: user, Clock: role.Clock},
-			Own:      role.Verifier,
-			Signer:   role.Signer,
-			Keys:     role.Keys,
-			Clock:    role.Clock,
-			Events:   role.Events,
+			//
+			// The audience is this merchant and not the Credential Provider,
+			// because sdjwt.Delegate writes aud and VerifyChain compares it: a
+			// closed mandate is minted for one verifier, so the payment chain
+			// presented here is a different document from the one presented for
+			// funding, and carries this identifier.
+			Payments: ap2.CredentialProviderRules{
+				Issuer:             user,
+				Clock:              role.Clock,
+				AgentKey:           roles.AgentKey,
+				Audience:           *id,
+				RequireConstrained: []string{"amount"},
+			},
+			Own:       role.Verifier,
+			Signer:    role.Signer,
+			Keys:      role.Keys,
+			Clock:     role.Clock,
+			Events:    role.Events,
+			Challenge: challenge,
 			// The merchant initiates payment, not the agent.
 			Processor: &merchant.HTTPProcessor{Base: *processor},
 		}
