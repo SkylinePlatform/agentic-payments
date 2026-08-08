@@ -66,6 +66,15 @@ var (
 //
 // Constraint failures are delegated to the constraint package, so that one
 // error has one code wherever it is produced.
+//
+// One arm is not a verifier's answer. open_mandate_outstanding names the
+// rejection-receipt rule in lifecycle.go, and no verifier can reach a verdict
+// on that rule — the refusal is the agent's, about its own presentation. This
+// arm is the only path by which that code is reached from an error;
+// internal/platform/problem's table renders it and does not produce it. It is
+// mapped here rather than left out because the alternative is the default arm
+// answering mandate_malformed for a rejection-receipt refusal, which is a wrong
+// answer arrived at silently.
 func CodeOf(err error) generated.ErrorCode {
 	switch {
 	case err == nil:
@@ -78,6 +87,33 @@ func CodeOf(err error) generated.ErrorCode {
 		return generated.ErrorCodeMandateNotYetValid
 	case errors.Is(err, ErrPinnedFieldChanged):
 		return generated.ErrorCodeConstraintViolated
+	// Both readings of the rejection-receipt rule, under the one code that
+	// names it: a further presentation of an open mandate for which no
+	// rejection receipt has arrived. For a spent mandate that receipt is not
+	// merely late — its presentation was accepted — and the code still fits,
+	// because what the schema describes is a further presentation *before* the
+	// rejection receipt for the previous one, and there is none.
+	case errors.Is(err, ErrOpenMandateOutstanding), errors.Is(err, ErrMandateSpent):
+		return generated.ErrorCodeOpenMandateOutstanding
+	// The lifecycle's other two refusals are a caller's bug rather than a
+	// verdict about a mandate: a receipt applied where nothing is outstanding,
+	// and a state value the machine does not define. The vocabulary has no code
+	// for either, so this says so with the empty code instead of falling through
+	// to mandate_malformed, which would answer a caller's bookkeeping mistake by
+	// telling a counterparty their mandate is bad. An empty code is not in the
+	// enum, so nothing renders it as a rejection.
+	//
+	// internal/adapters/ap2.CodeOf holds the opposite rule — "a non-nil error
+	// never yields the empty string" — and both are right about their own error
+	// populations rather than one contradicting the other. Everything reaching
+	// that function is a verifier's verdict on a counterparty's artefact, where
+	// an unnameable code is a hole that becomes a 500 naming nothing, so
+	// verifier_unavailable is the true answer. These two are the agent refusing
+	// itself, never travel to a counterparty, and have no verdict to name; there
+	// the empty code *is* the true answer, and borrowing a real one would invent
+	// a finding against somebody.
+	case errors.Is(err, ErrNoPresentationOutstanding), errors.Is(err, ErrUnknownTransition):
+		return ""
 	case errors.Is(err, ErrMalformedMandate):
 		return generated.ErrorCodeMandateMalformed
 	default:

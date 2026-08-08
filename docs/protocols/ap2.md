@@ -339,6 +339,56 @@ whichever came back accepted. It is a real security property, not bookkeeping,
 and it is the reason the rejection at 21000 must produce a signed receipt
 before the attempt at 18900 is allowed to exist.
 
+The rule is a sequence, so it is written as a state machine:
+`authz.MandateState` in `backend/internal/core/authz/lifecycle.go`, one value
+per open mandate. A mandate is *ready*; beginning a purchase attempt on it makes
+it *awaiting receipt*, from which beginning another is refused; a rejection
+receipt returns it to *ready*, which is the retry above; and a successful
+receipt makes it *spent*, which is terminal. Both refusals carry
+`open_mandate_outstanding`.
+
+**The unit is a purchase attempt, not a verifier hop**, and that distinction is
+load-bearing rather than pedantic. A single attempt puts the same Payment
+Mandate in front of **three** verifiers: the Credential Provider, which funds it;
+the merchant, which verifies it in its own right at settlement; and the Merchant
+Payment Processor, which verifies it before deciding whether the credential is
+scoped to the purchase. A machine stepped once per verifier would call the
+mandate spent as soon as the Credential Provider answered, then refuse
+settlement — killing the purchase after the payment credential had been issued
+and before the merchant was ever asked. An attempt is outstanding until some
+verifier in it answers, is rejected if any of them refuses, and is accepted when
+the purchase goes through.
+
+Nothing calls the machine yet: the autonomous loop that will is issue #15's, and
+until it lands the rule binds by being the one place the sequence is written
+down. That also means the unit is an obligation on the caller rather than a
+property of the type — `MandateState` sees no verifiers and counts calls, so an
+agent stepping it per hop gets the bug above silently.
+
+Single use is this implementation's reading of AP2's own answer, which is scope
+reduction — "the agent reduces the scope of the open mandate based on the
+receipt, often preventing future presentations entirely", on the specification's
+agent authorization page — taken to its degenerate case, because the narrowing
+the specification describes is agent-side and so is the one check no other party
+ever sees. The word doing the work there is *often*: the Subscription in
+`../business/use-cases.md`, one open mandate reused across billing periods until
+it expires, is the not-often case, and a terminal *spent* makes it
+unrepresentable. Widening that is a source change, not a setting.
+
+**Be exact about who enforces it, because the rule sounds stronger than it is.**
+The agent does, and nothing else can: a rule set holds no state, and a verifier
+is shown one presentation carrying no record of any other. So what the machine
+buys is an honest agent no longer able to spend one authorisation against two
+checkouts by accident, which is the common failure. It is not a defence against
+a dishonest agent — that one is replaying, and a replay is refused by the
+verifier-side nonce store of issue #27. *Awaiting receipt* is the state a screen
+has to draw as waiting rather than as stalled, for as long as an answer can
+still arrive: the rule makes attempts sequential on purpose. There is no exit
+from it but a receipt — no timeout and no abandon, because "no answer came, so I
+may try again" is the rule's own bypass — so a dropped response leaves the
+mandate there until it expires, and the recourse is re-delivering the same
+presentation under the same idempotency key rather than starting a new attempt.
+
 ## Binding: `checkout_hash`
 
 The merchant provides a merchant-signed JWT containing the checkout. Both
