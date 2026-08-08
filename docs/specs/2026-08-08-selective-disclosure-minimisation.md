@@ -289,12 +289,27 @@ because nothing routes an MPP through a chain today; `MPPRules.VerifyCredential`
 answers a different question, about a credential rather than a mandate. A third
 row is what an MPP chain verifier would need.
 
-**Nothing ties `evaluations` to the `constraint.Subject` a role actually
-builds.** A Credential Provider populating fewer facts than its row claims
+**The payment row is now tied to the `constraint.Subject` a verifier evaluates;
+the checkout row is not.** A verifier populating fewer facts than its row claims
 refuses in ignorance; one populating more has constraints withheld it could have
-enforced. `credentialProviderSubject` in the tests honours the row by hand and
-says so. Closing this would mean deriving the reach from the subject at
-verification time, which is a real design and not this one.
+enforced. When this was written, nothing checked either direction —
+`credentialProviderSubject` in the tests honoured the row by hand and said so.
+
+#120 closed it for the payment side by deleting the parameter that carried the
+problem. `ap2.PaymentSubject(closed, now)` is the `ForPayment` row as code, and
+`AuthorisePaymentChain` derives the subject with it after verification instead
+of taking one from its caller, which is what makes the pair checkable at all —
+`TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState` walks
+`constraint.FieldNames()` and asserts exactly three fields stated and four zero.
+The parameter had no correct filling in any case: a payment-side verifier's only
+source for the amount and the payee is the closed mandate *inside the chain*,
+which it cannot read until that chain has verified.
+
+`ForCheckout` has no counterpart and the asymmetry is the protocol's. A
+Merchant's subject is read off the checkout it issued, a document
+`internal/adapters/ap2` never sees, so there is nothing for an equivalent
+function to be a pure function of; `AuthoriseCheckoutChain` still takes a
+subject and keeping that row in step is still its caller's obligation.
 
 ## What this deliberately does not build
 

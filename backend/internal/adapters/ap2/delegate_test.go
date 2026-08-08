@@ -273,7 +273,7 @@ func TestADelegationBindsUnderTheAlgorithmItsDelegatingHopDeclares(t *testing.T)
 		fx := paymentDelegateFixture(t, sdjwt.WithHashAlg(sdjwt.SHA384))
 		chain := reparseChain(t, fx.delegatePayment(t))
 
-		got, err := ap2.AuthorisePaymentChain(chain, purchaseAt(18900), fx.opts)
+		got, err := ap2.AuthorisePaymentChain(chain, fx.opts)
 		require.NoError(t, err, "the mandate has to authorise before its binding is worth reading")
 		assert.Equal(t, digestOf(t, fx.f, merchantCheckout), got.Closed.CheckoutHash,
 			"no chain verifier recomputes this one — VerifyPayment's doc comment says why — so a transaction_id under the wrong algorithm would surface only as a Payment Mandate that no party holding both mandates could pair with its Checkout Mandate")
@@ -303,7 +303,7 @@ func TestDelegatingNarrowsTheRootForTheVerifierItIsAddressedTo(t *testing.T) {
 		fx := paymentDelegateFixture(t)
 		chain := reparseChain(t, fx.delegatePayment(t))
 
-		got, err := ap2.AuthorisePaymentChain(chain, purchaseAt(18900), fx.opts)
+		got, err := ap2.AuthorisePaymentChain(chain, fx.opts)
 		require.NoError(t, err,
 			"a faithful closed Payment Mandate reproducing the pinned payee has to authorise before what it disclosed means anything")
 
@@ -373,7 +373,7 @@ func TestNarrowingAfterDelegatingBreaksTheChain(t *testing.T) {
 
 	tampered := withRootDisclosures(t, unnarrowed, narrowed.Disclosures())
 
-	_, err = ap2.AuthorisePaymentChain(tampered, purchaseAt(18900), fx.opts)
+	_, err = ap2.AuthorisePaymentChain(tampered, fx.opts)
 	require.Error(t, err,
 		"a delegation signed over one presentation of its root and shown with another must not verify, or an intermediary could drop the constraint that would have refused the purchase")
 	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid,

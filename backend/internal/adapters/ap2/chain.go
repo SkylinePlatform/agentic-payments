@@ -368,9 +368,31 @@ type PaymentAuthorisation struct {
 // PaymentMandate — this function does not fold that check in and quietly
 // skip it, it leaves it out so a caller cannot mistake its own inaction for a
 // passed check.
+//
+// # It takes no subject, and that is not a convenience
+//
+// AuthoriseCheckoutChain takes one and this does not, which looks like an
+// inconsistency and is the protocol showing through. A Merchant builds its
+// subject from the checkout it issued, a document this package never sees. A
+// payment-side verifier has no such document: its only source for the amount
+// and the payee is the closed Payment Mandate *inside this chain*, which it
+// cannot read until the chain has verified — and cannot read naively even
+// then, since the delegate payload is an array digest whose content lives in a
+// disclosure.
+//
+// So the subject is derived here, after verification, by PaymentSubject, from
+// the verified closed mandate and opts.Clock. It was a parameter until #120,
+// and the parameter had no correct filling: every caller had to reproduce
+// evaluations[ForPayment].states by hand, with nothing checking that it had,
+// and the only code that ever did was a test helper whose own comment admitted
+// the gap. A pure function of what this function already holds is strictly
+// better than an argument no caller can supply honestly.
+//
+// The instant reaches authz.AuthorisePayment and the subject's `at` from the
+// same opts.Clock.Now() call, so expiry and the user's booking window are
+// judged as of one moment rather than two.
 func AuthorisePaymentChain(
 	c *sdjwt.Chain,
-	subject constraint.Subject,
 	opts ChainOptions,
 ) (PaymentAuthorisation, error) {
 	var zero PaymentAuthorisation
@@ -403,7 +425,12 @@ func AuthorisePaymentChain(
 		return PaymentAuthorisation{Open: open}, err
 	}
 
-	report, err := authz.AuthorisePayment(open, closed, subject, opts.Clock.Now())
+	// One reading of the clock, spent on both halves of the same question: the
+	// instant this authority is being exercised at, and the instant the mandate
+	// is checked for expiry against. Two calls could straddle a boundary and
+	// judge one purchase as of two moments.
+	now := opts.Clock.Now()
+	report, err := authz.AuthorisePayment(open, closed, PaymentSubject(closed, now), now)
 	result := PaymentAuthorisation{Open: open, Closed: closed, Report: report}
 	if err != nil {
 		return result, err

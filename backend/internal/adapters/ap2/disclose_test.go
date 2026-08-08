@@ -269,26 +269,112 @@ func TestTheAudienceComesFromTheMandateAndNotTheCaller(t *testing.T) {
 		"the identical constraints in an open Payment Mandate reach a verifier that can state neither half of a route")
 }
 
-// credentialProviderSubject is the purchase as a Credential Provider sees it:
-// an amount, a moment and a payee, assembled from the closed Payment Mandate
-// and its own clock.
+// TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState is the
+// check evaluations[ForPayment].states never had.
 //
-// It is deliberately not purchaseAt, which chain_test.go builds with a route, a
-// category and a quantity. That one is the *Merchant's* view — it holds the
-// checkout — and handing it to a Credential Provider in a test would hide the
-// whole reason minimisation matters, by giving that role facts the protocol
-// never sends it.
+// The row says a payment-side verifier can supply `amount`, `at` and
+// `merchant.id`. Until #120 nothing tied that claim to a subject anybody
+// actually built: this file carried a helper that honoured the row by hand and
+// said so in its own comment, and every other caller of AuthorisePaymentChain
+// passed whatever subject was convenient. ap2.PaymentSubject is that row as
+// code, and this is what holds the two together.
 //
-// It is also this file's only tie between evaluations[ForPayment].states and a
-// subject a role actually builds, and that tie is by hand: nothing in the
-// package checks that a Credential Provider populates exactly the three facts
-// the table credits it with. See that field's own comment.
-func credentialProviderSubject() constraint.Subject {
-	return constraint.Subject{
-		Amount:   generated.Amount{Amount: 18900, Currency: "USD"},
-		At:       base,
-		Merchant: constraint.Party{ID: pinnedPayee},
+// The table walks constraint.FieldNames rather than a second copy of the three
+// names, and refuses to run against a registry it does not cover — the same
+// shape TestEveryFactIsPlacedWithAVerifier uses, and for the same reason: a
+// fact added to core that this table did not enumerate would be a fact nobody
+// decided about, silently defaulted to unstated.
+//
+// Both columns matter and they fail differently. A field the row credits and
+// PaymentSubject leaves zero is a limit refused in ignorance on every
+// transaction, because constraint.Evaluate reads an unstated fact as
+// unsatisfied. A field the row withholds and PaymentSubject fills is worse and
+// quieter: Minimise has already dropped the constraints reading it, so the
+// value is never compared against anything and a user's limit goes unenforced
+// while the subject looks thorough.
+//
+// stated is written out per field rather than derived, because deriving it
+// would mean re-implementing constraint.Field.read — which is the thing under
+// test on the other side of the comparison.
+func TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState(t *testing.T) {
+	t.Parallel()
+
+	rows := map[string]struct {
+		canState bool
+		stated   func(constraint.Subject) bool
+		why      string
+	}{
+		"amount": {
+			canState: true,
+			stated:   func(s constraint.Subject) bool { return s.Amount.Currency != "" },
+			why:      "payment_amount is the one number a closed Payment Mandate is about",
+		},
+		"at": {
+			canState: true,
+			stated:   func(s constraint.Subject) bool { return !s.At.IsZero() },
+			why:      "every verifier has a clock, and the booking window is checked against it",
+		},
+		"merchant.id": {
+			canState: true,
+			stated:   func(s constraint.Subject) bool { return s.Merchant.ID != "" },
+			why:      "payee is on the mandate, so a constraint pinning the merchant is enforceable here",
+		},
+		"merchant.category": {
+			stated: func(s constraint.Subject) bool { return s.Merchant.Category != "" },
+			why:    "contracts/identity/merchant.json gives a Merchant no category to read one out of",
+		},
+		"quantity": {
+			stated: func(s constraint.Subject) bool { return s.Quantity != 0 },
+			why:    "a Payment Mandate carries an amount, not a basket",
+		},
+		"item.id": {
+			stated: func(s constraint.Subject) bool { return s.Item.ID != "" },
+			why:    "a Payment Mandate names no item",
+		},
+		"item.category": {
+			stated: func(s constraint.Subject) bool { return s.Item.Category != "" },
+			why:    "a Payment Mandate names no item",
+		},
 	}
+
+	names := make([]string, 0, len(rows))
+	for name := range rows {
+		names = append(names, name)
+	}
+	require.ElementsMatch(t, constraint.FieldNames(), names,
+		"a fact the vocabulary knows and this table does not is a fact nobody decided whether a payment-side verifier can state, and the subject would silently leave it zero")
+
+	got := ap2.PaymentSubject(generated.PaymentMandate{
+		CheckoutHash:      "irrelevant-here",
+		Payee:             generated.Merchant{ID: pinnedPayee, Name: "Demo Merchant"},
+		PaymentAmount:     generated.Amount{Amount: 18900, Currency: "USD"},
+		PaymentInstrument: generated.PaymentInstrument{ID: "card-tok-1", Type: "card"},
+	}, base)
+
+	for name, row := range rows {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			if row.canState {
+				assert.True(t, row.stated(got),
+					"evaluations[ForPayment] credits this verifier with %s — %s — and a subject leaving it unstated refuses every mandate constraining it, in ignorance rather than in judgement",
+					name, row.why)
+				return
+			}
+			assert.False(t, row.stated(got),
+				"this verifier cannot state %s — %s — so Minimise has already withheld the constraints reading it, and a value here is compared against nothing while the user's limit goes unenforced",
+				name, row.why)
+		})
+	}
+
+	// The values themselves, not only their presence: a subject stating three
+	// facts wrongly would satisfy every row above.
+	assert.Equal(t, generated.Amount{Amount: 18900, Currency: "USD"}, got.Amount,
+		"the amount has to be the one the closed mandate signed for, not one the verifier chose")
+	assert.Equal(t, pinnedPayee, got.Merchant.ID,
+		"the payee has to be the one the closed mandate names")
+	assert.Equal(t, base, got.At,
+		"and the moment has to be the clock's, which is what makes a booking window checkable at all")
 }
 
 // minimisedChainFx is a Payment Mandate chain whose root was narrowed for the
@@ -317,7 +403,7 @@ func TestANarrowedPresentationAuthorisesWhereTheFullOneCannot(t *testing.T) {
 		t.Parallel()
 
 		fx := paymentChainOver(t, demoConstraints(t), false)
-		got, err := ap2.AuthorisePaymentChain(fx.chain, credentialProviderSubject(), fx.opts)
+		got, err := ap2.AuthorisePaymentChain(fx.chain, fx.opts)
 		require.Error(t, err,
 			"the route constraints reach a verifier that cannot state a route, and an unstated fact is never satisfied")
 		assert.False(t, got.Report.Satisfied())
@@ -329,7 +415,7 @@ func TestANarrowedPresentationAuthorisesWhereTheFullOneCannot(t *testing.T) {
 		t.Parallel()
 
 		fx := paymentChainOver(t, demoConstraints(t), true)
-		got, err := ap2.AuthorisePaymentChain(fx.chain, credentialProviderSubject(), fx.opts)
+		got, err := ap2.AuthorisePaymentChain(fx.chain, fx.opts)
 		require.NoError(t, err,
 			"the limits a Credential Provider can apply are satisfied, and those are the only ones it was shown")
 		assert.True(t, got.Report.Satisfied())
@@ -384,12 +470,29 @@ func openPaymentRoot(
 }
 
 // paymentChainOver builds a Payment Mandate chain whose open hop carries cs,
-// narrowing the root for its own audience first when narrow is set.
+// priced at the built scenario's beat 6, and narrowing the root for its own
+// audience first when narrow is set.
+func paymentChainOver(t *testing.T, cs []generated.Constraint, narrow bool) *minimisedChainFx {
+	t.Helper()
+	return paymentChainPriced(t, cs, narrow, 18900)
+}
+
+// paymentChainPriced is paymentChainOver with the closed mandate's amount
+// spelled out, which is how a test puts a purchase outside the user's cap in
+// front of the verifier.
+//
+// It has to be the *mandate's* amount rather than a subject the test hands
+// over, because AuthorisePaymentChain derives the subject from the closed
+// mandate — see ap2.PaymentSubject. That is a more faithful scenario than the
+// one it replaced: an agent that wants to spend $5,000 has to have signed for
+// $5,000, and the chain in front of the verifier says so.
 //
 // Narrowing happens before the delegation, never after: sd_hash covers the root
 // as presented, so a presentation narrowed afterwards would break its own
 // delegation rather than reach the verifier at all.
-func paymentChainOver(t *testing.T, cs []generated.Constraint, narrow bool) *minimisedChainFx {
+func paymentChainPriced(
+	t *testing.T, cs []generated.Constraint, narrow bool, amountMinor int,
+) *minimisedChainFx {
 	t.Helper()
 
 	f := newFixture(t)
@@ -409,7 +512,7 @@ func paymentChainOver(t *testing.T, cs []generated.Constraint, narrow bool) *min
 		"vct":                ap2.VCTPaymentClosed,
 		"transaction_id":     hash,
 		"payee":              map[string]any{"id": pinnedPayee, "name": "Demo Merchant"},
-		"payment_amount":     map[string]any{"amount": 18900, "currency": "USD"},
+		"payment_amount":     map[string]any{"amount": amountMinor, "currency": "USD"},
 		"payment_instrument": map[string]any{"id": "card-tok-1", "type": "card"},
 	})
 	require.NoError(t, err, "blinding the closed Payment Mandate's content")
@@ -475,11 +578,10 @@ func TestAGroupOneVerifierCannotDecideIsWithheldWholeAndTheFloorCatchesIt(t *tes
 	t.Run("and the verifier refuses rather than funding it", func(t *testing.T) {
 		t.Parallel()
 
-		fx := paymentChainOver(t, grouped, true)
-		expensive := credentialProviderSubject()
-		expensive.Amount = generated.Amount{Amount: 500000, Currency: "USD"} // $5,000 against a $200 cap
+		// $5,000 against a $200 cap, signed for by the agent itself.
+		fx := paymentChainPriced(t, grouped, true, 500000)
 
-		got, err := ap2.AuthorisePaymentChain(fx.chain, expensive, fx.opts)
+		got, err := ap2.AuthorisePaymentChain(fx.chain, fx.opts)
 		require.Error(t, err,
 			"a presentation of no constraints at all must not read as a mandate that set no limits, or the user's cap is enforced by nobody and the payment goes through")
 		assert.ErrorIs(t, err, ap2.ErrDisclosureInsufficient)
@@ -498,11 +600,9 @@ func TestAGroupOneVerifierCannotDecideIsWithheldWholeAndTheFloorCatchesIt(t *tes
 		mixed := append([]generated.Constraint{constraintFrom(t,
 			`{"op":"eq","field":"merchant.id","value":"merchant_1"}`)}, grouped...)
 
-		fx := paymentChainOver(t, mixed, true)
-		expensive := credentialProviderSubject()
-		expensive.Amount = generated.Amount{Amount: 500000, Currency: "USD"}
+		fx := paymentChainPriced(t, mixed, true, 500000)
 
-		got, err := ap2.AuthorisePaymentChain(fx.chain, expensive, fx.opts)
+		got, err := ap2.AuthorisePaymentChain(fx.chain, fx.opts)
 		require.NoError(t, err,
 			"this is the residual hole, not a passing design: the floor sees one disclosed constraint and the $200 cap inside the withheld group is enforced by nobody here")
 		assert.True(t, got.Report.Satisfied())
@@ -573,10 +673,10 @@ func TestAMandateHidingTheWholeConstraintsClaimIsRefusedRatherThanCountedAsZero(
 		closedPayload, closedDisclosures)
 	require.NoError(t, err)
 
-	expensive := credentialProviderSubject()
-	expensive.Amount = generated.Amount{Amount: 500000, Currency: "USD"}
-
-	_, err = ap2.AuthorisePaymentChain(chain, expensive, ap2.ChainOptions{
+	// The closed mandate above signs for $5,000, and AuthorisePaymentChain
+	// reads the subject off it — so the purchase in front of the verifier is
+	// the expensive one without a test having to say so separately.
+	_, err = ap2.AuthorisePaymentChain(chain, ap2.ChainOptions{
 		Issuer: f.verifier, AgentKey: resolveTo(agentVerifier), Clock: f.clock,
 		Audience: chainAudience, Nonce: chainNonce})
 	require.Error(t, err,
@@ -599,7 +699,7 @@ func TestAMandateThatSetNoLimitsIsNotAPresentationNarrowedToNothing(t *testing.T
 
 	fx := paymentChainOver(t, nil, true)
 
-	got, err := ap2.AuthorisePaymentChain(fx.chain, credentialProviderSubject(), fx.opts)
+	got, err := ap2.AuthorisePaymentChain(fx.chain, fx.opts)
 	require.NoError(t, err,
 		"the floor asks what the mandate committed to, not how many constraints arrived; this one committed to none and is answerable on its own terms")
 	assert.True(t, got.Report.Satisfied())
@@ -672,7 +772,7 @@ func TestTheFloorCoversBothChainEntryPoints(t *testing.T) {
 			`{"op":"eq","field":"item.attr.route.origin","value":"BEG"}`)}
 		fx := paymentChainOver(t, route, true)
 
-		_, err := ap2.AuthorisePaymentChain(fx.chain, credentialProviderSubject(), fx.opts)
+		_, err := ap2.AuthorisePaymentChain(fx.chain, fx.opts)
 		require.ErrorIs(t, err, ap2.ErrDisclosureInsufficient,
 			"narrowing correctly for a Credential Provider can still empty a mandate, and an empty one must not read as a mandate with no limits")
 		assert.Contains(t, err.Error(), "Credential Provider",
@@ -767,7 +867,7 @@ func TestAVerifierRefusesAPresentationThatConstrainsNothingItRequires(t *testing
 	// verifier needs even though it is exactly what the agent should have sent.
 	fx.opts.RequireConstrained = []string{"merchant.id"}
 
-	got, err := ap2.AuthorisePaymentChain(fx.chain, credentialProviderSubject(), fx.opts)
+	got, err := ap2.AuthorisePaymentChain(fx.chain, fx.opts)
 	require.Error(t, err,
 		"a verifier that authorises against limits it never saw has evaluated what it was shown rather than what was approved")
 	assert.ErrorIs(t, err, ap2.ErrDisclosureInsufficient,
@@ -819,7 +919,7 @@ func TestEveryRequiredFactMustBeStatedNotJustOne(t *testing.T) {
 			fx := paymentChainOver(t, demoConstraints(t), true)
 			fx.opts.RequireConstrained = tc.required
 
-			_, err := ap2.AuthorisePaymentChain(fx.chain, credentialProviderSubject(), fx.opts)
+			_, err := ap2.AuthorisePaymentChain(fx.chain, fx.opts)
 			if tc.refused {
 				assert.ErrorIs(t, err, ap2.ErrDisclosureInsufficient, tc.why)
 				return
@@ -877,7 +977,7 @@ func TestARuleSetCarriesItsRequirementIntoTheChain(t *testing.T) {
 			Audience:           fx.opts.Audience,
 			RequireConstrained: []string{"merchant.id"},
 		}
-		_, err := rules.AuthorisePaymentChain(fx.chain, credentialProviderSubject(), fx.opts.Nonce)
+		_, err := rules.AuthorisePaymentChain(fx.chain, fx.opts.Nonce)
 		assert.ErrorIs(t, err, ap2.ErrDisclosureInsufficient)
 	})
 }
