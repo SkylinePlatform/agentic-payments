@@ -13,6 +13,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/evidence"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
@@ -366,6 +367,188 @@ func TestEveryRejectionPointAnswersWithAReceipt(t *testing.T) {
 		assert.Empty(t, p.Receipts,
 			"a refusal before any mandate exists has nothing to sign an answer about")
 	})
+}
+
+// arbiter is what somebody adjudicating a purchase from this world would hold:
+// the two rule sets, and the key of each party that answers with a receipt.
+//
+// It resolves nothing from the artefacts. A receipt carries iss, and picking a
+// key from it would let the party being judged choose the key it is judged
+// against — so the keys are brought, by name, from the parties this test stood
+// up.
+// The rule sets carry no Clock: the dispute path takes the instant instead, and
+// leaving the field nil is what shows that. w.clock is the world's, and using it
+// here would leave a reader unable to tell whether the arbiter judged as of the
+// transaction or as of whenever the test had wound the world to.
+func (w *world) arbiter() ap2.Dispute {
+	return ap2.Dispute{
+		CheckoutMandates: ap2.MerchantRules{Issuer: w.user.verifier},
+		PaymentMandates:  ap2.CredentialProviderRules{Issuer: w.user.verifier},
+		CheckoutReceipts: w.shop.verifier,
+		PaymentReceipts:  w.processor.verifier,
+	}
+}
+
+// TestARealPurchaseIsDisputable is issue #18's first box, against the real four
+// roles over real HTTP rather than against a fixture.
+//
+// Nothing in the bundle is constructed here: every token was signed by the party
+// that signed it in the flow, and the chain recomputes every digest from the
+// bytes rather than from anything this package concluded on the way past.
+func TestARealPurchaseIsDisputable(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	bought, err := w.client().Buy(t.Context(), "BEG", "PMI", paymentContent())
+	require.NoError(t, err, "a purchase nobody objected to was refused")
+
+	b := bought.Evidence()
+	require.NoError(t, b.Validate(),
+		"a completed purchase has to leave behind every artefact a dispute is decided from")
+
+	rep := w.arbiter().Verify(b, base)
+	require.True(t, rep.Holds(), "a purchase every party approved was called into question: %v", rep.Err)
+	assert.Len(t, rep.Held, 5, "all five links, or the picture has a gap somewhere in it")
+
+	assert.Equal(t, "air-serbia", rep.CheckoutReceipt.Issuer)
+	assert.Equal(t, "mock-payment-processor", rep.PaymentReceipt.Issuer,
+		"the Payment Receipt in a bundle is the processor's, and this is where that choice is visible")
+
+	// A day passes and the dispute is heard. The Trusted Surface signs closed
+	// mandates with a fifteen-minute life, so everything in this bundle lapsed
+	// within the hour — which is the ordinary case, not an edge one, and is why
+	// the arbiter judges as of the transaction rather than as of now.
+	w.clock.Advance(24 * time.Hour)
+
+	late := w.arbiter().Verify(b, base)
+	require.True(t, late.Holds(),
+		"a dispute is always heard after the mandates lapsed; if that broke the chain the feature would work nowhere: %v", late.Err)
+	assert.Len(t, late.Held, 5)
+
+	// And the answer an arbiter reading a wall clock would have given instead.
+	assert.Equal(t, generated.ErrorCodeMandateExpired,
+		w.arbiter().Verify(b, w.clock.Now()).Code,
+		"mandate_expired against a blameless counterparty is what judging as of now produces for every real purchase")
+}
+
+// TestARefusedPurchaseIsStillDisputable is the half a happy-path test cannot
+// reach, and the half a dispute is actually opened about.
+//
+// The merchant verified the mandate and it held; the processor refused because
+// the money was scoped to somebody else's purchase. Both answers are genuine and
+// signed, the chain holds over them, and what it proves is the refusal — which is
+// only possible because a rejection receipt is a valid link rather than a broken
+// one.
+func TestARefusedPurchaseIsStillDisputable(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	c := w.client()
+
+	var p agent.Purchase
+	require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &p))
+	require.NoError(t, c.Approve(t.Context(), paymentContent(), &p))
+	require.NoError(t, c.Fund(t.Context(), &p))
+
+	elsewhere, err := sdjwt.SHA256.Digest("a different offer entirely")
+	require.NoError(t, err)
+	p.Credential.CheckoutHash = elsewhere
+	require.ErrorIs(t, c.Settle(t.Context(), &p), agent.ErrRefused)
+
+	rep := w.arbiter().Verify(p.Evidence(), base)
+	require.True(t, rep.Holds(),
+		"a purchase that was refused is exactly what a dispute is about, and its evidence has to verify: %v", rep.Err)
+
+	assert.Equal(t, generated.ReceiptResultSuccess, rep.CheckoutReceipt.Result,
+		"the merchant's answer stands: the mandate was good")
+	assert.Equal(t, generated.ReceiptResultError, rep.PaymentReceipt.Result)
+	require.NotNil(t, rep.PaymentReceipt.Error)
+	assert.Equal(t, generated.ErrorCodeCredentialScopeMismatch, *rep.PaymentReceipt.Error,
+		"and the reason the money did not move is the finding the dispute is for")
+}
+
+// TestARetriedPurchaseIsDisputedOnItsLatestAnswer is the case where taking a
+// party's first answer produces a chain that verifies and lies.
+//
+// Settle is exported and this package documents the four steps as separately
+// usable, so a retry needs no misuse to reach: the processor refuses a
+// credential scoped elsewhere, the agent gets the right one and settles again.
+// Both parties have now answered twice and the money has moved.
+//
+// A bundle built from the first answer would hold — every artefact in it is
+// genuine — over the processor's signed statement that the payment did not go
+// through. Nothing in the chain could catch that, because nothing in the chain
+// is wrong. The only place it can be got right is here, at assembly.
+func TestARetriedPurchaseIsDisputedOnItsLatestAnswer(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	c := w.client()
+
+	var p agent.Purchase
+	require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &p))
+	require.NoError(t, c.Approve(t.Context(), paymentContent(), &p))
+	require.NoError(t, c.Fund(t.Context(), &p))
+
+	// The first attempt, with the credential pointed at somebody else's
+	// purchase. The merchant is happy and the processor is not.
+	good := *p.Credential
+	elsewhere, err := sdjwt.SHA256.Digest("a different offer entirely")
+	require.NoError(t, err)
+	p.Credential.CheckoutHash = elsewhere
+	require.ErrorIs(t, c.Settle(t.Context(), &p), agent.ErrRefused)
+	require.False(t, p.Settled)
+
+	// The second, with the credential the Credential Provider actually issued.
+	p.Credential = &good
+	require.NoError(t, c.Settle(t.Context(), &p))
+	require.True(t, p.Settled, "the money moved on the retry, and the evidence has to agree")
+
+	// The trail keeps both answers from both parties. It has to: an agent that
+	// could drop the refusal by retrying would be deleting the fact AP2 makes
+	// the rejection receipt mandatory to produce.
+	require.Len(t, p.Receipts, 5,
+		"one from the Credential Provider, then merchant and processor twice")
+	assert.Equal(t, []string{"credprovider", "merchant", "mpp", "merchant", "mpp"},
+		[]string{p.Receipts[0].From, p.Receipts[1].From, p.Receipts[2].From,
+			p.Receipts[3].From, p.Receipts[4].From})
+
+	b := p.Evidence()
+	assert.Equal(t, p.Receipts[4].Token, b.PaymentReceipt,
+		"the bundle carries the processor's latest answer, not its first")
+	assert.NotEqual(t, p.Receipts[2].Token, b.PaymentReceipt,
+		"if these matched, the bundle would be evidence of the attempt that was abandoned")
+	assert.Equal(t, p.Receipts[3].Token, b.CheckoutReceipt)
+
+	rep := w.arbiter().Verify(b, base)
+	require.True(t, rep.Holds(), "the retried purchase's own evidence must verify: %v", rep.Err)
+	assert.Equal(t, generated.ReceiptResultSuccess, rep.PaymentReceipt.Result,
+		"Settled says the money moved, so the signed answer in the bundle has to say so too")
+}
+
+// TestAnAbandonedPurchaseAssemblesIntoAnIncompleteBundle is the other side of
+// Evidence being total. A flow that stopped before the processor was asked has
+// no Payment Receipt, and the assembly says so rather than inventing one or
+// substituting the Credential Provider's answer to a different question.
+func TestAnAbandonedPurchaseAssemblesIntoAnIncompleteBundle(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	c := w.client()
+
+	var p agent.Purchase
+	require.NoError(t, c.Quote(t.Context(), "BEG", "PMI", &p))
+	require.NoError(t, c.Approve(t.Context(), paymentContent(), &p))
+	require.NoError(t, c.Fund(t.Context(), &p))
+
+	b := p.Evidence()
+	assert.NotEmpty(t, b.PaymentMandate, "everything the flow did reach is in the bundle")
+
+	err := b.Validate()
+	require.ErrorIs(t, err, evidence.ErrIncomplete)
+	assert.Contains(t, err.Error(), "Checkout Receipt")
+	assert.Contains(t, err.Error(), "Payment Receipt",
+		"the Credential Provider answered the Payment Mandate too, and its answer is not the one a bundle carries")
 }
 
 // verifyReceipt pulls a role's receipt out of a purchase and checks it against
