@@ -293,10 +293,26 @@ fail rather than be skipped.
 
 - **dSD-JWT+KB**, and chains of more than one delegation. AP2 uses two hops.
 - **JSON serialisation** of either form. Compact only.
-- **`issuer_jwt_hash` on the issuing side.** Verification accepts either hash,
-  because a chain we did not build may use either; this implementation emits
-  `sd_hash`, which is the stricter of the two — it commits to the disclosures as
-  well as the token.
+- **`issuer_jwt_hash` on the issuing side.** `pkg/sdjwt` accepts either hash by
+  default, because a chain we did not build may use either; this implementation
+  emits `sd_hash`, which is the stricter of the two — it commits to the
+  disclosures as well as the token.
+
+  **The AP2 adapter does not accept either.** It sets
+  `sdjwt.ChainOptions.RequireSDHashBinding`, so a chain reaching
+  `AuthoriseCheckoutChain` or `AuthorisePaymentChain` bound by `issuer_jwt_hash`
+  is refused as `ErrKeyBindingInvalid`. The reason is what the root's Disclosures
+  *are* here: under AP2 they are the constraints the user set, so a binding that
+  covers the Issuer-signed JWT alone lets a chain presented with constraints
+  {A, B} verify identically with B withheld — and B is then a limit nobody
+  enforces, with every other check passing. `requireSomeConstraintDisclosed` does
+  not reach it, because withholding one of four still discloses three, which is
+  an ordinary minimised presentation.
+
+  The split is the point and is the shape used throughout: the library stays
+  conformant to a draft that defines both bindings, and the profile that treats
+  receipts as evidence narrows it. See issue #124, and
+  `TestAChainBoundByIssuerJWTHashIsRefusedByTheAP2Profile`.
 
 Each is additive, and the draft is an individual Internet-Draft still subject to
 change. Implementing the parts nothing exercises would be guessing at a moving

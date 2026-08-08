@@ -378,6 +378,34 @@ func TestIssuerJWTHashBindsWithoutCoveringDisclosures(t *testing.T) {
 	require.NoError(t, err, "issuer_jwt_hash covers only the delegating JWT, not the disclosures presented alongside the root, so dropping one must not break verification")
 }
 
+func TestRequireSDHashBindingRefusesTheWeakerBinding(t *testing.T) {
+	// The policy a profile sets when its root disclosures are limits rather
+	// than attributes. The test above is the same chain under the same
+	// verifier with the field left at its zero value, so the pair is what
+	// states that this is a caller's decision and not a rule of the format:
+	// one chain, two policies, two answers.
+	chain := delegatedChainWithIssuerJWTHash(t, issuedRootWithExtraDisclosure(t))
+
+	opts := chainOptions(t)
+	opts.RequireSDHashBinding = true
+
+	_, err := sdjwt.VerifyChain(chain, opts)
+	require.Error(t, err, "a verifier that asked for the binding covering the root as presented must not be given the one that does not")
+	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid)
+	assert.ErrorContains(t, err, "issuer_jwt_hash",
+		"the message has to name what arrived, or a caller cannot tell a policy refusal from a binding that failed to match")
+
+	// The unnarrowed chain, refused for the binding it uses rather than for
+	// anything it did to its root. Dropping a disclosure is what makes the
+	// weaker binding dangerous, and this asserts the refusal does not wait for
+	// that to happen — a policy that only fired on a narrowed presentation
+	// would be detecting the symptom.
+	narrowed := dropOneRootDisclosure(t, chain)
+	_, err = sdjwt.VerifyChain(narrowed, opts)
+	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid,
+		"the narrowed presentation is refused on the same grounds, since the narrowing is undetectable and the binding is not")
+}
+
 func TestAnIssuerJWTHashNamingAnotherRootIsRejected(t *testing.T) {
 	// The weaker of the two hashes still has to bind. Without this the
 	// issuer_jwt_hash comparison could be deleted outright and every test would

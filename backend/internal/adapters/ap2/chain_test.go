@@ -1,7 +1,10 @@
 package ap2_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -227,6 +230,160 @@ func TestAChainOutsideItsConstraintsIsRefusedByTheVerifier(t *testing.T) {
 	// call site where the disagreement becomes a signed artefact.
 	assert.Equal(t, generated.ErrorCodeConstraintViolated, ap2.CodeOf(err),
 		"the demo's central beat is the verifier refusing a purchase that broke the user's limits, and a receipt blaming the verifier's own uptime teaches the opposite of what the beat exists to teach")
+}
+
+// rebindToIssuerJWTHash re-signs the delegating hop so that it names its root
+// by issuer_jwt_hash instead of the sd_hash Delegate wrote.
+//
+// It has to re-sign rather than edit, because the binding claim is inside the
+// delegating JWT's signed payload — which is the point. This is a chain an
+// agent could legitimately build with any conformant SD-JWT library, not a
+// forgery: the signature is the agent's own, over claims it chose. sdjwt.Delegate
+// will not produce this shape, and that is exactly why the refusal needed a
+// fixture of its own rather than being reachable through this package's issuer.
+//
+// The pkg/sdjwt tests build the same shape with delegatedChainWithIssuerJWTHash.
+// This is a second implementation rather than a shared one because the two test
+// packages cannot see each other's helpers, and the duplication is the kind
+// AGENTS.md accepts between layers.
+func rebindToIssuerJWTHash(t *testing.T, fx *checkoutChainFx) *sdjwt.Chain {
+	t.Helper()
+
+	parts, sep := splitChainAtSeparator(t, fx.chain)
+
+	// The root's own Issuer-signed JWT is parts[0], and the digest of it alone
+	// — not of it and the Disclosures presented with it — is what
+	// issuer_jwt_hash holds. Computed under the root's declared algorithm, the
+	// one verifyBinding will read.
+	issuerHash, err := fx.f.blinder.HashAlg().Digest(parts[0])
+	require.NoError(t, err, "a fixture that could not compute the binding it writes would fail for the reason the test is trying to rule out")
+
+	segments := strings.Split(parts[sep+1], ".")
+	require.Len(t, segments, 3, "the delegating JWT is a compact JWS")
+
+	headerBytes, err := base64.RawURLEncoding.DecodeString(segments[0])
+	require.NoError(t, err, "Delegate encoded this header a moment ago, so an unreadable one means the fixture is re-signing something else")
+	var header struct {
+		Typ string `json:"typ"`
+	}
+	require.NoError(t, json.Unmarshal(headerBytes, &header),
+		"typ is carried over unchanged; re-signing as an untyped JWT would be refused before the binding is ever compared")
+
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(segments[1])
+	require.NoError(t, err, "as above, for the claims this fixture is about to rewrite")
+	var claims map[string]any
+	require.NoError(t, json.Unmarshal(payloadBytes, &claims),
+		"decoding these wrongly would put a different delegation under test from the one named")
+
+	delete(claims, sdHashClaimName)
+	claims[issuerJWTHashClaimName] = issuerHash
+
+	resigned, err := sdjwt.SignJWT(t.Context(), ap2.JOSESigner(fx.agentSigner), header.Typ, claims)
+	require.NoError(t, err, "the agent signs its own delegation, so this is the key the chain will be verified against")
+
+	parts[sep+1] = resigned
+	again, err := sdjwt.ParseChain(strings.Join(parts, "~"))
+	require.NoError(t, err, "the re-signed chain must still be the shape ParseChain accepts")
+	return again
+}
+
+// The two binding claim names, spelled here rather than imported. pkg/sdjwt
+// keeps them unexported, and a test that could only name them by reaching into
+// the package would be checking that package's internals instead of the wire
+// form both sides have to agree on.
+const (
+	sdHashClaimName        = "sd_hash"
+	issuerJWTHashClaimName = "issuer_jwt_hash"
+)
+
+// splitChainAtSeparator returns a chain's wire components and the index of the
+// empty one dividing the two hops — so parts[0] is the root's Issuer-signed
+// JWT, parts[1:sep] are its Disclosures and parts[sep+1] is the delegating JWT.
+func splitChainAtSeparator(t *testing.T, c *sdjwt.Chain) ([]string, int) {
+	t.Helper()
+
+	parts := strings.Split(c.String(), "~")
+	for i := 1; i < len(parts); i++ {
+		if parts[i] == "" {
+			require.Less(t, i+1, len(parts), "the delegating JWT follows the separator")
+			return parts, i
+		}
+	}
+	require.Fail(t, "Chain.String always separates the two hops with an empty component")
+	return nil, 0
+}
+
+// withoutRootDisclosure removes root Disclosure i from a chain's wire form and
+// re-parses it, re-signing nothing.
+//
+// Signing nothing is what makes it the right fixture. This is precisely what a
+// party that only relays a chain can do to one, with no cooperation from
+// anybody who holds a key, so a verifier has to catch it unaided.
+func withoutRootDisclosure(t *testing.T, c *sdjwt.Chain, i int) *sdjwt.Chain {
+	t.Helper()
+
+	parts, sep := splitChainAtSeparator(t, c)
+	require.Less(t, 1+i, sep, "the index has to name a Disclosure the root actually presented")
+
+	narrowed := make([]string, 0, len(parts)-1)
+	narrowed = append(narrowed, parts[:1+i]...)
+	narrowed = append(narrowed, parts[1+i+1:]...)
+
+	again, err := sdjwt.ParseChain(strings.Join(narrowed, "~"))
+	require.NoError(t, err, "removing one Disclosure must not change the chain's shape")
+	return again
+}
+
+// TestAChainBoundByIssuerJWTHashIsRefusedByTheAP2Profile is #124.
+//
+// The draft defines two binding claims and pkg/sdjwt implements both.
+// issuer_jwt_hash covers the Issuer-signed JWT alone, so a delegation bound by
+// it survives its root being narrowed after the fact — correct for what the
+// claim says, and recorded from the other side by
+// TestIssuerJWTHashBindsWithoutCoveringDisclosures.
+//
+// In AP2 the root hop is the open mandate and its Disclosures are the
+// constraints the user set, which turns that correct weaker guarantee into an
+// unenforced spending limit. This fixture is beat 5 of the built scenario — a
+// price of 210.00 USD against the user's 200.00 USD cap — and before the profile
+// refusal, dropping the Disclosure carrying that cap made
+// AuthoriseCheckoutChain return no error at all and a satisfied Report: the
+// merchant authorising a purchase the user's own mandate forbade, having
+// verified everything it was shown.
+//
+// Both presentations are asserted, and the unnarrowed one is not padding. A
+// guard that fired only on the narrowed chain would be detecting a narrowing
+// nobody can detect — which Disclosure went, and what it said, is unrecoverable.
+// What is recoverable is which binding the delegation chose, so that is what is
+// refused.
+func TestAChainBoundByIssuerJWTHashIsRefusedByTheAP2Profile(t *testing.T) {
+	t.Parallel()
+
+	fx := chainFixture(t, 21000) // above the USD 20000 cap
+	rebound := rebindToIssuerJWTHash(t, fx)
+
+	_, sep := splitChainAtSeparator(t, rebound)
+	rootDisclosures := sep - 1
+	require.Greater(t, rootDisclosures, 1,
+		"the open mandate has to present several constraints, or withholding one proves nothing the always-on floor would not already catch")
+
+	presentations := map[string]*sdjwt.Chain{"as presented": rebound}
+	for i := range rootDisclosures {
+		presentations[fmt.Sprintf("with root disclosure %d withheld", i)] = withoutRootDisclosure(t, rebound, i)
+	}
+
+	for name, chain := range presentations {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := ap2.AuthoriseCheckoutChain(chain, fx.subject, fx.checkoutJWT, fx.opts)
+			require.Error(t, err,
+				"every one of these is one delegating JWT answering a different root presentation, and AP2 cannot tell which constraints it was not shown")
+			assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid)
+			assert.Equal(t, generated.ErrorCodeKeyBindingInvalid, ap2.CodeOf(err),
+				"the refusal has to name the binding, since the agent's fix is to delegate again over sd_hash rather than to change the purchase")
+		})
+	}
 }
 
 // TestAChainMayNotVouchForItsOwnBinding is TestAMandateMayNotVouchForItsOwnBinding's
