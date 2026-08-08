@@ -121,11 +121,18 @@ const (
 	// this row credits them with what a *Credential Provider* holds, which is
 	// the narrowest of the three. An MPP sits merchant-side and may well hold
 	// the checkout, in which case this row withholds constraints it could have
-	// enforced. That is the safe direction and it is not the right one; the
-	// spec records it as a gap rather than a decision, because nothing in this
-	// package routes an MPP through a chain today — MPPRules.VerifyCredential
-	// answers a different question entirely, about a credential rather than a
-	// mandate.
+	// enforced. That is the safe direction and it is not the right one.
+	//
+	// **It is now live rather than latent, and that is a change worth stating
+	// plainly.** This used to be a gap nothing could reach — the note here said
+	// so, on the grounds that MPPRules.VerifyCredential answers a different
+	// question entirely, about a credential rather than a mandate. #120 gave
+	// mpp.Service a chain entry point, and it verifies through
+	// CredentialProviderRules, so a Merchant Payment Processor really is being
+	// shown a Credential Provider's reach today. Closing it means a third row
+	// and a third rule set, which is more than that slice was: an MPP's reach
+	// depends on what its deployment actually holds, and this package cannot
+	// know that from here.
 	ForPayment Evaluation = "payment"
 )
 

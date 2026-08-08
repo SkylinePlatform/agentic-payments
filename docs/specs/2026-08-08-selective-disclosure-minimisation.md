@@ -284,10 +284,16 @@ holds.** AP2 has the Payment Mandate verified by the Credential Provider, the
 Network *and* the Merchant Payment Processor. `ForPayment` is one row, written
 for the first: the Payment Mandate and nothing else. An MPP sits merchant-side
 and may well hold the checkout, in which case that row withholds constraints it
-could have enforced — safe, and not right. It is a gap rather than a decision
-because nothing routes an MPP through a chain today; `MPPRules.VerifyCredential`
-answers a different question, about a credential rather than a mandate. A third
-row is what an MPP chain verifier would need.
+could have enforced — safe, and not right.
+
+When this was written it was a gap nothing could reach: `MPPRules.VerifyCredential`
+answers a different question, about a credential rather than a mandate, and no
+MPP was routed through a chain. **#120 made it live.** `mpp.Service` gained a
+chain entry point and verifies through `CredentialProviderRules`, so a Merchant
+Payment Processor really is shown a Credential Provider's reach today. A third
+row and a third rule set is what closing it needs, and it is not a table entry
+somebody can simply add: what an MPP can state depends on what its deployment
+actually holds, which `internal/adapters/ap2` has no way to know from here.
 
 **The payment row is now tied to the `constraint.Subject` a verifier evaluates;
 the checkout row is not.** A verifier populating fewer facts than its row claims

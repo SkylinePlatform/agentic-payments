@@ -44,40 +44,44 @@ func main() {
 			return nil, err
 		}
 
+		// Audience is this processor and not the Credential Provider that minted
+		// the credential: sdjwt.Delegate writes aud and VerifyChain compares it,
+		// so the payment chain presented here is its own document, minted for
+		// this verifier.
+		//
+		// AgentKey, Audience and RequireConstrained are read by
+		// AuthorisePaymentChain alone; VerifyPayment ignores every one of them,
+		// so one rule set serves both entry points without either reaching into
+		// the other's checks.
+		//
+		// AgentKey is roles.AgentKey: the cnf claim of the open mandate, turned
+		// into the one Verifier the delegating hop is ever checked with.
+		//
+		// RequireConstrained is a policy rather than a protocol rule: this
+		// processor will not settle against a mandate that says nothing about
+		// the amount. Leaving it empty selects no other check, only trust in
+		// whatever narrowing the agent chose.
+		payments := ap2.CredentialProviderRules{
+			Issuer:             user,
+			Clock:              role.Clock,
+			AgentKey:           roles.AgentKey,
+			Audience:           *id,
+			RequireConstrained: []string{"amount"},
+		}
+
 		service := &mpp.Service{
 			ID: *id,
-			// Audience is this processor and not the Credential Provider that
-			// minted the credential: sdjwt.Delegate writes aud and VerifyChain
-			// compares it, so the payment chain presented here is its own
-			// document, minted for this verifier.
-			//
-			// All three chain fields are read by AuthorisePaymentChain alone;
-			// VerifyPayment, which is what this binary uses today, ignores every
-			// one of them, so setting them changes no behaviour yet. Nothing can
-			// present a chain here until mpp.Service grows a chain entry point,
-			// which is #120.
-			//
-			// AgentKey is roles.AgentKey: the cnf claim of the open mandate,
-			// turned into the one Verifier the delegating hop is ever checked
-			// with.
-			//
-			// RequireConstrained is a policy rather than a protocol rule: this
-			// processor will not settle against a mandate that says nothing about
-			// the amount. Leaving it empty selects no other check, only trust in
-			// whatever narrowing the agent chose.
-			Payments: ap2.CredentialProviderRules{
-				Issuer:             user,
-				Clock:              role.Clock,
-				AgentKey:           roles.AgentKey,
-				Audience:           *id,
-				RequireConstrained: []string{"amount"},
-			},
-			Rules:     ap2.MPPRules{Clock: role.Clock},
-			Signer:    role.Signer,
-			Keys:      role.Keys,
-			Clock:     role.Clock,
-			Events:    role.Events,
-			Challenge: challenge,
+			// Assigned twice on purpose, on the terms cmd/credprovider gives:
+			// the two fields hold different interfaces so that a chain cannot
+			// reach the entry point that evaluates no constraints.
+			Payments:      payments,
+			PaymentChains: payments,
+			Rules:         ap2.MPPRules{Clock: role.Clock},
+			Signer:        role.Signer,
+			Keys:          role.Keys,
+			Clock:         role.Clock,
+			Events:        role.Events,
+			Challenge:     challenge,
 		}
 		return service.Handler()
 	})

@@ -51,15 +51,15 @@ const ReceiptType = "ap2-receipt+jwt"
 // reference from inside the mandate rather than from a digest over it — letting
 // the party being judged choose what the receipt points at.
 //
-// **No chain is passed here by anything in this repository yet**, and that is
-// worth saying rather than leaving a reader to check. Every existing call site —
-// merchant, credprovider, mpp, dispute.go and the tests — hands over a
-// *sdjwt.SDJWT, and not one of them changed when this widened. The chain callers
-// arrive with the role entry points of #119 and #120, which are blocked on this
-// existing: a role that cannot issue a receipt for a chain cannot refuse one
-// either, and merchant.Service calls IssueReceipt unconditionally with the
-// verdict as an argument precisely so that a refusal cannot skip it. Until then
-// the chain half is exercised by this package's own tests and nowhere else.
+// **Nothing here is optional for a role that verifies chains**, and the reason
+// the interface exists at all is that a role which cannot issue a receipt for a
+// chain cannot *refuse* one either. credprovider.Service and mpp.Service both
+// call IssueReceipt unconditionally with the verdict as an argument, precisely
+// so that a refusal cannot skip it, and both now hand over a *sdjwt.Chain on
+// their Human Not Present path — #120. The merchant's own chain caller is #119.
+//
+// Widening this changed no existing call site: every Human Present one still
+// passes a *sdjwt.SDJWT and not one of them was touched.
 type Presented interface {
 	// SDHash returns the digest a receipt's reference claim carries for this
 	// presentation.
@@ -211,9 +211,9 @@ func AnswersMandate(r generated.Receipt, sd Presented) error {
 // exactly the failures most worth having a receipt for.
 //
 // Both properties carry over to a chain unchanged, and the second is what makes
-// the chain entry points of #119 and #120 answerable at all: sdjwt.Chain.SDHash
-// digests the delegating hop without verifying anything either, so a delegation
-// signed by a key the open mandate never endorsed still has a name to be refused
+// the roles' chain entry points answerable at all: sdjwt.Chain.SDHash digests
+// the delegating hop without verifying anything either, so a delegation signed
+// by a key the open mandate never endorsed still has a name to be refused
 // under.
 func reference(sd Presented) (string, error) {
 	hash, err := sd.SDHash()
