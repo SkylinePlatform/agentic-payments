@@ -859,6 +859,209 @@ func TestAnOfferedQuantityIsWhatTheConstraintIsEvaluatedAgainst(t *testing.T) {
 	}
 }
 
+// TestTheAmountEvaluatedIsWhatTheWholeBasketCosts is the other half of a
+// quantity, and the half a test at one unit cannot see.
+//
+// The count and the money are two bounds and a purchase can sit inside one and
+// outside the other. Three tickets at $75 is within a limit of five and outside
+// a cap of $160 — and a merchant that evaluated the *unit* price against that
+// cap would authorise it, having compared the user's limit on the purchase
+// against the price of a third of it.
+func TestTheAmountEvaluatedIsWhatTheWholeBasketCosts(t *testing.T) {
+	t.Parallel()
+
+	// Five is deliberately more than any quantity below, so the count cannot be
+	// what refuses anything here. The cap is the scripted $160.
+	const upToFiveUnderOneSixty = `[
+		{"op":"lte","field":"quantity","value":5},
+		{"op":"lte","field":"amount","value":{"amount":16000,"currency":"USD"}}
+	]`
+
+	for _, tc := range []struct {
+		name       string
+		quantity   int
+		authorised bool
+		because    string
+	}{
+		{
+			name:       "two tickets, which come to $150",
+			quantity:   2,
+			authorised: true,
+			because:    "inside both bounds, which is what makes the row below about the money alone",
+		},
+		{
+			name:     "three tickets, which come to $225",
+			quantity: 3,
+			because: "each ticket is $75 and every one of them is under the cap; what is over it " +
+				"is the purchase, which is the only thing the user placed a limit on",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newChainShop(t)
+			if tc.authorised {
+				settlingChain(s.processor)
+			}
+
+			offer, price := s.quoteItem(t, merchant.DemoConcertID, tc.quantity)
+			require.Equal(t, merchant.DemoConcertPrice*tc.quantity, price.Amount,
+				"the signed offer prices the whole line, or there is no basket here to test")
+			require.LessOrEqual(t, merchant.DemoConcertPrice, merchant.DemoConcertCap,
+				"one ticket has to be inside the cap, or this proves nothing about which "+
+					"number was compared")
+
+			body := s.chains(t, constraintsFrom(t, upToFiveUnderOneSixty), offer, price,
+				sameNonce(s.nonce(t)))
+			status, _ := s.present(t, strconv.Itoa(tc.quantity), body)
+
+			want := http.StatusUnprocessableEntity
+			if tc.authorised {
+				want = http.StatusOK
+			}
+			assert.Equal(t, want, status, tc.because)
+		})
+	}
+}
+
+// TestAChainBlindedWithSHA384StillSettles is why the merchant is handed the
+// binding rather than assembling one.
+//
+// checkout_hash is computed under whatever _sd_alg names, and for a chain the
+// one that governs is the *delegating* hop's. A merchant that reached for
+// sha-256 — the default, and what every other test here happens to use — would
+// recompute a digest that does not match, and refuse a perfectly good purchase
+// as payment_binding_mismatch: the agent is paying for something else, reported
+// about a disagreement over a default.
+//
+// Nothing else in this file would notice, because a Blinder built with no
+// options is sha-256 on both sides. This is the one test where the two could
+// differ.
+func TestAChainBlindedWithSHA384StillSettles(t *testing.T) {
+	t.Parallel()
+
+	s := newChainShop(t)
+	settlingChain(s.processor)
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithHashAlg(sdjwt.SHA384))
+	require.NoError(t, err, "building a sha-384 blinder")
+	s.blinder = blinder
+
+	s.clock.Advance(2 * merchant.DefaultStep)
+	offer, price := s.quoteItem(t, merchant.DemoFlightID, 1)
+
+	body := s.chains(t, flightConstraints(t), offer, price, sameNonce(s.nonce(t)))
+	status, out := s.present(t, "sha384", body)
+
+	require.Equal(t, http.StatusOK, status,
+		"the algorithm the delegating hop declares is the one its binding was made under, "+
+			"and a verifier that assumed another would refuse an honest purchase")
+	assert.Equal(t, true, out["settled"])
+}
+
+// TestAHalfWiredMerchantWillNotStandUp is the Handler guard for the four fields
+// the Human Not Present flow needs together.
+//
+// Each one missing produces the same symptom at runtime — every delegated
+// purchase refused — and each for a reason that reads as the caller's fault. A
+// merchant that serves traffic in that state is worse than one that will not
+// start, because the refusals look like working verification.
+func TestAHalfWiredMerchantWillNotStandUp(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		spoil   func(s *merchant.Service)
+		because string
+	}{
+		{
+			name:    "chain rules for the checkout and none for the payment",
+			spoil:   func(s *merchant.Service) { s.ChainPayments = nil },
+			because: "the merchant checks the price as well as the purchase, on both flows",
+		},
+		{
+			name:    "chain rules for the payment and none for the checkout",
+			spoil:   func(s *merchant.Service) { s.ChainRules = nil },
+			because: "and the mirror, so the guard is not one-directional",
+		},
+		{
+			name:    "chain rules and no challenger",
+			spoil:   func(s *merchant.Service) { s.Challenge = nil },
+			because: "a delegation is a key binding, and there would be no nonce to bind it to",
+		},
+		{
+			name:    "chain rules and no catalogue",
+			spoil:   func(s *merchant.Service) { s.Catalogue = nil },
+			because: "there would be nothing to say what the item a constraint names actually is",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc := chainCapableService(t)
+			tc.spoil(svc)
+
+			_, err := svc.Handler()
+			assert.Error(t, err, tc.because)
+		})
+	}
+
+	t.Run("and a merchant with none of it stands up as Human Present", func(t *testing.T) {
+		t.Parallel()
+
+		svc := chainCapableService(t)
+		svc.ChainRules, svc.ChainPayments, svc.Challenge, svc.Catalogue = nil, nil, nil, nil
+
+		_, err := svc.Handler()
+		assert.NoError(t, err,
+			"the mirror: a guard that refused every merchant would satisfy the cases above "+
+				"without being a guard, and the Human Present merchant is the one that has "+
+				"always worked")
+	})
+}
+
+// chainCapableService builds a fully wired merchant without serving it, so a
+// test can remove one field and ask Handler what it thinks.
+func chainCapableService(t *testing.T) *merchant.Service {
+	t.Helper()
+
+	clk := clock.NewFake(base)
+	store, err := crypto.NewStore(clk)
+	require.NoError(t, err)
+	ref, err := store.Generate(crypto.Slot("merchant"), authz.ES256, "merchant")
+	require.NoError(t, err)
+	signer, err := store.Signer(crypto.Slot("merchant"))
+	require.NoError(t, err)
+	verifier, err := store.Resolve(t.Context(), ref)
+	require.NoError(t, err)
+
+	inventory, err := merchant.NewDemoInventory(clk, base, merchant.DefaultStep)
+	require.NoError(t, err)
+	catalogue, err := merchant.NewDemoCatalogue(clk, chainMerchantID, base, merchant.DefaultStep)
+	require.NoError(t, err)
+	challenge, err := crypto.NewChallenger(clk, roles.ChallengeTTL)
+	require.NoError(t, err)
+
+	rules := ap2.MerchantRules{Issuer: verifier, Clock: clk, AgentKey: roles.AgentKey, Audience: chainMerchantID}
+	payments := ap2.CredentialProviderRules{Issuer: verifier, Clock: clk, AgentKey: roles.AgentKey, Audience: chainMerchantID}
+
+	return &merchant.Service{
+		ID:            chainMerchantID,
+		Inventory:     inventory,
+		Catalogue:     catalogue,
+		Rules:         rules,
+		ChainRules:    rules,
+		Payments:      payments,
+		ChainPayments: payments,
+		Signer:        signer,
+		Own:           verifier,
+		Keys:          store,
+		Clock:         clk,
+		Challenge:     challenge,
+		Processor:     merchant.NewMockProcessor(t),
+	}
+}
+
 // TestTheNonceSplitIsTwoDifferentFailures is the pair #116 could only test one
 // half of, for want of a handler to present a chain to.
 //
