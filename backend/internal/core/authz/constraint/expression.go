@@ -80,6 +80,47 @@ func CodeOf(err error) generated.ErrorCode {
 	}
 }
 
+// Owns reports whether err is one of this package's failures.
+//
+// It exists because CodeOf is total and cannot answer this. CodeOf's default
+// arm is mandate_malformed, which is the right answer for a constraint that
+// could not be read and a badly wrong one for an error this package never
+// raised — so a caller that wants "is this yours, and if so what is it" has to
+// ask in two steps. Rather than each caller keeping its own list of these
+// sentinels, which is a copy free to drift in the direction that misses the
+// newest one, they ask here.
+//
+// Every sentinel this package declares is a member — there are no exclusions
+// here, unlike authz.Owns, because everything this package raises is a verdict
+// about a constraint and CodeOf has an answer for all of it.
+//
+// TestOwnsCoversEveryFailure spells that list out a second time rather than
+// deriving it, and a spelled-out list is enough *here* for the reason
+// ap2.adapterCodes gives for its own: the sentinels are one var block in this
+// file, immediately above, so a member missing from the loop below is visible
+// at a glance. authz.Owns cannot claim that — its members are spread across
+// three files plus this package — which is why its test reads the source
+// instead. The difference is the layout, not the standard.
+func Owns(err error) bool {
+	if err == nil {
+		return false
+	}
+	for _, sentinel := range []error{
+		ErrUnknownField,
+		ErrUnknownOperator,
+		ErrTypeMismatch,
+		ErrMalformed,
+		ErrTooDeep,
+		ErrCurrencyMismatch,
+		ErrViolated,
+	} {
+		if errors.Is(err, sentinel) {
+			return true
+		}
+	}
+	return false
+}
+
 // Expression is a parsed constraint: a leaf comparing one fact, or a group
 // combining others.
 //

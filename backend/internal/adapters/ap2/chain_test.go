@@ -738,6 +738,19 @@ func TestAnOpenMandateWhoseCnfNamesNoUsableKeyIsRefused(t *testing.T) {
 		"the mandate is well formed; the key is the problem, and the two must not be reported the same way")
 	assert.Equal(t, generated.ErrorCodeAgentKeyMismatch, authz.CodeOf(err),
 		"the receipt has to name the real reason")
+	// The same code, asked the way a receipt asks it — and this is the error
+	// that is in two populations at once. wrapAgentKey raised
+	// authz.ErrAgentKeyMismatch, sdjwt.resolveHolderKey wrapped it in
+	// ErrKeyBindingInvalid, and errors.Is is true for both. CodeOf's precedence
+	// is what picks between agent_key_mismatch and key_binding_invalid; see
+	// TestTheMostSpecificVerdictWins, which states the rule on the error
+	// directly. This asserts the chain path actually produces such an error, so
+	// that the rule is pinned against something production builds rather than
+	// only against a hand-made one.
+	require.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid,
+		"the dual membership is the premise; if this stops holding, the precedence rule has nothing to decide and TestTheMostSpecificVerdictWins is testing a shape that no longer occurs")
+	assert.Equal(t, generated.ErrorCodeAgentKeyMismatch, ap2.CodeOf(err),
+		"a counterparty told key_binding_invalid goes looking for a signature problem; the truth is that the mandate endorsed nobody, and only the inner layer knows that")
 }
 
 // paymentChainFx is TestAClosedMandateThatChangedAPinnedValueIsRefusedAsThat's

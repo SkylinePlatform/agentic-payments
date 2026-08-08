@@ -121,6 +121,73 @@ func CodeOf(err error) generated.ErrorCode {
 	}
 }
 
+// Owns reports whether err is a failure this package has decided a code for —
+// its own verdicts and the constraint package's, and nothing else.
+//
+// It exists because CodeOf is total and so cannot answer this. CodeOf's default
+// arm hands anything unrecognised to constraint.CodeOf, whose own default is
+// mandate_malformed, so CodeOf answers mandate_malformed for every error in
+// existence including ones raised three packages away. A caller that wants to
+// delegate "what code does this verdict carry" to the package that owns the
+// verdict therefore has to ask membership first, and this is that question.
+//
+// # The key errors in keys.go are deliberately not members
+//
+// ErrKeyNotFound, ErrKeyExpired, ErrKeyRetired, ErrAlgorithmMismatch,
+// ErrUnsupportedAlgorithm and ErrSignatureInvalid are declared by this package
+// and are *not* owned by it in this sense, which is the one thing about this
+// function worth reading twice.
+//
+// They are not verdicts about a mandate. They are what a Signer, a Verifier or
+// a KeyResolver reports about key material, and CodeOf has no arm for any of
+// them — so a member would be answered by that default arm, and a verifier
+// whose key store could not find its own kid would tell a counterparty their
+// mandate was malformed. Worse for the last one: a signature that does not
+// verify would be reported as a bad mandate rather than a bad signature, which
+// are different findings in a dispute.
+//
+// Excluded, they fall to whichever caller is better placed. A signature failure
+// reaches an AP2 verifier already wrapped in the securing format's own
+// ErrSignatureInvalid and is answered signature_invalid there; the key-store
+// failures reach it unmapped and are answered verifier_unavailable, which is
+// true — a verifier that cannot resolve its own key has a fault of its own.
+//
+// So this is a decision recorded, not an oversight. If one of the six ever
+// needs a code of its own, the fix is an arm in CodeOf and an entry here, in
+// that order.
+func Owns(err error) bool {
+	if err == nil {
+		return false
+	}
+	for _, sentinel := range []error{
+		// The verdicts about the mandate itself.
+		ErrAgentKeyMismatch,
+		ErrNoEndorsedKey,
+		ErrExpired,
+		ErrNotYetValid,
+		ErrPinnedFieldChanged,
+		ErrMalformedMandate,
+
+		// The rejection-receipt lifecycle. All four, including the two CodeOf
+		// deliberately answers with the empty code: "this package has decided"
+		// covers deciding that no code names the failure, and a caller reading
+		// an empty code back from CodeOf learns exactly that rather than being
+		// unable to tell it apart from "not mine".
+		ErrOpenMandateOutstanding,
+		ErrMandateSpent,
+		ErrNoPresentationOutstanding,
+		ErrUnknownTransition,
+	} {
+		if errors.Is(err, sentinel) {
+			return true
+		}
+	}
+	// CodeOf's default arm delegates to the constraint package, so ownership has
+	// to follow it there — asked of that package rather than restated here, for
+	// the reason its own Owns gives.
+	return constraint.Owns(err)
+}
+
 // Endorsement is the agent an open mandate authorises, and the window it
 // authorises them for.
 //

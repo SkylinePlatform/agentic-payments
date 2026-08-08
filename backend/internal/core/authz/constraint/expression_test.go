@@ -3,6 +3,7 @@ package constraint_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -820,4 +821,56 @@ func TestEveryFieldNameFieldsReportsIsOneTheRegistryOrTheAttributeFormExplains(t
 				"a caller that cannot place %q in one of the two halves of the vocabulary has no basis to decide whether a verifier can state it", name)
 		}
 	}
+}
+
+// TestOwnsCoversEveryFailure holds Owns' invariant: every sentinel this package
+// declares is one it owns.
+//
+// The list is spelled out rather than derived from the loop inside Owns, for
+// the reason every mapping test in this repository is: one that read the
+// implementation's own list would agree with it by construction, including
+// agreeing that a missing entry is missing.
+//
+// What it protects is a caller three layers away. internal/adapters/ap2 asks
+// authz.Owns, which asks this, before delegating to CodeOf for the code — so a
+// sentinel added here without being added to Owns does not fail loudly, it
+// quietly becomes verifier_unavailable in a rejection receipt, blaming the
+// verifier's own uptime for a constraint problem. That was #111.
+func TestOwnsCoversEveryFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, err := range []error{
+		constraint.ErrUnknownField,
+		constraint.ErrUnknownOperator,
+		constraint.ErrTypeMismatch,
+		constraint.ErrMalformed,
+		constraint.ErrTooDeep,
+		constraint.ErrCurrencyMismatch,
+		constraint.ErrViolated,
+	} {
+		t.Run(err.Error(), func(t *testing.T) {
+			t.Parallel()
+
+			assert.True(t, constraint.Owns(err),
+				"an unowned sentinel reaches a receipt as verifier_unavailable, which names the wrong party for a constraint problem")
+			assert.True(t, constraint.Owns(fmt.Errorf("constraint 2: %w", err)),
+				"every one of these reaches a caller wrapped in context, so the wrapped form is the one that has to be recognised")
+			assert.NotEmpty(t, constraint.CodeOf(err),
+				"ownership without a code would be a claim this package cannot honour")
+		})
+	}
+}
+
+// TestOwnsSaysNoToWhatItDoesNotOwn is what stops Owns being made trivially true
+// by returning true. CodeOf is total and answers mandate_malformed for anything
+// it does not recognise, so a caller that trusted Owns wrongly would tell a
+// counterparty their mandate was bad on the strength of an error raised
+// somewhere else entirely.
+func TestOwnsSaysNoToWhatItDoesNotOwn(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, constraint.Owns(nil),
+		"success is not a failure, and a caller asking about nil must not be told yes")
+	assert.False(t, constraint.Owns(errors.New("some other package: unrelated")),
+		"CodeOf would answer mandate_malformed for this; Owns is the guard that stops that answer travelling")
 }

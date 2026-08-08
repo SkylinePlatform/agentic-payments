@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
@@ -156,6 +157,61 @@ func TestTheAuthorisationDomainsVerdictsKeepTheirOwnCodes(t *testing.T) {
 			assert.Equal(t, tc.want, ap2.CodeOf(tc.err))
 			assert.Equal(t, tc.want, ap2.CodeOf(fmt.Errorf("authorising: %w", tc.err)),
 				"AuthoriseCheckoutChain hands these back wrapped in context, so the wrapped form is the one a receipt is built from")
+		})
+	}
+}
+
+// TestTheMostSpecificVerdictWins pins CodeOf's precedence between populations,
+// for the errors that are genuinely in two at once.
+//
+// Both cases below are built the way production builds them rather than by
+// hand: sdjwt.resolveHolderKey wraps whatever the delegate-key resolver returns
+// in ErrKeyBindingInvalid, and this package's wrapAgentKey is that resolver.
+// TestAnOpenMandateWhoseCnfNamesNoUsableKeyIsRefused drives the whole chain to
+// reach the first of them; this states the rule directly, so that the reason
+// the answer is agent_key_mismatch is written down somewhere other than in the
+// order of three function calls.
+//
+// Without this test, swapping authzCodeOf and sdjwtCodeOf in CodeOf leaves the
+// whole package green while changing the code that reaches a signed receipt.
+func TestTheMostSpecificVerdictWins(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		want generated.ErrorCode
+		also error
+	}{
+		{
+			// The authorisation domain's verdict inside the securing format's.
+			// pkg/sdjwt knows a resolver refused; this package knows the cnf
+			// endorsed nobody, and that is what a counterparty can act on.
+			name: "an unendorsed agent key, refused inside a key binding",
+			err: fmt.Errorf("%w: resolve holder key: %w",
+				sdjwt.ErrKeyBindingInvalid, authz.ErrAgentKeyMismatch),
+			want: generated.ErrorCodeAgentKeyMismatch,
+			also: sdjwt.ErrKeyBindingInvalid,
+		},
+		{
+			// This package's own sentinel in the same position, from decodeCnf.
+			// codeFor runs first, so this is the arm that settles it — and it
+			// has to, because authz does not own ErrMandateMalformed and would
+			// pass it through to the securing format's answer.
+			name: "a malformed cnf, refused inside a key binding",
+			err: fmt.Errorf("%w: resolve holder key: %w",
+				sdjwt.ErrKeyBindingInvalid, ap2.ErrMandateMalformed),
+			want: generated.ErrorCodeMandateMalformed,
+			also: sdjwt.ErrKeyBindingInvalid,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			require.ErrorIs(t, tc.err, tc.also,
+				"the premise of this test is dual membership; if it holds only one way there is no precedence to pin")
+			assert.Equal(t, tc.want, ap2.CodeOf(tc.err),
+				"the innermost layer to form a view has the most specific one, and that is the finding a dispute reads")
 		})
 	}
 }
