@@ -109,6 +109,12 @@ func (s *SDJWT) HashAlg() (HashAlg, error) {
 // **What it cannot recover is which elements were withheld or what they held.**
 // That is what the salt hides, and a count is the whole of what this adds.
 //
+// The count is also only as honest as the Issuer. §4.2.5 permits decoy digests
+// in an array of values, and Blinder declines to add them there — see
+// WithDecoyDigests, which says why — but an Issuer that pads inflates what this
+// reads. A consumer treating the number as a lower bound on what was committed
+// is safe; one treating it as exact is trusting the Issuer not to pad.
+//
 // For a chain, prefer Verified.RootSigned: it is this same payload, taken after
 // the root's signature has been checked, so the per-claim argument above does
 // not have to be made at all.

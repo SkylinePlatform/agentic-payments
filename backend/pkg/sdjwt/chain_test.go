@@ -1368,14 +1368,41 @@ func TestSignedClaimsKeepsWhatVerificationRemoves(t *testing.T) {
 // TestVerifiedCarriesTheRootAsSigned is the chain-shaped half. A caller
 // authorising against a chain never holds the root hop — Chain exposes no
 // accessor — so the count has to arrive through Verified or not at all.
+//
+// **The root here withholds an array element on purpose.** An earlier version
+// of this test used delegatedChain, whose root hides nothing, and asserted vct
+// and the presence of cnf — both true of the processed payload as well, so
+// assigning Root to RootSigned left this package green while three tests in
+// internal/adapters/ap2 went red. For a package meant to stand alone outside
+// this repository, a public field whose contract only an internal consumer
+// enforces is the gap; the withheld element is what closes it here.
 func TestVerifiedCarriesTheRootAsSigned(t *testing.T) {
 	t.Parallel()
 
-	verified, err := sdjwt.VerifyChain(delegatedChain(t, "delegate"), chainOptions(t))
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err)
+	payload, disclosures, err := blinder.Blind(map[string]any{
+		"vct":    "open.example",
+		"cnf":    map[string]any{"jwk": map[string]any{"kty": "oct", "k": "delegate"}},
+		"limits": []any{"one", "two", "three"},
+	}, "limits[]")
+	require.NoError(t, err)
+
+	full, err := sdjwt.Issue(t.Context(), newHMACKey("issuer", "issuer"), payload, disclosures)
+	require.NoError(t, err)
+	root, err := full.Present(func(d sdjwt.Disclosure) bool {
+		_, named := d.Name()
+		return named
+	})
+	require.NoError(t, err, "keep the named claims, withhold every array element")
+
+	verified, err := sdjwt.VerifyChain(delegatedChainFromRoot(t, root, "", "delegate"), chainOptions(t))
 	require.NoError(t, err)
 
 	assert.Equal(t, "open.example", verified.RootSigned["vct"],
 		"the root's own claims, not the delegated payload's — reading one for the other is the bug Verified names its fields to prevent")
-	assert.Contains(t, verified.RootSigned, "cnf",
-		"cnf travels in the clear in this fixture, so it is in the signed payload as well as the processed one")
+	assert.Empty(t, verified.Root["limits"],
+		"Root is what the Verifier was shown, and it was shown none of them")
+	assert.Len(t, verified.RootSigned["limits"], 3,
+		"RootSigned is what the Issuer committed to, and the difference between the two is exactly what the Holder withheld — a Verified that carried the processed payload here would report zero and be indistinguishable from a mandate that listed nothing")
 }
