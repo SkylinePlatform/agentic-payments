@@ -858,6 +858,39 @@ func TestAMisconfiguredChainVerifierIsNotTheMandatesFault(t *testing.T) {
 	})
 }
 
+// TestAChainBoundToANonceThisVerifierDidNotIssueIsRefusedAsAKeyBinding is the
+// half of the nonce split that produces a receipt.
+//
+// A nonce can be wrong at two moments and the two are answered differently.
+// Before any mandate has been examined — a caller presenting a challenge that
+// crypto.Challenger.Check refuses — nothing has been verified and there is
+// nothing to sign an answer about, so the answer is Problem Details carrying
+// request_malformed, which is the rule TestTheMerchantRefusesAnOfferItNeverMade
+// already pins for the merchant's own offer.
+//
+// This is the other moment. The chain has been presented and its delegating hop
+// carries a nonce claim under the agent's own signature, so a disagreement is a
+// proof of possession that does not hold: a chain-verification failure, named
+// key_binding_invalid, on a receipt. The two are not interchangeable, and a
+// verifier that reported this one as request_malformed would leave a dispute
+// with no signed statement about a mandate it did examine.
+func TestAChainBoundToANonceThisVerifierDidNotIssueIsRefusedAsAKeyBinding(t *testing.T) {
+	t.Parallel()
+
+	fx := chainFixture(t, 18900) // otherwise beat 8, the price the merchant accepts
+
+	opts := fx.opts
+	opts.Nonce = "n-a-challenge-from-somewhere-else"
+
+	_, err := ap2.AuthoriseCheckoutChain(fx.chain, fx.subject, fx.checkoutJWT, opts)
+	require.Error(t, err,
+		"a delegation minted against a challenge this verifier never issued is the case the nonce exists for; accepting it would make the parameter decoration")
+	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid,
+		"the agent signed the nonce claim, so this is a proof that does not hold rather than a mandate that will not parse")
+	assert.Equal(t, generated.ErrorCodeKeyBindingInvalid, ap2.CodeOf(err),
+		"a mandate has been examined by now, so the answer is a receipt, and this is the code a dispute reads off it")
+}
+
 // resolveTo, agentJWK, demoConstraints, newFixture, fixture, merchantCheckout,
 // issueClaims and assertMisconfigured are keybinding_test.go's, open_test.go's
 // and checkout_test.go's own — all package ap2_test, all reused rather than
