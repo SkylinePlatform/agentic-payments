@@ -663,8 +663,15 @@ func TestTheAgentValidatesWhatItsInterpreterReturned(t *testing.T) {
 		"the failure has to be the verifier's own parser refusing the field, not a shape check of our own")
 }
 
-// drifted is an interpreter that answers with a field the registry does not
-// hold, which is the failure Validate exists for.
+// drifted is an interpreter that answers with one constraint the registry holds
+// and one it does not, which is the failure Validate exists for.
+//
+// **Both halves are load-bearing.** The good one names an item this merchant
+// really sells, so discovery succeeds and the run reaches the Trusted Surface —
+// without it, an agent that skipped Validate would fail for want of anything to
+// buy, and the test would go red for a reason that has nothing to do with the
+// check it is named after. With it, skipping Validate fails at the surface
+// instead: same code, one round trip later, attributed to the wrong party.
 //
 // Hand-rolled rather than generated, on the terms AGENTS.md draws: it computes a
 // specific wrong answer rather than recording that it was called, so a generated
@@ -672,12 +679,12 @@ func TestTheAgentValidatesWhatItsInterpreterReturned(t *testing.T) {
 type drifted struct{}
 
 func (drifted) Interpret(context.Context, string) ([]generated.Constraint, error) {
-	// "price" is what a model reaches for; the registry says "amount".
-	field := "price"
-	return []generated.Constraint{{
-		Op: "lte", Field: &field,
-		Value: map[string]any{"amount": 20000, "currency": "USD"},
-	}}, nil
+	item, price := "item.id", "price"
+	return []generated.Constraint{
+		{Op: "eq", Field: &item, Value: merchant.DemoBicycleID},
+		// "price" is what a model reaches for; the registry says "amount".
+		{Op: "lte", Field: &price, Value: map[string]any{"amount": 40000, "currency": "USD"}},
+	}, nil
 }
 
 // TestAWatchRefusesToStartWithoutWhatItNeedsToFinish covers the wiring failures,
