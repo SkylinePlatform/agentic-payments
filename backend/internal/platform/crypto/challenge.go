@@ -84,25 +84,42 @@ const (
 //
 // # Why the payload is not the timestamp alone
 //
-// The salt is not decoration, and the reason that survives on its own is the
-// third one below rather than the first two.
+// Without the salt a challenge is a pure function of the second it was issued
+// in, and two things follow. Both are about **collision between callers**, and
+// both are the reason.
 //
-// Without it a challenge is a pure function of the second it was issued in. So
-// **the entire live set is enumerable**: at any instant the accepted values are
-// one per second across the window — 241 of them at a two-minute TTL — and each
-// is obtainable by a single GET /nonce at the right moment. An agent could
-// harvest the whole set every two minutes and mint delegations from then on
-// without ever calling the endpoint again, which leaves the nonce checking that
-// the agent owns a clock. That failure needs nothing that does not exist yet.
+//   - Every caller asking inside one second is handed the identical string. Two
+//     agents transacting at once hold one nonce between them.
+//   - So the replay store #27 adds could not mark one caller's challenge spent
+//     without spending everybody's: a per-challenge value is what a spend is
+//     recorded against, and there would be one value per second rather than one
+//     per challenge.
 //
-// The other two do, and are worth stating in that order. Every caller asking
-// inside one second would be handed the identical string; and the replay store
-// #27 adds could not mark one caller's challenge spent without spending
-// everybody's, because a per-challenge value is what a spend is recorded
-// against. Both are real and both are contingent on #27 landing. The
-// enumeration is not.
+// The key space makes the size of that concrete. At any instant the values this
+// verifier would accept are the whole seconds within the window in either
+// direction — 241 of them at a two-minute TTL when the clock reads an exact
+// second, 240 at every other instant. A store keyed on the nonce would be that
+// fixed, tiny space shared by every caller at once, and one agent spending
+// second s would lock out every other agent that fetched during s.
 //
-// The salt only buys any of this if a challenge has one spelling, which the
+// # The threat that is not there, recorded so nobody re-derives it
+//
+// It is tempting to go one step further and say the saltless set is
+// *harvestable*: fetch one per second for a window, and mint delegations
+// afterwards without calling the endpoint again. **That is false, and the reason
+// is in Issue.** It stamps c.clk.Now(), so the endpoint never emits a stamp
+// later than now, while acceptance at t needs a stamp within ±ttl of t — the
+// forward half of which is unobtainable. The accepted set slides with the clock
+// and cannot be got ahead of, so a full harvest is usable for exactly as long as
+// a single fetch at the same instant: an agent must call at least once per
+// window either way, salt or no salt.
+//
+// Nor would a saltless nonce reduce to "the agent owns a clock". The stamp is
+// under an HMAC whose key never leaves this process, so it still proves that
+// somebody obtained a challenge from this verifier within the window — which is
+// what it proves with the salt too. What the salt adds is which somebody.
+//
+// The salt only buys any of it if a challenge has one spelling, which the
 // decoder does not give for free — see decodeChallengeHalf.
 //
 // This lives in internal/platform/crypto because it holds a secret key, which
@@ -158,11 +175,26 @@ func (c *Challenger) Issue() (string, error) {
 // Check reports whether nonce is one this Challenger issued and is still
 // within its window.
 //
-// The order is structure, then MAC, then window, and the last two are not
-// interchangeable. The timestamp is read only after the MAC has held, because
-// until then it is a number the presenter chose — a challenger that aged an
-// unauthenticated stamp would accept any token whose first eight bytes said
-// "now".
+// **Nothing in production calls this yet.** roles.Nonce reaches Issue and that
+// is the whole of the traffic; the caller for this half arrives with the chain
+// verification, which fills AuthoriseCheckoutChain's and AuthorisePaymentChain's
+// nonce parameter from a value it checked here first. Worth saying rather than
+// leaving a reader to infer urgency from tone: what this function refuses is
+// latent until then, which changes when a defect here matters and not whether
+// it is one.
+//
+// The order is structure, then MAC, then window. The MAC before the window is
+// a classification decision rather than a safety one, and an earlier version of
+// this comment overstated it — reordering the two lets nothing wrong through,
+// because the MAC still runs and still refuses anything this verifier did not
+// issue. Computing the age first, or returning on the window first, both leave
+// the suite green. What they cost is the answer: an expired forgery would come
+// back ErrChallengeExpired, sending whoever reads it after a stale challenge
+// rather than after an attacker, and the two sentinels exist precisely to keep
+// those apart. The stronger claim — that an unauthenticated stamp would let any
+// token whose first eight bytes said "now" through — follows from *removing*
+// the MAC check, not from moving it, and that mutation is the one the tamper
+// cases in TestAChallengeThisVerifierDidNotIssueIsRefused kill.
 func (c *Challenger) Check(nonce string) error {
 	// Kept, and kept documented, on the same terms as the length check below:
 	// no input can reach this and go on to be accepted, because a nonce with no

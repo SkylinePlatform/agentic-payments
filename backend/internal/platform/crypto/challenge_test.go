@@ -143,6 +143,28 @@ func TestAChallengeOutsideItsWindowIsRefused(t *testing.T) {
 		"a symmetric window is the same rule pkg/sdjwt applies to a key binding's iat, and for the same reason")
 }
 
+// TestTwoChallengesIssuedInOneInstantDiffer is the salt itself, asserted beside
+// the four paragraphs in challenge.go that argue for it.
+//
+// The fact was already covered — TestTheChallengeEndpointIsSafeAndUnmetered
+// compares two nonces from two HTTP calls on a frozen clock — but two packages
+// away, and load-bearing on a detail nobody editing internal/roles would know
+// they were defending. The clock does not move between these two calls, so the
+// stamp is identical and only the salt can differ.
+func TestTwoChallengesIssuedInOneInstantDiffer(t *testing.T) {
+	t.Parallel()
+
+	c, _ := newChallenger(t)
+
+	first, err := c.Issue()
+	require.NoError(t, err)
+	second, err := c.Issue()
+	require.NoError(t, err)
+
+	assert.NotEqual(t, first, second,
+		"the clock has not moved, so a challenge that is a function of the timestamp alone would repeat — and one value per second is one value for every caller in that second to share")
+}
+
 // TestOneChallengeHasExactlyOneSpelling is what makes the salt worth having.
 //
 // A per-challenge value only lets anything be recorded against it if the value
