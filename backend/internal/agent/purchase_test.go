@@ -18,6 +18,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/credprovider"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/mpp"
@@ -33,6 +34,19 @@ import (
 // the role that refused.
 
 var base = time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+
+// The three identifiers each verifier compares against a delegation's aud, and
+// the defaults cmd/merchant, cmd/credprovider and cmd/mpp carry.
+//
+// They are constants here because a Human Not Present test has to name the same
+// string in three places — the role's own ID, the audience its rules compare,
+// and the audience the agent addresses a chain to — and a typo in the third is
+// a refusal that reads exactly like a broken signature.
+const (
+	merchantID     = "air-serbia"
+	credProviderID = "mock-credential-provider"
+	processorID    = "mock-payment-processor"
+)
 
 // world is the four roles, standing.
 type world struct {
@@ -151,37 +165,77 @@ func newWorldEmitting(t *testing.T, events emitters) *world {
 
 	inventory, err := merchant.NewDemoInventory(clk, base, merchant.DefaultStep)
 	require.NoError(t, err, "seeding the inventory")
+	catalogue, err := merchant.NewDemoCatalogue(clk, merchantID, base, merchant.DefaultStep)
+	require.NoError(t, err, "seeding the catalogue")
+
+	// Every role below is wired for both flows, exactly as its cmd/ binary
+	// wires it: one rule set held twice, once behind the interface the Human
+	// Present entry point takes and once behind the chain one. The Human
+	// Present tests in this file send no chain and reach none of it, which is
+	// the point — a world that could only do one flow would be two worlds.
+	checkoutRules := ap2.MerchantRules{
+		Issuer: w.user.verifier, Clock: clk,
+		AgentKey: roles.AgentKey, Audience: merchantID,
+		RequireConstrained: []string{"amount"},
+	}
+	// The user signs both closed mandates in Human Present mode, so the
+	// merchant checks the payment side against the same key it checks the
+	// Checkout Mandate with. It needs it to compare the amount against the
+	// offer it made — see ap2.AmountMatches.
+	merchantPayments := ap2.CredentialProviderRules{
+		Issuer: w.user.verifier, Clock: clk,
+		AgentKey: roles.AgentKey, Audience: merchantID,
+		RequireConstrained: []string{"amount"},
+	}
+	merchantChallenge, err := crypto.NewChallenger(clk, roles.ChallengeTTL)
+	require.NoError(t, err, "minting the merchant's challenge key")
 
 	// Built with a placeholder processor and pointed at the real one below,
 	// because the two need each other's addresses and only one can be first.
 	merchantSvc := &merchant.Service{
-		ID: "air-serbia", Inventory: inventory,
-		Rules: ap2.MerchantRules{Issuer: w.user.verifier, Clock: clk},
-		// The user signs both closed mandates in Human Present mode, so the
-		// merchant checks the payment side against the same key it checks the
-		// Checkout Mandate with. It needs it to compare the amount against the
-		// offer it made — see ap2.AmountMatches.
-		Payments: ap2.CredentialProviderRules{Issuer: w.user.verifier, Clock: clk},
-		Signer:   w.shop.signer, Own: w.shop.verifier, Keys: w.shop.keys, Clock: clk,
+		ID: merchantID, Inventory: inventory, Catalogue: catalogue,
+		Rules: checkoutRules, ChainRules: checkoutRules,
+		Payments: merchantPayments, ChainPayments: merchantPayments,
+		Signer: w.shop.signer, Own: w.shop.verifier, Keys: w.shop.keys, Clock: clk,
+		Challenge: merchantChallenge,
 		Processor: &merchant.HTTPProcessor{},
 		Events:    events.merchant,
 	}
 	w.endpoints.Merchant = serve(t, merchantSvc.Handler)
 
+	providerRules := ap2.CredentialProviderRules{
+		Issuer: w.user.verifier, Clock: clk,
+		AgentKey: roles.AgentKey, Audience: credProviderID,
+		RequireConstrained: []string{"amount"},
+	}
+	providerChallenge, err := crypto.NewChallenger(clk, roles.ChallengeTTL)
+	require.NoError(t, err, "minting the provider's challenge key")
+
 	providerSvc := &credprovider.Service{
-		ID:     "mock-credential-provider",
-		Rules:  ap2.CredentialProviderRules{Issuer: w.user.verifier, Clock: clk},
+		ID:     credProviderID,
+		Rules:  providerRules,
+		Chains: providerRules,
 		Signer: w.provider.signer, Keys: w.provider.keys, Clock: clk,
-		Events: events.credprovider,
+		Challenge: providerChallenge,
+		Events:    events.credprovider,
 	}
 	w.endpoints.CredProvider = serve(t, providerSvc.Handler)
 
+	processorRules := ap2.CredentialProviderRules{
+		Issuer: w.user.verifier, Clock: clk,
+		AgentKey: roles.AgentKey, Audience: processorID,
+		RequireConstrained: []string{"amount"},
+	}
+	processorChallenge, err := crypto.NewChallenger(clk, roles.ChallengeTTL)
+	require.NoError(t, err, "minting the processor's challenge key")
+
 	mppSvc := &mpp.Service{
-		ID:       "mock-payment-processor",
-		Payments: ap2.CredentialProviderRules{Issuer: w.user.verifier, Clock: clk},
-		Rules:    ap2.MPPRules{Clock: clk},
-		Signer:   w.processor.signer, Keys: w.processor.keys, Clock: clk,
-		Events: events.mpp,
+		ID:       processorID,
+		Payments: processorRules, PaymentChains: processorRules,
+		Rules:  ap2.MPPRules{Clock: clk},
+		Signer: w.processor.signer, Keys: w.processor.keys, Clock: clk,
+		Challenge: processorChallenge,
+		Events:    events.mpp,
 	}
 	w.endpoints.MPP = serve(t, mppSvc.Handler)
 
