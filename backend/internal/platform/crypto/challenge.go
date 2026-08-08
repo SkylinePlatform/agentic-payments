@@ -254,13 +254,17 @@ func (c *Challenger) Check(nonce string) error {
 // string the agent itself signed. One challenge, N spends, with the store
 // working precisely as designed.
 //
-// Strict closes the trailing-bit half and does nothing about the newlines,
-// which is why the re-encode is the load-bearing check rather than a belt on
-// top of one. Base64 is injective, so a value that re-encodes to the characters
-// it arrived as is the only spelling of itself, and both leniencies fall to the
-// same line.
+// Base64 is injective, so a value that re-encodes to the characters it arrived
+// as is the only spelling of itself, and both leniencies fall to that one line.
+//
+// The obvious reach is for base64's Strict mode, and it is worth saying why it
+// is not here: Strict closes the trailing-bit half and does nothing whatever
+// about the newlines, so it would leave most of this open while looking like
+// the fix. It was written that way first and turned no test red when removed —
+// the re-encode had already refused everything it would have. One check, one
+// reason, and nothing in this function that a mutation cannot reach.
 func decodeChallengeHalf(half, encoded string) ([]byte, error) {
-	raw, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("%w: the %s is not base64url: %w", ErrChallengeInvalid, half, err)
 	}
