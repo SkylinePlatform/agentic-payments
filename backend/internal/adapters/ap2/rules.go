@@ -3,6 +3,7 @@ package ap2
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
@@ -82,6 +83,57 @@ type PaymentChainVerifier interface {
 	AuthorisePaymentChain(c *sdjwt.Chain, subject constraint.Subject, nonce string) (PaymentAuthorisation, error)
 }
 
+// CheckoutVerifierAsOf and PaymentVerifierAsOf are the same two questions asked
+// about a moment that has passed.
+//
+// A role verifies as it goes, so its clock is a field: the moment it decides is
+// the moment it is asked. An arbiter hearing a dispute is in the opposite
+// position — the transaction it is judging happened, and every mandate in front
+// of it has since expired, because that is what mandates are for. Asked "is this
+// live?" a role means "now" and an arbiter means "then", and the two cannot be
+// the same call.
+//
+// So the instant is a parameter rather than a field, for the reason
+// MerchantRules' nonce is a parameter: Issuer and Clock are fixed for a rule
+// set's lifetime and production wiring builds one at role startup, while the
+// instant a dispute is judged as of belongs to one dispute. A field could only
+// ever express one of them.
+//
+// These are separate interfaces rather than an optional argument on
+// CheckoutVerifier, on the grounds CheckoutChainVerifier gives for the same
+// choice: a nullable instant would read as "expiry is checked against the
+// transaction when you supply one", and there would then be a single entry point
+// a caller could hand a dispute to by mistake and have it silently judged as of
+// now. Dispute holds these two and not the plain pair, so an arbiter that judges
+// a year-old purchase against today's clock is not a thing this package can be
+// asked to build.
+type CheckoutVerifierAsOf interface {
+	VerifyCheckoutAsOf(at time.Time, sd *sdjwt.SDJWT, checkoutJWT string) (generated.CheckoutMandate, error)
+}
+
+// PaymentVerifierAsOf is CheckoutVerifierAsOf's counterpart for the Payment
+// Mandate. See that interface for why the instant is a parameter.
+type PaymentVerifierAsOf interface {
+	VerifyPaymentAsOf(at time.Time, sd *sdjwt.SDJWT) (generated.PaymentMandate, error)
+}
+
+// fixedClock is authz.Clock stopped at one instant.
+//
+// It is what turns "as of then" into something the existing verification path
+// can consume: VerifyCheckout and VerifyPayment take an authz.Clock and compare
+// exp against whatever it answers, so pinning the answer is the whole of what
+// judging a past transaction requires. Nothing else about verification changes,
+// which is the point — an arbiter runs the same rules a role ran, at the moment
+// the role ran them.
+//
+// It is not internal/platform/clock's Fake. That one is a clock a test moves,
+// and moving is exactly what this must not do; it is also in a package this one
+// does not import. There is no time.Now here for forbidigo to object to: the
+// instant arrives from the caller.
+type fixedClock time.Time
+
+func (c fixedClock) Now() time.Time { return time.Time(c) }
+
 // MerchantRules is what a Merchant checks before it accepts a purchase.
 type MerchantRules struct {
 	// Issuer verifies the signature over the closed Checkout Mandate in Human
@@ -90,7 +142,11 @@ type MerchantRules struct {
 	// root. The closed hop of a chain is never checked against Issuer; that is
 	// what AgentKey is for. Required.
 	Issuer authz.Verifier
-	// Clock decides whether the mandate has expired. Required.
+	// Clock decides whether the mandate has expired, for the two entry points
+	// that answer as of now — VerifyCheckout and AuthoriseCheckoutChain, which
+	// both require it. VerifyCheckoutAsOf does not read it at all: an arbiter
+	// supplies the instant instead, because the transaction it is judging has
+	// already happened.
 	Clock authz.Clock
 
 	// AgentKey and Audience are AuthoriseCheckoutChain's half of this rule
@@ -159,6 +215,49 @@ func (r MerchantRules) VerifyCheckout(
 	})
 }
 
+// VerifyCheckoutAsOf runs the Merchant's rules as they stood at a stated moment,
+// which is what an arbiter hearing a dispute needs and a merchant serving a
+// purchase does not.
+//
+// It reads r.Clock not at all: at replaces it outright, rather than being
+// compared against it. A dispute is heard after the fact by definition, so a
+// rule set whose clock still had to be right for the answer to be right would be
+// a rule set nobody could hold long enough to use.
+//
+// at is required and a zero one is refused. Defaulting it to anything — the
+// clock, the epoch, now — would answer a question nobody asked, and the answer
+// it would give for a real bundle is "every mandate here expired", against
+// counterparties who did nothing.
+//
+// **Everything after that guard is VerifyCheckout's**, reached by copying this
+// rule set with its clock pinned. That is the only correct shape: the two entry
+// points differ in *when* the question is asked and in nothing else, so a second
+// body would be a second answer to one question, drifting the moment either side
+// is tightened. It was two bodies for one commit, and the copy of the empty-
+// checkout guard was already unreachable by any test — which is exactly how that
+// drift begins. A rule added to VerifyCheckout now reaches disputes for free,
+// and the replay store issue #27 will add is the case that makes it matter: it
+// lands on the role path, and a dispute is the one path where nobody is watching
+// a live transaction fail.
+//
+// The copy carries every field forward rather than naming Issuer alone, so a
+// field VerifyCheckout starts reading is not silently dropped here.
+func (r MerchantRules) VerifyCheckoutAsOf(
+	at time.Time,
+	sd *sdjwt.SDJWT,
+	checkoutJWT string,
+) (generated.CheckoutMandate, error) {
+	if at.IsZero() {
+		return generated.CheckoutMandate{}, fmt.Errorf(
+			"%w: no instant to judge this checkout as of, and a mandate is live or expired only relative to one",
+			ErrMisconfigured)
+	}
+
+	pinned := r
+	pinned.Clock = fixedClock(at)
+	return pinned.VerifyCheckout(sd, checkoutJWT)
+}
+
 // AuthoriseCheckoutChain runs the Merchant's rules against a delegation
 // chain — a closed Checkout Mandate authorised by the open one that endorsed
 // it — the Human Not Present counterpart to VerifyCheckout.
@@ -219,7 +318,10 @@ type CredentialProviderRules struct {
 	// uses it instead — the signature over the open mandate at the chain's
 	// root, on the same terms MerchantRules.Issuer documents. Required.
 	Issuer authz.Verifier
-	// Clock decides whether the mandate has expired. Required.
+	// Clock decides whether the mandate has expired, for the two entry points
+	// that answer as of now — VerifyPayment and AuthorisePaymentChain, which
+	// both require it. VerifyPaymentAsOf does not read it, on the same terms
+	// MerchantRules.Clock documents.
 	Clock authz.Clock
 
 	// AgentKey and Audience are AuthorisePaymentChain's half of this rule set.
@@ -268,6 +370,26 @@ func (r CredentialProviderRules) VerifyPayment(sd *sdjwt.SDJWT) (generated.Payme
 		Issuer: r.Issuer,
 		Clock:  r.Clock,
 	})
+}
+
+// VerifyPaymentAsOf runs the Credential Provider's rules as they stood at a
+// stated moment. See MerchantRules.VerifyCheckoutAsOf for why the instant
+// replaces r.Clock rather than being checked against it, why a zero one is
+// refused rather than defaulted, and why everything past that guard is
+// VerifyPayment's own body reached through a clock-pinned copy of this rule set.
+func (r CredentialProviderRules) VerifyPaymentAsOf(
+	at time.Time,
+	sd *sdjwt.SDJWT,
+) (generated.PaymentMandate, error) {
+	if at.IsZero() {
+		return generated.PaymentMandate{}, fmt.Errorf(
+			"%w: no instant to judge this payment as of, and a mandate is live or expired only relative to one",
+			ErrMisconfigured)
+	}
+
+	pinned := r
+	pinned.Clock = fixedClock(at)
+	return pinned.VerifyPayment(sd)
 }
 
 // AuthorisePaymentChain runs the Credential Provider's rules against a
@@ -383,7 +505,10 @@ func (r MPPRules) VerifyCredential(
 var (
 	_ CheckoutVerifier      = MerchantRules{}
 	_ CheckoutChainVerifier = MerchantRules{}
+	_ CheckoutVerifierAsOf  = MerchantRules{}
 	_ PaymentVerifier       = CredentialProviderRules{}
 	_ PaymentChainVerifier  = CredentialProviderRules{}
+	_ PaymentVerifierAsOf   = CredentialProviderRules{}
 	_ CredentialVerifier    = MPPRules{}
+	_ authz.Clock           = fixedClock{}
 )

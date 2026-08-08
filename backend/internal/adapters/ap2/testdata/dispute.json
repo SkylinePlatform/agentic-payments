@@ -1,0 +1,67 @@
+{
+  "_comment": "Dispute evidence conformance vectors. Two implementations shown the same broken bundle must name the same link and the same reason, or one dispute reaches two verdicts depending on whose code heard it. `steps` is read by position as well as by name: a stored report holds an ordinal, so a reordering that kept every spelling would still change what a stored report means. `broken` maps a tampered Human Present bundle to the first link that must refuse and the contracts/evidence/error_code.json code the refusal carries. Every tamper leaves exactly one thing wrong and everything else genuine, so the link named is the earliest that can refuse rather than merely one that does. A bundle is judged as of the instant the transaction happened, which the arbiter supplies and no artefact in the bundle may choose; expiry rows therefore describe a mandate that was already dead when it was presented, which is a fault, and never one that merely lapsed between the purchase and the hearing, which is what every mandate does. Every row here is reproducible from the bundle alone, against an arbiter holding the ordinary Merchant and Credential Provider rules — a tamper that needs a differently configured arbiter to reach the link it names is not a vector and is not published, because an implementation applying it to the bundle would refuse earlier and be judged non-conformant for being right.",
+
+  "steps": [
+    "none",
+    "checkout_authorised",
+    "checkout_answered",
+    "payment_authorised",
+    "one_purchase",
+    "payment_answered"
+  ],
+
+  "broken": {
+    "checkout_mandate_signed_by_an_impostor": {
+      "step": "checkout_authorised",
+      "code": "signature_invalid"
+    },
+    "another_genuine_offer_in_the_bundle": {
+      "step": "checkout_authorised",
+      "code": "checkout_hash_mismatch"
+    },
+    "checkout_receipt_answers_another_mandate": {
+      "step": "checkout_answered",
+      "code": "mandate_malformed"
+    },
+    "checkout_receipt_signed_by_another_party": {
+      "step": "checkout_answered",
+      "code": "signature_invalid"
+    },
+    "payment_receipt_in_the_checkout_receipts_place": {
+      "step": "checkout_answered",
+      "code": "signature_invalid"
+    },
+    "checkout_receipt_mislabelled_as_payment": {
+      "step": "checkout_answered",
+      "code": "mandate_malformed"
+    },
+    "checkout_mandate_expired_before_presentation": {
+      "step": "checkout_authorised",
+      "code": "mandate_expired"
+    },
+    "payment_mandate_expired_before_presentation": {
+      "step": "payment_authorised",
+      "code": "mandate_expired"
+    },
+    "payment_mandate_bound_elsewhere": {
+      "step": "one_purchase",
+      "code": "payment_binding_mismatch"
+    },
+    "unequal_algorithms_payment_bound_elsewhere": {
+      "step": "one_purchase",
+      "code": "checkout_hash_mismatch"
+    },
+    "payment_receipt_answers_another_mandate": {
+      "step": "payment_answered",
+      "code": "mandate_malformed"
+    },
+    "payment_receipt_signed_by_the_merchant": {
+      "step": "payment_answered",
+      "code": "signature_invalid"
+    },
+    "payment_receipt_mislabelled_as_checkout": {
+      "step": "payment_answered",
+      "code": "mandate_malformed"
+    }
+  }
+}
