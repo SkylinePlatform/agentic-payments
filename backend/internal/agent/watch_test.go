@@ -54,6 +54,41 @@ type authorisedAgent struct {
 	tick     chan time.Time
 	quotes   chan struct{}
 	attempts chan struct{}
+
+	// finished is closed when the watch has returned.
+	//
+	// Every barrier below waits on it as well as on the thing it is actually
+	// waiting for, and that second arm is not defensive tidying — it is what
+	// turns a broken watch into a failing test rather than a hanging one. A
+	// change that ends the loop early (a lifecycle machine stepped per hop
+	// reaches spent at the Credential Provider, refuses the merchant, and Run
+	// returns) leaves this file waiting for a request that is never going to be
+	// made, and a test that hangs names nothing.
+	finished chan struct{}
+}
+
+// quoted waits for the watch to finish a poll, or for it to stop.
+func (a *authorisedAgent) quoted() {
+	select {
+	case <-a.quotes:
+	case <-a.finished:
+	}
+}
+
+// attempted waits for the watch to finish an attempt, or for it to stop.
+func (a *authorisedAgent) attempted() {
+	select {
+	case <-a.attempts:
+	case <-a.finished:
+	}
+}
+
+// beat lets the watch take one poll at whatever the price is now.
+func (a *authorisedAgent) beat() {
+	select {
+	case a.tick <- time.Time{}:
+	case <-a.finished:
+	}
 }
 
 // authorise runs the discovery half against a standing world.
@@ -170,7 +205,7 @@ func (p pulse) RoundTrip(r *http.Request) (*http.Response, error) {
 // loop receives — which is the loop having come back round.
 func (a *authorisedAgent) step() {
 	a.world.clock.Advance(merchant.DefaultStep)
-	a.tick <- time.Time{}
+	a.beat()
 }
 
 // running starts the watch and hands back the way to wait for it, and the way
@@ -185,7 +220,7 @@ func (a *authorisedAgent) step() {
 // of schedule keeps polling by design — that is what waiting is — so a test
 // interested in what it did before then has to end it, and cancelling is the way
 // the loop is documented to stop.
-func running(t *testing.T, w *agent.Watch) (wait func() (agent.Watched, error), stop func()) {
+func (a *authorisedAgent) running(t *testing.T, w *agent.Watch) (wait func() (agent.Watched, error), stop func()) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -195,14 +230,14 @@ func running(t *testing.T, w *agent.Watch) (wait func() (agent.Watched, error), 
 		watched agent.Watched
 		err     error
 	)
-	done := make(chan struct{})
+	a.finished = make(chan struct{})
 	go func() {
-		defer close(done)
+		defer close(a.finished)
 		watched, err = w.Run(ctx)
 	}()
 
 	return func() (agent.Watched, error) {
-		<-done
+		<-a.finished
 		return watched, err
 	}, cancel
 }
@@ -320,19 +355,19 @@ func TestTheWatchBuysWhenTheMerchantsPriceComesIntoRange(t *testing.T) {
 	w := newWorldEmitting(t, emitting)
 	a := authorise(t, w)
 
-	wait, _ := running(t, a.watch(t))
+	wait, _ := a.running(t, a.watch(t))
 
 	// The baseline poll, before the loop. Waiting for it is what makes the
 	// advance below safe: the watch has read $240 and is sitting on its ticker.
-	<-a.quotes
+	a.quoted()
 
 	a.step() // $210 — above the cap the user signed
-	<-a.quotes
-	<-a.attempts
+	a.quoted()
+	a.attempted()
 
 	a.step() // $189 — inside it
-	<-a.quotes
-	<-a.attempts
+	a.quoted()
+	a.attempted()
 
 	watched, err := wait()
 	require.NoError(t, err, "the watch had a price it could buy at and did not")
@@ -509,19 +544,19 @@ func TestTheBaselineIsNotAnAttempt(t *testing.T) {
 	w := newWorld(t)
 	a := authorise(t, w)
 
-	wait, stop := running(t, a.watch(t))
-	<-a.quotes // the baseline
+	wait, stop := a.running(t, a.watch(t))
+	a.quoted() // the baseline
 
 	// A second poll at the same price, so the loop has demonstrably run and not
 	// merely been slow. Nothing is advanced between them.
-	a.tick <- time.Time{}
-	<-a.quotes
+	a.beat()
+	a.quoted()
 
 	// The step change the watch is actually for, so the test proves the silence
 	// above was the baseline rule rather than a loop that never attempts.
 	a.step()
-	<-a.quotes
-	<-a.attempts
+	a.quoted()
+	a.attempted()
 
 	// The $210 candidate was refused and the schedule has another step in it, so
 	// the watch is doing what it is for: waiting. Stopping is how a caller ends
