@@ -244,8 +244,7 @@ func TestAChainOutsideItsConstraintsIsRefusedByTheVerifier(t *testing.T) {
 //
 // The pkg/sdjwt tests build the same shape with delegatedChainWithIssuerJWTHash.
 // This is a second implementation rather than a shared one because the two test
-// packages cannot see each other's helpers, and the duplication is the kind
-// AGENTS.md accepts between layers.
+// packages cannot see each other's helpers.
 func rebindToIssuerJWTHash(t *testing.T, fx *checkoutChainFx) *sdjwt.Chain {
 	t.Helper()
 

@@ -191,25 +191,46 @@ func verifyDelegationChain(c *sdjwt.Chain, opts ChainOptions) (sdjwt.Verified, e
 		//
 		// pkg/sdjwt accepts either binding because the draft defines both. AP2
 		// cannot, because in AP2 the root hop is the open mandate and its
-		// Disclosures are *the constraints the user set*. issuer_jwt_hash covers
-		// only the Issuer-signed JWT, so under it a chain presented with
-		// constraints {A, B} still verifies with B withheld — and B is then a
-		// limit nobody enforces, while everything upstream of here passes. That
-		// is the outcome AGENTS.md rules out in as many words: silently ignoring
-		// a constraint nobody understands converts a limit the user set into a
-		// limit nobody enforces. The mechanism differs — withheld rather than
-		// unreadable — and the result on the purchase is identical.
+		// Disclosures are *the constraints the user set*.
 		//
-		// requireSomeConstraintDisclosed does not reach it. That floor refuses a
-		// presentation disclosing *none* of the constraints its mandate committed
-		// to; withholding one of four leaves three, and three constraints is a
-		// perfectly ordinary minimised presentation. Counting cannot tell the two
-		// apart, which is why this is closed at the binding instead.
+		// # What this closes, stated precisely
 		//
-		// Refusing here rather than in pkg/sdjwt is deliberate. The weaker
-		// binding is legitimate in the draft and useful to somebody whose root
-		// disclosures are attributes rather than limits; deleting it from the
-		// library would make this repository's SD-JWT implementation
+		// Not withholding. **Unattributable withholding.**
+		//
+		// The difference matters more than it looks, and getting it wrong is how
+		// somebody standing up the next role talks themselves out of setting
+		// RequireConstrained. A holder may narrow an open mandate perfectly
+		// legitimately — Minimise exists for it — and may do so by calling
+		// Present before delegating, in which case sd_hash covers the narrowed
+		// root and this check has nothing to say. A purchase over the user's cap
+		// then authorises, with the amount constraint simply not shown. That is
+		// not a defect and it is not closed here; disclose.go argues it at
+		// length, and requireConstrained is the answer to it. Every role in
+		// cmd/ sets RequireConstrained: []string{"amount"} for exactly this
+		// reason, and a role that leaves it empty has chosen the floor alone.
+		//
+		// What sd_hash buys is that the agent *signed* the narrowing. Its
+		// signature covers the root exactly as presented, so the presentation it
+		// chose is attributable to it afterwards, in the evidence a dispute
+		// reads — requireConstrained's own comment is where that argument lives.
+		// issuer_jwt_hash destroys precisely that: the delegation covers the
+		// Issuer-signed JWT alone, so one signed delegation answers every
+		// narrowing of the root, and anyone downstream who merely relays the
+		// chain can drop a constraint that nobody signed for and nobody can
+		// attribute. The agent's signature stops being evidence of what it
+		// presented.
+		//
+		// requireSomeConstraintDisclosed does not reach that either. The floor
+		// refuses a presentation disclosing *none* of the constraints its mandate
+		// committed to; withholding one of four leaves three, which is an
+		// ordinary minimised presentation, and counting cannot tell the two
+		// apart.
+		//
+		// # Why here rather than in pkg/sdjwt
+		//
+		// The weaker binding is legitimate in the draft and useful to somebody
+		// whose root disclosures are attributes rather than limits; deleting it
+		// from the library would make this repository's SD-JWT implementation
 		// non-conformant to prevent a problem only AP2 has. This is the profile
 		// narrowing the library, the shape used throughout — the same reason
 		// RequireConstrained is a verifier's policy and not a rule in Verify.

@@ -407,6 +407,49 @@ func TestRequireSDHashBindingRefusesTheWeakerBinding(t *testing.T) {
 		"the narrowed presentation is refused on the same grounds, since the narrowing is undetectable and the binding is not")
 }
 
+// TestRequireSDHashBindingDoesNotSpeakForTheOtherTwoArms pins where the policy
+// check sits, which is not something the code says out loud.
+//
+// verifyBinding has four arms — both claims, neither, sd_hash, and the policy
+// refusal — and the policy one is deliberately last. Hoisting it to
+// `case requireSD && !hasSD:` leaves both this package and internal/adapters/ap2
+// green, and under that mutation a delegation carrying *neither* binding claim
+// is refused with a message saying it "is bound by issuer_jwt_hash": naming a
+// claim the token does not contain, in text that reaches a rejection receipt
+// and a Problem Details response.
+//
+// A wrong diagnosis is worse than a vague one here, because the counterparty
+// acts on it — told the wrong claim is present, they go looking for a binding
+// bug in a delegation whose actual fault is that it names no root at all.
+func TestRequireSDHashBindingDoesNotSpeakForTheOtherTwoArms(t *testing.T) {
+	opts := chainOptions(t)
+	opts.RequireSDHashBinding = true
+
+	root := issuedRootWithExtraDisclosure(t)
+
+	t.Run("neither claim", func(t *testing.T) {
+		chain := delegatedChainWithHashClaims(t, root, map[string]any{})
+
+		_, err := sdjwt.VerifyChain(chain, opts)
+		require.Error(t, err, "a delegation naming no root could be lifted onto another, policy or no policy")
+		assert.ErrorContains(t, err, "neither",
+			"the diagnosis has to be the one that is true — with the policy arm hoisted above this one, the message instead names issuer_jwt_hash, a claim the token does not carry")
+	})
+
+	t.Run("both claims", func(t *testing.T) {
+		correct, err := root.SDHash()
+		require.NoError(t, err, "the both-present arm has to be reached with a genuinely correct sd_hash, or the refusal could be the comparison failing instead")
+		chain := delegatedChainWithHashClaims(t, root, map[string]any{
+			"sd_hash": correct, "issuer_jwt_hash": "y",
+		})
+
+		_, err = sdjwt.VerifyChain(chain, opts)
+		require.Error(t, err, "a verifier that picked one would decide silently which binding it checked")
+		assert.ErrorContains(t, err, "both",
+			"the policy must not answer for a chain whose real fault is that it names two bindings, even though refusing it is also correct")
+	})
+}
+
 func TestAnIssuerJWTHashNamingAnotherRootIsRejected(t *testing.T) {
 	// The weaker of the two hashes still has to bind. Without this the
 	// issuer_jwt_hash comparison could be deleted outright and every test would
