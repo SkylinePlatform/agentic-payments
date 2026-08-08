@@ -446,9 +446,10 @@ when the two differ, and no role is assigned the comparison. AP2 does state
 amount rules, and every one of them measures the mandate against itself or its
 own history rather than against the document it references: `payment.amount_range`
 bounds `payment_amount` between a `min` and a `max` carried by the open mandate
-and requires the currency to match that constraint's, and `payment.budget`
-requires the requested amount plus the sum of previously closed Payment Mandates
-to stay within a `max`. A user can therefore cap what an agent spends. Nothing
+and requires the currency to match that constraint's, and `payment.budget` —
+which the specification scopes to mandates using the `payment.agent_recurrence`
+constraint — requires the requested amount plus the sum of previously closed
+Payment Mandates to stay within a `max`. A user can therefore cap what an agent spends. Nothing
 ties any of it to what the merchant is charging.
 
 So a Payment Mandate saying **pay 1 USD**, correctly bound by hash to a checkout

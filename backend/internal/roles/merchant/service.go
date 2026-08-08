@@ -53,11 +53,20 @@ type Service struct {
 	//
 	// AP2 does not give the Merchant this mandate to verify — it names the
 	// Credential Provider, the Network and the Merchant Payment Processor. The
-	// merchant needs it anyway for one question none of those three is given a
-	// checkout to answer: whether the amount being paid is the amount this
-	// checkout costs. See ap2.AmountMatches for why that check is ours rather
-	// than the protocol's, and why the merchant is the party positioned to
-	// make it.
+	// merchant needs it anyway for two questions, and they are not the same kind
+	// of thing:
+	//
+	//   - Is this payment for this checkout? AP2's own rule — transaction_id
+	//     exists for nothing else — but the specification assigns it to no role,
+	//     and the parties it does hand this mandate to are sent no checkout to
+	//     recompute against. See ap2.Binding.PaysFor.
+	//   - Does it pay what this checkout costs? Not AP2's rule at all. See
+	//     ap2.AmountMatches, which is where that divergence is argued.
+	//
+	// "AP2 does not give the Merchant this mandate to verify" and "the binding
+	// check is AP2's" are both true and are about different things: the rule is
+	// the specification's, the decision to run it here is ours. The merchant is
+	// the party positioned for both, because it holds the checkout.
 	//
 	// Verified rather than read, for the reason the Merchant Payment Processor
 	// gives about the same mandate: a claim read out of an unverified payload is
@@ -472,14 +481,32 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 // sign, for instance, "mandate_type: checkout, error: signature_invalid" over
 // the digest of a Checkout Mandate whose signature was perfect — a false
 // statement about a specifically named document, in the artefact this project
-// treats as dispute evidence. Making the pair inseparable means the mandate
-// that failed is the mandate the receipt references, by construction.
+// treats as dispute evidence. Pairing them means the mandate that failed is the
+// mandate the receipt references.
+// aboutCheckout and aboutPayment below are the only two ways this package
+// constructs one, which is what keeps a kind paired with a mandate it can name.
+// They are a default and not a wall: Go lets any code in this package write the
+// struct literal directly with the two crossed over, and no signature stops it.
+// What does stop it is TestAReceiptNamesTheMandateThatFailed, which checks the
+// receipt's reference against the artefact that failed for every way the payment
+// side can fail — a hand-built mismatch fails it. The constructors make the
+// right thing the easy thing; the test is what makes it the only passing thing.
 type answered struct {
 	// subject is the mandate the receipt references, and kind is what it is.
 	subject *sdjwt.SDJWT
 	kind    generated.ReceiptMandateType
 	// err is the verdict: nil when the purchase may proceed.
 	err error
+}
+
+// aboutCheckout and aboutPayment are the only ways to make an answered, which
+// is what pairs each kind with the mandate it can name.
+func aboutCheckout(sd *sdjwt.SDJWT) answered {
+	return answered{subject: sd, kind: generated.ReceiptMandateTypeCheckout}
+}
+
+func aboutPayment(sd *sdjwt.SDJWT) answered {
+	return answered{subject: sd, kind: generated.ReceiptMandateTypePayment}
 }
 
 // refusing returns this answer with a verdict attached.
@@ -528,12 +555,12 @@ func (a answered) refusing(err error) answered { a.err = err; return a }
 func (s *Service) decide(
 	presented, paying *sdjwt.SDJWT, checkoutJWT string, quoted generated.Amount,
 ) answered {
-	checkout := answered{subject: presented, kind: generated.ReceiptMandateTypeCheckout}
+	checkout := aboutCheckout(presented)
 	if _, err := s.Rules.VerifyCheckout(presented, checkoutJWT); err != nil {
 		return checkout.refusing(err)
 	}
 
-	payment := answered{subject: paying, kind: generated.ReceiptMandateTypePayment}
+	payment := aboutPayment(paying)
 	// Verified before a claim is read out of it. The merchant is not one of the
 	// roles AP2 gives this mandate to verify, and it verifies anyway rather than
 	// reading the payload — see the Payments field for the whole of that

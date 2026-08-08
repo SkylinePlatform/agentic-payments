@@ -28,8 +28,9 @@ import (
 // the checkout costs, none describes what happens when the two differ, and no
 // role is assigned the comparison. AP2 does state amount rules — payment.amount_range
 // bounds payment_amount between a min and a max and pins its currency to the
-// constraint's, and payment.budget bounds the request plus everything previously
-// spent — but every one of them measures the mandate against itself or its own
+// constraint's, and payment.budget, scoped to mandates using
+// payment.agent_recurrence, bounds the request plus everything previously spent
+// — but every one of them measures the mandate against itself or its own
 // history. None reaches the document the mandate references.
 //
 // So a Payment Mandate saying "pay 1 USD", correctly bound by hash to a

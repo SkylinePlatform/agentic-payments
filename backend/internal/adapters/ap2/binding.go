@@ -153,13 +153,22 @@ func (b Binding) Covers(checkoutJWT string) error {
 // payment_binding_mismatch. Reporting checkout_hash_mismatch would send whoever
 // reads the receipt to the mandate that was fine.
 //
-// This is also what Binding.Same tells a caller to do when it cannot answer.
-// Same compares two digests and refuses outright when they were made by
-// different algorithms — the ordinary case for these two mandates, since a
-// Checkout Mandate always blinds checkout_jwt and a closed Payment Mandate
-// usually blinds nothing, so bindingAlg gives them different defaults. A party
-// holding the document does not need that comparison at all; it recomputes,
-// which is what this does.
+// Same would also answer this question, and as this repository mints mandates
+// today it would answer it correctly — so the reason to prefer recomputation is
+// not that Same cannot cope. Every Blinder here is built by the bare
+// NewBlinder(), which takes DefaultHashAlg, so bindingAlg returns sha-256 both
+// when the payload blinds something and when it does not: a Checkout Mandate
+// and a closed Payment Mandate over one checkout carry identical digests, and
+// Same compares them happily.
+//
+// What Same has is a failure mode this does not. It compares digest to digest
+// and refuses outright, as ErrBindingUnverifiable, the moment the two were made
+// under different algorithms — which is one WithHashAlg away, on a pair of
+// mandates that are perfectly valid, and invisible until somebody makes that
+// change. A party holding the document never needs the comparison at all: it
+// recomputes, which is the recompute-never-trust rule and has no such mode.
+// Same's own doc comment says as much for the case it cannot answer; this is
+// that advice taken before the situation arises rather than after.
 func (b Binding) PaysFor(checkoutJWT string) error {
 	if err := b.recomputable(checkoutJWT); err != nil {
 		return err

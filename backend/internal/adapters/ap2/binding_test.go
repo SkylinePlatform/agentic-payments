@@ -164,3 +164,101 @@ func TestACallerSuppliedHashIsIgnored(t *testing.T) {
 	assert.NotEqual(t, "not-the-hash-of-anything", got.CheckoutHash,
 		"issuance must recompute the binding rather than copy what it was handed")
 }
+
+// PaysFor and the guards under it, tested in this package rather than only
+// through the merchant's HTTP handler.
+//
+// make vectors scopes the conformance suite to internal/adapters/... and pkg/...,
+// so an exported adapter method whose only exercise is a role's integration test
+// is outside the suite that is supposed to cover it. The guards below were
+// untested inside Covers before PaysFor existed; extracting recomputable made
+// one untested helper serve two methods, which is the moment to close it.
+
+// TestPaysForRefusesAnotherCheckout is the binding the Payment Mandate exists to
+// carry, as its own unit rather than as a purchase.
+//
+// The refusal is payment_binding_mismatch and not checkout_hash_mismatch, and
+// the distinction is the entire reason this method is separate from Covers: by
+// the time a caller reaches it the Checkout Mandate has already been verified
+// against this same document, so the disagreement is between two mandates
+// rather than between one mandate and the document.
+func TestPaysForRefusesAnotherCheckout(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	sd := reparse(t, issue(t, f, mandate()))
+	m, err := ap2.VerifyCheckout(sd, f.options())
+	require.NoError(t, err)
+
+	b, err := ap2.BindingOf(sd, m.CheckoutHash)
+	require.NoError(t, err)
+
+	assert.NoError(t, b.PaysFor(merchantCheckout),
+		"the document this mandate was issued over has to be the one it pays for")
+
+	err = b.PaysFor(merchantCheckout + "-different")
+	require.ErrorIs(t, err, ap2.ErrPaymentBindingMismatch)
+	assert.NotErrorIs(t, err, ap2.ErrCheckoutHashMismatch,
+		"reporting the checkout's own code here would send a reader to the mandate that was fine")
+	assert.Equal(t, generated.ErrorCodePaymentBindingMismatch, ap2.CodeOf(err))
+}
+
+// TestABindingWithNothingToCompareIsRefused covers the two states in which
+// neither method is answering a question about a mandate at all.
+//
+// Both matter for the same reason: the alternative to refusing is returning nil,
+// and a nil from a binding check reads as "the binding held". A zero Binding
+// comes from a caller that never read one out of a mandate, and an empty
+// checkout from one that has no document to recompute against — neither is a
+// mandate that passed.
+func TestABindingWithNothingToCompareIsRefused(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	sd := reparse(t, issue(t, f, mandate()))
+	m, err := ap2.VerifyCheckout(sd, f.options())
+	require.NoError(t, err)
+	held, err := ap2.BindingOf(sd, m.CheckoutHash)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		call func(ap2.Binding) error
+		want error
+		code generated.ErrorCode
+	}{
+		{
+			name: "a Binding nobody read out of a mandate",
+			call: func(ap2.Binding) error { return ap2.Binding{}.PaysFor(merchantCheckout) },
+			want: ap2.ErrMisconfigured,
+			code: generated.ErrorCodeVerifierUnavailable,
+		},
+		{
+			name: "no checkout to recompute against",
+			call: func(b ap2.Binding) error { return b.PaysFor("") },
+			want: ap2.ErrBindingUnverifiable,
+			code: generated.ErrorCodeDisclosureInsufficient,
+		},
+		{
+			name: "the same two through Covers, which shares the guards",
+			call: func(ap2.Binding) error { return ap2.Binding{}.Covers(merchantCheckout) },
+			want: ap2.ErrMisconfigured,
+			code: generated.ErrorCodeVerifierUnavailable,
+		},
+		{
+			name: "Covers with no checkout",
+			call: func(b ap2.Binding) error { return b.Covers("") },
+			want: ap2.ErrBindingUnverifiable,
+			code: generated.ErrorCodeDisclosureInsufficient,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := tc.call(held)
+			require.ErrorIs(t, err, tc.want,
+				"returning nil here would be a binding check reporting that the binding held")
+			assert.Equal(t, tc.code, ap2.CodeOf(err))
+		})
+	}
+}

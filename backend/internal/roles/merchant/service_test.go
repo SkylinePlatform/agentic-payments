@@ -320,6 +320,28 @@ func TestAReceiptNamesTheMandateThatFailed(t *testing.T) {
 			kind: generated.ReceiptMandateTypePayment,
 			code: generated.ErrorCodePaymentBindingMismatch,
 		},
+		{
+			// Both faults at once, which is what pins the order decide argues
+			// for. The binding is AP2's rule and the amount is our divergence,
+			// so the binding has to be the reported one: a receipt saying
+			// payment_amount_mismatch here would attribute a protocol-level
+			// checkout substitution to a local policy decision, and send whoever
+			// reads it hunting for the wrong thing entirely. Without this case
+			// the ordering is two paragraphs of prose that the module stays
+			// green without.
+			name: "the Payment Mandate is for a different checkout and a different price",
+			spoil: func(t *testing.T, s shop, offer string, price generated.Amount) (map[string]any, *sdjwt.SDJWT) {
+				checkout, _ := s.mandates(t, s.user, offer, price)
+				elsewhere, other := s.quote(t)
+				require.NotEqual(t, offer, elsewhere, "two quotes have to be two documents")
+				_, payment := s.mandates(t, s.user, elsewhere, dearer(other, 500))
+				return map[string]any{
+					"mandate": checkout.String(), "payment": payment.String(), "checkout": offer,
+				}, payment
+			},
+			kind: generated.ReceiptMandateTypePayment,
+			code: generated.ErrorCodePaymentBindingMismatch,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
