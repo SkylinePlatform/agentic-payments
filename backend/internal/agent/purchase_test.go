@@ -142,6 +142,10 @@ func newWorldEmitting(t *testing.T, events emitters) *world {
 	surfaceSvc := &surface.Service{
 		Signer: w.user.signer, Keys: w.user.keys, Clock: clk, Blinder: blinder,
 		Events: events.surface,
+		// Human Present never reads this — the agent assembles the Payment
+		// Mandate and the instrument comes with it — but Handler refuses a
+		// surface that could not serve /authorise.
+		Instrument: generated.PaymentInstrument{ID: "card-4242", Type: "CARD"},
 	}
 	w.endpoints.Surface = serve(t, surfaceSvc.Handler)
 

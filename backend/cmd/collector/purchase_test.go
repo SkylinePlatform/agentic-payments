@@ -114,6 +114,10 @@ func newWorld(t *testing.T, ingest string) *world {
 	w.endpoints.Surface = serve(t, (&surface.Service{
 		Signer: user.signer, Keys: user.keys, Clock: clk, Blinder: blinder,
 		Events: emitter("surface"),
+		// Human Present never reads this — the agent assembles the Payment
+		// Mandate and the instrument comes with it — but Handler refuses a
+		// surface that could not serve /authorise.
+		Instrument: generated.PaymentInstrument{ID: "card-4242", Type: "CARD"},
 	}).Handler)
 
 	inventory, err := merchant.NewDemoInventory(clk, base, merchant.DefaultStep)

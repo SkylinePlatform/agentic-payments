@@ -73,15 +73,18 @@ func main() {
 			// what makes AP2's delegation allowance reachable: a merchant built
 			// with somebody else's CheckoutVerifier has delegated.
 			//
-			// Audience and RequireConstrained are read by AuthoriseCheckoutChain
-			// and by nothing else — VerifyCheckout, which is the whole of the
-			// Human Present flow this binary serves today, ignores both — so
-			// setting them changes no behaviour yet. AgentKey stays unset, and
-			// that absence is not inert: AuthoriseCheckoutChain refuses a nil
-			// one under ap2.ErrMisconfigured, so this merchant refuses every
-			// delegation chain outright rather than half-checking one. The
-			// resolver it wants is roles.AgentKey, which arrives with the slice
-			// of #15 that gives the agent a key for a user to endorse.
+			// All three chain fields are read by AuthoriseCheckoutChain and by
+			// nothing else — VerifyCheckout, which is the whole of the Human
+			// Present flow this binary serves today, ignores every one of them —
+			// so setting them changes no behaviour yet. Nothing can present a
+			// chain here until merchant.Service grows a chain entry point, which
+			// is #119.
+			//
+			// AgentKey is roles.AgentKey: the cnf claim of the open mandate,
+			// turned into the one Verifier the delegating hop is ever checked
+			// with. That there is exactly one resolution, and no second key to
+			// compare it against by hand, is the property the whole delegation
+			// design turns on.
 			//
 			// RequireConstrained is a policy rather than a protocol rule: this
 			// merchant will not authorise a purchase against a mandate that says
@@ -91,6 +94,7 @@ func main() {
 			Rules: ap2.MerchantRules{
 				Issuer:             user,
 				Clock:              role.Clock,
+				AgentKey:           roles.AgentKey,
 				Audience:           *id,
 				RequireConstrained: []string{"amount"},
 			},
@@ -107,6 +111,7 @@ func main() {
 			Payments: ap2.CredentialProviderRules{
 				Issuer:             user,
 				Clock:              role.Clock,
+				AgentKey:           roles.AgentKey,
 				Audience:           *id,
 				RequireConstrained: []string{"amount"},
 			},
