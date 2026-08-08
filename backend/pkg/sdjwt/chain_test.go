@@ -1323,3 +1323,59 @@ func delegatedChainWithDelegateHashAlg(t *testing.T, alg sdjwt.HashAlg) *sdjwt.C
 		"delegation is the mechanism under test; if it cannot be built there is nothing to verify")
 	return chain
 }
+
+// TestSignedClaimsKeepsWhatVerificationRemoves is the property the AP2
+// disclosure-minimisation floor is built on, pinned here where it belongs
+// rather than only at the caller.
+//
+// §7.1 step 3.d removes an undisclosed array element instead of leaving a hole,
+// so a Verifier reading the Processed SD-JWT Payload cannot tell an array it
+// was shown all of from a longer one it was shown part of. The signed payload
+// still commits to every element. Both halves are asserted, because the
+// interesting one is not that SignedClaims answers — it is that Verify does
+// not.
+func TestSignedClaimsKeepsWhatVerificationRemoves(t *testing.T) {
+	t.Parallel()
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err)
+
+	payload, disclosures, err := blinder.Blind(map[string]any{
+		"limits": []any{"one", "two", "three"},
+	}, "limits[]")
+	require.NoError(t, err, "each element withholdable independently is what minimisation over a list needs")
+
+	issued, err := sdjwt.Issue(t.Context(), newHMACKey("issuer", "issuer"), payload, disclosures)
+	require.NoError(t, err)
+
+	narrowed, err := issued.Present(func(sdjwt.Disclosure) bool { return false })
+	require.NoError(t, err, "withholding every element is a decision a Holder can state")
+
+	processed, err := sdjwt.Verify(narrowed, sdjwt.Options{
+		Issuer: newHMACKey("issuer", "issuer"),
+		Clock:  fixedClock(time.Unix(1_777_326_200, 0)),
+	})
+	require.NoError(t, err, "a presentation that discloses nothing still verifies; the digests simply match nothing")
+	assert.Empty(t, processed["limits"],
+		"this is the hole: what the Verifier reads is indistinguishable from an array the Issuer signed empty")
+
+	signed, err := narrowed.SignedClaims()
+	require.NoError(t, err)
+	assert.Len(t, signed["limits"], 3,
+		"and this is what closes it — the signature commits to one digest per element whether or not a Disclosure came with it, which is the only place the count survives")
+}
+
+// TestVerifiedCarriesTheRootAsSigned is the chain-shaped half. A caller
+// authorising against a chain never holds the root hop — Chain exposes no
+// accessor — so the count has to arrive through Verified or not at all.
+func TestVerifiedCarriesTheRootAsSigned(t *testing.T) {
+	t.Parallel()
+
+	verified, err := sdjwt.VerifyChain(delegatedChain(t, "delegate"), chainOptions(t))
+	require.NoError(t, err)
+
+	assert.Equal(t, "open.example", verified.RootSigned["vct"],
+		"the root's own claims, not the delegated payload's — reading one for the other is the bug Verified names its fields to prevent")
+	assert.Contains(t, verified.RootSigned, "cnf",
+		"cnf travels in the clear in this fixture, so it is in the signed payload as well as the processed one")
+}

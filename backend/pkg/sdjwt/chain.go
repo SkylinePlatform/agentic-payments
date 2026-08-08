@@ -198,6 +198,17 @@ func (c *Chain) String() string {
 // to be lifted out and used outside this repository. When a caller proves what
 // it needs, the right accessor goes in then and is shaped by that need rather
 // than guessed ahead of it.
+//
+// **That caller has since arrived, and this paragraph is what it was held to.**
+// AP2's selective disclosure minimisation needs to know whether a Holder
+// narrowed the root's constraints array to nothing, which step 3.d makes
+// invisible in the processed payload. Shaped by that need, the answer is
+// Verified.RootSigned — one field, populated only after the root's signature
+// has been checked — and not an accessor returning the hop. A hop accessor
+// would hand out the whole credential, unverified, to answer a question about
+// one array; it would also still be the wrong shape for the *delegating*-hop
+// digest the paragraph above predicts, so it would have been the second
+// accessor nobody needed rather than the first anybody did.
 
 // Delegate signs a delegating KB-JWT over this presentation and returns the
 // two-hop chain.
@@ -389,6 +400,26 @@ type Verified struct {
 	// element of the delegating JWT's delegate_payload array.
 	Delegated map[string]any
 
+	// RootSigned is the root hop's claims as the Issuer signed them, with every
+	// digest still in place — SDJWT.SignedClaims, taken after that signature has
+	// been checked.
+	//
+	// Root above is what the Verifier was *shown*; this is what the Issuer
+	// *committed to*, and the two differ by exactly what the Holder withheld.
+	// Step 3.d removes an undisclosed array element rather than leaving a hole,
+	// so a Verifier holding only Root cannot tell a short array from a narrowed
+	// one — which for a credential whose array *is* the authorisation is the
+	// difference between "the user set no limits" and "you were shown none of
+	// them". AP2's open mandates are that credential; see
+	// internal/adapters/ap2's requireSomeConstraintDisclosed.
+	//
+	// It is here rather than behind an accessor on Chain for the reason Chain
+	// has no accessor at all: an exported hop would hand out the whole
+	// credential to answer one question, and the answer is only sound once the
+	// signature over it has been checked. Reading this means verification
+	// already passed.
+	RootSigned map[string]any
+
 	// DelegatedHashAlg is the _sd_alg the delegating JWT declared — the
 	// algorithm Delegated's own digests, and anything a caller derives one
 	// from, were verified under.
@@ -441,6 +472,14 @@ func VerifyChain(c *Chain, opts ChainOptions) (Verified, error) {
 		AllowedHashAlgs: opts.AllowedHashAlgs,
 		Clock:           opts.Clock,
 	})
+	if err != nil {
+		return Verified{}, err
+	}
+
+	// Read only now, and only because the line above passed: these are the
+	// claims as signed, and they are worth nothing until the signature over
+	// them has been checked. See Verified.RootSigned.
+	rootSigned, err := c.root.SignedClaims()
 	if err != nil {
 		return Verified{}, err
 	}
@@ -532,7 +571,12 @@ func VerifyChain(c *Chain, opts ChainOptions) (Verified, error) {
 		return Verified{}, err
 	}
 
-	return Verified{Root: rootPayload, Delegated: delegated, DelegatedHashAlg: alg}, nil
+	return Verified{
+		Root:             rootPayload,
+		RootSigned:       rootSigned,
+		Delegated:        delegated,
+		DelegatedHashAlg: alg,
+	}, nil
 }
 
 // verifyBinding checks that the delegating JWT names the root it was signed

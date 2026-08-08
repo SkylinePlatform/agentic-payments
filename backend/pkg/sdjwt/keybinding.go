@@ -80,15 +80,44 @@ func (s *SDJWT) SDHash() (string, error) {
 // SD-JWT declared. AP2's checkout_hash is that case, and Verify cannot answer
 // it — the Processed SD-JWT Payload has _sd_alg stripped out of it by then.
 func (s *SDJWT) HashAlg() (HashAlg, error) {
-	jwt, err := parseJWT(s.issuerJWT)
-	if err != nil {
-		return "", err
-	}
-	claims, err := jwt.claims()
+	claims, err := s.SignedClaims()
 	if err != nil {
 		return "", err
 	}
 	return hashAlgOf(claims)
+}
+
+// SignedClaims returns the claims of the Issuer-signed JWT exactly as the
+// Issuer signed them: every digest still in place, nothing resolved, nothing
+// removed.
+//
+// **It does not check the signature**, on the same terms HashAlg does not, and
+// the safety argument has to be made per claim rather than once here — which is
+// why this is a deliberately awkward thing to reach for. Verify is what a
+// Verifier reads.
+//
+// It exists because there is one question about an SD-JWT that verification
+// destroys the evidence for. RFC 9901 §7.1 step 3.d removes an undisclosed
+// array element rather than leaving a hole, so a Verifier reading the Processed
+// SD-JWT Payload cannot tell an array of three it was shown all of from an
+// array of five it was shown three of. The count is in the signed payload,
+// which commits to every element whether or not a Disclosure accompanies it,
+// and nowhere else. A profile that needs to know it was shown *any* of
+// something — AP2's open-mandate constraints are exactly that case — has no
+// other source.
+//
+// **What it cannot recover is which elements were withheld or what they held.**
+// That is what the salt hides, and a count is the whole of what this adds.
+//
+// For a chain, prefer Verified.RootSigned: it is this same payload, taken after
+// the root's signature has been checked, so the per-claim argument above does
+// not have to be made at all.
+func (s *SDJWT) SignedClaims() (map[string]any, error) {
+	jwt, err := parseJWT(s.issuerJWT)
+	if err != nil {
+		return nil, err
+	}
+	return jwt.claims()
 }
 
 // AttachKeyBinding signs a Key Binding JWT over this presentation and returns
