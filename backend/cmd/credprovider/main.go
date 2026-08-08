@@ -46,13 +46,16 @@ func main() {
 
 		service := &credprovider.Service{
 			ID: *id,
-			// Audience and RequireConstrained are read by AuthorisePaymentChain
-			// and by nothing else — VerifyPayment, which is the whole of the
-			// Human Present flow this binary serves today, ignores both. AgentKey
-			// stays unset, and AuthorisePaymentChain refuses a nil one under
-			// ap2.ErrMisconfigured, so this provider refuses every delegation
-			// chain outright rather than half-checking one; the resolver it wants
-			// is roles.AgentKey, from the slice of #15 that gives the agent a key.
+			// All three chain fields are read by AuthorisePaymentChain and by
+			// nothing else — VerifyPayment, which is the whole of the Human
+			// Present flow this binary serves today, ignores every one of them —
+			// so setting them changes no behaviour yet. Nothing can present a
+			// chain here until credprovider.Service grows a chain entry point,
+			// which is #120.
+			//
+			// AgentKey is roles.AgentKey: the cnf claim of the open mandate,
+			// turned into the one Verifier the delegating hop is ever checked
+			// with.
 			//
 			// RequireConstrained is a policy rather than a protocol rule: this
 			// provider will not fund a purchase against a mandate that says
@@ -63,6 +66,7 @@ func main() {
 			Rules: ap2.CredentialProviderRules{
 				Issuer:             user,
 				Clock:              role.Clock,
+				AgentKey:           roles.AgentKey,
 				Audience:           *id,
 				RequireConstrained: []string{"amount"},
 			},

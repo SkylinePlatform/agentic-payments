@@ -51,12 +51,15 @@ func main() {
 			// compares it, so the payment chain presented here is its own
 			// document, minted for this verifier.
 			//
-			// Audience and RequireConstrained are read by AuthorisePaymentChain
-			// alone; VerifyPayment, which is what this binary uses today,
-			// ignores both. AgentKey stays unset and a nil one is refused under
-			// ap2.ErrMisconfigured, so every delegation chain is refused outright
-			// rather than half-checked until roles.AgentKey lands with the slice
-			// of #15 that gives the agent a key.
+			// All three chain fields are read by AuthorisePaymentChain alone;
+			// VerifyPayment, which is what this binary uses today, ignores every
+			// one of them, so setting them changes no behaviour yet. Nothing can
+			// present a chain here until mpp.Service grows a chain entry point,
+			// which is #120.
+			//
+			// AgentKey is roles.AgentKey: the cnf claim of the open mandate,
+			// turned into the one Verifier the delegating hop is ever checked
+			// with.
 			//
 			// RequireConstrained is a policy rather than a protocol rule: this
 			// processor will not settle against a mandate that says nothing about
@@ -65,6 +68,7 @@ func main() {
 			Payments: ap2.CredentialProviderRules{
 				Issuer:             user,
 				Clock:              role.Clock,
+				AgentKey:           roles.AgentKey,
 				Audience:           *id,
 				RequireConstrained: []string{"amount"},
 			},

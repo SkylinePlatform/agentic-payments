@@ -51,6 +51,12 @@ import (
 // mandate endorsing a key the agent will not sign with, which fails an hour
 // later at a verifier that can say nothing more useful than that the delegation
 // was signed by an unendorsed key.
+//
+// Nothing in this repository calls it yet, and that is worth saying rather than
+// leaving a reader to discover it. Its caller is the agent, which has no key to
+// publish until the slice that gives it one runs — #121. AgentKey below is the
+// other half and is wired into all three verifying roles today, so the two are
+// at different stages on purpose rather than by oversight.
 func PublicKey(ctx context.Context, keys authz.KeySetPublisher) (generated.PublicKey, error) {
 	var zero generated.PublicKey
 	if keys == nil {
