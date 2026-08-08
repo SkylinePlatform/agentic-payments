@@ -29,8 +29,9 @@ import (
 // branch while the processor being written beside it read "chain", and the
 // mutation that renamed the member back survived a pass of sixteen others. The
 // cost of not catching it here is that it surfaces when the two roles are first
-// run in one process, which is slice 8 — three slices and a fortnight from the
-// commit that caused it.
+// run in one process, which is slice 8 — three slices downstream of the commit
+// that caused it, and in the one place a failure is a demonstration stopping
+// rather than a test going red.
 //
 // The names below are therefore pinned deliberately rather than described. They
 // are what internal/roles/mpp reads today ("mandate") and what #120 adds
