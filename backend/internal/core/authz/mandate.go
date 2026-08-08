@@ -66,6 +66,15 @@ var (
 //
 // Constraint failures are delegated to the constraint package, so that one
 // error has one code wherever it is produced.
+//
+// One arm is not a verifier's answer. open_mandate_outstanding names the
+// rejection-receipt rule in lifecycle.go, and no verifier can reach a verdict
+// on that rule — the refusal is the agent's, about its own presentation. This
+// arm is the only path by which that code is reached from an error;
+// internal/platform/problem's table renders it and does not produce it. It is
+// mapped here rather than left out because the alternative is the default arm
+// answering mandate_malformed for a rejection-receipt refusal, which is a wrong
+// answer arrived at silently.
 func CodeOf(err error) generated.ErrorCode {
 	switch {
 	case err == nil:
@@ -78,6 +87,14 @@ func CodeOf(err error) generated.ErrorCode {
 		return generated.ErrorCodeMandateNotYetValid
 	case errors.Is(err, ErrPinnedFieldChanged):
 		return generated.ErrorCodeConstraintViolated
+	// Both readings of the rejection-receipt rule, under the one code that
+	// names it: a further presentation of an open mandate for which no
+	// rejection receipt has arrived. For a spent mandate that receipt is not
+	// merely late — its presentation was accepted — and the code still fits,
+	// because what the schema describes is a further presentation *before* the
+	// rejection receipt for the previous one, and there is none.
+	case errors.Is(err, ErrOpenMandateOutstanding), errors.Is(err, ErrMandateSpent):
+		return generated.ErrorCodeOpenMandateOutstanding
 	case errors.Is(err, ErrMalformedMandate):
 		return generated.ErrorCodeMandateMalformed
 	default:

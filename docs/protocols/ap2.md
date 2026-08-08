@@ -339,6 +339,28 @@ whichever came back accepted. It is a real security property, not bookkeeping,
 and it is the reason the rejection at 21000 must produce a signed receipt
 before the attempt at 18900 is allowed to exist.
 
+The rule is a sequence, so it is written as a state machine:
+`authz.MandateState` in `backend/internal/core/authz/lifecycle.go`, one value
+per open mandate. A mandate is *ready*; presenting it makes it *awaiting
+receipt*, from which presenting again is refused; a rejection receipt returns it
+to *ready*, which is the retry above; and a successful receipt makes it *spent*,
+which is terminal. Both refusals carry `open_mandate_outstanding`. Single use is
+this implementation's reading of AP2's own answer, which is scope reduction —
+"the agent reduces the scope of the open mandate based on the receipt, often
+preventing future presentations entirely" — taken to its degenerate case,
+because the narrowing the specification describes is agent-side and so is the
+one check no other party ever sees.
+
+**Be exact about who enforces it, because the rule sounds stronger than it is.**
+The agent does, and nothing else can: a rule set holds no state, and a verifier
+is shown one presentation carrying no record of any other. So what the machine
+buys is an honest agent no longer able to spend one authorisation against two
+checkouts by accident, which is the common failure. It is not a defence against
+a dishonest agent — that one is replaying, and a replay is refused by the
+verifier-side nonce store of issue #27. *Awaiting receipt* is also the state a
+screen has to draw as waiting rather than as stalled: the rule makes
+presentations sequential on purpose.
+
 ## Binding: `checkout_hash`
 
 The merchant provides a merchant-signed JWT containing the checkout. Both
