@@ -210,9 +210,39 @@ type purchase struct {
 	// purchase it then could not settle.
 	ProcessorPaymentChain string `json:"processor_payment_chain"`
 
-	// Nonce is the challenge this merchant issued from GET /nonce and the
-	// delegating hops are bound to. Human Not Present only: a directly presented
-	// mandate carries no key binding for a nonce to be part of.
+	// ProcessorNonce is the challenge that chain's delegating hop is bound to,
+	// issued by the processor, and it is **the second thing on this endpoint the
+	// merchant carries without being the audience for**.
+	//
+	// The reason is the one ProcessorPaymentChain already gives. A delegation is
+	// a key binding and a key binding is checked by whichever verifier issued
+	// the value it names, so the challenge inside the processor's chain came
+	// from the processor's own GET /nonce — not from this merchant's, which
+	// issued the one in Nonce below. The agent fetches both and sends both; the
+	// merchant checks the one it can and forwards the one it cannot.
+	//
+	// It is required whenever a delegated purchase is presented, on the same
+	// terms as the chain it belongs to, and for the reason that guard exists at
+	// all: a purchase the merchant verifies and then cannot settle has spent a
+	// nonce and produced a signed acceptance for money that never moves.
+	//
+	// **Presence is the whole of what is checked here, and that is not a
+	// weakening.** It is the whole of what *can* be checked: crypto.Challenger
+	// authenticates a challenge under a key that never leaves the process that
+	// minted it, so this merchant cannot tell a good processor nonce from an
+	// invented one, and pretending otherwise would be a check that passes
+	// everything. The processor makes the real one.
+	ProcessorNonce string `json:"processor_nonce"`
+
+	// Nonce is the challenge this merchant issued from GET /nonce and the two
+	// delegating hops addressed to it are bound to. Human Not Present only: a
+	// directly presented mandate carries no key binding for a nonce to be part
+	// of.
+	//
+	// Unlike ProcessorNonce this one is checked rather than carried —
+	// examineChain runs it through the Challenger that issued it, before any
+	// mandate is read. Which of the two a value belongs to is decided by the
+	// field it arrives in, never by trying one against the other.
 	Nonce string `json:"nonce"`
 
 	// Checkout is the merchant's own offer, echoed back. The merchant does not
@@ -263,11 +293,22 @@ const (
 // authorisations in it, and a merchant that picked one would be choosing which
 // of two things the user approved to hold the purchase to.
 //
-// A chain arriving without its partner is refused here too, before anything is
-// parsed. All three chain fields are needed and none substitutes for another —
-// the checkout chain says the purchase was authorised, the payment chain
-// addressed here says the price was, and the processor's is what actually moves
-// the money.
+// A chain arriving without its partners is refused here too, before anything is
+// parsed. All three chains are needed and none substitutes for another — the
+// checkout chain says the purchase was authorised, the payment chain addressed
+// here says the price was, and the processor's is what actually moves the money
+// — and the processor's nonce is needed on the same terms as the chain it is
+// bound to, because a merchant that verified a purchase and then could not
+// settle it would have spent a nonce and signed an acceptance for money that
+// never moved.
+//
+// **Which fields decide the flow, and which merely have to be there.** The three
+// documents decide it: they are what is being presented, and a request carrying
+// one is making a Human Not Present claim whatever else it holds. The two nonces
+// do not — they are attributes of a presentation rather than presentations —
+// which is why a stray nonce beside a directly signed pair is ignored rather
+// than turned into a contradiction, and why ProcessorNonce is checked inside the
+// chained arm rather than counted into the test above it.
 func (p purchase) presentation() (presentation, error) {
 	direct := p.Mandate != "" || p.Payment != ""
 	chained := p.MandateChain != "" || p.PaymentChain != "" || p.ProcessorPaymentChain != ""
@@ -284,6 +325,16 @@ func (p purchase) presentation() (presentation, error) {
 				"a delegated purchase needs mandate_chain, payment_chain and " +
 					"processor_payment_chain: one closed mandate per verifier, because a " +
 					"delegation names its audience and cannot be presented to another")
+		}
+		if p.ProcessorNonce == "" {
+			// Named separately from the three above because it sends a caller
+			// somewhere else entirely: the chains come from the agent's own
+			// signing, and this comes from a round trip to the processor the
+			// agent has to have made.
+			return noPresentation, errors.New(
+				"a delegated purchase needs processor_nonce beside processor_payment_chain: " +
+					"that chain is bound to a challenge the processor issued, and this merchant " +
+					"cannot supply one it did not mint")
 		}
 		return humanNotPresent, nil
 	case direct:
@@ -809,9 +860,12 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 // and there must be no entry point where guessing decides. HTTPProcessor sends
 // them under different members for the same reason.
 //
-// The document forwarded under a chain is never the one this merchant verified.
-// PaymentChain is addressed to this merchant and would be refused by the
-// processor on its audience, correctly — see purchase.ProcessorPaymentChain.
+// Neither the document nor the nonce forwarded under a chain is the one this
+// merchant verified. PaymentChain is addressed to this merchant and would be
+// refused by the processor on its audience, correctly; Nonce is a challenge this
+// merchant minted and the processor never issued. Both of the values that go out
+// are the ones the agent obtained for that hop — see
+// purchase.ProcessorPaymentChain and purchase.ProcessorNonce.
 func (s *Service) initiate(
 	ctx context.Context, mode presentation, req purchase,
 ) (string, bool, error) {
@@ -819,7 +873,8 @@ func (s *Service) initiate(
 	case humanPresent:
 		return s.Processor.InitiatePayment(ctx, req.Payment, req.Credential)
 	case humanNotPresent:
-		return s.Processor.InitiatePaymentChain(ctx, req.ProcessorPaymentChain, req.Credential)
+		return s.Processor.InitiatePaymentChain(
+			ctx, req.ProcessorPaymentChain, req.ProcessorNonce, req.Credential)
 	case noPresentation:
 		fallthrough
 	default:

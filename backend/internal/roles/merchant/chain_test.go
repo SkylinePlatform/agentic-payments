@@ -54,6 +54,18 @@ const chainMerchantID = demoMerchantID
 // makes forwarding the merchant's own copy a detectable mistake.
 const chainProcessorID = "mock-payment-processor"
 
+// processorNonce stands in for the challenge the agent fetched from the
+// processor's own GET /nonce.
+//
+// A literal rather than a value from a Challenger, and that is the property
+// under test rather than a shortcut: there is no processor in this fixture and
+// the merchant is not the audience of this value, so nothing here can or should
+// establish anything about it. What matters is only that it is visibly *not* the
+// merchant's own nonce — which is what lets a test see the difference between a
+// merchant forwarding what the agent gave it and one substituting a challenge of
+// its own.
+const processorNonce = "processor-issued-challenge"
+
 // chainShop is a merchant that accepts delegated purchases, together with the
 // three keys one purchase needs.
 //
@@ -346,7 +358,13 @@ func (s chainShop) chainsWith(
 	}
 
 	toMerchant := s.payChain(t, constraints, payment, about.paymentFor, chainMerchantID, n.signed)
-	toProcessor := s.payChain(t, constraints, payment, about.paymentFor, chainProcessorID, n.signed)
+	// Bound to the processor's challenge, not this merchant's. That is what
+	// makes the pair the merchant forwards checkable: a merchant that sent its
+	// own nonce along with this chain would be presenting the processor two
+	// values that do not go together, and the processor would refuse a purchase
+	// the merchant had already signed an acceptance for.
+	toProcessor := s.payChain(t, constraints, payment, about.paymentFor,
+		chainProcessorID, processorNonce)
 
 	scope, err := sdjwt.SHA256.Digest(about.checkout)
 	require.NoError(t, err, "scoping the credential to this checkout")
@@ -355,6 +373,7 @@ func (s chainShop) chainsWith(
 		"mandate_chain":           checkoutChain.String(),
 		"payment_chain":           toMerchant.String(),
 		"processor_payment_chain": toProcessor.String(),
+		"processor_nonce":         processorNonce,
 		"nonce":                   n.presented,
 		"checkout":                about.checkout,
 		"credential": generated.PaymentCredential{
@@ -411,8 +430,32 @@ func (s chainShop) initiations(method string) int {
 // settlingChain is the expectation for a processor that is allowed to be asked
 // to settle a delegated purchase. Permissive, for the reason settling is.
 func settlingChain(p *merchant.MockProcessor) {
-	p.EXPECT().InitiatePaymentChain(mock.Anything, mock.Anything, mock.Anything).
+	p.EXPECT().InitiatePaymentChain(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return("", true, nil)
+}
+
+// forwarded reads back what the merchant actually presented to its processor on
+// the delegated leg: the chain and the nonce, in that order.
+//
+// Read from the test goroutine after the request has returned, which is safe —
+// the handler is done with the recorder — and asserted there rather than pinned
+// as an argument matcher, because testify fails a matcher from whichever
+// goroutine tripped it and this one is tripped inside an HTTP handler.
+func (s chainShop) forwarded(t *testing.T) (string, string) {
+	t.Helper()
+
+	for _, c := range s.processor.Calls {
+		if c.Method != "InitiatePaymentChain" {
+			continue
+		}
+		chain, ok := c.Arguments[1].(string)
+		require.True(t, ok, "the chain argument has to be a string")
+		nonce, ok := c.Arguments[2].(string)
+		require.True(t, ok, "the nonce argument has to be a string")
+		return chain, nonce
+	}
+	require.FailNow(t, "the merchant never presented anything to its processor")
+	return "", ""
 }
 
 // flightConstraints is the built scenario's mandate: BEG→PMI, at most $200, this
@@ -475,6 +518,23 @@ func TestAChainWithinItsConstraintsBuysTheOfferItNames(t *testing.T) {
 	assert.Equal(t, 0, s.initiations("InitiatePayment"),
 		"forwarding the chain addressed to this merchant would be refused by the processor "+
 			"on its audience, which is the one thing a per-verifier closed mandate exists to do")
+
+	// What actually went out, which is the half a call count cannot see. Both
+	// values belong to the processor's hop and neither is the merchant's, so a
+	// merchant that forwarded what it had just verified — or substituted the
+	// challenge it had just checked — would be presenting the processor a pair
+	// that cannot verify, on a purchase it had already signed an acceptance for.
+	sent, nonce := s.forwarded(t)
+	assert.Equal(t, body["processor_payment_chain"], sent,
+		"the chain addressed to the processor is the one the processor is sent")
+	assert.NotEqual(t, body["payment_chain"], sent,
+		"and it is not the one addressed to this merchant, which is a different document")
+	assert.Equal(t, processorNonce, nonce,
+		"a delegation is bound to a challenge the verifier that checks it issued, so the "+
+			"processor gets the processor's")
+	assert.NotEqual(t, body["nonce"], nonce,
+		"this merchant's own challenge is not one the processor ever issued, and sending it "+
+			"would be a proof of possession against a value nobody asked for")
 }
 
 // TestAChainOverThePriceTheUserApprovedIsRefusedWithAReceipt is beat 5, and it
@@ -1152,6 +1212,16 @@ func TestAMalformedDelegatedPurchaseIsRefusedBeforeAnythingIsParsed(t *testing.T
 			},
 			because: "a delegation names its audience, so the merchant's own copy cannot be " +
 				"forwarded and a purchase with nothing to forward cannot settle",
+		},
+		{
+			name: "a chain for the processor and no challenge it is bound to",
+			body: func(full map[string]any) map[string]any {
+				delete(full, "processor_nonce")
+				return full
+			},
+			because: "the merchant cannot supply a challenge the processor issued, so a purchase " +
+				"missing one is one it would verify and then fail to settle — having spent a " +
+				"nonce and signed an acceptance for money that never moves",
 		},
 		{
 			name: "a directly signed mandate beside a chain",

@@ -662,7 +662,7 @@ func (refusingProcessor) InitiatePayment(
 // so that a test reaching the wrong leg does not silently pass through the
 // right one.
 func (refusingProcessor) InitiatePaymentChain(
-	context.Context, string, generated.PaymentCredential,
+	context.Context, string, string, generated.PaymentCredential,
 ) (string, bool, error) {
 	return "", false, nil
 }
