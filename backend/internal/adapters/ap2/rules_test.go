@@ -363,7 +363,7 @@ func TestTheCredentialProviderRequiresANonceForADelegatedPayment(t *testing.T) {
 		Audience: fx.opts.Audience,
 	}
 
-	_, err := r.AuthorisePaymentChain(fx.chain, fx.subject, "") // nonce deliberately withheld
+	_, err := r.AuthorisePaymentChain(fx.chain, "") // nonce deliberately withheld
 	require.Error(t, err,
 		"a delegation is a key binding, and a key binding with no nonce is a proof that can be replayed against the same verifier tomorrow")
 	assert.ErrorIs(t, err, ap2.ErrMisconfigured)
@@ -379,7 +379,7 @@ func TestTheCredentialProviderAuthorisesADelegatedPayment(t *testing.T) {
 	fx := paymentChainFixture(t)
 	rules := credentialProviderChainRules(fx.opts)
 
-	got, err := rules.AuthorisePaymentChain(fx.chain, fx.subject, fx.opts.Nonce)
+	got, err := rules.AuthorisePaymentChain(fx.chain, fx.opts.Nonce)
 	require.NoError(t, err)
 	assert.True(t, got.Report.Satisfied())
 	assert.Equal(t, pinnedPayee, got.Closed.Payee.ID,

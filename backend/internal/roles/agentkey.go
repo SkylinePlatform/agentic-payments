@@ -52,11 +52,14 @@ import (
 // later at a verifier that can say nothing more useful than that the delegation
 // was signed by an unendorsed key.
 //
-// Nothing in this repository calls it yet, and that is worth saying rather than
-// leaving a reader to discover it. Its caller is the agent, which has no key to
-// publish until the slice that gives it one runs — #121. AgentKey below is the
-// other half and is wired into all three verifying roles today, so the two are
-// at different stages on purpose rather than by oversight.
+// No production code calls it yet, and that is worth saying rather than leaving
+// a reader to discover it. Its caller is the agent, which has no key to publish
+// until the slice that gives it one runs — #121. The Human Not Present tests in
+// this package do call it, and they are the closest thing to a demonstration
+// there is today: they endorse a key the test's agent then really signs a
+// delegation with, and AgentKey below reads it back out of cnf at the verifier.
+// That round trip is the whole contract between the two functions, and until
+// #121 it is the only place either end is exercised against the other.
 func PublicKey(ctx context.Context, keys authz.KeySetPublisher) (generated.PublicKey, error) {
 	var zero generated.PublicKey
 	if keys == nil {
@@ -110,9 +113,9 @@ func PublicKey(ctx context.Context, keys authz.KeySetPublisher) (generated.Publi
 // the key a closed mandate's delegating hop is checked against is the one the
 // user's own signature already covers. Its shape is fixed by the fields it is
 // written for — ap2.MerchantRules.AgentKey and
-// ap2.CredentialProviderRules.AgentKey, neither of which any role sets yet —
-// which is why it takes no context and cannot grow one. See the call to Resolve
-// below for why that costs nothing.
+// ap2.CredentialProviderRules.AgentKey, which cmd/merchant, cmd/credprovider
+// and cmd/mpp all set to this function — which is why it takes no context and
+// cannot grow one. See the call to Resolve below for why that costs nothing.
 //
 // cnf arrives as pkg/sdjwt hands it over: the JSON encoding of the whole
 // confirmation claim, {"jwk": {...}}, taken from the *processed* payload, so a

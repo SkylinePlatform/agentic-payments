@@ -284,17 +284,51 @@ holds.** AP2 has the Payment Mandate verified by the Credential Provider, the
 Network *and* the Merchant Payment Processor. `ForPayment` is one row, written
 for the first: the Payment Mandate and nothing else. An MPP sits merchant-side
 and may well hold the checkout, in which case that row withholds constraints it
-could have enforced — safe, and not right. It is a gap rather than a decision
-because nothing routes an MPP through a chain today; `MPPRules.VerifyCredential`
-answers a different question, about a credential rather than a mandate. A third
-row is what an MPP chain verifier would need.
+could have enforced — safe, and not right.
 
-**Nothing ties `evaluations` to the `constraint.Subject` a role actually
-builds.** A Credential Provider populating fewer facts than its row claims
+When this was written it was a gap nothing could reach: `MPPRules.VerifyCredential`
+answers a different question, about a credential rather than a mandate, and no
+MPP was routed through a chain. **#120 made it live.** `mpp.Service` gained a
+chain entry point and verifies through `CredentialProviderRules`, so a Merchant
+Payment Processor really is shown a Credential Provider's reach today. A third
+row and a third rule set is what closing it needs, and it is not a table entry
+somebody can simply add: what an MPP can state depends on what its deployment
+actually holds, which `internal/adapters/ap2` has no way to know from here.
+
+**The payment row is now tied to the `constraint.Subject` a verifier evaluates;
+the checkout row is not.** A verifier populating fewer facts than its row claims
 refuses in ignorance; one populating more has constraints withheld it could have
-enforced. `credentialProviderSubject` in the tests honours the row by hand and
-says so. Closing this would mean deriving the reach from the subject at
-verification time, which is a real design and not this one.
+enforced. When this was written, nothing checked either direction —
+`credentialProviderSubject` in the tests honoured the row by hand and said so.
+
+#120 closed it for the payment side by deleting the parameter that carried the
+problem. `ap2.PaymentSubject(closed, now)` is the `ForPayment` row as code, and
+`AuthorisePaymentChain` derives the subject with it after verification instead
+of taking one from its caller. The parameter had no correct filling in any case:
+a payment-side verifier's only source for the amount and the payee is the closed
+mandate *inside the chain*, which it cannot read until that chain has verified.
+
+**Collapsing the two statements into one function is what makes a check
+possible; reading the row is what makes it a check.**
+`TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState` lives in
+`disclose_internal_test.go`, package `ap2`, for exactly that reason: it indexes
+`evaluations[ForPayment].states` to decide what to expect of `PaymentSubject`,
+so editing either apart from the other fails. Review caught the first version
+doing something weaker — spelling the three names out a third time, which agrees
+with whichever of the other two was written last. Widening the row by one entry
+left the package green.
+
+The test also walks `constraint.FieldNames()`, and that guards a different
+thing: a `Field` added to core that neither reach list placed. Worth keeping
+the two apart, because only the first is the tie.
+
+`ForCheckout` has no counterpart and the asymmetry is the protocol's. A
+Merchant's subject is read off the catalogue and the checkout it issued —
+neither of which `internal/adapters/ap2` ever sees, since `checkoutJWT` arrives
+as an opaque string that is only hashed and nothing in `generated` models a cart
+— so there is nothing for an equivalent function to be a pure function of.
+`AuthoriseCheckoutChain` still takes a subject, its doc comment says why in
+place, and keeping that row in step is `internal/roles/merchant`'s obligation.
 
 ## What this deliberately does not build
 

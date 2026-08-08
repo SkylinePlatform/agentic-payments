@@ -3,6 +3,7 @@ package ap2
 import (
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
@@ -120,11 +121,18 @@ const (
 	// this row credits them with what a *Credential Provider* holds, which is
 	// the narrowest of the three. An MPP sits merchant-side and may well hold
 	// the checkout, in which case this row withholds constraints it could have
-	// enforced. That is the safe direction and it is not the right one; the
-	// spec records it as a gap rather than a decision, because nothing in this
-	// package routes an MPP through a chain today — MPPRules.VerifyCredential
-	// answers a different question entirely, about a credential rather than a
-	// mandate.
+	// enforced. That is the safe direction and it is not the right one.
+	//
+	// **It is now live rather than latent, and that is a change worth stating
+	// plainly.** This used to be a gap nothing could reach — the note here said
+	// so, on the grounds that MPPRules.VerifyCredential answers a different
+	// question entirely, about a credential rather than a mandate. #120 gave
+	// mpp.Service a chain entry point, and it verifies through
+	// CredentialProviderRules, so a Merchant Payment Processor really is being
+	// shown a Credential Provider's reach today. Closing it means a third row
+	// and a third rule set, which is more than that slice was: an MPP's reach
+	// depends on what its deployment actually holds, and this package cannot
+	// know that from here.
 	ForPayment Evaluation = "payment"
 )
 
@@ -142,12 +150,28 @@ type evaluation struct {
 	// is what fails on it. Derived lists agree with the registry by
 	// construction, including agreeing that a gap is not a gap.
 	//
-	// **Nothing ties this to the constraint.Subject a role actually builds.**
-	// It is this package's statement of what each verifier *can* hold, and a
+	// **The payment row has an executable form; the checkout row does not.**
+	// This is this package's statement of what each verifier *can* hold, and a
 	// role populating less refuses in ignorance while one populating more has
-	// constraints withheld that it could have enforced. Keeping the two in step
-	// is a caller's obligation today; internal/adapters/ap2's own
-	// credentialProviderSubject honours it by hand and says so.
+	// constraints withheld that it could have enforced. PaymentSubject is the
+	// ForPayment row written as code, and
+	// TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState reads
+	// this map to decide what to expect of it, field by field — so editing one
+	// without the other fails, in either direction, and no role has to be
+	// trusted to fill a subject correctly because AuthorisePaymentChain fills it
+	// for them.
+	//
+	// That the test *reads this map* rather than restating it is the whole of
+	// what makes it a check. It was written the other way first, with the three
+	// names spelled out a third time, and widening this row by one entry left
+	// the package green.
+	//
+	// ForCheckout has no counterpart, and the asymmetry is the protocol's rather
+	// than an omission here: a Merchant's subject is read off the checkout it
+	// issued, a document this package never sees, so there is nothing for a
+	// function like PaymentSubject to be a pure function of.
+	// AuthoriseCheckoutChain accordingly still takes a subject, and keeping that
+	// row in step is still its caller's obligation.
 	states map[string]bool
 
 	// attributes says whether this verifier can state item attributes —
@@ -204,6 +228,70 @@ var evaluations = map[Evaluation]evaluation{
 		},
 		attributes: false,
 	},
+}
+
+// PaymentSubject is the purchase as a payment-side verifier can state it, built
+// from the closed Payment Mandate that verifier has just verified and its own
+// clock.
+//
+// **It is the executable form of evaluations[ForPayment].states**, and that is
+// the whole of its job. That row credits a Credential Provider, a Network or a
+// Merchant Payment Processor with `amount`, `at` and `merchant.id` and nothing
+// else; this populates exactly those three and leaves every other field of
+// constraint.Subject zero, which is how constraint.Evaluate is told a fact was
+// not stated.
+//
+// Both directions of drift are failures, and neither announces itself:
+//
+//   - Populate *less*, and the missing fact is unstated — which evaluateLeaf
+//     treats as unsatisfied, correctly, so this verifier refuses every purchase
+//     under any mandate constraining it. That is a refusal made in ignorance
+//     rather than the user's limit being applied, delivered on every
+//     transaction.
+//   - Populate *more*, and Minimise has already withheld the constraints
+//     reading that fact — so a limit the user set is enforced by nobody here,
+//     while the extra field sits in the subject looking like diligence.
+//
+// The table has never been held to either of those until now. A test helper
+// honoured this row by hand and said in its own comment that nothing checked
+// it; the check is now
+// TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState, which
+// **reads evaluations[ForPayment].states** to decide what to expect of this
+// function — so the row and this body cannot be edited apart. It walks
+// constraint.FieldNames as well, but that guards a different thing: a fact
+// added to core that neither reach list placed.
+//
+// # Where each value comes from, and why there is no fourth
+//
+// The amount and the payee are read off the closed mandate, which is the only
+// document AP2 sends this role — and off the *verified* one, which is why this
+// is called from inside AuthorisePaymentChain rather than by a caller holding a
+// chain it has not checked yet. `at` comes from the clock, which every verifier
+// has, and is the instant the authority is being exercised rather than anything
+// the mandate carries; passing the same instant to authz.AuthorisePayment is
+// what stops a subject built at one moment being judged for expiry at another.
+//
+// merchant.category is absent because contracts/identity/merchant.json gives a
+// Merchant no category to read. quantity, item.id and item.category are absent
+// because a Payment Mandate carries an amount rather than a basket, and names
+// no item at all. Filling any of them would mean this role inventing a fact,
+// which is the "populate more" failure above with better intentions.
+//
+// **No production code outside this package calls it, and none should need
+// to**, which is worth saying because an exported function usually implies
+// otherwise. AuthorisePaymentChain is the only thing that needs a payment-side
+// subject and it builds one itself; a role that called this would be
+// duplicating that, against a closed mandate it had not verified. It is
+// exported so that the test holding it to the table can name it from ap2_test,
+// where the reach table's other test already lives, and so that a caller
+// deciding what to log or render can ask what its verifier will evaluate
+// rather than guessing.
+func PaymentSubject(closed generated.PaymentMandate, now time.Time) constraint.Subject {
+	return constraint.Subject{
+		Amount:   closed.PaymentAmount,
+		At:       now,
+		Merchant: constraint.Party{ID: closed.Payee.ID},
+	}
 }
 
 // audienceOf is the one open mandate type each verifier reads, keyed by the vct

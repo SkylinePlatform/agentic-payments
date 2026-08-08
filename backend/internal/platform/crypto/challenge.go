@@ -175,13 +175,15 @@ func (c *Challenger) Issue() (string, error) {
 // Check reports whether nonce is one this Challenger issued and is still
 // within its window.
 //
-// **Nothing in production calls this yet.** roles.Nonce reaches Issue and that
-// is the whole of the traffic; the caller for this half arrives with the chain
-// verification, which fills AuthoriseCheckoutChain's and AuthorisePaymentChain's
-// nonce parameter from a value it checked here first. Worth saying rather than
-// leaving a reader to infer urgency from tone: what this function refuses is
-// latent until then, which changes when a defect here matters and not whether
-// it is one.
+// Its callers are the chain entry points of the roles that verify one:
+// credprovider.examineChain and mpp.examineChain each check the nonce a request
+// carries here before handing the same string to
+// ap2.AuthorisePaymentChain. That order is the whole shape of the thing, and
+// those two comments set it out: this establishes that the value came from this
+// verifier and came recently, and the chain verification establishes that the
+// agent's signature covers it. Neither subsumes the other, and the two failures
+// are answered differently — Problem Details here, because nothing has been
+// examined, and a receipt there, because something has.
 //
 // The order is structure, then MAC, then window. The MAC before the window is
 // a classification decision rather than a safety one, and an earlier version of

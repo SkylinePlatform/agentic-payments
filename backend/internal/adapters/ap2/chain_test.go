@@ -755,13 +755,19 @@ func TestAnOpenMandateWhoseCnfNamesNoUsableKeyIsRefused(t *testing.T) {
 // paymentChainFx is TestAClosedMandateThatChangedAPinnedValueIsRefusedAsThat's
 // fixture: a Payment Mandate chain whose open mandate pins a payee, so that
 // repin can build a closed mandate that does not reproduce it.
+//
+// It carries no subject, where checkoutChainFx does. AuthorisePaymentChain
+// derives one from the closed mandate inside the chain, so the way to put a
+// different purchase in front of this verifier is to build a different closed
+// mandate — which is what buildClosedPaymentChain's amount parameter is for,
+// and is a more faithful scenario than the old one: an agent that wants to
+// spend more has to sign for more.
 type paymentChainFx struct {
 	t           *testing.T
 	f           fixture
 	agentSigner authz.Signer
 	root        *sdjwt.SDJWT
 	chain       *sdjwt.Chain
-	subject     constraint.Subject
 	opts        ap2.ChainOptions
 }
 
@@ -784,12 +790,21 @@ func paymentChainFixture(t *testing.T) *paymentChainFx {
 	root, err := ap2.IssueOpenPayment(t.Context(), f.signer, open, f.blinder)
 	require.NoError(t, err, "issuing the open Payment Mandate")
 
+	// Narrowed for the audience its own vct names, which is what
+	// ap2.DelegatePayment does for a caller and what an agent therefore always
+	// sends. Without it the two route pins reach a verifier that can state
+	// neither half of a route, and every test below would refuse for that
+	// rather than for the thing it is about — see
+	// TestANarrowedPresentationAuthorisesWhereTheFullOneCannot, which is where
+	// that refusal is the subject rather than the noise.
+	narrowed, err := ap2.Minimise(root)
+	require.NoError(t, err, "narrowing the root this package issued")
+
 	fx := &paymentChainFx{
 		t:           t,
 		f:           f,
 		agentSigner: agentSigner,
-		root:        root,
-		subject:     purchaseAt(18900),
+		root:        narrowed,
 		opts: ap2.ChainOptions{
 			Issuer:   f.verifier,
 			AgentKey: resolveTo(agentVerifier),
@@ -798,11 +813,13 @@ func paymentChainFixture(t *testing.T) *paymentChainFx {
 			Nonce:    chainNonce,
 		},
 	}
-	fx.chain = fx.buildClosedPaymentChain(t, pinnedPayee)
+	fx.chain = fx.buildClosedPaymentChain(t, pinnedPayee, 18900)
 	return fx
 }
 
-func (fx *paymentChainFx) buildClosedPaymentChain(t *testing.T, payeeID string) *sdjwt.Chain {
+func (fx *paymentChainFx) buildClosedPaymentChain(
+	t *testing.T, payeeID string, amountMinor int,
+) *sdjwt.Chain {
 	t.Helper()
 
 	// transaction_id is required by decodePayment (it is the wire name for
@@ -818,7 +835,7 @@ func (fx *paymentChainFx) buildClosedPaymentChain(t *testing.T, payeeID string) 
 		"vct":                ap2.VCTPaymentClosed,
 		"transaction_id":     hash,
 		"payee":              map[string]any{"id": payeeID, "name": "Some Merchant"},
-		"payment_amount":     map[string]any{"amount": 18900, "currency": "USD"},
+		"payment_amount":     map[string]any{"amount": amountMinor, "currency": "USD"},
 		"payment_instrument": map[string]any{"id": "card-tok-1", "type": "card"},
 	})
 	require.NoError(t, err, "blinding the closed Payment Mandate's content")
@@ -834,7 +851,16 @@ func (fx *paymentChainFx) buildClosedPaymentChain(t *testing.T, payeeID string) 
 // than the one the open mandate pinned.
 func (fx *paymentChainFx) repin(t *testing.T, payeeID string) {
 	t.Helper()
-	fx.chain = fx.buildClosedPaymentChain(t, payeeID)
+	fx.chain = fx.buildClosedPaymentChain(t, payeeID, 18900)
+}
+
+// reprice rebuilds fx.chain with a closed mandate signing for a different
+// amount, which is the only way to put a purchase outside the user's cap in
+// front of this verifier now that the subject comes off the mandate rather
+// than from the caller.
+func (fx *paymentChainFx) reprice(t *testing.T, amountMinor int) {
+	t.Helper()
+	fx.chain = fx.buildClosedPaymentChain(t, pinnedPayee, amountMinor)
 }
 
 // swapRootForAClosedMandate rebuilds fx.chain over a root whose vct claims a
@@ -864,7 +890,7 @@ func (fx *paymentChainFx) swapRootForAClosedMandate(t *testing.T) {
 		"cnf": map[string]any{"jwk": jwk},
 	})
 	fx.root = impostorRoot
-	fx.chain = fx.buildClosedPaymentChain(t, pinnedPayee)
+	fx.chain = fx.buildClosedPaymentChain(t, pinnedPayee, 18900)
 }
 
 // TestTheOpenHopMustBeAnOpenPaymentMandate is TestTheOpenHopMustBeAnOpenMandate's
@@ -879,7 +905,7 @@ func TestTheOpenHopMustBeAnOpenPaymentMandate(t *testing.T) {
 	fx := paymentChainFixture(t)
 	fx.swapRootForAClosedMandate(t)
 
-	_, err := ap2.AuthorisePaymentChain(fx.chain, fx.subject, fx.opts)
+	_, err := ap2.AuthorisePaymentChain(fx.chain, fx.opts)
 	require.Error(t, err,
 		"a closed mandate at the root would let an agent delegate an authority that was already spent, the payment side of TestTheOpenHopMustBeAnOpenMandate")
 	assert.ErrorIs(t, err, ap2.ErrWrongMandateType,
@@ -925,7 +951,7 @@ func TestTheDelegatedHopMustBeAClosedPaymentMandate(t *testing.T) {
 	}, payload, disclosures)
 	require.NoError(t, err, "delegating")
 
-	_, err = ap2.AuthorisePaymentChain(chain, purchaseAt(18900), ap2.ChainOptions{
+	_, err = ap2.AuthorisePaymentChain(chain, ap2.ChainOptions{
 		Issuer:   f.verifier,
 		AgentKey: resolveTo(agentVerifier),
 		Clock:    f.clock,
@@ -946,7 +972,7 @@ func TestAClosedMandateThatChangedAPinnedValueIsRefusedAsThat(t *testing.T) {
 	fx := paymentChainFixture(t)
 	fx.repin(t, "merchant_2") // the open mandate pinned merchant_1
 
-	_, err := ap2.AuthorisePaymentChain(fx.chain, fx.subject, fx.opts)
+	_, err := ap2.AuthorisePaymentChain(fx.chain, fx.opts)
 	require.Error(t, err, "a closed mandate paying a different merchant than the open mandate pinned must be refused outright")
 	assert.ErrorIs(t, err, authz.ErrPinnedFieldChanged,
 		"a rewritten instruction is a different failure from an exceeded limit, and a receipt naming the wrong one sends the reader looking in the wrong place")
@@ -961,7 +987,7 @@ func TestAPaymentChainWithinItsConstraintsIsAuthorised(t *testing.T) {
 
 	fx := paymentChainFixture(t)
 
-	got, err := ap2.AuthorisePaymentChain(fx.chain, fx.subject, fx.opts)
+	got, err := ap2.AuthorisePaymentChain(fx.chain, fx.opts)
 	require.NoError(t, err, "a faithful closed mandate reproducing the pinned payee must authorise outright, not merely fail to error")
 	assert.True(t, got.Report.Satisfied(),
 		"the Payment Mandate chain's mirror of TestAChainWithinItsConstraintsIsAuthorised: the Report itself has to record success, not just the absence of an error")
@@ -979,8 +1005,9 @@ func TestAPaymentChainOutsideItsConstraintsIsRefusedByTheVerifier(t *testing.T) 
 	t.Parallel()
 
 	fx := paymentChainFixture(t) // the open mandate still pins merchant_1; only the amount moves
+	fx.reprice(t, 21000)         // above the USD 20000 cap
 
-	got, err := ap2.AuthorisePaymentChain(fx.chain, purchaseAt(21000), fx.opts) // above the USD 20000 cap
+	got, err := ap2.AuthorisePaymentChain(fx.chain, fx.opts)
 	require.Error(t, err,
 		"a purchase outside the constraints the user approved must be refused, even though the pinned payee is unchanged and checkPinned has nothing to say")
 	assert.False(t, got.Report.Satisfied(),

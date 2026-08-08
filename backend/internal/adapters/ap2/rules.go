@@ -71,16 +71,30 @@ type CredentialVerifier interface {
 // only be verified through a code path that knows it is one; there is no
 // single entry point a caller could hand a chain to by mistake and have it
 // silently evaluate no constraints.
+//
+// It takes a constraint.Subject where PaymentChainVerifier below does not, and
+// the asymmetry is deliberate: a Merchant builds its subject from the catalogue
+// and the checkout it issued, neither of which this package ever sees, while a
+// payment-side verifier reads its own out of the chain after verifying it.
+// AuthoriseCheckoutChain's doc comment argues it in full.
 type CheckoutChainVerifier interface {
 	AuthoriseCheckoutChain(c *sdjwt.Chain, subject constraint.Subject, checkoutJWT string, nonce string) (CheckoutAuthorisation, error)
 }
 
 // PaymentChainVerifier is CheckoutChainVerifier's counterpart for the
-// Credential Provider and the Network: authorising a closed Payment Mandate
-// against the open one that endorsed it. See CheckoutChainVerifier for why
-// this is a distinct interface rather than a parameter on PaymentVerifier.
+// Credential Provider, the Network and the Merchant Payment Processor:
+// authorising a closed Payment Mandate against the open one that endorsed it.
+// See CheckoutChainVerifier for why this is a distinct interface rather than a
+// parameter on PaymentVerifier.
+//
+// It takes no constraint.Subject where CheckoutChainVerifier does, and the
+// asymmetry is the point rather than an oversight: a payment-side verifier's
+// only source for the amount and the payee is the closed mandate inside the
+// chain, so the subject is derived from it after verification instead of being
+// supplied by a role that would have to guess at it. See
+// AuthorisePaymentChain and PaymentSubject.
 type PaymentChainVerifier interface {
-	AuthorisePaymentChain(c *sdjwt.Chain, subject constraint.Subject, nonce string) (PaymentAuthorisation, error)
+	AuthorisePaymentChain(c *sdjwt.Chain, nonce string) (PaymentAuthorisation, error)
 }
 
 // CheckoutVerifierAsOf and PaymentVerifierAsOf are the same two questions asked
@@ -446,9 +460,14 @@ func (r CredentialProviderRules) VerifyPaymentAsOf(
 // sdjwt.ErrInvalidOptions rather than this package's own ErrMisconfigured. A
 // nil AgentKey needs no matching guard here — the package-level
 // AuthorisePaymentChain already refuses that under ap2.ErrMisconfigured.
+//
+// There is no subject parameter, where MerchantRules.AuthoriseCheckoutChain
+// has one. That is what makes this method callable by a role at all: a
+// Credential Provider holds the Payment Mandate and nothing else, so it has no
+// honest way to describe the purchase before the chain carrying it has
+// verified. AuthorisePaymentChain derives the subject once it has.
 func (r CredentialProviderRules) AuthorisePaymentChain(
 	c *sdjwt.Chain,
-	subject constraint.Subject,
 	nonce string,
 ) (PaymentAuthorisation, error) {
 	var zero PaymentAuthorisation
@@ -458,7 +477,7 @@ func (r CredentialProviderRules) AuthorisePaymentChain(
 			ErrMisconfigured)
 	}
 
-	return AuthorisePaymentChain(c, subject, ChainOptions{
+	return AuthorisePaymentChain(c, ChainOptions{
 		Issuer:             r.Issuer,
 		AgentKey:           r.AgentKey,
 		Clock:              r.Clock,
