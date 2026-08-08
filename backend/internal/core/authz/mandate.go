@@ -102,6 +102,16 @@ func CodeOf(err error) generated.ErrorCode {
 	// to mandate_malformed, which would answer a caller's bookkeeping mistake by
 	// telling a counterparty their mandate is bad. An empty code is not in the
 	// enum, so nothing renders it as a rejection.
+	//
+	// internal/adapters/ap2.CodeOf holds the opposite rule — "a non-nil error
+	// never yields the empty string" — and both are right about their own error
+	// populations rather than one contradicting the other. Everything reaching
+	// that function is a verifier's verdict on a counterparty's artefact, where
+	// an unnameable code is a hole that becomes a 500 naming nothing, so
+	// verifier_unavailable is the true answer. These two are the agent refusing
+	// itself, never travel to a counterparty, and have no verdict to name; there
+	// the empty code *is* the true answer, and borrowing a real one would invent
+	// a finding against somebody.
 	case errors.Is(err, ErrNoPresentationOutstanding), errors.Is(err, ErrUnknownTransition):
 		return ""
 	case errors.Is(err, ErrMalformedMandate):

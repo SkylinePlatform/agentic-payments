@@ -45,9 +45,8 @@ import (
 //
 // # What it does not track
 //
-// Whether the mandate is still live. StateReady says nothing has been presented
-// that is awaiting an answer; it does not say the open mandate's own window is
-// open. That is a separate axis, and it is Endorsement.CanAuthorise's — checked
+// Whether the mandate is still live. StateReady says no attempt is awaiting an
+// answer; it does not say the open mandate's own window is open. That is a separate axis, and it is Endorsement.CanAuthorise's — checked
 // by the verifier, against the instant it was given. Answering it here as well
 // would be a second copy of the same boundary rules, and the two would drift.
 //
@@ -85,13 +84,21 @@ import (
 // So an attempt is outstanding from the moment the agent begins presenting it
 // until some verifier in it answers. It is rejected if any of them refuses —
 // the rejection receipt that licenses the retry is that verifier's — and
-// accepted when the purchase goes through. Which verifiers an attempt touches
-// is the caller's business; this machine counts attempts.
+// accepted when the purchase goes through.
+//
+// **Nothing here makes that true, and the distinction is the same one AGENTS.md
+// draws for interpret.Validate: an obligation, not an enforcement.** This type
+// sees no verifiers, no hops and no purchases. It counts calls to Next, and
+// whether one call corresponds to one attempt is entirely the caller's doing —
+// #15's, when it wires Fund and Settle. An agent that steps the machine once
+// per verifier gets the bug described above and gets it silently, because from
+// in here the two are the same three calls. What closes that is the caller's
+// own test, not a guard this package can write.
 //
 // # Single use
 //
 // A successful receipt ends the mandate: StateSpent is terminal, and no further
-// presentation is permitted from it.
+// attempt is permitted from it.
 //
 // That is this repository's reading of AP2's own answer, which is scope
 // reduction — "the agent reduces the scope of the open mandate based on the
@@ -116,22 +123,30 @@ import (
 //
 // # The zero value
 //
-// StateReady, which is the state a mandate nobody has presented is in. A caller
-// that stores these alongside mandates therefore gets the right answer for a
-// mandate it has no record of, rather than having to remember to initialise
-// one.
+// StateReady, which is the state a mandate nobody has attempted a purchase with
+// is in. A caller that stores these alongside mandates therefore gets the right
+// answer for a mandate it has no record of, rather than having to remember to
+// initialise one.
+//
+// # A note on two words
+//
+// An **attempt** is what this machine counts: one purchase, however many
+// verifiers it takes. A **presentation** is one of those hops — the mandate
+// going to one verifier. The two are deliberately not synonyms anywhere in this
+// file, because treating them as one is exactly the mistake the section above
+// exists to prevent.
 type MandateState int
 
 const (
-	// StateReady means no presentation of this mandate is awaiting an answer,
-	// so presenting it is permitted.
+	// StateReady means no attempt on this mandate is awaiting an answer, so
+	// beginning one is permitted.
 	//
-	// It does not distinguish a mandate that has never been presented from one
-	// whose last presentation was rejected, because the rule does not: what
-	// makes a presentation permissible is that nothing is outstanding. The
-	// built scenario in docs/business/use-cases.md passes through here twice:
-	// once before the candidate at $210, and once after the merchant rejects
-	// it, which is what lets the agent present against $189.
+	// It does not distinguish a mandate that has never been attempted from one
+	// whose last attempt was rejected, because the rule does not: what makes an
+	// attempt permissible is that nothing is outstanding. The built scenario in
+	// docs/business/use-cases.md passes through here twice: once before the
+	// candidate at $210, and once after the merchant rejects it, which is what
+	// lets the agent attempt $189.
 	StateReady MandateState = iota
 
 	// StateAwaitingReceipt means an attempt on this mandate is outstanding and
@@ -149,9 +164,9 @@ const (
 	//
 	// No timeout, no reset, no abandon event. The rule names a rejection receipt
 	// as the thing that licenses the next attempt, so an escape hatch would be
-	// its own bypass: "no answer came, so I may present again" is precisely the
-	// move that lets one authorisation reach two checkouts, and a machine
-	// offering it would enforce nothing an impatient agent could not opt out of.
+	// its own bypass: "no answer came, so I may try again" is precisely the move
+	// that lets one authorisation reach two checkouts, and a machine offering it
+	// would enforce nothing an impatient agent could not opt out of.
 	//
 	// The cost is real and belongs next to the claim above. A dropped response
 	// or a verifier that never answers leaves the mandate here until its own
@@ -173,21 +188,23 @@ const (
 //
 // There are three, and only a rejection receipt is distinguished from a
 // successful one, because that is the whole of what the rule turns on. Reading
-// a receipt — checking its signature, that it answers this presentation, and
-// what it says — belongs to the adapter that parsed it; core is handed the
-// verdict, never the token.
+// a receipt — checking its signature, that it answers the presentation it
+// claims to, and what it says — belongs to the adapter that parsed it; core is
+// handed the verdict, never the token.
 type MandateEvent int
 
 const (
-	// EventPresented is the agent beginning one purchase attempt on this
+	// EventAttempted is the agent beginning one purchase attempt on this
 	// mandate.
 	//
-	// One attempt, however many verifiers it takes — see MandateState's "An
-	// attempt, not a hop". Presenting the same mandate again to the next
-	// verifier in the same attempt is not another EventPresented, and neither
-	// is re-delivering a presentation whose response was lost, which is the
-	// same attempt still outstanding.
-	EventPresented MandateEvent = iota
+	// **Attempted rather than presented, and the name is doing work.** One
+	// attempt covers however many verifiers the purchase takes — see
+	// MandateState's "An attempt, not a hop" — so presenting the same mandate
+	// to the next verifier is not a second event, and neither is re-delivering
+	// a presentation whose response was lost. A name built on "presented" reads
+	// as one-per-presentation at exactly the call sites where that is wrong,
+	// and a doc comment denying what a name suggests loses to the name.
+	EventAttempted MandateEvent = iota
 
 	// EventRejected is the outstanding attempt being refused: some verifier in
 	// it answered with a receipt whose result is error. It is what licenses the
@@ -206,26 +223,31 @@ const (
 // separate sentinels because a caller does different things with them, which is
 // argued at each one.
 var (
-	// ErrOpenMandateOutstanding is the rule: a presentation was attempted while
-	// the previous presentation of this same mandate is still unanswered.
-	ErrOpenMandateOutstanding = errors.New("authz: the previous presentation of this open mandate is unanswered")
+	// ErrOpenMandateOutstanding is the rule: an attempt was begun while the
+	// previous attempt on this same mandate is still unanswered.
+	ErrOpenMandateOutstanding = errors.New("authz: the previous attempt on this open mandate is unanswered")
 
 	// ErrMandateSpent is the same rule reached from the other end. The previous
-	// presentation was answered, and answered with an acceptance; only a
-	// rejection receipt licenses another presentation, so this mandate is
-	// finished.
+	// attempt was answered, and answered with an acceptance; only a rejection
+	// receipt licenses another attempt, so this mandate is finished.
 	//
 	// It is a separate sentinel from ErrOpenMandateOutstanding — though CodeOf
 	// gives the two one code, because they are one rule — because a caller acts
 	// on them differently. A mandate awaiting a receipt is worth waiting for
-	// and a spent one never becomes presentable again, so a retry loop that
+	// and a spent one never becomes attemptable again, so a retry loop that
 	// could not tell them apart would wait for a receipt that is not coming.
 	ErrMandateSpent = errors.New("authz: this open mandate has already been spent")
 
-	// ErrNoPresentationOutstanding means a receipt was applied to a mandate
-	// with no presentation for it to answer.
+	// ErrNoPresentationOutstanding means a receipt was applied to a mandate with
+	// nothing for it to answer.
 	//
-	// The machine holds no identity for a presentation, so it cannot tell one
+	// The name keeps "presentation" because that is what a receipt answers —
+	// receipts are issued per presentation, and this error is not an event, so
+	// nothing about it invites the per-hop reading EventAttempted's name is
+	// built to shut down. What is missing when it fires is the attempt those
+	// presentations would have belonged to.
+	//
+	// The machine holds no identity for an attempt, so it cannot tell one
 	// receipt delivered twice from a receipt for something that never happened;
 	// both arrive here. Deduplicating deliveries belongs to whoever receives
 	// them, and refusing is safe for that caller either way, because a refused
@@ -285,35 +307,35 @@ type outcome struct {
 // refusal varies — the state and the event are the whole of what happened — so
 // there is nothing to interpolate.
 var transitions = map[transition]outcome{
-	// Nothing is outstanding, so presenting is the one thing the rule permits.
-	// Neither receipt can apply: there is no presentation for one to answer.
-	{StateReady, EventPresented}: {next: StateAwaitingReceipt},
+	// Nothing is outstanding, so beginning an attempt is the one thing the rule
+	// permits. Neither receipt can apply: there is no attempt for one to answer.
+	{StateReady, EventAttempted}: {next: StateAwaitingReceipt},
 	{StateReady, EventRejected}: {err: fmt.Errorf(
-		"%w: this mandate is ready to present, so nothing has been presented for a rejection to answer",
+		"%w: this mandate has no attempt outstanding, so nothing is here for a rejection to answer",
 		ErrNoPresentationOutstanding)},
 	{StateReady, EventAccepted}: {err: fmt.Errorf(
-		"%w: this mandate is ready to present, so nothing has been presented for an acceptance to answer",
+		"%w: this mandate has no attempt outstanding, so nothing is here for an acceptance to answer",
 		ErrNoPresentationOutstanding)},
 
 	// The rule, and the two events that resolve it. A rejection returns the
 	// mandate to StateReady — that is the retry the specification's sentence
 	// exists to sequence, not a failure — and an acceptance spends it.
-	{StateAwaitingReceipt, EventPresented}: {err: fmt.Errorf(
-		"%w: a rejection receipt for it has to arrive before this mandate may be presented again",
+	{StateAwaitingReceipt, EventAttempted}: {err: fmt.Errorf(
+		"%w: a rejection receipt for it has to arrive before another attempt may begin",
 		ErrOpenMandateOutstanding)},
 	{StateAwaitingReceipt, EventRejected}: {next: StateReady},
 	{StateAwaitingReceipt, EventAccepted}: {next: StateSpent},
 
-	// Terminal. Presenting is refused by the rule, and a receipt has nothing
-	// outstanding to answer.
-	{StateSpent, EventPresented}: {err: fmt.Errorf(
-		"%w: its presentation was accepted, and only a rejection licenses another",
+	// Terminal. A further attempt is refused by the rule, and a receipt has
+	// nothing outstanding to answer.
+	{StateSpent, EventAttempted}: {err: fmt.Errorf(
+		"%w: its attempt was accepted, and only a rejection licenses another",
 		ErrMandateSpent)},
 	{StateSpent, EventRejected}: {err: fmt.Errorf(
-		"%w: this mandate is spent, so nothing has been presented for a rejection to answer",
+		"%w: this mandate is spent, so nothing is outstanding for a rejection to answer",
 		ErrNoPresentationOutstanding)},
 	{StateSpent, EventAccepted}: {err: fmt.Errorf(
-		"%w: this mandate is spent, so nothing has been presented for an acceptance to answer",
+		"%w: this mandate is spent, so nothing is outstanding for an acceptance to answer",
 		ErrNoPresentationOutstanding)},
 }
 
@@ -328,10 +350,10 @@ var transitions = map[transition]outcome{
 // This package keeps nothing per mandate; the caller does, and #15's tracker is
 // what will. The consequence is worth stating plainly rather than leaving to be
 // discovered: a caller that drops the returned state has not applied the
-// transition, and its next presentation will be permitted. That is the same
-// contract append has, and the reason for it is that the alternative — a
-// machine that owns the value — is a store, and the store belongs to whoever
-// knows how many mandates there are and how long they live.
+// transition, and its next attempt will be permitted. That is the same contract
+// append has, and the reason for it is that the alternative — a machine that
+// owns the value — is a store, and the store belongs to whoever knows how many
+// mandates there are and how long they live.
 //
 // # There is no idempotency key, and that is not an omission
 //
@@ -339,7 +361,8 @@ var transitions = map[transition]outcome{
 // This changes no state: it reads the table and returns a value, mutating
 // nothing that outlives the call, so there is no effect for a repeated call to
 // duplicate. The operation that does change state is presenting a mandate over
-// the wire, and that one takes its key where it is made.
+// the wire — one hop of an attempt — and that one takes its key where it is
+// made.
 func (s MandateState) Next(e MandateEvent) (MandateState, error) {
 	o, ok := transitions[transition{from: s, event: e}]
 	switch {
@@ -352,9 +375,13 @@ func (s MandateState) Next(e MandateEvent) (MandateState, error) {
 	}
 }
 
-// stateNames are what a consumer shows a person — see StateAwaitingReceipt for
-// why the middle one has to read as waiting — and what ErrUnknownTransition
-// names when it reports the pair it was handed.
+// stateNames are what ErrUnknownTransition names when it reports the pair it
+// was handed, and what a consumer will show a person — see StateAwaitingReceipt
+// for why the middle one has to read as waiting.
+//
+// Will, not does. Nothing outside this package names MandateState today and
+// neither contracts/ nor frontend/src contains "awaiting_receipt", so the only
+// caller these spellings currently have is the refusal message below.
 //
 // They are not conformance surface the way evidence.Step's spellings are.
 // Nothing serialises a mandate state: no artefact in this repository carries
@@ -373,7 +400,7 @@ func (s MandateState) String() string {
 }
 
 var eventNames = [...]string{
-	EventPresented: "presented",
+	EventAttempted: "attempted",
 	EventRejected:  "rejected",
 	EventAccepted:  "accepted",
 }

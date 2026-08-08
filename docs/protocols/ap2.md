@@ -348,14 +348,22 @@ receipt makes it *spent*, which is terminal. Both refusals carry
 `open_mandate_outstanding`.
 
 **The unit is a purchase attempt, not a verifier hop**, and that distinction is
-load-bearing rather than pedantic. A single attempt presents the same Payment
-Mandate to more than one verifier: the agent hands it to the Credential Provider
-to be funded, and hands it to the merchant again at settlement, which verifies
-it in its own right. A machine stepped once per verifier would call the mandate
-spent as soon as the Credential Provider funded the purchase and then refuse
-settlement — killing the purchase after the payment credential had been issued.
-An attempt is outstanding until some verifier in it answers, is rejected if any
-of them refuses, and is accepted when the purchase goes through.
+load-bearing rather than pedantic. A single attempt puts the same Payment
+Mandate in front of **three** verifiers: the Credential Provider, which funds it;
+the merchant, which verifies it in its own right at settlement; and the Merchant
+Payment Processor, which verifies it before deciding whether the credential is
+scoped to the purchase. A machine stepped once per verifier would call the
+mandate spent as soon as the Credential Provider answered, then refuse
+settlement — killing the purchase after the payment credential had been issued
+and before the merchant was ever asked. An attempt is outstanding until some
+verifier in it answers, is rejected if any of them refuses, and is accepted when
+the purchase goes through.
+
+Nothing calls the machine yet: the autonomous loop that will is issue #15's, and
+until it lands the rule binds by being the one place the sequence is written
+down. That also means the unit is an obligation on the caller rather than a
+property of the type — `MandateState` sees no verifiers and counts calls, so an
+agent stepping it per hop gets the bug above silently.
 
 Single use is this implementation's reading of AP2's own answer, which is scope
 reduction — "the agent reduces the scope of the open mandate based on the
@@ -377,7 +385,7 @@ verifier-side nonce store of issue #27. *Awaiting receipt* is the state a screen
 has to draw as waiting rather than as stalled, for as long as an answer can
 still arrive: the rule makes attempts sequential on purpose. There is no exit
 from it but a receipt — no timeout and no abandon, because "no answer came, so I
-may present again" is the rule's own bypass — so a dropped response leaves the
+may try again" is the rule's own bypass — so a dropped response leaves the
 mandate there until it expires, and the recourse is re-delivering the same
 presentation under the same idempotency key rather than starting a new attempt.
 
