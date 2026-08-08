@@ -347,8 +347,34 @@ type delegationVector struct {
 // TestGoldenOpenCheckoutMandateSerialisation gives — hmacAuthzKey stands in for
 // the ECDSA keys issuance uses, so both signatures are deterministic — and it
 // needs *two* of them here, because a delegation is signed by a different party
-// from the credential it delegates. The user's key signs the root; the agent's
-// signs the delegating hop, and the open mandate's cnf is what says it may.
+// from the credential it delegates: the user's key signs the root, the agent's
+// signs the delegating hop.
+//
+// # What this vector deliberately does not exercise: cnf
+//
+// The root's cnf names an EC P-256 key ("agent-1", agentJWK) and the delegating
+// hop is HS256 under kid "golden-delegation-agent". **Those are not the same
+// key, and this chain authorises below only because resolveTo returns the agent
+// verifier whatever cnf says.** A second implementation that resolved cnf to a
+// key — which is what AuthoriseCheckoutChain does in production, through
+// wrapAgentKey — would reproduce this string and then reject it as
+// ErrSignatureInvalid.
+//
+// So read this as a vector over the *encoding* and over sd_hash, and not over
+// the delegation's trust link. The link has its own tests, which is where a
+// second implementation should look instead:
+// TestADelegationSignedWithAKeyTheOpenMandateDidNotEndorseIsRefused for the
+// rejection and TestADelegationSignedWithTheEndorsedKeyIsAccepted for the
+// acceptance, both against a resolver that really reads cnf.
+//
+// It cannot be made faithful here, and both escapes are closed rather than
+// unexplored. A symmetric key cannot go in cnf at all — authz.UsableKey admits
+// EC, OKP and RSA and nothing else, so an oct JWK is refused by wrapAgentKey
+// before any signature is checked. And the one deterministic *asymmetric*
+// signature available, Ed25519, needs crypto/ed25519, which
+// key-material-containment forbids outside internal/platform/crypto. Pinning an
+// ECDSA chain is not an option either: that is the non-determinism this whole
+// file works around.
 //
 // What a second implementation has to reproduce to land on this string is more
 // than an encoding: the delegating hop's sd_hash covers the root *as presented*,
