@@ -352,9 +352,12 @@ type delegationVector struct {
 //
 // What a second implementation has to reproduce to land on this string is more
 // than an encoding: the delegating hop's sd_hash covers the root *as presented*,
-// so an implementation that narrowed the root differently — or narrowed it after
-// signing — produces a different string here and a chain no verifier accepts.
-// That is the one fact this vector holds which neither mandate's own vector can.
+// so the string commits to which of the root's disclosures travelled. This
+// presentation withholds none of the four — a Merchant can state every fact the
+// constraint registry holds, which the assertion at the end of this test pins —
+// so an implementation that narrowed it at all, or that narrowed it after
+// signing, lands on a different sd_hash and a chain no verifier accepts. That is
+// the one fact this vector holds which neither mandate's own vector can.
 //
 // The audience and nonce are in the file rather than only in this test because
 // they are part of what the string commits to: a chain minted for one verifier

@@ -180,8 +180,11 @@ func TestADelegatedCheckoutMandateAuthorisesUnderItsOpenMandate(t *testing.T) {
 		"a chain this package minted has to be one this package's own verifier authorises; anything else means its issuing and verifying halves disagree about AP2")
 	assert.True(t, got.Report.Satisfied(),
 		"beat 8 of the built scenario: the third price is the one that goes through, and the Report has to say so rather than merely not erroring")
+
+	require.NotNil(t, got.Closed.Checkout,
+		"checkout_jwt is withholdable and this presentation withholds nothing, so a nil here is the delegation having dropped the document rather than a verifier having declined to be shown it")
 	assert.Equal(t, merchantCheckout, *got.Closed.Checkout,
-		"the delegated hop has to carry the merchant's own document, since a verifier holding none of its own has nothing else to recompute the binding against")
+		"the delegated hop has to carry the merchant's own document, since a verifier holding no copy of its own has nothing else to recompute the binding against")
 }
 
 // TestADelegationRecomputesTheBindingRatherThanCarryingTheAgentsOwn is the

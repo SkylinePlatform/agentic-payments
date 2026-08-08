@@ -176,7 +176,7 @@ func delegable(signer authz.Signer, open *sdjwt.SDJWT, blinder *sdjwt.Blinder) e
 // is the Holder looking at its own credential, and a root whose vct was tampered
 // with is refused again by the verifier, which reads the verified claims.
 //
-// The order of the last two statements is the whole point of this file. sd_hash
+// The order of the last two steps is the whole point of this file. sd_hash
 // covers the root as presented, so Minimise runs before Delegate; do it the
 // other way round and the delegation no longer covers the root it names.
 // TestNarrowingAfterDelegatingBreaksTheChain builds that other way round by hand
