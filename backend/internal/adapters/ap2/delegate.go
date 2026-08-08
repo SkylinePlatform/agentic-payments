@@ -168,8 +168,12 @@ func delegable(signer authz.Signer, open *sdjwt.SDJWT, blinder *sdjwt.Blinder) e
 // DelegateCheckout would be narrowed for a Credential Provider's reach — the
 // route pins dropped — and the chain would then be refused by
 // AuthoriseCheckoutChain's own requireVCT for what reads as an unrelated reason.
-// Refusing it where the chain is minted names the actual mistake, and no chain
-// that could not have verified is ever built.
+// Refusing it where the chain is minted names the actual mistake instead.
+//
+// It is the one mistake catchable here and not the only one there is: a
+// delegation signed with a key the root's cnf does not endorse is minted just as
+// happily, because nothing at issuance can tell an endorsed Signer from an
+// unendorsed one. See DelegateCheckout.
 //
 // The vct is read from the Issuer-signed payload without checking the signature,
 // which is sound here for the reason Minimise gives for the identical read: this
