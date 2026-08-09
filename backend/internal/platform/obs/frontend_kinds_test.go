@@ -39,6 +39,16 @@ const (
 // call addEventListener once per kind, from a list it holds itself; there is
 // nothing for a generator to generate that would not still be a list. What
 // makes a hand-written list safe is this test, not its authorship.
+//
+// # Go's test cache does not track the file this reads
+//
+// Measured rather than assumed: delete a kind from events.ts alone and a second
+// `go test ./internal/platform/obs/` still answers `(cached)`. That is the
+// direction this test is not for. Adding a kind edits this package, which does
+// invalidate the cache and does rerun this; and a kind going missing from the
+// frontend list is caught by the literal in frontend/src/sse/events.test.ts, on
+// the side where the edit happened. Both halves are needed and neither is the
+// other's backup.
 func TestTheFrontendKnowsEveryKind(t *testing.T) {
 	source, err := os.ReadFile(frontendKinds)
 	require.NoError(t, err, "the frontend's kind list has moved; this test is the only thing "+

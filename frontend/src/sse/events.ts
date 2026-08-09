@@ -9,8 +9,8 @@
  * share. `src/protocol` is the barrel for the canonical types; an event is not
  * one of them, so it does not go there.
  *
- * The cost of a hand-written copy is drift, and `events.test.ts` is what pays
- * it: the kind list below is checked against the Go constants themselves.
+ * The cost of a hand-written copy is drift. What pays it is a test on the other
+ * side of the wire — see {@link EVENT_KINDS}.
  */
 
 /**
@@ -24,9 +24,10 @@
  * never called for, and its frames are delivered to nobody at all.
  *
  * The authority is `Kinds()` in `backend/internal/platform/obs/event.go`, which
- * closes the set on the Go side for the same reason. `events.test.ts` reads
- * that file and fails when the two disagree, so a sixth kind added to the
- * backend fails the frontend suite rather than quietly vanishing from the view.
+ * closes the set on the Go side for the same reason.
+ * `TestTheFrontendKnowsEveryKind`, beside it, reads this file and fails when the
+ * two disagree. It is on that side deliberately: the failure belongs to whoever
+ * adds a kind, and what they run is `make check`.
  *
  * There is a second, weaker backstop at runtime: the collector's `id:` line
  * still counts an event nothing here listens for, so the next frame that *is*

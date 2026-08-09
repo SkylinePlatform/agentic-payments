@@ -358,19 +358,25 @@ const MAY_NAME_THE_EVENT_SOURCE: readonly string[] = ["./sse/stream.ts"];
  *
  * The rule below is about code and not prose: a comment elsewhere explaining
  * why this seam exists is worth having, and flagging it would push the
- * explanation out of the tree. Same hand-scan as `stringLiterals` above, and
- * the same single blind spot — a regex literal containing a quote desyncs it,
- * and no file in APP_SOURCES contains a regex literal at all.
+ * explanation out of the tree.
+ *
+ * String literals are copied through rather than skipped — they are code, and a
+ * URL is the reason this has to know about them at all. Without that branch the
+ * `//` in `"http://…"` starts a line comment, and everything after it on that
+ * line stops being scanned. Same hand-scan as `stringLiterals` above and the
+ * same single blind spot: a regex literal containing a quote desyncs it, and no
+ * file in APP_SOURCES contains a regex literal at all.
  */
 function codeOf(source: string): string {
   let out = "";
   let i = 0;
   while (i < source.length) {
-    if (source[i] === "/" && source[i + 1] === "/") {
+    const c = source[i];
+    if (c === "/" && source[i + 1] === "/") {
       while (i < source.length && source[i] !== "\n") i++;
       continue;
     }
-    if (source[i] === "/" && source[i + 1] === "*") {
+    if (c === "/" && source[i + 1] === "*") {
       const start = i;
       i += 2;
       while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++;
@@ -378,7 +384,17 @@ function codeOf(source: string): string {
       out += source.slice(start, i).replace(/[^\n]/g, " ");
       continue;
     }
-    out += source[i];
+    if (c === '"' || c === "'" || c === "`") {
+      const start = i;
+      i++;
+      while (i < source.length && source[i] !== c) {
+        i += source[i] === "\\" ? 2 : 1;
+      }
+      i++;
+      out += source.slice(start, i);
+      continue;
+    }
+    out += c;
     i++;
   }
   return out;
@@ -664,6 +680,10 @@ describe("the frontend's architecture", () => {
         "prose is not a violation, which is why the scan runs over code alone",
       ).toEqual([]);
       expect(namesTheEventSource(`// EventSource is missing from jsdom\nconst x = 1;`)).toEqual([]);
+      expect(
+        namesTheEventSource(`const u = "http://x"; const s = new EventSource(u);`),
+        "the // inside a URL must not take the rest of the line out of the scan",
+      ).toHaveLength(1);
     });
   });
 });

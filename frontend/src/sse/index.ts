@@ -11,10 +11,11 @@
  * wiring it into an effect is #20's job, and `stream.ts`'s own comment gives
  * the cleanup that makes `StrictMode` behave.
  *
- * `EventSourceLike` is the one export deliberately missing from this barrel.
- * The app never names it — passing nothing gets the browser's — and
- * `src/architecture.test.ts` allows the identifier in `./stream.ts` alone, so a
- * test injecting a fake imports it from there.
+ * The two names that carry the seam — the source interface and its factory —
+ * are deliberately missing from this barrel. The app never writes either of
+ * them down, because passing nothing gets the browser's, and
+ * `src/architecture.test.ts` allows that identifier in `./stream.ts` alone; a
+ * test injecting a fake imports them from there.
  */
 
 export { EVENT_KINDS, isEventKind, parseRecord } from "./events";

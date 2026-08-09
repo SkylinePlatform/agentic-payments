@@ -64,10 +64,13 @@ const READY_STATE_CLOSED = 2;
 /**
  * The slice of the browser's `EventSource` this client uses.
  *
- * Four members, and each is load-bearing. `addEventListener` is the whole
+ * Three members, and each is load-bearing. `addEventListener` is the whole
  * shape of the client — see {@link connect}. `close` is what cleanup calls.
  * `readyState` is the only way to tell a drop the browser will retry from one
  * it has abandoned, since both arrive as the same `error` event.
+ *
+ * There is no `onmessage`, and its absence is the point: a client that could
+ * reach for it would eventually be given one, and a named event never fires it.
  */
 export interface EventSourceLike {
   addEventListener(type: string, listener: (frame: MessageEvent<string>) => void): void;

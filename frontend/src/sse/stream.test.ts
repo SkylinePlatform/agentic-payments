@@ -36,10 +36,14 @@ const KINDS = [
  *
  * Hand-written rather than a recorder, and AGENTS.md draws that line: a double
  * whose job is to record a call belongs in a generator, and one that *computes*
- * something does not. This one serialises a record the way
- * `collector.writeRecord` does and dispatches a real `MessageEvent`, so a
- * client that read the wrong field or the wrong frame fails here rather than
- * agreeing with a fixture.
+ * something does not. This one marshals the payload the way
+ * `collector.writeRecord` marshals it and delivers it as the named
+ * `MessageEvent` a browser would build from the frame, so a client that read the
+ * wrong field fails here rather than agreeing with a fixture.
+ *
+ * It does record one thing — every type the client subscribed to — because that
+ * is the assertion the whole file turns on and there is nowhere else to read it
+ * from.
  */
 class FakeSource implements EventSourceLike {
   readyState = CONNECTING;
