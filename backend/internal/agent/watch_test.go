@@ -2,9 +2,11 @@ package agent_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,6 +56,10 @@ type authorisedAgent struct {
 	tick     chan time.Time
 	quotes   chan struct{}
 	attempts chan struct{}
+
+	// breaks, when set, is the rule deciding which requests fail at the
+	// transport. Installed after authorise has run — see the client below.
+	breaks func(*http.Request) bool
 
 	// finished is closed when the watch has returned.
 	//
@@ -113,7 +119,14 @@ func authorise(t *testing.T, w *world) *authorisedAgent {
 	a.client = &agent.Client{
 		Endpoints: w.endpoints,
 		Events:    w.agentEvents,
-		HTTP:      &http.Client{Transport: pulse{quotes: a.quotes, attempts: a.attempts}},
+		HTTP: &http.Client{Transport: pulse{
+			quotes:   a.quotes,
+			attempts: a.attempts,
+			// Indirected through the field so a test can install a rule after
+			// the discovery half has run: breaking the wire before the user has
+			// signed would fail a different thing entirely.
+			fail: func(r *http.Request) bool { return a.breaks != nil && a.breaks(r) },
+		}},
 	}
 
 	auth, err := a.client.Authorise(t.Context(), agent.Intent{
@@ -176,9 +189,28 @@ func (a *authorisedAgent) watch(t *testing.T) *agent.Watch {
 type pulse struct {
 	quotes   chan<- struct{}
 	attempts chan<- struct{}
+
+	// fail, when set, decides whether a request never reaches its role.
+	//
+	// It is how the tests below produce the one outcome no counterparty can be
+	// asked to produce: a delivery that nobody answered. A role can be made to
+	// refuse — that is what the $210 candidate is for — but a refusal is an
+	// answer, and VerdictUnanswered is specifically the absence of one. The only
+	// honest way to get that is to break the wire.
+	fail func(*http.Request) bool
 }
 
 func (p pulse) RoundTrip(r *http.Request) (*http.Response, error) {
+	if p.fail != nil && p.fail(r) {
+		// Signalled as an ended attempt on the same terms a refusal is, so a
+		// barrier waiting for one does not wait for a request that will now
+		// never be made.
+		if r.Method == http.MethodPost {
+			p.attempts <- struct{}{}
+		}
+		return nil, fmt.Errorf("pulse: this test broke the wire to %s", r.URL.Path)
+	}
+
 	resp, err := http.DefaultTransport.RoundTrip(r)
 	if err != nil {
 		return resp, err
@@ -440,13 +472,19 @@ func TestTheWatchBuysWhenTheMerchantsPriceComesIntoRange(t *testing.T) {
 //
 // # It is the Credential Provider that refuses, not the merchant
 //
-// The built scenario's prose has the merchant refusing, and under Human Not
-// Present it cannot: the merchant is the party that initiates payment, so it
-// requires a credential, so the Credential Provider is asked first — and the
-// user's cap is a constraint on the amount, which is one of the three facts a
-// payment-side verifier can state. It refuses before the merchant is ever
-// reached. The property the beat is about is untouched: the party that refuses
-// is not the party that assembled the purchase.
+// The built scenario's prose has the merchant refusing, and for *this* refusal
+// it cannot get there first. The merchant is the party that initiates payment,
+// so it requires a credential, so the Credential Provider is asked first — and
+// the user's cap is a constraint on the amount, which is one of the three facts
+// a payment-side verifier can state. It refuses before the merchant is reached.
+//
+// The merchant is perfectly capable of refusing under Human Not Present, and
+// does so elsewhere in this file: an item.id violation, a mis-addressed chain, a
+// payment that does not match the offer. What it cannot do is beat the
+// Credential Provider to an *amount* constraint, because that is the one both of
+// them can read and the Credential Provider reads it first. The property the
+// beat is about is untouched either way: the party that refuses is not the party
+// that assembled the purchase.
 func TestTheRefusalAtTwoHundredAndTenIsAVerifiersOwnSignedAnswer(t *testing.T) {
 	t.Parallel()
 
@@ -610,25 +648,6 @@ func TestOneAttemptMintsFourChainsWithFourAudiences(t *testing.T) {
 	assert.NotEqual(t, d.MerchantNonce, d.ProcessorNonce)
 	assert.NotEqual(t, d.CredProviderNonce, d.ProcessorNonce)
 
-	t.Run("the Credential Provider refuses the merchant's copy", func(t *testing.T) {
-		// Entirely genuine: the user's limits, the agent's signature, a challenge
-		// this provider issued. The only thing wrong with it is the audience.
-		lifted := &agent.Delegated{
-			ID:                d.ID + "-lifted",
-			Offer:             d.Offer,
-			Price:             d.Price,
-			CredentialChain:   d.MerchantChain,
-			CredProviderNonce: d.CredProviderNonce,
-		}
-		err := watch.Fund(t.Context(), lifted)
-		require.ErrorIs(t, err, agent.ErrRefused)
-
-		receipt, err := ap2.VerifyReceipt(lifted.Receipt("credprovider"), w.provider.verifier)
-		require.NoError(t, err, "a chain has been examined, so the refusal is signed evidence")
-		require.NotNil(t, receipt.Error)
-		assert.Equal(t, generated.ErrorCodeKeyBindingInvalid, *receipt.Error,
-			"the agent's own signature covers aud, so a proof made for the merchant does not hold here")
-	})
 }
 
 // TestTheAgentValidatesWhatItsInterpreterReturned is AGENTS.md hard rule 4 held
@@ -843,6 +862,22 @@ func TestEveryScriptedPromptFindsOneCandidate(t *testing.T) {
 			agentKey, err := roles.PublicKey(t.Context(), key.keys)
 			require.NoError(t, err)
 
+			// Discover rather than Authorise, and that is the whole difference
+			// between this test and the one it replaced. Authorise takes the
+			// first candidate and discards the rest, so asserting on its Item
+			// says nothing about how many there were — add a second offer in
+			// category "ladders" and the first still wins and the old assertion
+			// still passed, while the sentence it was cited for became false.
+			constraints, err := interpret.Demo().Interpret(t.Context(), prompt)
+			require.NoError(t, err, "the scripted interpreter has to answer its own prompt")
+
+			found, err := w.client().Discover(t.Context(), constraints)
+			require.NoError(t, err, "every scripted prompt has to find something to watch")
+			assert.Equal(t, []string{want}, found,
+				"the prompt has to match exactly one offer: the agent takes the first and asks nobody, which is only defensible while there is only one")
+
+			// And the whole path still reaches a signature, because Discover on
+			// its own would not catch a narrowing or an authorisation that broke.
 			auth, err := w.client().Authorise(t.Context(), agent.Intent{
 				Prompt:      prompt,
 				Interpreter: interpret.Demo(),
@@ -853,4 +888,336 @@ func TestEveryScriptedPromptFindsOneCandidate(t *testing.T) {
 				"the prompt found the wrong thing to watch, so the demo would wait on a price nobody asked about")
 		})
 	}
+}
+
+// TestAChainAddressedToOneVerifierIsRefusedByAnother is what makes "one closed
+// mandate per verifier" a measured fact rather than a sentence in chain.go.
+//
+// Both directions, because they are not symmetric and the asymmetry is the
+// interesting part. Reusing the Credential Provider's copy everywhere gets past
+// the Credential Provider — it is that chain's audience — and is stopped by the
+// merchant; reusing the merchant's copy is stopped by the Credential Provider.
+// A comment asserting one of those would be describing the case it did not
+// check.
+//
+// Both refusals arrive as key_binding_invalid. The description names the nonce
+// rather than the audience, because a chain minted for one verifier carries that
+// verifier's challenge too and the nonce is compared first — a different
+// sentence for the same claim.
+func TestAChainAddressedToOneVerifierIsRefusedByAnother(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the merchant refuses the Credential Provider's copy", func(t *testing.T) {
+		t.Parallel()
+
+		w := newWorld(t)
+		a := authorise(t, w)
+		watch := a.watch(t)
+
+		w.clock.Advance(2 * merchant.DefaultStep)
+		quoted, err := a.client.QuoteItem(t.Context(), a.auth.Item, 1)
+		require.NoError(t, err)
+		d, err := watch.Delegate(t.Context(), quoted)
+		require.NoError(t, err)
+
+		// Funded honestly first, so what the merchant then refuses is the
+		// audience and not a missing credential.
+		require.NoError(t, watch.Fund(t.Context(), d),
+			"the funding leg has to succeed, or this tests the wrong refusal")
+
+		d.MerchantChain = d.CredentialChain
+		err = watch.Settle(t.Context(), d)
+		require.ErrorIs(t, err, agent.ErrRefused)
+		assert.False(t, d.Settled, "money must not move on a proof addressed to somebody else")
+
+		receipt, err := ap2.VerifyReceipt(d.Receipt("merchant"), w.shop.verifier)
+		require.NoError(t, err, "a chain has been examined, so the refusal is signed evidence")
+		require.NotNil(t, receipt.Error)
+		assert.Equal(t, generated.ErrorCodeKeyBindingInvalid, *receipt.Error,
+			"the agent's own signature covers aud and nonce, so a proof made for the Credential Provider does not hold here")
+	})
+
+	t.Run("the Credential Provider refuses the merchant's copy", func(t *testing.T) {
+		t.Parallel()
+
+		w := newWorld(t)
+		a := authorise(t, w)
+		watch := a.watch(t)
+
+		w.clock.Advance(2 * merchant.DefaultStep)
+		quoted, err := a.client.QuoteItem(t.Context(), a.auth.Item, 1)
+		require.NoError(t, err)
+		d, err := watch.Delegate(t.Context(), quoted)
+		require.NoError(t, err)
+
+		// Entirely genuine: the user's limits, the agent's signature, a challenge
+		// this provider issued. The only thing wrong with it is the audience.
+		lifted := &agent.Delegated{
+			ID:                d.ID + "-lifted",
+			Offer:             d.Offer,
+			Price:             d.Price,
+			CredentialChain:   d.MerchantChain,
+			CredProviderNonce: d.CredProviderNonce,
+		}
+		require.ErrorIs(t, watch.Fund(t.Context(), lifted), agent.ErrRefused)
+		assert.Nil(t, lifted.Credential, "no credential may be issued against somebody else's proof")
+
+		receipt, err := ap2.VerifyReceipt(lifted.Receipt("credprovider"), w.provider.verifier)
+		require.NoError(t, err)
+		require.NotNil(t, receipt.Error)
+		assert.Equal(t, generated.ErrorCodeKeyBindingInvalid, *receipt.Error)
+	})
+}
+
+// TestADeliveryNobodyAnsweredHoldsTheAttemptOpen is the state Tracker's longest
+// section is about, reached the only way it can be: by breaking the wire.
+//
+// A refusal is an answer and returns the pair to ready. This is the other
+// outcome — no verifier reached a verdict — and nothing licenses either event,
+// so the attempt stays outstanding and a *different* attempt is refused by the
+// rule rather than by anybody's verifier.
+func TestADeliveryNobodyAnsweredHoldsTheAttemptOpen(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	a := authorise(t, w)
+	watch := a.watch(t)
+
+	w.clock.Advance(2 * merchant.DefaultStep)
+	quoted, err := a.client.QuoteItem(t.Context(), a.auth.Item, 1)
+	require.NoError(t, err)
+	d, err := watch.Delegate(t.Context(), quoted)
+	require.NoError(t, err)
+
+	// The funding leg never lands. Installed after Delegate, so the three
+	// challenge round trips it needed are unaffected.
+	a.breaks = func(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/credential") }
+
+	var tracker agent.Tracker
+	err = watch.Attempt(t.Context(), &tracker, d)
+	require.Error(t, err, "a delivery that reached nobody is not a purchase")
+	assert.NotErrorIs(t, err, agent.ErrRefused,
+		"nobody refused this — reading a broken wire as a refusal would license an attempt no receipt paid for")
+	assert.Empty(t, d.Receipts, "no verifier answered, so there is nothing signed to keep")
+
+	assert.Equal(t, authz.StateAwaitingReceipt, tracker.Payment(),
+		"nothing licenses a transition: the mandate is not spent and no rejection receipt exists to permit another attempt")
+	assert.Equal(t, authz.StateAwaitingReceipt, tracker.Checkout())
+	assert.Equal(t, d.ID, tracker.Outstanding(),
+		"the attempt has to stay named, or a re-delivery cannot be told from a second purchase")
+
+	// A different attempt is refused by the rule. This is the bug the whole
+	// machine exists to prevent — one authorisation reaching two checkouts —
+	// and it is refused before anything is presented to anybody.
+	other, err := watch.Delegate(t.Context(), quoted)
+	require.NoError(t, err)
+	require.NotEqual(t, d.ID, other.ID, "two mints are two attempts, or this proves nothing")
+	require.ErrorIs(t, watch.Attempt(t.Context(), &tracker, other), authz.ErrOpenMandateOutstanding)
+	assert.Empty(t, other.Receipts, "the rule refused it, so no verifier was troubled")
+
+	// And the same attempt, re-delivered once the wire is back, is answered.
+	a.breaks = nil
+	require.NoError(t, watch.Attempt(t.Context(), &tracker, d),
+		"re-delivering the same attempt is not a second attempt, and this one settles")
+	assert.Equal(t, authz.StateSpent, tracker.Payment())
+	assert.Empty(t, tracker.Outstanding(), "an answered attempt is no longer outstanding")
+}
+
+// TestARedeliveredAttemptIsOneRowNotTwo is the loop's half of the test above.
+//
+// Watched.Attempts is what cmd/agent prints and what a reader counts, and the
+// vocabulary of this whole package turns on one attempt being one thing the
+// tracker steps once. A delivery that reached nobody is presented again under
+// the same idempotency key, against the same tracker state, and has to update
+// its own row — a second row would make "attempt 2" on the console a purchase
+// that never happened.
+func TestARedeliveredAttemptIsOneRowNotTwo(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	a := authorise(t, w)
+
+	// The first funding request never lands; every later one does.
+	var broken atomic.Int32
+	a.breaks = func(r *http.Request) bool {
+		return strings.HasSuffix(r.URL.Path, "/credential") && broken.Add(1) == 1
+	}
+
+	wait, stop := a.running(t, a.watch(t))
+	a.quoted() // the baseline
+
+	a.step() // $210
+	a.quoted()
+	a.attempted() // the delivery that reached nobody
+
+	a.beat()      // the re-delivery: no quote is taken, so no poll signal
+	a.attempted() // and this one is refused, by the Credential Provider
+
+	stop()
+	watched, err := wait()
+	require.ErrorIs(t, err, context.Canceled)
+
+	require.Len(t, watched.Attempts, 1,
+		"two deliveries of one attempt are one attempt; a second row here is a purchase that never happened")
+	only := watched.Attempts[0]
+	assert.Equal(t, 2, only.Deliveries, "and the re-delivery has to be visible somewhere")
+	assert.Equal(t, merchant.DemoPriceRejected, only.Quote.Price.Amount,
+		"the re-delivery presents the offer the attempt was minted against, not a fresh quote")
+	require.ErrorIs(t, only.Err, agent.ErrRefused,
+		"the second delivery reached the Credential Provider, which refused it")
+	assert.Equal(t, authz.StateReady, only.Payment,
+		"a refusal returns the pair, however many deliveries it took to get one")
+	assert.Zero(t, watched.Unminted, "nothing failed to mint here")
+}
+
+// TestAFailedMintDoesNotConsumeTheStepChange is a regression test, and the
+// defect it is for was a comment describing a retry the code did not do.
+//
+// The step index was advanced before the delegation was minted, so a mint that
+// failed left the loop believing it had acted on that change: the next poll saw
+// the same step, compared equal, and did nothing. One timed-out challenge fetch
+// therefore abandoned the user's purchase permanently — and if it landed on the
+// merchant's last step, Run returned ErrScheduleExhausted, which cmd/agent
+// treats as fatal. The agent would have exited 1 saying the merchant had no
+// further price to move to, for what was a network blip.
+func TestAFailedMintDoesNotConsumeTheStepChange(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	a := authorise(t, w)
+
+	// The first challenge fetch of the first mint fails; everything after it is
+	// fine. Counted rather than switched by the test, so nothing here races the
+	// loop.
+	var broken atomic.Int32
+	a.breaks = func(r *http.Request) bool {
+		return strings.HasSuffix(r.URL.Path, "/nonce") && broken.Add(1) == 1
+	}
+
+	wait, stop := a.running(t, a.watch(t))
+	a.quoted() // the baseline
+
+	a.step() // $210
+	a.quoted()
+	// No attempt signal: the mint failed before anything was presented. The beat
+	// below returns when that iteration is over and the next has begun.
+	a.beat()
+
+	a.quoted()    // the same step change, seen again because it was never consumed
+	a.attempted() // and this time it reaches the Credential Provider, which refuses
+
+	stop()
+	watched, err := wait()
+	require.ErrorIs(t, err, context.Canceled)
+
+	assert.Equal(t, 1, watched.Unminted, "one mint failed, and it is not an attempt")
+	require.Error(t, watched.UnmintedErr)
+
+	require.Len(t, watched.Attempts, 1,
+		"the step change survived the failed mint and was attempted on the next tick")
+	assert.Equal(t, merchant.DemoPriceRejected, watched.Attempts[0].Quote.Price.Amount,
+		"and it is the $210 candidate, which is the one the user's cap has to refuse")
+}
+
+// TestTheWatchStopsWhenTheLastPriceIsRefused is ErrScheduleExhausted, which is
+// the fourth way a run can end and the only one that is neither a purchase, a
+// spent mandate nor somebody stopping the agent.
+//
+// Two seats rather than one, so every price on the schedule is over the user's
+// cap: the line price is what an amount constraint is compared against, so
+// 2 × $189 is $378 against a $200 bound. That is also the quantity path getting
+// its only exercise — the merchant prices the basket and the verifier refuses
+// the total.
+func TestTheWatchStopsWhenTheLastPriceIsRefused(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	a := authorise(t, w)
+
+	watch := a.watch(t)
+	watch.Quantity = 2
+
+	wait, _ := a.running(t, watch)
+	a.quoted() // the baseline, at 2 × $240
+
+	a.step() // 2 × $210
+	a.quoted()
+	a.attempted()
+
+	a.step() // 2 × $189 — the last price the merchant will quote
+	a.quoted()
+	a.attempted()
+
+	watched, err := wait()
+	require.ErrorIs(t, err, agent.ErrScheduleExhausted,
+		"the schedule ran out and nothing was bought, which is not the same as being stopped")
+	assert.Nil(t, watched.Bought)
+
+	require.Len(t, watched.Attempts, 2, "one attempt per step change, both refused")
+	for i, attempt := range watched.Attempts {
+		assert.ErrorIsf(t, attempt.Err, agent.ErrRefused, "attempt %d", i+1)
+		assert.Equalf(t, authz.StateReady, attempt.Payment,
+			"attempt %d: a refusal licenses the next, right up to the one there is no next after", i+1)
+	}
+	assert.Equal(t, 2*merchant.DemoPriceAccepted, watched.Attempts[1].Quote.Price.Amount,
+		"the merchant prices the basket, so the cap is compared against what will actually be charged")
+}
+
+// TestAWatchWithNoTickBuildsItsOwnTicker covers the pacing a running agent uses
+// and every other test in this file replaces.
+//
+// Interval is an hour, so no tick can arrive; the watch is stopped instead, at
+// the select. **Nothing sleeps** — the wait is on a cancellation, not on a
+// duration — and the baseline poll is waited for first, because a watch
+// cancelled before that returns from the quote and never reaches the ticker at
+// all. That is how the first version of this test passed while covering none of
+// what it names.
+func TestAWatchWithNoTickBuildsItsOwnTicker(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	a := authorise(t, w)
+
+	// Both arms of the interval: one a caller chose, one the default. Neither
+	// elapses — an hour cannot, and DefaultPoll's five seconds are far longer
+	// than the cancellation below takes.
+	for _, tc := range []struct {
+		name     string
+		interval time.Duration
+	}{
+		{"an interval the caller chose", time.Hour},
+		{"the default", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			watch := a.watch(t)
+			watch.Tick = nil
+			watch.Interval = tc.interval
+
+			wait, stop := a.running(t, watch)
+			a.quoted() // the baseline: the loop is now on a ticker of its own making
+			stop()
+
+			watched, err := wait()
+			assert.ErrorIs(t, err, context.Canceled,
+				"a stopped watch returns at its own select rather than waiting out an interval")
+			assert.Equal(t, merchant.DemoPriceWatched, watched.Baseline.Price.Amount,
+				"and it got far enough to have taken the baseline quote")
+			assert.Empty(t, watched.Attempts, "no interval elapsed, so nothing was ever attempted")
+		})
+	}
+}
+
+// TestAVerdictNamesItself pins the three names a verdict renders as.
+//
+// They reach a reader through Attempted and through cmd/agent's report, and an
+// unnamed verdict would print as an integer beside two words.
+func TestAVerdictNamesItself(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "unanswered", agent.VerdictUnanswered.String(),
+		"the zero value has to read as the outcome it is, not as an empty string")
+	assert.Equal(t, "accepted", agent.VerdictAccepted.String())
+	assert.Equal(t, "rejected", agent.VerdictRejected.String())
+	assert.Equal(t, "verdict(9)", agent.Verdict(9).String(),
+		"a value outside the set has to say so rather than index past the table")
 }

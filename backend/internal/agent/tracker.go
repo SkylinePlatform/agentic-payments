@@ -41,13 +41,22 @@ import (
 //
 //   - The states are unexported and there is no setter. Checkout and Payment
 //     read them; nothing hands one back out to be stepped.
-//   - `run` takes no arguments. The code that presents the mandate to each
-//     verifier — Watch.Fund and Watch.Settle, called from inside the closure —
-//     is handed no tracker and holds none, so stepping per hop is not something
-//     a maintainer can do by editing one function. It needs a new field or a new
-//     parameter, which is a visible edit rather than a line.
+//   - `run` takes no arguments, so Watch.Fund and Watch.Settle — the code that
+//     presents the mandate to one verifier — are handed no tracker and hold
+//     none. A per-hop step written *inside either of them* needs a new field or
+//     a new parameter first.
 //   - Watch.Run keeps its Tracker in a local, so there is no field on Watch for
 //     a hop to reach for even within this package.
+//
+// **None of that stops the per-hop reading being written one level up**, and
+// saying otherwise would be the same overclaim lifecycle.go is careful not to
+// make. Watch.Attempt already holds the *Tracker, so splitting its single call
+// into one per hop is an edit to one function with no new field and no new
+// parameter — it was written, deliberately, as this slice's first mutation. What
+// caught it was three tests, named on Watch.Attempt and on
+// TestTheCredentialProvidersReceiptDoesNotSpendTheMandate. The arrangements
+// above make the mistake harder to reach by accident; the tests are what make it
+// fail.
 //
 // A value is safe to use from one goroutine. It is not safe to share: it holds
 // no lock, because the rule it keeps makes attempts sequential and an agent

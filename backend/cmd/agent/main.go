@@ -261,6 +261,10 @@ func report(watched agent.Watched) {
 	fmt.Printf("  baseline   step %d, %d %s\n",
 		watched.Baseline.Step, watched.Baseline.Price.Amount, watched.Baseline.Price.Currency)
 
+	// One line per attempt, because that is what a row is. A re-delivery says so
+	// on its own line rather than becoming a second attempt — "attempt 2" here
+	// has to mean a second purchase was attempted, or the console disagrees with
+	// every other place this repository uses the word.
 	for i, a := range watched.Attempts {
 		outcome := "settled"
 		switch {
@@ -272,6 +276,10 @@ func report(watched agent.Watched) {
 		fmt.Printf("  attempt %d  step %d, %d %s — %s\n",
 			i+1, a.Quote.Step, a.Quote.Price.Amount, a.Quote.Price.Currency, outcome)
 		fmt.Printf("             checkout mandate %s, payment mandate %s\n", a.Checkout, a.Payment)
+		if a.Deliveries > 1 {
+			fmt.Printf("             presented %d times; the earlier ones reached no verifier\n",
+				a.Deliveries)
+		}
 
 		if a.Delegated == nil {
 			continue
@@ -279,6 +287,14 @@ func report(watched agent.Watched) {
 		for _, r := range a.Delegated.Receipts {
 			fmt.Printf("             receipt %-13s %s…\n", r.From, truncate(r.Token))
 		}
+	}
+
+	// Not attempts, and printed apart from them for that reason: nothing was
+	// presented to anybody, so no verifier answered and the rejection-receipt
+	// rule never saw them.
+	if watched.Unminted > 0 {
+		fmt.Printf("  unminted   %d step change(s) could not be turned into a delegation; last: %v\n",
+			watched.Unminted, watched.UnmintedErr)
 	}
 
 	if watched.Bought == nil {

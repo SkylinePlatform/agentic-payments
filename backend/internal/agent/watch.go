@@ -122,6 +122,14 @@ const DefaultPoll = 5 * time.Second
 // Attempted is one purchase attempt and what the rejection-receipt rule made of
 // it.
 //
+// **One row per attempt, not per delivery**, and the distinction is the same one
+// this whole package turns on: an attempt is one thing the tracker steps once,
+// however many times its documents have to be put on the wire. A delivery whose
+// response is lost is re-delivered under the same idempotency key, against the
+// same tracker state, and updates this row rather than adding a second — a
+// reader counting rows is counting attempts, which is what every other file here
+// means by the word. Deliveries is where the re-delivery shows.
+//
 // The two states are recorded per attempt rather than only at the end, because
 // what they are between attempts is the thing worth seeing: a refusal returns the
 // pair to StateReady, and that return is what licenses the next attempt. A caller
@@ -130,12 +138,15 @@ const DefaultPoll = 5 * time.Second
 type Attempted struct {
 	// Quote is the offer this attempt was made against.
 	Quote Quote
-	// Delegated is what was minted and what came back. Nil when the attempt was
-	// refused by the machine before anything was presented.
+	// Delegated is what was minted and what came back.
 	Delegated *Delegated
 	// Err is what the attempt returned: nil on a purchase, ErrRefused when a
 	// counterparty said no, an authz sentinel when the rule refused to begin.
 	Err error
+	// Deliveries is how many times these documents were presented. One on the
+	// ordinary path; more when a delivery reached no verifier and the same
+	// attempt was presented again.
+	Deliveries int
 	// Checkout and Payment are where the two open mandates stood once the
 	// attempt had been applied.
 	Checkout authz.MandateState
@@ -147,10 +158,26 @@ type Watched struct {
 	// Baseline is the offer in force when the watch began. It is never attempted
 	// — see Watch.
 	Baseline Quote
-	// Attempts, in the order they were made.
+	// Attempts, in the order they were made, one row each.
 	Attempts []Attempted
 	// Bought is the attempt that went through, or nil.
 	Bought *Delegated
+
+	// Unminted counts the ticks on which a step change was seen and no
+	// delegation could be made, and UnmintedErr is the most recent reason.
+	//
+	// **These are not attempts and are deliberately not in Attempts.** Nothing
+	// was presented to anybody, so the rejection-receipt rule has nothing to say
+	// about them and no verifier answered — putting them in the same list would
+	// make a reader counting rows count something other than attempts, which is
+	// exactly the confusion Attempted's first paragraph exists to prevent.
+	//
+	// A count and the latest error rather than every error, because the loop
+	// retries a failed mint on every tick: a slice would grow for as long as a
+	// counterparty was down, and the second failure says nothing the first did
+	// not.
+	Unminted    int
+	UnmintedErr error
 }
 
 // Run watches until the purchase goes through, the mandate is spent, the
@@ -188,11 +215,18 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 	defer stop()
 
 	var tracker Tracker
-	// pending is an attempt that has been presented and not answered. While it
-	// is set the loop re-delivers it rather than quoting, because the mandate is
-	// awaiting a receipt and beginning a second attempt is the thing the rule
-	// forbids.
-	var pending *Delegated
+	// pending is an attempt that has been presented and not answered, with the
+	// offer it was made against. While it is set the loop re-delivers it rather
+	// than quoting: the mandate is awaiting a receipt, and beginning a second
+	// attempt is the thing the rule forbids.
+	var (
+		pending      *Delegated
+		pendingQuote Quote
+	)
+	// recorded is where each attempt's row lives, keyed the way the tracker keys
+	// the attempt itself. A re-delivery updates its own row instead of adding
+	// one, which is what makes len(out.Attempts) a count of attempts.
+	recorded := make(map[string]int)
 
 	for {
 		select {
@@ -201,19 +235,11 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 		case <-tick:
 		}
 
-		var (
-			d      *Delegated
-			quoted Quote
-		)
-		switch {
-		case pending != nil:
-			// Re-delivery. No quote is taken: the same documents go out again,
-			// which is what makes it one attempt rather than two, and asking the
-			// merchant again would put a price in the record that nothing was
-			// presented at.
-			d, quoted = pending, out.lastQuote()
-
-		default:
+		// The re-delivery carries its own quote rather than taking a new one:
+		// the same documents go out again, and asking the merchant would put a
+		// price in the record that nothing was presented at.
+		d, quoted := pending, pendingQuote
+		if d == nil {
 			q, err := w.Client.QuoteItem(ctx, w.Authorisation.Item, w.quantity())
 			if err != nil {
 				// A poll that did not answer says nothing about the price, so it
@@ -224,39 +250,46 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 			if q.Step == last {
 				continue
 			}
-			last = q.Step
 
 			minted, err := w.Delegate(ctx, q)
 			if err != nil {
-				// Nothing was presented, so no attempt was begun and the rule
-				// has nothing to say about it. Retrying is worth it because the
-				// three challenge round trips are the part of Delegate most
-				// likely to fail and the part most likely to succeed next time;
-				// the rest of it — parsing the open mandates, four signatures —
-				// would fail the same way on every tick, and the context is what
-				// bounds that rather than a count kept here.
-				out.Attempts = append(out.Attempts, Attempted{
-					Quote:    q,
-					Err:      err,
-					Checkout: tracker.Checkout(),
-					Payment:  tracker.Payment(),
-				})
-				if q.Final {
-					return out, ErrScheduleExhausted
-				}
+				// **last is not advanced here, and that is the retry.** As far as
+				// this loop is concerned the step change has still not been acted
+				// on, so the next tick quotes, sees the same change, and tries to
+				// mint again. Advancing before the mint would consume the change
+				// whether or not anything was presented against it — and three of
+				// the things that can fail in Delegate are round trips to a
+				// verifier for a challenge, so one timeout would abandon the
+				// user's purchase for good. If it landed on the merchant's last
+				// step the watch would then stop and report that the merchant had
+				// no further price to move to, which is a statement about the
+				// schedule for a failure that was a network blip.
+				out.Unminted++
+				out.UnmintedErr = err
 				continue
 			}
+			// Only once something exists to present.
+			last = q.Step
 			d, quoted = minted, q
 		}
 
 		err := w.Attempt(ctx, &tracker, d)
-		out.Attempts = append(out.Attempts, Attempted{
-			Quote:     quoted,
-			Delegated: d,
-			Err:       err,
-			Checkout:  tracker.Checkout(),
-			Payment:   tracker.Payment(),
-		})
+
+		row := Attempted{
+			Quote:      quoted,
+			Delegated:  d,
+			Err:        err,
+			Deliveries: 1,
+			Checkout:   tracker.Checkout(),
+			Payment:    tracker.Payment(),
+		}
+		if i, seen := recorded[d.ID]; seen {
+			row.Deliveries = out.Attempts[i].Deliveries + 1
+			out.Attempts[i] = row
+		} else {
+			recorded[d.ID] = len(out.Attempts)
+			out.Attempts = append(out.Attempts, row)
+		}
 
 		switch {
 		case err == nil:
@@ -271,11 +304,11 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 
 		if tracker.Outstanding() != "" {
 			// Nobody answered. Hold on to the documents and present them again.
-			pending = d
+			pending, pendingQuote = d, quoted
 			continue
 		}
+		pending, pendingQuote = nil, Quote{}
 
-		pending = nil
 		// A verifier refused. The pair is back at StateReady, which is what
 		// licenses the next attempt — but the last price holds for ever, so
 		// against a final offer there is no next step to wait for and every tick
@@ -314,17 +347,6 @@ func (w *Watch) Attempt(ctx context.Context, tracker *Tracker, d *Delegated) err
 		delivered := w.Deliver(ctx, d)
 		return verdictOf(d, delivered), delivered
 	})
-}
-
-// lastQuote is the offer the outstanding attempt was made against, for the
-// record a re-delivery writes. It reads the previous attempt rather than
-// re-quoting, because a re-delivery presents the same documents and asking the
-// merchant again would put a price in the record that nothing was presented at.
-func (o Watched) lastQuote() Quote {
-	if len(o.Attempts) == 0 {
-		return Quote{}
-	}
-	return o.Attempts[len(o.Attempts)-1].Quote
 }
 
 // ticker is where the loop's pacing comes from.

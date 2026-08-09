@@ -196,9 +196,12 @@ These are enforced, not advisory.
    **The Human Not Present flow is what imports it.** `internal/agent`'s
    `Client.Authorise` calls an `IntentInterpreter` once, before the user signs,
    and `cmd/agent -watch` supplies `interpret.Demo()` — the scripted table — as
-   the implementation. Two other packages name its import path without using it:
-   `roles/surface/nonagentic_test.go`, which names it to prove the Trusted
-   Surface does *not* reach it, and `internal/agent`'s own import-graph test.
+   the implementation. Those two are the whole of the production import graph;
+   tests in `internal/adapters/ap2` and `internal/agent` build one as well.
+   `roles/surface/nonagentic_test.go` is the one place that names the import
+   path *without* importing it — it holds the path as a string and walks the
+   transitive graph to prove the Trusted Surface cannot reach it. `grep -rn
+   'agent/interpret"' backend --include='*.go'` is what checks that paragraph.
 
    Whatever ends up behind `IntentInterpreter` must call `interpret.Validate`
    on what it is about to return. A constraint naming a field the verifier does

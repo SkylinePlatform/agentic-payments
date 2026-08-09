@@ -46,18 +46,53 @@ const (
 	searchParam   = "constraints"
 )
 
-// itemFieldPrefix and itemIDField are the constraint field names this file
-// names, and the only two it does.
+// itemFieldPrefix and merchantFieldPrefix are the two prefixes under which a
+// constraint says *what* to buy or *from whom*, as opposed to the terms a
+// purchase has to meet. itemIDField is the one field this file writes.
+//
+// The registry holds seven named fields plus item.attr.*. Three of them —
+// amount, at, quantity — are terms: they describe a purchase rather than pick
+// one out, and they are the ones the watch exists to wait for. The other four
+// sit under these two prefixes, and all four are things Catalogue.Search can
+// evaluate: Catalogue.Subject fills Item.ID, Item.Category, Item.Attributes and
+// Merchant, so a query carrying merchant.id or merchant.category is answered
+// rather than ignored. That is why `merchant.` is here and not only `item.` —
+// "buy it from this shop" is as much a description of what to go looking for as
+// "buy this bicycle" is.
 //
 // Naming a field is not evaluating one. The agent never parses a constraint,
 // never builds a subject and never reaches a verdict — internal/agent does not
 // import internal/core/authz/constraint, and
-// TestTheAgentCannotReachAConstraintEvaluator is what keeps that true. What it
-// does here is decide which of the user's limits describe *what* to go looking
-// for, which is a question about a search query rather than about a purchase.
+// TestTheAgentCannotReachAConstraintEvaluator is what keeps that true.
+//
+// # A prefix is the wrong place for this, and the right place is unreachable
+//
+// Whether a field is selective is a property *of the field*, so its home is a
+// column on constraint.Field beside Kind, Noun and exact — which is exactly
+// where AGENTS.md's "Open for extension" row says a new fact about a purchase
+// goes. **The agent cannot read it there.** Doing so means importing the
+// constraint package, and that import is the thing #121's fourth box forbids and
+// TestTheAgentCannotReachAConstraintEvaluator fails on. So the knowledge is
+// duplicated here as a string prefix, in the one package that must not ask the
+// registry.
+//
+// That tension is real and is tracked: see the issue linked from
+// TestTheAgentCannotReachAConstraintEvaluator. Two consequences worth knowing
+// before the next field lands, because neither announces itself:
+//
+//   - **A selective field added to the registry outside these prefixes is
+//     silently dropped from discovery.** Nothing fails to compile and no test
+//     goes red; the query simply stops carrying it and a search returns more
+//     candidates than it should.
+//   - **Group nodes are dropped whole.** identifying reads leaves only, because
+//     a group can mix a bound on the price with a fact about the object and
+//     there is no honest way to send half of one. All five scripted
+//     interpretations are flat lists, so this is invisible until an interpreter
+//     produces a group — #17's.
 const (
-	itemFieldPrefix = "item."
-	itemIDField     = "item.id"
+	itemFieldPrefix     = "item."
+	merchantFieldPrefix = "merchant."
+	itemIDField         = "item.id"
 )
 
 // ErrNothingToBuy means discovery found no candidate to watch.
@@ -237,35 +272,31 @@ type candidate struct {
 	ID string `json:"id"`
 }
 
-// discover asks the merchant what it sells that matches, and picks one.
+// Discover asks the merchant what it sells that an interpretation describes, in
+// catalogue order.
 //
-// **Choosing among candidates is a product decision this demo does not make.**
-// The first result wins, and the merchant returns them in catalogue order, so
-// the choice is stable rather than considered. A real agent ranks, or asks.
-//
-// Every scripted prompt matches exactly one offer once the terms are out of the
-// query, so the demo never reaches a case where the difference shows —
-// TestEveryScriptedPromptFindsOneCandidate is what pins that, by driving this
-// path for every prompt interpret.Demo() answers and naming the offer each one
-// has to land on. Note which test does *not* pin it:
-// TestTheCatalogueAnswersTheScriptedPrompts, in internal/roles/merchant, searches
-// with the **whole** constraint set, which is the query this function
-// deliberately does not send.
-func (c *Client) discover(ctx context.Context, constraints []generated.Constraint) (string, error) {
+// Exported because it is the only way to see how many candidates a query
+// actually found. Authorise takes the first and discards the rest, so a test
+// driving Authorise cannot tell one candidate from five —
+// TestEveryScriptedPromptFindsOneCandidate calls this instead, and asserts the
+// count as well as the identifier. That was written after the first version of
+// that test was found to assert only the identifier, which stayed green while
+// the claim it was cited for became false.
+func (c *Client) Discover(ctx context.Context, constraints []generated.Constraint) ([]string, error) {
 	query := identifying(constraints)
 	if len(query) == 0 {
 		// The merchant would answer request_malformed for an empty set, which is
 		// the right answer to the wrong question: what is actually wrong is one
 		// layer up, in an interpretation that placed limits on the terms of a
-		// purchase and said nothing about what was being bought.
-		return "", fmt.Errorf(
-			"%w: the interpretation names nothing to buy — no constraint reads a fact under %q",
-			ErrNothingToBuy, itemFieldPrefix)
+		// purchase and named neither an item nor a merchant.
+		return nil, fmt.Errorf(
+			"%w: the interpretation names nothing to go looking for — of its %d constraints, none reads a fact under %q or %q",
+			ErrNothingToBuy, len(constraints), itemFieldPrefix, merchantFieldPrefix)
 	}
 
 	encoded, err := json.Marshal(query)
 	if err != nil {
-		return "", fmt.Errorf("encoding the search: %w", err)
+		return nil, fmt.Errorf("encoding the search: %w", err)
 	}
 
 	var results struct {
@@ -275,34 +306,66 @@ func (c *Client) discover(ctx context.Context, constraints []generated.Constrain
 		strings.TrimSuffix(c.Endpoints.Merchant, "/"), searchParam,
 		base64.RawURLEncoding.EncodeToString(encoded))
 	if err := c.call(ctx, http.MethodGet, url, nil, &results); err != nil {
-		return "", fmt.Errorf("searching the merchant's catalogue: %w", err)
+		return nil, fmt.Errorf("searching the merchant's catalogue: %w", err)
 	}
 
-	if len(results.Offers) == 0 {
-		return "", fmt.Errorf("%w: the search matched no offer", ErrNothingToBuy)
+	out := make([]string, 0, len(results.Offers))
+	for _, o := range results.Offers {
+		if o.ID == "" {
+			return nil, fmt.Errorf("%w: the merchant returned an offer with no identifier",
+				ErrNothingToBuy)
+		}
+		out = append(out, o.ID)
 	}
-	if results.Offers[0].ID == "" {
-		return "", fmt.Errorf("%w: the merchant returned an offer with no identifier",
-			ErrNothingToBuy)
-	}
-	return results.Offers[0].ID, nil
+	return out, nil
 }
 
-// identifying returns the constraints that say what is being bought.
+// discover picks the one candidate the watch will follow.
 //
-// A leaf whose field sits under `item.` — item.id, item.category, item.attr.*.
-// Group nodes are left out rather than walked into: a group can mix a bound on
-// the price with a fact about the object, and there is no honest way to send
-// half of one. The scripted interpretations are four flat lists, which is a
-// disclosure decision argued in internal/agent/interpret/scenarios.go rather
-// than a convenience here, so nothing in the demo is dropped by this.
+// **Choosing among candidates is a product decision this demo does not make.**
+// The first result wins, and the merchant returns them in catalogue order, so
+// the choice is stable rather than considered. A real agent ranks, or asks.
+//
+// Every scripted prompt matches exactly one offer once the terms are out of the
+// query, so the demo never reaches a case where the difference shows —
+// TestEveryScriptedPromptFindsOneCandidate is what pins that, by calling
+// Discover for every prompt interpret.Demo() answers and asserting both the
+// count and the identifier. Note which test does *not* pin it:
+// TestTheCatalogueAnswersTheScriptedPrompts, in internal/roles/merchant, searches
+// with the **whole** constraint set, which is the query this path deliberately
+// does not send.
+func (c *Client) discover(ctx context.Context, constraints []generated.Constraint) (string, error) {
+	found, err := c.Discover(ctx, constraints)
+	if err != nil {
+		return "", err
+	}
+	if len(found) == 0 {
+		return "", fmt.Errorf("%w: the search matched no offer", ErrNothingToBuy)
+	}
+	return found[0], nil
+}
+
+// identifying returns the constraints that say what to go looking for.
+//
+// A leaf whose field sits under one of selectivePrefixes — item.id,
+// item.category, item.attr.*, merchant.id, merchant.category. Everything else is
+// a term of the purchase rather than a description of one, and the terms are
+// what the watch is waiting to be met.
+//
+// Group nodes are left out rather than walked into, and a selective field
+// registered outside those two prefixes would be left out too. Both are argued
+// where the prefixes are declared, because both are silent.
 //
 // What is dropped is dropped from a *query*, never from the mandate. See
 // Authorise for why that distinction is the whole of this function.
 func identifying(constraints []generated.Constraint) []generated.Constraint {
 	out := make([]generated.Constraint, 0, len(constraints))
 	for _, c := range constraints {
-		if c.Field != nil && strings.HasPrefix(*c.Field, itemFieldPrefix) {
+		if c.Field == nil {
+			continue
+		}
+		if strings.HasPrefix(*c.Field, itemFieldPrefix) ||
+			strings.HasPrefix(*c.Field, merchantFieldPrefix) {
 			out = append(out, c)
 		}
 	}
