@@ -389,8 +389,10 @@ func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 			why: "a shop with four unattributed products is one nobody reads as a shop",
 		},
 		{
+			// The grounded one, for the reason the duplicate row gives: emptying
+			// the flight's attributes would take its route with them.
 			name:   "an offer stating no facts about itself",
-			mutate: func(f *merchant.CatalogueFile) { entry(f).Attributes = nil }, wantErr: true,
+			mutate: func(f *merchant.CatalogueFile) { groundedIn(f).Attributes = nil }, wantErr: true,
 			why: "no constraint on this kind of purchase could be checked against it, so it is " +
 				"unreachable to every prompt that does not name it outright",
 		},
@@ -437,7 +439,13 @@ func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 		{
 			name: "the same identifier twice",
 			mutate: func(f *merchant.CatalogueFile) {
-				f.Offers = append(f.Offers, f.Offers[0])
+				// The grounded one, and this is the whole of what makes the row
+				// test its own check: duplicating the flight would leave two
+				// offers describing a route, which Validate refuses for a
+				// reason that has nothing to do with the identifier. The row
+				// went on passing with the duplicate check disabled until it
+				// was written this way.
+				f.Offers = append(f.Offers, *groundedIn(f))
 			}, wantErr: true,
 			why: "item.id would be ambiguous, and a mandate approving one of the two would " +
 				"authorise whichever the iteration reached",
@@ -520,11 +528,14 @@ func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 	}
 }
 
-// The three offers the table above reaches for, and none of them by position.
+// The three offers the table above reaches for.
 //
-// Ordering inside deploy/catalogue.json is presentational — NewCatalogue sorts
-// by identifier — so a row that mutated f.Offers[1] would go on compiling and
-// stop testing what its name says the day somebody moved an entry.
+// Most rows are about a field rather than about which product carries it, and
+// take entry — whichever offer is first. The two that are about the route, and
+// the two that would collide with it, ask for the offer they mean: ordering
+// inside deploy/catalogue.json is presentational, since NewCatalogue sorts by
+// identifier, so a row naming f.Offers[1] would go on compiling and stop
+// testing what its name says the day somebody moved an entry.
 const (
 	// routeOrigin is the attribute that decides which offer is the flight. It is
 	// written out here rather than imported, because the prompt that goes
