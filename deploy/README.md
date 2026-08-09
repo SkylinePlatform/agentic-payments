@@ -1,6 +1,6 @@
 # deploy
 
-How the demo runs.
+How the demo runs, and what it sells.
 
 ```bash
 make demo        # from the repository root
@@ -24,6 +24,34 @@ Order matters and is the order in the file. The collector comes first because
 every role emits into it, and a role that starts before it is listening loses
 the events explaining its own startup. The frontend comes last, because it
 proxies to the collector and there is nothing to look at until the rest is up.
+
+## `catalogue.json`
+
+What the mock Merchant sells. `cmd/merchant` reads it through `-catalogue`,
+which defaults to `../deploy/catalogue.json` — a path that resolves from
+`backend/`, the working directory every Go command in this repository runs from
+and the one `demo.json` starts the process with.
+
+Adding a fifth product is an edit here. Nothing above the catalogue was ever the
+obstacle: `item.attr.<name>` is open by construction, the constraint field
+registry names nothing aviation, and search evaluates constraints against an
+offer without knowing what it is selling.
+
+The rules are `merchant.CatalogueFile.Validate` and nowhere else, and a
+malformed file stops the process rather than producing a merchant that answers
+404 on `GET /search`. Three of them are worth knowing before editing:
+
+- **One `currency` for the whole file.** Per-offer currency would let a
+  `lte 40000 USD` cap sit against a `38000 EUR` price, and a money comparison
+  across two currencies is refused rather than converted — so the symptom is a
+  prompt that matches nothing, with nothing failing anywhere.
+- **The offer carrying `route.origin` and `route.destination` is the flight**,
+  and the inventory the Human Present flow buys through quotes that route on
+  that offer's own prices. Exactly one may carry them.
+- **`scenario` is the offer saying what it is for**: `cap` is the bound the
+  prompt that goes looking for it names, and `found` is `always`,
+  `at-the-last-price` or `never`. A price edited past its cap fails a test
+  rather than quietly producing a search box that answers nothing.
 
 ## `implemented: false`
 

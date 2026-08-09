@@ -244,7 +244,7 @@ func TestTheMerchantAnswersARejectionWithAReceipt(t *testing.T) {
 	shop := newParty(t, "merchant")
 	surfaceSrv := theSurface(t, user)
 
-	inventory, err := merchant.NewDemoInventory(shop.clock, base, merchant.DefaultStep)
+	inventory, err := shippedCatalogue(t).Inventory(shop.clock, base, merchant.DefaultStep)
 	require.NoError(t, err)
 
 	svc := &merchant.Service{
@@ -450,7 +450,7 @@ func TestTheMerchantRefusesAnOfferItNeverMade(t *testing.T) {
 	shop := newParty(t, "merchant")
 	surfaceSrv := theSurface(t, user)
 
-	inventory, err := merchant.NewDemoInventory(shop.clock, base, merchant.DefaultStep)
+	inventory, err := shippedCatalogue(t).Inventory(shop.clock, base, merchant.DefaultStep)
 	require.NoError(t, err)
 
 	svc := &merchant.Service{
@@ -619,9 +619,10 @@ func TestTheMerchantSearchesItsCatalogue(t *testing.T) {
 func theShop(t *testing.T, shop party) (http.Handler, error) {
 	t.Helper()
 
-	inventory, err := merchant.NewDemoInventory(shop.clock, base, merchant.DefaultStep)
+	listing := shippedCatalogue(t)
+	inventory, err := listing.Inventory(shop.clock, base, merchant.DefaultStep)
 	require.NoError(t, err)
-	catalogue, err := merchant.NewDemoCatalogue(shop.clock, "air-serbia", base, merchant.DefaultStep)
+	catalogue, err := listing.Catalogue(shop.clock, "air-serbia", base, merchant.DefaultStep)
 	require.NoError(t, err)
 
 	svc := &merchant.Service{
@@ -665,4 +666,20 @@ func (refusingProcessor) InitiatePaymentChain(
 	context.Context, string, string, generated.PaymentCredential,
 ) (string, bool, error) {
 	return "", false, nil
+}
+
+// cataloguePath is the shipped catalogue, from this package's directory.
+//
+// Loaded rather than assembled, on the terms internal/demo loads deploy/demo.json:
+// the stock is data now, so a merchant built from a Go fixture here would keep
+// passing while the file the demonstration actually serves said something else.
+const cataloguePath = "../../../deploy/catalogue.json"
+
+// shippedCatalogue loads it.
+func shippedCatalogue(t *testing.T) *merchant.CatalogueFile {
+	t.Helper()
+
+	f, err := merchant.LoadCatalogue(cataloguePath)
+	require.NoError(t, err, "the shipped catalogue does not load, so the demonstration sells nothing")
+	return f
 }

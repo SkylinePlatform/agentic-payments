@@ -136,6 +136,7 @@ func demoServiceWith(t *testing.T, controls bool) (*merchant.Service, *clock.Fak
 		}},
 		merchant.DemoOptions{
 			ID:        demoMerchantID,
+			Catalogue: shippedCatalogue(t),
 			User:      userVerifier,
 			Processor: merchant.NewMockProcessor(t),
 			Step:      demoStep,

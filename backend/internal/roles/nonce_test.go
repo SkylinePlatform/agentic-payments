@@ -36,7 +36,7 @@ func theChallengers(t *testing.T) map[string]challenging {
 
 	shop := newParty(t, "merchant")
 	shopIssuer := newChallenger(t, shop)
-	inventory, err := merchant.NewDemoInventory(shop.clock, base, merchant.DefaultStep)
+	inventory, err := shippedCatalogue(t).Inventory(shop.clock, base, merchant.DefaultStep)
 	require.NoError(t, err, "a merchant needs something to sell before it will stand up")
 	shopHandler, shopErr := (&merchant.Service{
 		ID:        "air-serbia",
