@@ -195,14 +195,19 @@ These are enforced, not advisory.
    could not construct one.
 
    **The Human Not Present flow is what imports it.** `internal/agent`'s
-   `Client.Authorise` calls an `IntentInterpreter` once, before the user signs,
-   and `cmd/agent -watch` supplies `interpret.Demo()` — the scripted table — as
-   the implementation. Those two are the whole of the production import graph;
-   tests in `internal/adapters/ap2` and `internal/agent` build one as well.
+   `Client.Authorise` calls an `IntentInterpreter` once, before the user signs;
+   `internal/agent/console` holds one for the watches it starts; and `cmd/agent`
+   is what chooses the implementation — `-interpreter scripted`, the default,
+   is `interpret.Demo()`, and `-interpreter gemini` is a model behind the same
+   interface. Those three are the whole of the production import graph; tests in
+   `internal/adapters/ap2` and `internal/agent` build one as well.
    `roles/surface/nonagentic_test.go` is the one place that names the import
    path *without* importing it — it holds the path as a string and walks the
    transitive graph to prove the Trusted Surface cannot reach it. `grep -rn
-   'agent/interpret"' backend --include='*.go'` is what checks that paragraph.
+   'agent/interpret"' backend --include='*.go'` is what checks that paragraph,
+   and `TestOnlyTheAgentCanReachAnInterpreter` is the same question asked of the
+   transitive graph rather than of the files, so a role that reached one through
+   a helper would fail rather than pass a grep.
 
    Whatever ends up behind `IntentInterpreter` must call `interpret.Validate`
    on what it is about to return. A constraint naming a field the verifier does
@@ -212,14 +217,28 @@ These are enforced, not advisory.
    rather than a second list of field names, because a copy would drift in the
    direction that accepts what the verifier cannot read.
 
-   This one is **an obligation, not yet an enforcement**, and the difference is
-   worth being straight about in a section headed "enforced, not advisory".
-   `ScriptedInterpreter` does call it, and for that implementation the call
-   cannot fail — `NewScripted` validated the same text and decoding is
-   deterministic. Nothing makes the *next* implementation call it. The place to
-   close that is a shared conformance test the model-backed interpreter has to
-   pass, which is #17's to add, because that is when there is a second
-   implementation to hold to it.
+   **This is now enforced**, which it was not while `ScriptedInterpreter` was
+   the only implementation: it does call `Validate`, and for that implementation
+   the call cannot fail, so a suite built around it alone proved nothing.
+   `TestNoInterpreterReturnsSomethingAVerifierCouldNotRead` in
+   `internal/agent/interpret/conformance_test.go` is the enforcement #17 added.
+   It is a suite over implementations, each registering a rig that makes it
+   answer arbitrary raw JSON, and the property is that the implementation
+   **refuses it either at construction or at `Interpret`, and never returns it**.
+   Two moments rather than one, because `ScriptedInterpreter` refuses at
+   construction — `NewScripted` validated the same text — and `ModelInterpreter`
+   refuses at `Interpret`; demanding an error from `Interpret` would force a
+   fake constructor for the scripted arm that nothing in production uses. The
+   built scenario has to come back deep-equal, so an implementation cannot pass
+   by refusing everything.
+
+   **What it cannot do is notice an implementation that never joins the list.**
+   A suite over a list is only as good as the list, Go cannot enumerate an
+   interface's implementations, and what stops an arm being omitted is review.
+   `grep -cE '^\s+rig: func' backend/internal/agent/interpret/conformance_test.go` counts
+   the arms — two — and `grep -rn 'IntentInterpreter = ' backend
+   --include='*.go'` lists the implementations that assert they satisfy the
+   interface. A third in the second list and not the first is the gap.
 
    The *caller* side is enforced: `internal/agent`'s `Client.Authorise` calls
    `Validate` on what it was handed, and

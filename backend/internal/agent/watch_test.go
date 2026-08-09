@@ -653,12 +653,13 @@ func TestOneAttemptMintsFourChainsWithFourAudiences(t *testing.T) {
 // TestTheAgentValidatesWhatItsInterpreterReturned is AGENTS.md hard rule 4 held
 // at this call site.
 //
-// The rule is an obligation on every caller of an IntentInterpreter, and the
-// scripted implementation calling Validate internally does not discharge it —
-// the model-backed one is #17's and nothing about it is written yet. So the
-// interpreter here is one that answers with a constraint naming a field no
-// verifier knows, which is precisely what a model that had drifted from the
-// registry would produce.
+// The rule is an obligation on every caller of an IntentInterpreter, and an
+// implementation calling Validate internally does not discharge it. Both
+// implementations do call it, and interpret's own conformance suite is what
+// holds them to that; this covers the other half — a caller that was handed an
+// interpretation nobody checked. So the interpreter here is one that answers
+// with a constraint naming a field no verifier knows, which is precisely what a
+// model that had drifted from the registry would produce.
 //
 // Without the check the constraint would render on the approval screen, be
 // signed into an open mandate, and be refused as constraint_type_unknown at the

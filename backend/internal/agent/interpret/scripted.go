@@ -47,11 +47,12 @@ type Script struct {
 // it for a mock returning canned values would delete what its tests prove, in
 // the same way it would for pkg/sdjwt's hmacKey or for clock.Fake.
 //
-// And it is not only a test double. It is what the demo runs: no model is
-// configured there, and beat 2 has to happen for beats 3 to 10 to exist at all.
-// A type declared in a _test.go file is reachable only from its own package's
-// test binary, so cmd/agent could not name one — and cmd/agent does name one,
-// through Demo(), when it is started with -watch. internal/agent's own tests
+// And it is not only a test double. It is what the demo runs: deploy/demo.json
+// leaves -interpreter at its default, so no key and no network are needed, and
+// beat 2 has to happen for beats 3 to 10 to exist at all. A type declared in a
+// _test.go file is reachable only from its own package's test binary, so
+// cmd/agent could not name one — and cmd/agent does name one, through Demo(),
+// whenever -interpreter is scripted. internal/agent's own tests
 // name it too, for the same reason: hard rule 4 forbids a test from depending on
 // a live model, and this is what stands in for one.
 //

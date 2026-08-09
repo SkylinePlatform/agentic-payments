@@ -99,23 +99,23 @@ func TestGeminiSaysWhyThereIsNoAnswer(t *testing.T) {
 		},
 		{
 			name: "the prompt was refused", says: "SAFETY",
-			raw:  `{"promptFeedback":{"blockReason":"SAFETY"}}`,
-			why:  "a blocked prompt is a fact about the sentence, not a defect in this package",
+			raw: `{"promptFeedback":{"blockReason":"SAFETY"}}`,
+			why: "a blocked prompt is a fact about the sentence, not a defect in this package",
 		},
 		{
 			name: "nothing came back at all", says: "no candidates",
-			raw:  `{"candidates":[]}`,
-			why:  "an empty candidate list is the one case with nothing else to report",
+			raw: `{"candidates":[]}`,
+			why: "an empty candidate list is the one case with nothing else to report",
 		},
 		{
 			name: "a candidate with no text", says: "no text",
-			raw:  `{"candidates":[{"content":{"parts":[{}]},"finishReason":"STOP"}]}`,
-			why:  "the parts of a candidate carry more than text, and a part carrying none is not an answer",
+			raw: `{"candidates":[{"content":{"parts":[{}]},"finishReason":"STOP"}]}`,
+			why: "the parts of a candidate carry more than text, and a part carrying none is not an answer",
 		},
 		{
 			name: "not the documented shape", says: "not the shape",
-			raw:  `<html>502 Bad Gateway</html>`,
-			why:  "a proxy answering 200 with HTML is a real failure mode and reads as a model defect",
+			raw: `<html>502 Bad Gateway</html>`,
+			why: "a proxy answering 200 with HTML is a real failure mode and reads as a model defect",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

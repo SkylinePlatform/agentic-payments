@@ -88,8 +88,13 @@ const (
 //   - **Group nodes are dropped whole.** identifying reads leaves only, because
 //     a group can mix a bound on the price with a fact about the object and
 //     there is no honest way to send half of one. All five scripted
-//     interpretations are flat lists, so this is invisible until an interpreter
-//     produces a group — #17's.
+//     interpretations are flat lists, and the model-backed interpreter of #17
+//     produces leaves only for exactly this reason — its structured-output
+//     schema's op enum carries no group operator, and
+//     TestTheSchemaDescribesLeafConstraintsOnly is what keeps that true. So the
+//     case is currently unreachable rather than merely unexercised, and closing
+//     the drop is what has to come before an interpreter is widened to produce
+//     one.
 const (
 	itemFieldPrefix     = "item."
 	merchantFieldPrefix = "merchant."
@@ -115,7 +120,8 @@ type Intent struct {
 	// Prompt is what the user typed.
 	Prompt string
 	// Interpreter turns it into constraints. The demo wires interpret.Demo(),
-	// a scripted table; the model-backed implementation is #17's.
+	// a scripted table; cmd/agent -interpreter gemini wires a model behind this
+	// same interface.
 	Interpreter interpret.IntentInterpreter
 	// AgentKey is the public half of the key this agent signs delegations with,
 	// as roles.PublicKey reads it out of the agent's own key set. It ends up in
@@ -229,10 +235,11 @@ type Authorisation struct {
 //
 // AGENTS.md hard rule 4 puts that obligation on every caller of an
 // IntentInterpreter, and an implementation calling it internally does not
-// discharge it — ScriptedInterpreter does, the model-backed one is #17's, and
-// this call site is what holds the next one to it. A constraint naming a field
-// no verifier knows would otherwise render on the approval screen, be signed,
-// and be refused as constraint_type_unknown an hour later with nobody there.
+// discharge it. Both implementations do call it, and interpret's conformance
+// suite is what holds them to that; this call site covers the other half, an
+// implementation that forgot. A constraint naming a field no verifier knows
+// would otherwise render on the approval screen, be signed, and be refused as
+// constraint_type_unknown an hour later with nobody there.
 //
 // The constraint this function appends afterwards is not run through Validate a
 // second time. It is a fixed shape over a registered field, and the Trusted

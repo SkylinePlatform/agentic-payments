@@ -40,7 +40,7 @@ const conformancePrompt = "buy something within the limits I described"
 
 // implementations is the suite's list, and the list is the thing to keep honest.
 //
-// `grep -c 'rig:' backend/internal/agent/interpret/conformance_test.go` counts
+// `grep -cE '^\s+rig: func' backend/internal/agent/interpret/conformance_test.go` counts
 // the arms. Two today. **Nothing makes a third implementation join them** — a
 // suite over a list is only as good as the list, and what stops an arm being
 // omitted, or quietly deleted, is review. That is stated here rather than
