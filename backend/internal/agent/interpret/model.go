@@ -27,9 +27,12 @@ import (
 //
 // Issue #17's third box is that adding one requires no change outside this
 // package, and this interface is what makes that true: ModelInterpreter names no
-// provider type, holds no key, and builds no request. What a second provider
-// costs is one file beside gemini.go and one case in cmd/agent's -interpreter
-// flag.
+// provider type, holds no key and builds no request, so a second provider is one
+// file beside gemini.go and nothing else here.
+//
+// Being able to *ask* for it from a command line is a separate cost and worth
+// separating: cmd/agent's -interpreter flag has a case per name it accepts, and
+// that case is the only line outside this package a second provider touches.
 //
 // # Why it is not http.RoundTripper or a provider SDK
 //
@@ -211,8 +214,10 @@ func excerpt(answer []byte) string {
 // # This interpreter produces leaf constraints only, and that is a stated
 // # narrowing
 //
-// The vocabulary has three group operators — all, any, not — and the instruction
-// below names them as forbidden rather than omitting them. Two reasons. The
+// The registry publishes group operators as well as leaf ones — all, any and not
+// today — and the instruction below names them as forbidden rather than omitting
+// them. The list is derived by subtraction, so a fourth would appear there too
+// without the prose being edited. Two reasons for naming them at all. The
 // registry publishes them, so an instruction claiming to list what the verifier
 // knows and quietly leaving three out would be a smaller lie of exactly the kind
 // this file exists to prevent. And a model that has been told the operators
@@ -274,9 +279,9 @@ and then the operator decides how many of them:
 
 `)
 
-	fmt.Fprintf(&b, `This verifier also implements three operators that combine constraints — %s —
-and you must not use any of them. Answer with a flat list: every constraint in it
-has to hold.
+	fmt.Fprintf(&b, `This verifier also implements operators that combine constraints — %s — and you
+must not use any of them. Answer with a flat list: every constraint in it has to
+hold.
 
 Two things decide whether this is a good reading.
 

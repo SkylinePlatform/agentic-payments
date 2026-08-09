@@ -18,10 +18,15 @@ import (
 //
 // **The server is a local httptest.Server, not the API.** Hard rule 4 forbids a
 // test that depends on a live LLM or an external network call, and this depends
-// on neither: no key, no quota, no DNS. What it cannot prove is the mirror image
-// — that no test ever *does* reach the network. Nothing can prove that. What is
-// checkable, and is checked, is that NewGemini performs no I/O and that Model is
-// the only way ModelInterpreter obtains bytes.
+// on neither: no key, no quota, no DNS.
+//
+// **What no test here proves is the mirror image** — that nothing in this
+// repository ever *does* reach the network. Nothing can prove that, and inventing
+// a guard that appeared to would be worse than the gap. Two things stand in for
+// it, and both are structural rather than checked: NewGemini's body performs no
+// I/O, so constructing one reaches nothing; and Model is ModelInterpreter's only
+// collaborator, so bytes cannot arrive by another route. Both are readable in
+// twenty lines, and neither is enforced.
 
 // TestTheRequestCarriesWhatTheAPIDocuments pins the four things a wrong one
 // would break silently: the key is in a header rather than the URL, the model
