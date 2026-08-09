@@ -138,6 +138,30 @@ type Service struct {
 	Challenge *crypto.Challenger
 	// OfferLifetime is how long a quoted checkout stays purchasable.
 	OfferLifetime time.Duration
+	// DemoClock is the clock POST /demo/advance moves, and it has to be the
+	// clock this Service reads — Handler refuses a Service where it is not, on
+	// the narrow terms that check states.
+	//
+	// Optional, and **absent means the route is not registered at all**, which
+	// is the same shape Catalogue and Challenge use and here it is a guard rail
+	// rather than a courtesy. An endpoint that lets a caller move a verifier's
+	// clock is catastrophic anywhere but a demonstration, and a route that
+	// exists and refuses is a route somebody can be talked into enabling; a
+	// route that was never registered is a 404. NewDemoService sets it only
+	// under DemoOptions.Controls, which cmd/merchant leaves off by default.
+	//
+	// A local interface rather than *clock.Offset, so that a role service does
+	// not name a platform implementation — every other clock here is the
+	// authz.Clock port. See MovableClock.
+	DemoClock MovableClock
+	// DemoStep is how far one call to that endpoint moves it: one step of the
+	// price schedule, so whoever is working the demonstration does not have to
+	// know the schedule to move it on.
+	//
+	// Read only when DemoClock is set, and required to be positive then — a
+	// control that advanced by nothing would answer 200 and change no price,
+	// which is the failure hardest to tell from a broken schedule.
+	DemoStep time.Duration
 	// Events records the moments this role owns: its verdict on a presented
 	// purchase, the receipt carrying it, and the payment side it then presents
 	// to its processor. Optional — a nil Emitter records nothing.
@@ -392,6 +416,45 @@ func (s *Service) Handler() (http.Handler, error) {
 				"to say what is being bought")
 	}
 
+	// **One binding, and it is not the interesting one.** This checks that the
+	// clock the endpoint moves is the clock this Service reads — the clock
+	// ownOffer judges an offer's expiry against, that stamps offers and
+	// receipts, and that roles.Middleware ages its idempotency records against.
+	// A Service holding an Offset for one and something else for the other is
+	// refused here rather than serving a control that answers 200 having moved
+	// nothing this object reads.
+	//
+	// **What it cannot check is most of it.** The prices come from Inventory and
+	// Catalogue, the mandate deadlines from Rules and Payments, and challenge
+	// freshness from Challenge — each captured a clock when it was built,
+	// outside this Service, behind a type that cannot be asked which one. A
+	// merchant assembled with the demo clock here and the process clock there
+	// passes this guard, answers 200 to every advance, and quotes a price that
+	// does not move. That is not hypothetical; it is what a reviewer built from
+	// this package's own fixture.
+	//
+	// So this is the half a constructor can check, and NewDemoService is the
+	// other half: it builds all five from one clock, and
+	// TestTheDemoMerchantMovesEveryClockItWasBuiltWith drives that composition
+	// over HTTP and fails if any of them stayed behind.
+	if s.DemoClock != nil {
+		// Interface comparison rather than a type assertion, which is what lets
+		// the field be a narrow port instead of *clock.Offset: two interface
+		// values are equal only when the dynamic type and the value both match,
+		// so this is exactly as strong and names no platform type.
+		if authz.Clock(s.DemoClock) != s.Clock {
+			return nil, errors.New(
+				"merchant: the demo clock has to be the clock this merchant reads, or advancing " +
+					"time would leave this merchant's own offers and receipts judged against a " +
+					"clock nobody moved")
+		}
+		if s.DemoStep <= 0 {
+			return nil, fmt.Errorf(
+				"merchant: a demo control that advances by %s advances nothing; give it one step "+
+					"of the price schedule", s.DemoStep)
+		}
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("GET "+roles.JWKSPath, roles.JWKS(s.Keys))
 	mux.HandleFunc("GET /checkout", s.quote)
@@ -401,6 +464,9 @@ func (s *Service) Handler() (http.Handler, error) {
 	}
 	if s.Challenge != nil {
 		mux.Handle("GET "+roles.NoncePath, roles.Nonce(s.Challenge))
+	}
+	if s.DemoClock != nil {
+		mux.HandleFunc("POST "+AdvancePath, s.advance)
 	}
 	return roles.Middleware(s.Clock, mux)
 }
