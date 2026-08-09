@@ -52,11 +52,20 @@ make generate        # both languages
 CI type-checks and builds this package on every change, which is how a schema
 edit that breaks TypeScript is caught without anybody opening the app.
 
-## The dev server proxies the event stream
+## The dev server proxies two backends
 
 `/events` is proxied to the collector at `http://127.0.0.1:8085`, so the event
 stream is same-origin in development and nothing downstream has to solve CORS
 or learn the collector's address. Point it elsewhere with `VITE_COLLECTOR_URL`.
+
+`/watches` is proxied to the Shopping Agent's console API at
+`http://127.0.0.1:8086` — `VITE_AGENT_URL` — which is the address the
+`agent-watch` entry in `deploy/demo.json` gives it. Same reason, plus a sharper
+one: `POST` carrying `Idempotency-Key` is not a simple request, so a browser
+preflights it, and the idempotency middleware every role runs treats `OPTIONS`
+as safe and passes it to a mux that answers 405. Solving that with CORS would
+mean changing middleware every role runs, in a process holding a signing key, to
+serve one browser in one dev setup.
 
 The collector is demo infrastructure and not an AP2 role — see
 [ADR 0003](../docs/architecture/adr/0003-correlation-and-event-log.md).
