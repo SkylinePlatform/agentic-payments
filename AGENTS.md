@@ -576,7 +576,10 @@ reconcile against the code for no benefit.
   `contracts/evidence/error_code.json` declares — vectored, or TAP's, or the
   HTTP layer's, or the agent's own, or produced by nothing — each with a
   reason. **Adding a code to `contracts/` fails `make check` until it is
-  classified, and removing one fails while its entry stays.** That is the point
+  classified.** Removing one fails too, though at the build rather than at that
+  check — `internal/platform/problem`'s rendering table names every code as a
+  generated constant — and the classification is the backstop for a removal done
+  properly, enum and rendering together, that left the entry behind. That is the point
   rather than a side effect: the schema's own description says the list
   describes the domain and not what is built, so without this a code can be
   promised to a counterparty that nothing here can send. A status is a claim
