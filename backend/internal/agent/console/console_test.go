@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/console"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
@@ -294,6 +296,63 @@ func TestTheResponseCarriesWhatTheUserSigned(t *testing.T) {
 	require.Len(t, body["signed"], len(signed))
 	assert.Equal(t, signed[0], body["signed"].([]any)[0],
 		"what the user signed is the interpretation, and it comes back in the order it was signed in")
+}
+
+// TestASentenceThisAgentCannotReadIsTheCallersMistake is why the two failure
+// arms of POST /watches are told apart.
+//
+// #109's picker offers the five sentences the scripted interpreter knows, so
+// "this is not one of them" is something a screen can say and act on. "The
+// Trusted Surface did not answer" is not, and answering both the same way would
+// leave a console reporting its own bad request as somebody else's outage.
+func TestASentenceThisAgentCannotReadIsTheCallersMistake(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+		why  string
+	}{
+		{
+			name: "a prompt with no reading", err: interpret.ErrNoScript,
+			want: http.StatusUnprocessableEntity,
+			why:  "nobody has been asked to authorise anything; the sentence is what cannot be used",
+		},
+		{
+			name: "an interpretation with no limits", err: interpret.ErrNoConstraints,
+			want: http.StatusUnprocessableEntity,
+			why:  "an open mandate with no limits authorises everything, so this is refused before it is shown",
+		},
+		{
+			name: "nothing in the catalogue matches", err: agent.ErrNothingToBuy,
+			want: http.StatusUnprocessableEntity,
+			why:  "a watch with no item polls nothing for ever, which surfaces as a demo where nothing happens",
+		},
+		{
+			name: "the surface did not answer", err: errors.New("dial tcp: connection refused"),
+			want: http.StatusBadGateway,
+			why:  "this one is not the caller's to fix, and a console cannot offer them a different sentence",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			watcher := console.NewMockWatcher(t)
+			watcher.EXPECT().Authorise(mock.Anything, mock.Anything, mock.Anything).
+				Return(agent.Authorisation{}, fmt.Errorf("authorising: %w", tc.err)).Maybe()
+
+			service := &console.Service{Watcher: watcher, Clock: clock.New()}
+			handler, err := service.Handler()
+			require.NoError(t, err)
+			server := httptest.NewServer(handler)
+			t.Cleanup(server.Close)
+
+			c := &scripted{service: service, watcher: watcher, url: server.URL}
+			status, _, _ := c.post(t, t.Name(), map[string]any{"prompt": "buy something"})
+			assert.Equal(t, tc.want, status, tc.why)
+		})
+	}
 }
 
 // TestTheStateNamesTheConsoleServesAreTheOnesTheMachineWrites is the second of

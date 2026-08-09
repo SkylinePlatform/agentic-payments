@@ -54,6 +54,7 @@ import (
 	"sync"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
@@ -332,6 +333,22 @@ func (s *Service) start(w http.ResponseWriter, r *http.Request) {
 		// describe the call, not a mandate — which is why roles.DecodeJSON above
 		// answers with one.
 		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	case errors.Is(err, interpret.ErrNoScript),
+		errors.Is(err, interpret.ErrNoConstraints),
+		errors.Is(err, agent.ErrNothingToBuy):
+		// The request was well formed and this agent cannot turn it into a
+		// watch: a sentence its interpreter has no reading for, an
+		// interpretation that placed no limits at all, or a search that matched
+		// nothing this merchant sells. All three are the agent's own account of
+		// its own failure, which is a different thing from reporting a
+		// verifier's verdict — nobody has been asked to authorise anything yet.
+		//
+		// Told apart from the arm below because a console does different things
+		// with them. #109's picker offers the five sentences the scripted
+		// interpreter knows, so "this is not one of them" is something the
+		// screen can say; "the Trusted Surface did not answer" is not.
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	case err != nil:
 		// Including a refusal from the Trusted Surface: the user did not sign,
