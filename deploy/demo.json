@@ -208,7 +208,7 @@
       "name": "agent-watch",
       "kind": "role",
       "summary": "Shopping Agent — authorises once, then watches the price and buys on its own",
-      "note": "Human Not Present, beats 4 to 6: $240.00 watched, $210.00 refused with a signed receipt, $189.00 bought. Advance the merchant to see it sooner. It also serves the console API: GET http://127.0.0.1:8086/watches lists every watch, and a new one is curl -X POST -H 'Idempotency-Key: one-click' -d '{\"prompt\":\"buy a flight to Palma when it drops below $200, this summer\"}' http://127.0.0.1:8086/watches",
+      "note": "Human Not Present, beats 4 to 6: $240.00 watched, $210.00 refused with a signed receipt, $189.00 bought. Advance the merchant to see it sooner. It also serves the console API: GET http://127.0.0.1:8086/watches lists every watch, and a new one is curl -X POST -H 'Idempotency-Key: one-click' -d '{\"prompt\":\"buy a flight to Palma when it drops below $200, this summer\"}' http://127.0.0.1:8086/watches. GET http://127.0.0.1:8086/watches/{id}/attempts/1/presented is the four chains that attempt presented, each beside the verifier it was addressed to — it is what #21's Mandate Inspector reads, and the chains are deliberately not on the polled view",
       "issue": "15",
       "implemented": true,
       "dir": "backend",

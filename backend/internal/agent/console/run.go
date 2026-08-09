@@ -160,12 +160,16 @@ type attemptRow struct {
 	// presented is what this attempt put in front of its verifiers: the four
 	// chains, each beside the audience it was addressed to.
 	//
-	// It is here rather than on the polled view because a console reads it on a
-	// click and polls the view about once a second — see presentedView. The
-	// chains do not change after minting, so this particular copy would survive
-	// being an alias; it is a copy anyway, because the rule this struct's own
-	// comment states is about the row and not about which of its fields happen
-	// to be safe today.
+	// **Run.view deliberately does not read it.** It is on the row because this
+	// is where an attempt's facts live, and it reaches the wire only through
+	// Run.presented — a console polls the view about once a second and would
+	// otherwise carry four multi-kilobyte documents on every one of those polls.
+	// presentedView is where that trade is argued.
+	//
+	// The chains do not change after minting, so this particular copy would
+	// survive being an alias; it is a copy anyway, because the rule this struct's
+	// own comment states is about the row rather than about which of its fields
+	// happen to be safe today.
 	presented presentedChains
 
 	// err is what the delivery returned, as its own text.

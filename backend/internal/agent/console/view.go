@@ -160,8 +160,10 @@ type receiptView struct {
 // chains per attempt, each several kilobytes, would ride every one of those
 // polls and grow with every attempt — for data a viewer sees only when they
 // click a row. The interaction is already request-shaped: a tracker row is
-// clicked, and *then* the Inspector opens. TestThePolledViewDoesNotCarryTheChains
-// is what fails if they migrate onto the row.
+// clicked, and *then* the Inspector opens. Measured against the built scenario:
+// a completed two-attempt watch polls at about 3 kB, and one attempt's four
+// chains are about 11 kB. TestThePolledViewDoesNotCarryTheChains is what fails
+// if they migrate onto the polled view.
 //
 // # It says what was presented and never what came back of it
 //

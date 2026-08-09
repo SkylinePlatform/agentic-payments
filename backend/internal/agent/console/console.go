@@ -408,10 +408,10 @@ func (s *Service) read(w http.ResponseWriter, r *http.Request) {
 
 // readPresented is GET /watches/{id}/attempts/{n}/presented.
 //
-// Two lookups and two 404s, told apart in the text: a watch nobody started and
-// an attempt that watch never made are different mistakes, and a caller reading
-// one message for both has no way to tell a stale identifier from a number it
-// counted wrong.
+// Three ways to answer 404 and a different sentence for each: a watch nobody
+// started, a number that is not one, and an attempt that watch never made are
+// three different mistakes, and a caller given one message for all of them
+// cannot tell a stale identifier from a number it counted wrong.
 func (s *Service) readPresented(w http.ResponseWriter, r *http.Request) {
 	run, ok := s.lookup(r.PathValue("id"))
 	if !ok {
