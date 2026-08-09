@@ -373,9 +373,15 @@ func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 			why: "a mandate constraining merchant.category could never match anything it sells",
 		},
 		{
-			name:   "no offers",
-			mutate: func(f *merchant.CatalogueFile) { f.Offers = nil }, wantErr: true,
-			why: "a catalogue with nothing in it has nothing to sell",
+			// Another message-only case, found the same way: with no offers at
+			// all there is no offer describing a route either, so the check that
+			// derives the inventory refuses the file regardless. What an empty
+			// catalogue should be told about is being empty, not about routes.
+			name:     "no offers",
+			mutate:   func(f *merchant.CatalogueFile) { f.Offers = nil },
+			wantErr:  true,
+			mentions: "no offers",
+			why:      "a catalogue with nothing in it has nothing to sell",
 		},
 		{
 			name:   "an offer with no identifier",
@@ -494,6 +500,13 @@ func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 				flight := flightIn(f)
 				delete(flight.Attributes, routeOrigin)
 				delete(flight.Attributes, routeDestination)
+
+				// And something is put back, because those two are the whole of
+				// what the flight states about itself: without this the offer
+				// carries no attributes at all, and the row is refused for that
+				// instead. It was passing that way until the check it names was
+				// deleted and the test stayed green.
+				flight.Attributes["cabin"] = "economy"
 			}, wantErr: true,
 			why: "the Human Present flow buys through GET /checkout?from=&to=, and there would " +
 				"be no route for the inventory to quote",
