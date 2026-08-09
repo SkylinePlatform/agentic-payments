@@ -1,0 +1,150 @@
+{
+  "title": "Every rejection code, and what this implementation does about it",
+
+  "reading": [
+    "contracts/evidence/error_code.json declares the vocabulary a verifier refuses in. Its own description says the list describes the domain rather than what is built, so a code can exist there for a rule nobody has implemented — and nothing would notice.",
+    "This file closes that. Every code the contract declares appears below exactly once, with a status and a reason. golden_rejection_test.go's TestGoldenEveryErrorCodeIsClassified fails on a code that is missing, on an entry for a code the contract no longer declares, and on a status that disagrees with whether a vector actually produces it.",
+    "It is written for a second implementer whose first question is not whether our happy path works. It is: given a mandate my code produced, what will yours say when it says no?"
+  ],
+
+  "statuses": {
+    "vectored": "A row in golden_rejection_test.go's rejectionVectors builds an artefact, drives a real verification entry point, and asserts this code. Reproducing that verdict is what interoperating means.",
+    "agent-side": "Produced, and by the agent about its own presentation rather than by a verifier about a counterparty's artefact. It never travels, so there is no input to hand a second implementation and no answer to compare. Enforced where it is produced.",
+    "transport": "Produced by this project's HTTP layer rather than by a mandate verifier, answering a rule docs/architecture/adr/0001-transport-and-errors.md sets rather than one AP2 or TAP states. Tested where it is produced.",
+    "tap": "Visa TAP's identity axis, milestone #24-#33. internal/adapters/tap is a doc.go and an empty testdata directory, so there is no input to construct — not a decision to leave one unconstructed.",
+    "not-produced": "Nothing in this implementation produces it, and the note says why. TestGoldenTheCodesNothingProducesAndWhatArrivesInstead pins what arrives instead, so the claim is checked rather than asserted."
+  },
+
+  "codes": {
+    "request_malformed": {
+      "status": "vectored",
+      "note": "A mandate presented where a receipt was expected. Every artefact here is a compact JWS signed by the same keys, so typ is what distinguishes them; sdjwt.ErrUnexpectedType is request_malformed rather than mandate_malformed because nothing about the securing format failed - the caller sent the wrong thing. The dispute path reaches the same code by another route, evidence.ErrIncomplete from a bundle missing an artefact."
+    },
+    "request_too_large": {
+      "status": "transport",
+      "note": "internal/roles/serve.go and internal/platform/transport/idempotent.go, on the body a handler will read. A mandate verifier has no opinion about request framing."
+    },
+    "idempotency_key_missing": {
+      "status": "transport",
+      "note": "internal/platform/transport/idempotent.go. AP2 states no transport, so there is nothing here for a second AP2 implementation to reproduce."
+    },
+    "idempotency_conflict": {
+      "status": "transport",
+      "note": "internal/platform/transport/idempotent.go: the key was reused for a materially different request. Tested in idempotent_test.go."
+    },
+    "idempotency_in_flight": {
+      "status": "transport",
+      "note": "internal/platform/transport/idempotent.go: a retry arrived while the first attempt was still running. Tested in idempotent_test.go."
+    },
+
+    "mandate_malformed": {
+      "status": "vectored",
+      "note": "A closed Checkout Mandate carrying no checkout_hash. The most-produced code in the adapter - ErrMandateMalformed, ErrReceiptMismatch, four constraint parse failures and three of pkg/sdjwt's own sentinels all land here - and the vector takes the shortest honest route to it: a required claim that is not there."
+    },
+    "signature_invalid": {
+      "status": "vectored",
+      "note": "A mandate verified against a key that did not sign it, both ES256, so the header's alg agrees and only the bytes disagree. Deliberately indistinguishable from a wrong payload or a malformed signature: a verifier should not tell a forger which."
+    },
+    "algorithm_unsupported": {
+      "status": "vectored",
+      "note": "_sd_alg naming sha-256-64, which is in the IANA Named Information registry and truncated to 64 bits. Membership of that registry is not the acceptance criterion, and an implementation that computed whatever _sd_alg named would accept digests a forger can collide. The same code answers a JWS alg that is absent, 'none', or not the resolved key's."
+    },
+    "mandate_expired": {
+      "status": "vectored",
+      "note": "exp has passed, judged against the injected clock. Two other producers share it: authz.ErrExpired for the open mandate's own authority window, and ErrCredentialExpired for a payment credential - three lifetimes, one code, because what the holder must do is the same in all three."
+    },
+    "mandate_not_yet_valid": {
+      "status": "vectored",
+      "note": "nbf has not arrived. Separate from expiry because the holder's next move differs: an expired mandate needs reissuing and this one needs waiting for."
+    },
+    "disclosure_unmatched": {
+      "status": "vectored",
+      "note": "A Disclosure from another mandate spliced onto this presentation. The issuer's signature covers the digest, so an unmatched Disclosure is a claim added after signing. A repeated digest, an unreachable Disclosure and a claim collision are the same refusal by other routes."
+    },
+    "disclosure_insufficient": {
+      "status": "vectored",
+      "note": "Two vectors, because the code has two producers that mean different things. ErrBindingUnverifiable: checkout_jwt was withheld and the verifier holds no copy, so the hash cannot be recomputed and a hash nobody can recompute is not a binding. ErrDisclosureInsufficient: a chain disclosed no constraint on a fact this verifier will not authorise without one. In both the presentation verified perfectly and left the verifier unable to conclude."
+    },
+    "key_binding_required": {
+      "status": "vectored",
+      "note": "Policy required proof of possession and none arrived. RFC 9901 section 7.3 step 1 makes this come from policy and never from what the presenter chose to send."
+    },
+    "key_binding_invalid": {
+      "status": "vectored",
+      "note": "A Key Binding JWT minted for another transaction's nonce. Note the precedence rule: an unendorsed agent key is refused inside a key binding and satisfies errors.Is for both this and agent_key_mismatch, and the receipt carries the latter, because the innermost layer to form a view has the most specific one."
+    },
+
+    "key_unknown": {
+      "status": "not-produced",
+      "note": "authz.ErrKeyNotFound exists and key stores raise it, and authz.Owns deliberately excludes it - see that function's comment, which records the decision. So it reaches a receipt as verifier_unavailable, which is true: a verifier that cannot resolve its own kid has a fault of its own rather than a verdict about a counterparty's mandate. Nothing maps to key_unknown. If one of the six key errors ever needs a code of its own, the fix is an arm in authz.CodeOf and an entry in Owns, in that order."
+    },
+    "key_expired": {
+      "status": "not-produced",
+      "note": "authz.ErrKeyExpired, on the same terms as key_unknown and for the same recorded reason. Distinct from mandate_expired, which is the credential's life rather than the signing key's."
+    },
+
+    "mandate_version_unsupported": {
+      "status": "vectored",
+      "note": "Two vectors, for the two sentinels that share it. ErrUnsupportedVersion: a vct whose version suffix names a credential type this verifier does not implement - the suffix exists to make this refusable rather than guessable. ErrWrongMandateType: the vct names one of AP2's four mandates and not the one being verified, most usefully an open Checkout Mandate where a closed one belongs, which is the escalation the open/closed split exists to prevent."
+    },
+    "checkout_hash_mismatch": {
+      "status": "vectored",
+      "note": "A Checkout Mandate recomputed against a different merchant document. The mandate authorises a purchase and this is a different purchase."
+    },
+    "payment_binding_mismatch": {
+      "status": "vectored",
+      "note": "A Payment Mandate whose transaction_id names a checkout other than the one being paid for. Separate from checkout_hash_mismatch because both mandates may be perfectly valid and simply not belong together."
+    },
+    "payment_amount_mismatch": {
+      "status": "vectored",
+      "note": "A mandate paying 1 USD against a checkout costing 189 USD. The one code here that no AP2 rule produces: the specification binds the two documents by hash and says nothing about the number, so this mandate conforms and is refused anyway. docs/protocols/ap2.md carries the rule we adopted; ap2.AmountMatches carries the argument."
+    },
+    "constraint_violated": {
+      "status": "vectored",
+      "note": "Beat 5 of the built scenario: a Human Not Present purchase at USD 210 against the USD 200 cap the user set. The limits were read, evaluated, and the answer was no - the one code an agent acts on, because it means come back cheaper rather than retry. authz.ErrPinnedFieldChanged carries it too: a closed mandate that rewrote a value the user fixed outright is a violation, not a malformed document."
+    },
+    "constraint_type_unknown": {
+      "status": "vectored",
+      "note": "An open mandate constraining checkout.line_items, which is AP2's own constraint and one this verifier does not implement. Rejected, never skipped: silently ignoring a limit nobody understands lets the purchase proceed while misrepresenting what was approved. An unknown operator is the same refusal; the field and operator tables are closed on purpose."
+    },
+    "agent_key_mismatch": {
+      "status": "vectored",
+      "note": "A delegation whose open mandate carries a cnf that decodes cleanly and names no usable material - a kty with no coordinates. The mandate is well formed and the key is the problem. The wrong key entirely is unrepresentable rather than caught: a closed mandate is a Key Binding JWT verified against cnf and no other key, so a foreign signature fails to verify at all."
+    },
+    "open_mandate_required": {
+      "status": "not-produced",
+      "note": "Nothing raises it. The rule it names is a verifier policy - this closed mandate was signed by an agent, so where is the open one that endorsed the key - and this implementation never reaches the question, because under Human Not Present the delegation is a chain: a lone mandate offered where a chain belongs is refused by sdjwt.ParseChain one step earlier, and every role's call site answers that mandate_malformed. Under Human Present the user signs the closed mandate directly and no open mandate is required. Classified as not produced rather than unreachable: the input exists, there is simply no code path that reads it as this rejection, and a verifier that chose to accept a bare agent-signed closed mandate would need this code."
+    },
+    "open_mandate_outstanding": {
+      "status": "agent-side",
+      "note": "authz.MandateState.Next, for both readings of AP2's rejection-receipt rule: a further attempt while one is unanswered, and an attempt against a mandate already spent. It is the one AP2 rule no verifier can enforce - authz.CodeOf's own comment says so - because a verifier is shown one presentation carrying no record of any other. The refusal is the agent's about its own bookkeeping and never reaches a counterparty, so there is no artefact for a vector to be over. internal/core/authz/lifecycle_test.go asserts this code on both routes."
+    },
+
+    "credential_scope_mismatch": {
+      "status": "vectored",
+      "note": "A payment credential scoped to another checkout. The third and last place the same digest appears: three signatures by three parties over one value is what makes them one transaction. The mandates may agree with each other perfectly and the money still be wrong."
+    },
+
+    "agent_unknown": {
+      "status": "tap",
+      "note": "TAP: the key reference is one the registry has never held. Identity, not authorisation - AP2 answers what the user approved and TAP answers who is asking."
+    },
+    "agent_unverified": {
+      "status": "tap",
+      "note": "TAP: the agent is known and its RFC 9421 request signature does not check out."
+    },
+    "signature_replayed": {
+      "status": "tap",
+      "note": "TAP: the signature has already been used inside its window. The verifier-side nonce store of issue #27, which is also what defends against a dishonest agent replaying an open mandate - a defence the agent-side rejection-receipt machine cannot provide."
+    },
+    "signature_scope_mismatch": {
+      "status": "tap",
+      "note": "TAP: the signature is not bound to this domain or this operation."
+    },
+
+    "verifier_unavailable": {
+      "status": "vectored",
+      "note": "A verifier stood up without a clock. The only 5xx in the taxonomy and the one code that is not a verdict about the counterparty: answering mandate_malformed here would send the one party who did nothing wrong away to debug their own request. It is also the backstop - an unmapped failure arrives here rather than as the empty string, which is not in the enum and would reach the transport as a 500 naming nothing."
+    }
+  }
+}
