@@ -151,6 +151,55 @@ type receiptView struct {
 	Token string `json:"token"`
 }
 
+// presentedView is the whole of GET /watches/{id}/attempts/{n}/presented: the
+// four documents one attempt put in front of its verifiers.
+//
+// # A sub-resource rather than four more fields on attemptView
+//
+// A console polls GET /watches/{id} about once a second while a watch runs. Four
+// chains per attempt, each several kilobytes, would ride every one of those
+// polls and grow with every attempt — for data a viewer sees only when they
+// click a row. The interaction is already request-shaped: a tracker row is
+// clicked, and *then* the Inspector opens. TestThePolledViewDoesNotCarryTheChains
+// is what fails if they migrate onto the row.
+//
+// # It says what was presented and never what came back of it
+//
+// attemptView's argument about the missing error code applies here word for
+// word, and it applies harder: these are the documents themselves, so a verdict
+// field beside one would read as the document's own status. What each verifier
+// concluded is in that attempt's receipts, signed by whoever concluded it.
+type presentedView struct {
+	// Checkout is the closed Checkout Mandate. One, because the merchant is the
+	// only party that reads one.
+	Checkout presentationView `json:"checkout"`
+
+	// Payment is the closed Payment Mandate, once per verifier that reads one:
+	// the Credential Provider, the merchant and the Merchant Payment Processor,
+	// in the order they are presented. It is an array rather than three named
+	// fields because what a reader does with it is compare the entries — which
+	// is #21's whole screen.
+	Payment []presentationView `json:"payment"`
+}
+
+// presentationView is one chain and the verifier it was addressed to.
+//
+// **The audience is what makes the chain legible**, and it is the reason this is
+// not a bare list of strings. "What did *this* verifier see" needs the reader to
+// know which verifier, and `aud` sits inside the delegating hop where only a
+// decoder reaches it. The agent knows it without decoding anything, because it
+// chose it — see agent.Audiences.
+//
+// The chain travels exactly as it was presented, and nothing here decodes one.
+// Which claims a verifier was shown and which were withheld is the difference
+// between issuance and presentation, so it is legible only from the presentation
+// itself; a console that re-derived it from the schema's DISCLOSABLE list would
+// be showing what *may* be withheld as though it were what was.
+type presentationView struct {
+	Audience string `json:"audience"`
+	Chain    string `json:"chain"`
+}
+
 // boughtView is the attempt that went through.
 type boughtView struct {
 	// Attempt is which row of Attempts it was, counting from one.
@@ -247,6 +296,44 @@ func (r *Run) view() view {
 		out.Attempts = append(out.Attempts, row)
 	}
 	return out
+}
+
+// presented renders GET /watches/{id}/attempts/{n}/presented, reporting whether
+// this watch has an attempt n at all.
+//
+// n is the number the row calls itself — attemptView.N, which is what a caller
+// read off the view it is asking about — rather than an offset into the slice.
+// The two are the same today, and matching on the number is what keeps that an
+// implementation detail of record instead of something this depends on.
+//
+// A watch with no attempt n reports false rather than an empty presentation, and
+// Service.readPresented turns that into a 404. An empty answer would read as
+// "this attempt presented nothing", which is a statement about an attempt that
+// exists.
+func (r *Run) presented(n int) (presentedView, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, a := range r.attempts {
+		if a.n != n {
+			continue
+		}
+		out := presentedView{
+			Checkout: presentationView{
+				Audience: a.presented.checkout.audience,
+				Chain:    a.presented.checkout.chain,
+			},
+			// Length zero rather than nil, on sentences' reasoning below: a
+			// caller iterating over the answer would otherwise have to handle
+			// both `[]` and `null`.
+			Payment: make([]presentationView, 0, len(a.presented.payment)),
+		}
+		for _, p := range a.presented.payment {
+			out.Payment = append(out.Payment, presentationView{Audience: p.audience, Chain: p.chain})
+		}
+		return out, true
+	}
+	return presentedView{}, false
 }
 
 // sentences renders a list that has to survive encoding/json's nil.

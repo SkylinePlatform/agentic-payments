@@ -230,6 +230,56 @@ type Attempted struct {
 	// attempt had been applied.
 	Checkout authz.MandateState
 	Payment  authz.MandateState
+	// Audiences names the verifier each of Delegated's four chains was
+	// addressed to. It travels beside them rather than being read out of them;
+	// see Audiences.
+	Audiences Audiences
+}
+
+// Audiences names the verifier each of an attempt's four chains was addressed
+// to.
+//
+// The value is inside the chain already — `aud` in the delegating hop, which is
+// what sdjwt.VerifyChain compares — so this is not new information. What it is
+// is *reachable* information: a consumer holding the compact serialisation can
+// only get at that claim by decoding a document it did not sign, and the agent
+// never has to, because it is the party that chose the value. chain.go's table
+// is where each of the four is decided.
+//
+// Four fields for three identifiers, because the merchant reads two of the
+// chains: the closed Checkout Mandate and one of the three closed Payment
+// Mandates are both addressed to it. Naming the four separately is what lets a
+// reader check the pairing field by field instead of counting documents — and
+// the pairing is the thing worth checking, since the three payment chains differ
+// only in `aud` and the nonce they are bound to.
+type Audiences struct {
+	// Checkout is who the closed Checkout Mandate was addressed to. Always the
+	// merchant: it is the only party that reads one.
+	Checkout string
+
+	// Credential, Merchant and Processor are the audiences of the three closed
+	// Payment Mandates, named after the Delegated fields that hold them —
+	// CredentialChain, MerchantChain, ProcessorChain.
+	Credential string
+	Merchant   string
+	Processor  string
+}
+
+// audiences is the identifier each of this watch's four chains is addressed to.
+//
+// It is a second statement of chain.go's table, and there is no arrangement that
+// would make it the first: the values reach the wire as `aud` inside a
+// signature, so anything downstream either takes the agent's word for them or
+// decodes a mandate. What keeps the two statements in step is therefore a test
+// rather than a shape — TestEachChainCarriesTheAudienceItIsPublishedBesideIt
+// decodes the delegating hop of every chain a real attempt minted and compares.
+func (w *Watch) audiences() Audiences {
+	return Audiences{
+		Checkout:   w.Merchant.ID,
+		Credential: w.CredProviderID,
+		Merchant:   w.Merchant.ID,
+		Processor:  w.ProcessorID,
+	}
 }
 
 // Watched is what one run of the watch did.
@@ -378,6 +428,7 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 			Deliveries: delivery,
 			Checkout:   tracker.Checkout(),
 			Payment:    tracker.Payment(),
+			Audiences:  w.audiences(),
 		}
 		if i, seen := recorded[d.ID]; seen {
 			out.Attempts[i] = row
@@ -482,6 +533,7 @@ func (w *Watch) Attempt(
 				Deliveries: delivery,
 				Checkout:   tracker.Checkout(),
 				Payment:    tracker.Payment(),
+				Audiences:  w.audiences(),
 			})
 		}
 

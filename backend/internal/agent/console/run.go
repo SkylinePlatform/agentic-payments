@@ -157,6 +157,17 @@ type attemptRow struct {
 	receipts   []agent.Receipt
 	settled    bool
 
+	// presented is what this attempt put in front of its verifiers: the four
+	// chains, each beside the audience it was addressed to.
+	//
+	// It is here rather than on the polled view because a console reads it on a
+	// click and polls the view about once a second — see presentedView. The
+	// chains do not change after minting, so this particular copy would survive
+	// being an alias; it is a copy anyway, because the rule this struct's own
+	// comment states is about the row and not about which of its fields happen
+	// to be safe today.
+	presented presentedChains
+
 	// err is what the delivery returned, as its own text.
 	//
 	// **A string and never a generated.ErrorCode.** The code belongs to whoever
@@ -165,6 +176,52 @@ type attemptRow struct {
 	// its own would be reporting somebody else's decision as its own, which
 	// purchase.go names as the wrong model. See the package comment.
 	err string
+}
+
+// presentation is one chain and the verifier it was addressed to.
+type presentation struct {
+	audience string
+	chain    string
+}
+
+// presentedChains is one attempt's four documents: the closed Checkout Mandate
+// the merchant reads, and the three closed Payment Mandates, one per verifier
+// that reads one.
+//
+// The payment chains are held in the order they are presented — Credential
+// Provider, merchant, processor. That is agent.Delegated's own field order and
+// the order of chain.go's table as well, so there is one order here rather than
+// a third one for a reader to reconcile.
+type presentedChains struct {
+	checkout presentation
+	payment  []presentation
+}
+
+// presentedBy pairs each of an attempt's four chains with the verifier it was
+// addressed to.
+//
+// **This pairing is the one thing on this route that can be wrong without
+// looking wrong.** The three payment chains differ only in `aud` and the nonce
+// they are bound to, so serving the merchant's where the processor's belongs
+// puts a genuine chain this agent minted under the wrong heading: every string
+// on the screen is a real document, and the Inspector shows a viewer what that
+// verifier did not see. Counting four chains cannot tell the difference, which
+// is why TestEachChainIsServedToTheAudienceItWasAddressedTo asserts the pairing
+// rather than the tally.
+//
+// The audiences come from the attempt rather than from anything here. They are
+// cmd/agent's -merchant-id, -credprovider-id and -mpp-id, carried through
+// console.Agent and agent.Watch to agent.Audiences; a console that spelled them
+// out would be naming three parties it does not configure.
+func presentedBy(d *agent.Delegated, aud agent.Audiences) presentedChains {
+	return presentedChains{
+		checkout: presentation{audience: aud.Checkout, chain: d.CheckoutChain},
+		payment: []presentation{
+			{audience: aud.Credential, chain: d.CredentialChain},
+			{audience: aud.Merchant, chain: d.MerchantChain},
+			{audience: aud.Processor, chain: d.ProcessorChain},
+		},
+	}
 }
 
 // quoteRow is an offer as the console shows it.
@@ -239,6 +296,10 @@ func (r *Run) record(a agent.Attempted) {
 		// Cloned rather than aliased. agent.Delegated.keep appends, so the slice
 		// this row was handed grows under a re-delivery.
 		row.receipts = slices.Clone(a.Delegated.Receipts)
+		// Read out here rather than at render time, which is the same copy the
+		// two lines above take and for the same reason: what is stored is what
+		// was true when the watch published it.
+		row.presented = presentedBy(a.Delegated, a.Audiences)
 	}
 
 	if i, seen := r.index[row.id]; seen {

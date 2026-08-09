@@ -2,6 +2,8 @@ package agent_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -325,6 +327,127 @@ func TestAnItemChosenByTheCallerIsStillRenderedForTheUserToSee(t *testing.T) {
 
 	assert.Contains(t, strings.Join(auth.Rendered, "\n"), merchant.DemoBicycleID,
 		"the whole point of narrowing before signing is that the user reads which offer it is")
+}
+
+// TestEachChainCarriesTheAudienceItIsPublishedBesideIt is what makes the label
+// on a served chain worth anything.
+//
+// The console serves each of an attempt's four chains beside the identifier of
+// the verifier it was addressed to, and it does that without decoding anything —
+// the value arrives as agent.Audiences, which is this package's own second
+// statement of chain.go's table. A second statement of a fact is a second thing
+// that can be wrong, and this is where the two are made to agree: every chain is
+// taken apart, the `aud` claim is read out of its delegating hop, and compared
+// against the label the watch published for it.
+//
+// **A transposition is what this catches**, and it is the failure worth catching
+// because it looks like nothing. The three payment chains are one mandate
+// delegated three times and differ only in `aud` and the nonce they carry, so a
+// pairing that put the merchant's copy under the processor's name would publish
+// four genuine documents with one of them addressed to a party that never saw
+// it — and every other test in this file would still pass.
+func TestEachChainCarriesTheAudienceItIsPublishedBesideIt(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	a := authorise(t, w)
+
+	progress := watching(t)
+	watch := a.watch(t)
+	watch.Progress = progress
+
+	wait, _ := a.running(t, watch)
+
+	a.quoted() // the baseline, $240
+
+	a.step() // $210 — refused
+	a.quoted()
+	a.attempted()
+
+	a.step() // $189 — bought
+	a.quoted()
+	a.attempted()
+
+	_, err := wait()
+	require.NoError(t, err, "the watch had a price it could buy at and did not")
+
+	rows := published(t, progress, "Attempted")
+	require.Len(t, rows, 2, "two attempts, and both minted their own four chains")
+
+	// Three identifiers, and the assertions below are only worth making because
+	// they really are three: a watch that addressed everything to one party
+	// would satisfy every comparison in the loop while proving nothing.
+	require.Equal(t, merchantID, rows[0].Audiences.Merchant,
+		"the audiences are the watch's own configuration, which is cmd/agent's -merchant-id")
+	require.NotEqual(t, merchantID, rows[0].Audiences.Credential,
+		"the Credential Provider is a different party from the merchant")
+	require.NotEqual(t, merchantID, rows[0].Audiences.Processor)
+	require.NotEqual(t, rows[0].Audiences.Credential, rows[0].Audiences.Processor)
+
+	for i, row := range rows {
+		require.NotNil(t, row.Delegated, "attempt %d minted four documents", i+1)
+
+		for _, pair := range []struct{ what, chain, published string }{
+			{"the closed Checkout Mandate", row.Delegated.CheckoutChain, row.Audiences.Checkout},
+			{"the Credential Provider's Payment Mandate", row.Delegated.CredentialChain, row.Audiences.Credential},
+			{"the merchant's Payment Mandate", row.Delegated.MerchantChain, row.Audiences.Merchant},
+			{"the processor's Payment Mandate", row.Delegated.ProcessorChain, row.Audiences.Processor},
+		} {
+			assert.Equal(t, pair.published, audienceOf(t, pair.chain),
+				"attempt %d: %s is published beside %q, and a consumer that must not decode a "+
+					"mandate has nothing but that label to go on",
+				i+1, pair.what, pair.published)
+		}
+	}
+}
+
+// audienceOf reads the aud claim out of a chain's delegating hop.
+//
+// Decoded here rather than through sdjwt.VerifyChain, because the two answer
+// different questions. VerifyChain is handed the audience it should find and
+// reports whether it matches, so a test built on it would be asking a verifier
+// to confirm the value the test gave it. What this asserts is what the *bytes*
+// say, which is the only thing a party downstream of the agent could ever check.
+//
+// assert rather than require, on the standing rule for helpers: this one is safe
+// on the test goroutine and a require in it would be unsafe the moment somebody
+// called it from a callback. The empty string is what a caller compares against
+// when the chain could not be read, and no audience is ever that.
+func audienceOf(t *testing.T, chain string) string {
+	t.Helper()
+
+	// root JWT, the root's disclosures, an empty component, the delegating JWT,
+	// its disclosures, and a trailing empty component. The first empty component
+	// after the root is the hop separator; the delegating JWT follows it.
+	parts := strings.Split(chain, "~")
+	sep := -1
+	for i := 1; i < len(parts); i++ {
+		if parts[i] == "" {
+			sep = i
+			break
+		}
+	}
+	if !assert.Positive(t, sep, "a delegate SD-JWT separates its two hops with an empty component") ||
+		!assert.Less(t, sep+1, len(parts), "and the delegating JWT is the component after it") {
+		return ""
+	}
+
+	encoded := strings.Split(parts[sep+1], ".")
+	if !assert.Len(t, encoded, 3, "the delegating hop is a JWS: header, payload, signature") {
+		return ""
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(encoded[1])
+	if !assert.NoError(t, err, "decoding the delegating hop's payload") {
+		return ""
+	}
+
+	var claims struct {
+		Audience string `json:"aud"`
+	}
+	if !assert.NoError(t, json.Unmarshal(raw, &claims), "reading the delegating hop's claims") {
+		return ""
+	}
+	return claims.Audience
 }
 
 // watching is the double every test here hands the watch.
