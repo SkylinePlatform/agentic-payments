@@ -1,11 +1,25 @@
 // Command agent runs the mock Shopping Agent.
 //
 // It is the only role an LLM may ever appear in — inside internal/agent/interpret
-// and nowhere else. None appears here, and none appears in the watch either: the
-// interpretation happens once, before the user signs, and everything after that
-// is deterministic. That is beat 4 of the built scenario, and it is a property
-// rather than a coincidence of the demo's wiring — -watch builds an
-// interpret.Demo(), which is a fixed table, and no model is configured anywhere.
+// and nowhere else. None appears in the watch: the interpretation happens once,
+// before the user signs, and everything after that is deterministic. That is
+// beat 4 of the built scenario, and it is structural rather than a coincidence of
+// the demo's wiring — the interpreter is called from one place, Client.Authorise,
+// and nothing below it can reach one.
+//
+// # -interpreter chooses which implementation reads the prompt
+//
+// `scripted`, the default, is interpret.Demo(): a fixed table of five prompts,
+// no key and no network. `gemini` is a model behind the same interface, reading
+// GEMINI_API_KEY from the environment.
+//
+// **The default is what deploy/demo.json runs and must stay so.** `make demo`
+// has to come up without a key and without reaching anything, and the golden
+// numbers every screenshot in this repository shows are the scripted five.
+//
+// **There is no fallback.** `-interpreter gemini` with no key refuses to start,
+// because an agent asked for a model and quietly handed a fixed table produces a
+// screenshot nobody can attribute. interpreterFor is where that decision lives.
 //
 // It confirms every counterparty is reachable and publishing a readable key,
 // and then runs whichever flow it was asked for:
@@ -85,6 +99,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/console"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
@@ -134,10 +149,31 @@ func run() error {
 	credProviderID := flag.String("credprovider-id", "mock-credential-provider", "the Credential Provider's identifier, and the audience of the chain addressed to it")
 	processorID := flag.String("mpp-id", "mock-payment-processor", "the processor's identifier, and the audience of the chain addressed to it")
 
+	// Which implementation reads the prompt. Defaulting to the scripted table is
+	// what keeps `make demo` needing no key and no network — and a
+	// non-deterministic demo would take the golden numbers with it.
+	interpreter := flag.String("interpreter", interpreterScripted,
+		"which IntentInterpreter reads -prompt: "+interpreterScripted+" or "+interpreterGemini)
+	geminiModel := flag.String("gemini-model", interpret.DefaultGeminiModel,
+		"the model -interpreter "+interpreterGemini+" calls")
+
 	collector := roles.CollectorFlag()
 	flag.Parse()
 
 	if err := flagsAgree(*addr, *once); err != nil {
+		return err
+	}
+
+	// Built before anything is dialled, so that a missing key fails now rather
+	// than after thirty seconds of waiting for four counterparties. The
+	// constructors perform no I/O, which is what makes that ordering available.
+	//
+	// The key is read here rather than inside interpret. os.Getenv appears
+	// nowhere else in backend/ and should not start inside a library package: a
+	// package that reads the environment behaves differently depending on who
+	// called it, and makes tests depend on the order they ran in.
+	reader, reading, err := interpreterFor(*interpreter, os.Getenv(geminiKeyVar), *geminiModel, clock.New())
+	if err != nil {
 		return err
 	}
 
@@ -169,8 +205,17 @@ func run() error {
 		}
 	}
 
+	// Only where a prompt will actually be read. The Human Present flow never
+	// calls an interpreter, and deploy/demo.json's agent-buy is that process —
+	// a line there would say something true about a collaborator it does not
+	// have.
+	if *watch || *addr != "" {
+		fmt.Printf("  [ ok ] %-13s %s\n", "interpreter", reading)
+	}
+
 	cfg := watching{
 		prompt:         *prompt,
+		interpreter:    reader,
 		quantity:       *quantity,
 		poll:           *poll,
 		merchant:       generated.Merchant{ID: *merchantID, Name: *merchantName},
@@ -218,6 +263,81 @@ func flagsAgree(addr string, once bool) error {
 			"a server that exits after its first watch is a server nobody can use")
 	}
 	return nil
+}
+
+// The two implementations of IntentInterpreter -interpreter chooses between, and
+// the environment variable the second one needs.
+//
+// The variable is named here rather than in internal/agent/interpret because
+// this is the process that reads it. A library package reaching into the
+// environment behaves differently depending on who imported it, and turns every
+// test that touches it into one that depends on the order the others ran in.
+const (
+	interpreterScripted = "scripted"
+	interpreterGemini   = "gemini"
+
+	geminiKeyVar = "GEMINI_API_KEY"
+)
+
+// interpreterFor builds the IntentInterpreter this process was asked for.
+//
+// # There is no silent fallback, and that is the whole of this function
+//
+// -interpreter gemini with no key **refuses to start**. The tempting behaviour
+// is to warn and carry on with the scripted table, and it is the one that must
+// not be written: an agent asked for a model and quietly handed a fixed table
+// produces a screenshot nobody can attribute, and the failure shows up as a
+// demonstration that works suspiciously well. The refusal is made in
+// interpret.NewGemini; this function only declines to paper over it.
+//
+// An unknown name is refused for the same reason rather than defaulted. A typo
+// that silently selected the scripted table would be the same screenshot.
+//
+// # Why it is a function rather than four lines inside run
+//
+// The same reason as flagsAgree: so that the decision is assertable without a
+// process. TestInterpreterFor is what holds it, and the row that matters is
+// gemini with no key — a fallback added there is a test that goes red rather
+// than a demo that looks fine.
+//
+// **Neither constructor performs I/O**, so calling this during flag handling
+// costs nothing and fails a missing key before the process has waited for its
+// counterparties. It is also what lets the test exist at all: hard rule 4
+// forbids a test that depends on a live model, and a constructor that dialled
+// anything would put one here.
+// # The second return value is what the banner prints
+//
+// Which interpreter read the prompt is the one thing about this process that
+// cannot be recovered from its output afterwards — two interpretations of the
+// same sentence look alike on the approval screen — so it is printed on the way
+// up. That is the same argument as the refusal above, one step along: a
+// screenshot nobody can attribute is the failure, and saying which implementation
+// is in play is the cheap half of preventing it.
+func interpreterFor(name, apiKey, model string, clk authz.Clock) (interpret.IntentInterpreter, string, error) {
+	switch name {
+	case interpreterScripted:
+		scripted := interpret.Demo()
+		return scripted, fmt.Sprintf("%s — %d prompts, no model", interpreterScripted, len(scripted.Prompts())), nil
+
+	case interpreterGemini:
+		provider, err := interpret.NewGemini(apiKey, model)
+		if err != nil {
+			return nil, "", fmt.Errorf("agent: -interpreter %s: %w; export %s, or leave -interpreter at %s",
+				interpreterGemini, err, geminiKeyVar, interpreterScripted)
+		}
+		reader, err := interpret.NewModel(provider, clk)
+		if err != nil {
+			return nil, "", err
+		}
+		// The provider's own answer rather than the flag's, because NewGemini
+		// substitutes the default for an empty name and a banner repeating the
+		// flag would then print nothing where a model is.
+		return reader, interpreterGemini + " — " + provider.Model(), nil
+
+	default:
+		return nil, "", fmt.Errorf("agent: -interpreter %q is not one this build has; it is %q or %q",
+			name, interpreterScripted, interpreterGemini)
+	}
 }
 
 // afterWatch turns the end of a watch into what the process should do about it,
@@ -311,11 +431,12 @@ func serveConsole(
 	service := &console.Service{
 		Watcher: &console.Agent{
 			Client: &agent.Client{Endpoints: e, Events: events},
-			// The scripted table, which is what the demo runs. The model-backed
-			// implementation is #17's and goes behind this same interface — it is
-			// the one thing in this process an LLM may ever sit behind, and it is
-			// called once per authorisation, before the user signs.
-			Interpreter:    interpret.Demo(),
+			// Whichever implementation -interpreter chose: the scripted table by
+			// default, which is what the demo runs, or a model behind the same
+			// interface. It is the one thing in this process an LLM may ever sit
+			// behind, and it is called once per authorisation, before the user
+			// signs.
+			Interpreter:    cfg.interpreter,
 			AgentKey:       agentKey,
 			Signer:         identity.Signer,
 			Blinder:        blinder,
@@ -367,7 +488,13 @@ func serveConsole(
 // or a number and a call site passing them positionally is one transposition
 // away from addressing the merchant's chain to the processor.
 type watching struct {
-	prompt         string
+	prompt string
+
+	// interpreter reads the prompt, once, before the user signs. It is the one
+	// thing in this process an LLM may ever sit behind — hard rule 2 — and which
+	// implementation it holds is the whole of what -interpreter chooses.
+	interpreter interpret.IntentInterpreter
+
 	quantity       int
 	poll           time.Duration
 	merchant       generated.Merchant
@@ -424,10 +551,10 @@ func watchOnce(
 
 	authorised, err := client.Authorise(ctx, agent.Intent{
 		Prompt: cfg.prompt,
-		// The scripted interpreter, which is what the demo runs: no model is
-		// configured and beat 2 has to happen for beats 3 to 10 to exist at all.
-		// The model-backed implementation goes behind this same interface.
-		Interpreter: interpret.Demo(),
+		// Whichever -interpreter chose. The default is the scripted table, which
+		// is what the demo runs: beat 2 has to happen for beats 3 to 10 to exist
+		// at all, and it must not depend on a key or a network.
+		Interpreter: cfg.interpreter,
 		AgentKey:    agentKey,
 	})
 	if err != nil {
