@@ -44,6 +44,13 @@ packages:
     interfaces:
       Progress:
 
+  # The console's Watcher, for the same reason one interface along: Watch runs
+  # on the goroutine POST /watches leaves behind, and how many times Authorise
+  # was called is exactly what TestARepeatedKeyStartsOneWatch is about.
+  github.com/SkylinePlatform/agentic-payments/backend/internal/agent/console:
+    interfaces:
+      Watcher:
+
   # The merchant's Processor. What its tests are about is whether the money was
   # asked for at all: the merchant refuses a purchase before initiating payment,
   # and the response shape cannot show that — a refusal omits the payment

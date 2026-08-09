@@ -381,16 +381,37 @@ func (s MandateState) Next(e MandateEvent) (MandateState, error) {
 }
 
 // stateNames are what ErrUnknownTransition names when it reports the pair it
-// was handed, and what a consumer will show a person — see StateAwaitingReceipt
-// for why the middle one has to read as waiting.
+// was handed, and what a consumer shows a person — see StateAwaitingReceipt for
+// why the middle one has to read as waiting.
 //
-// Will, not does. Nothing outside this package names MandateState today and
-// neither contracts/ nor frontend/src contains "awaiting_receipt", so the only
-// caller these spellings currently have is the refusal message below.
+// # One of them is served, and that is not the same as travelling
 //
-// They are not conformance surface the way evidence.Step's spellings are.
-// Nothing serialises a mandate state: no artefact in this repository carries
-// one, because the state is the agent's own bookkeeping and never travels.
+// internal/agent/console serves these strings: the agent's own console API puts
+// them on an attempt row so a browser can read where each open mandate stands.
+// The rule that survives is narrower than "nothing serialises a mandate state",
+// and it is the one that was doing the work all along — **the state may be
+// served by its owner, and must not become a protocol artefact.** The agent is
+// the only party that knows it: no verifier does, for the reasons the section on
+// enforcement above gives, so a counterparty reading it from anywhere would be
+// reading an inference.
+//
+// Three arrangements keep that structural rather than a promise. Nothing in
+// `contracts/` gains a mandate-state field, so no schema, no generated Go type
+// and no generated TypeScript type carries one —
+// TestNoContractCarriesAMandateState walks the schemas for these three
+// spellings. The console takes the string from String below rather than keeping
+// a table of its own. And **no route accepts a state**: the console's DTO is
+// only ever marshalled, so an agent can state where its mandates stand and
+// nobody can tell it.
+//
+// The containment is a lint rule rather than a convention. `console-containment`
+// in backend/.golangci.yml makes internal/agent/console importable only from
+// cmd/agent, so a verifier cannot reach the buyer's bookkeeping even by
+// accident — the same argument collector-containment makes about the event log.
+//
+// They are still not conformance surface the way evidence.Step's spellings are.
+// No mandate, no receipt and no schema carries one, so nothing outside this
+// repository ever has to agree with them.
 var stateNames = [...]string{
 	StateReady:           "ready",
 	StateAwaitingReceipt: "awaiting_receipt",

@@ -159,7 +159,7 @@ These are enforced, not advisory.
    defines ports; everything else implements them. If core knows which protocols
    exist, the ability to add one without surgery is gone.
 
-   Six more dependency rules follow from the same reasoning, and all seven are
+   Seven more dependency rules follow from the same reasoning, and all eight are
    enforced by `depguard` in CI rather than by review:
 
    | Rule | Effect |
@@ -170,6 +170,7 @@ These are enforced, not advisory.
    | `key-material-containment` | `crypto/ecdsa`, `crypto/ed25519`, `crypto/rsa`, `crypto/ecdh` and `crypto/x509` are importable only from `internal/platform/crypto` — nowhere else can name the type a private key would arrive in |
    | `no-weak-randomness` | `math/rand` and `math/rand/v2` are banned everywhere — randomness here reaches nonces and keys |
    | `collector-containment` | `internal/collector/**` is importable only from `cmd/collector` — the event log is observability, never evidence, so a dispute path must not be able to reach it even by accident |
+   | `console-containment` | `internal/agent/console/**` is importable only from `cmd/agent` — the same argument one party along. An agent's view of where its own mandates stand is bookkeeping and never evidence, so a merchant that could import it would be reading the buyer's opinion as fact rather than the signed receipt AP2 gives it |
 
    A lint failure in this repository is an architecture violation, not a style
    nit. Do not add a `//nolint` to get past one; the rule is the design.

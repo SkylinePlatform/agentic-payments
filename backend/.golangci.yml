@@ -119,6 +119,29 @@ linters:
             - pkg: github.com/SkylinePlatform/agentic-payments/backend/internal/collector
               desc: the event log is observability, never evidence — dispute paths read signed artefacts
 
+        # An agent's view of where its own mandates stand is bookkeeping and
+        # never evidence — which is collector-containment's argument, one party
+        # along, and this rule is deliberately that rule's exact shape.
+        #
+        # authz/lifecycle.go says the state is the agent's own and that no
+        # verifier can keep it: the rule sets hold no state and each verifier
+        # sees one presentation carrying no record of any other. So the state may
+        # be served by its owner. What must not happen is a second party reading
+        # it: a merchant that could import this package to ask an agent whether
+        # its mandate is spent would be reading the buyer's opinion as fact,
+        # where AP2 gives it a signed receipt to read instead.
+        #
+        # cmd/agent is the only importer, because it is the process the console
+        # exists for.
+        console-containment:
+          files:
+            - $all
+            - "!**/cmd/agent/**"
+            - "!**/internal/agent/console/**"
+          deny:
+            - pkg: github.com/SkylinePlatform/agentic-payments/backend/internal/agent/console
+              desc: a mandate's state is the agent's own bookkeeping, never evidence — verifiers read signed receipts
+
         # Randomness in this codebase reaches nonces, key material and
         # signatures. There is no benign math/rand call here.
         no-weak-randomness:
