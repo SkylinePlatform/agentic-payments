@@ -100,8 +100,9 @@ describe("the SD-JWT reader never verifies", () => {
   });
 
   it("reaches Web Crypto from exactly one file", () => {
-    // Not a stylistic preference. One file means one place to read to know what
-    // this module can do with crypto, and it is eleven lines long.
+    // Not a stylistic preference. One file means there is one function to read
+    // to know everything this module can do with crypto, and the rule above
+    // says what that one thing is.
     expect(
       SOURCES.filter(([, source]) => REACHES_SUBTLE.test(source)).map(([path]) => path),
     ).toEqual(["./digest.ts"]);
