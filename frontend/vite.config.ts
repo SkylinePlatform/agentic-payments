@@ -1,4 +1,5 @@
-import { defineConfig, loadEnv } from "vite";
+import { loadEnv } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 /**
@@ -15,10 +16,24 @@ const DEFAULT_COLLECTOR = "http://127.0.0.1:8085";
  */
 const DEFAULT_AGENT = "http://127.0.0.1:8086";
 
+/**
+ * defineConfig comes from vitest/config rather than vite so that the `test`
+ * block below type-checks; loadEnv still comes from vite, which is the only
+ * one of the two that exports it. Vitest reads this file, so the tests run
+ * against the same resolution and plugins as the app — one config, not two
+ * that can disagree about what a `../protocol` import means.
+ */
 export default defineConfig(({ mode }) => {
   // "." rather than process.cwd(): this file is type-checked with the app, and
   // reaching for process would pull Node's type definitions into a config that
   // needs nothing else from them.
+  //
+  // Vitest resolves it the same way, against the working directory. `npm test`
+  // and `make frontend-test` both run from frontend/, so it lands here; the
+  // mode is "test" rather than "development", so a .env.test would be the file
+  // it picked up. Verified, not assumed — a config that threw under the test
+  // runner would have made every test unrunnable for a reason nothing about a
+  // failing test would point at.
   const env = loadEnv(mode, ".", "VITE_");
   const collector = env.VITE_COLLECTOR_URL ?? DEFAULT_COLLECTOR;
   const agent = env.VITE_AGENT_URL ?? DEFAULT_AGENT;
@@ -66,6 +81,41 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
         },
       },
+    },
+
+    test: {
+      // These are React components, and there is no DOM to render them into
+      // under Vitest's default `node` environment.
+      environment: "jsdom",
+
+      // Testing Library registers its own cleanup only when Vitest runs with
+      // `globals: true`. It does not here, so setup.ts registers it — and it
+      // is also where the note about jsdom's missing EventSource lives, next
+      // to the polyfill somebody would otherwise reach for.
+      setupFiles: ["./src/test/setup.ts"],
+
+      // Tests live beside what they test, under src/. Stated rather than left
+      // to the default so that scripts/ and the generated protocol types are
+      // not somewhere a test could hide.
+      include: ["src/**/*.test.{ts,tsx}"],
+
+      // An empty suite is a broken suite. Deleting every test, breaking the
+      // glob above or moving src/ must not produce a green tick that asserts
+      // nothing, because green is exactly what nobody looks into.
+      //
+      // This is Vitest 4's default as well — measured, not assumed: with the
+      // line removed, a run matching no files still exits 1. It is written
+      // down because the property is a decision and a default is not, and
+      // because the two ways of losing the suite fail differently and it is
+      // worth knowing both do: no matching file at all is "No test files
+      // found, exiting with code 1", and a .test.ts left in place with its
+      // tests removed fails as a file with no suite in it.
+      //
+      // What it does not do is lock anything. `vitest run --passWithNoTests`
+      // still exits 0, because the CLI wins over the config — so the thing
+      // actually keeping this true is that neither package.json nor
+      // .github/workflows/ci.yml passes that flag.
+      passWithNoTests: false,
     },
   };
 });

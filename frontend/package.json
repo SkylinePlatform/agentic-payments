@@ -10,6 +10,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "generate": "node scripts/generate-protocol-types.mjs"
   },
   "dependencies": {
@@ -18,14 +20,18 @@
     "react-router-dom": "^7.1.1"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.3",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
     "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^29.1.1",
     "json-schema-to-typescript": "^15.0.4",
     "typescript": "^5.7.2",
-    "vite": "^6.0.5"
+    "vite": "^6.0.5",
+    "vitest": "^4.1.10"
   },
   "engines": {
-    "node": ">=20"
+    "node": "^20.19.0 || ^22.13.0 || >=24.0.0"
   }
 }
