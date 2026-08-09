@@ -49,6 +49,26 @@ export default defineConfig(({ mode }) => {
       // prints a URL, and a dev server that quietly picked 5174 makes that
       // URL wrong.
       strictPort: true,
+
+      // Vite refuses to load a module from outside the workspace root, and
+      // this package *is* the workspace root — `package-lock.json` lives here,
+      // so nothing above `frontend/` is reachable by default. Vitest goes
+      // through the same transform pipeline, so the restriction applies to
+      // fixtures as much as to source.
+      //
+      // One directory is added, and only one: the SD-JWT conformance vectors,
+      // which `src/sdjwt/golden.test.ts` imports with `?raw`. RFC 9901
+      // publishes its own disclosures, digests and processed payloads, and
+      // those files are where the Go implementation already reads them from —
+      // so a copy under `frontend/` would be a second source of truth for a
+      // vector, which goes on passing after the original moves. The header of
+      // that test file carries the full argument.
+      //
+      // Deliberately not `".."`. The list governs what the *dev server* will
+      // serve to a page, so widening it to the repository would put every file
+      // in this checkout one request away from anything running in a browser
+      // on this machine.
+      fs: { allow: [".", "../backend/pkg/sdjwt/testdata"] },
       proxy: {
         // The event stream is served same-origin in development, so nothing
         // downstream has to solve CORS or learn the collector's address. It is
