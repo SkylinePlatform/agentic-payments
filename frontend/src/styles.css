@@ -25,10 +25,13 @@
  *
  * `font-display` differs by role and that is the point. IBM Plex Mono carries
  * the digests, the `vct` strings and the amounts — it *is* the content — so it
- * blocks: a short block period and then an infinite swap period, which in
- * practice means the glyphs a screenshot is about never arrive after the paint
- * it was taken from. The other two swap, because a heading appearing in a
- * fallback for 80ms costs nothing.
+ * blocks: nothing is painted in a fallback for the first three seconds. Paired
+ * with the preload in `index.html` for an 11 KB file served from the same
+ * origin, that is the difference between a screenshot of a digest and a
+ * screenshot of a digest changing shape. It is not a guarantee — past the block
+ * period `block` swaps like anything else — it is a three-second head start on
+ * a request that takes milliseconds. The other two swap, because a heading
+ * appearing in a fallback for 80ms costs nothing.
  */
 
 @font-face {
@@ -167,9 +170,11 @@
  *           the brightest thing on a dark screen is no brighter than the light
  *           theme's ground.
  *   wash    derived. The lightness at which `wash` sits the same distance off
- *           `paper` as it does in the light theme — 1.158:1 against 1.161:1.
- *           In light a lane sits into the page; in dark it lifts off it; in
- *           both it is one step.
+ *           `paper` as it does in the light theme solves to L 0.2516; 0.25 is
+ *           that rounded to something a reader can hold, and it lands at
+ *           1.158:1 against the light theme's 1.161:1. In light a lane sits
+ *           into the page; in dark it lifts off it; in both it is one step, and
+ *           `palette.test.ts` asserts the two steps agree.
  *   graphite, seal, broken
  *           derived. Hue and chroma held, lightness raised by bisection until
  *           the contrast against `wash` — the lighter of the two dark grounds,
@@ -187,8 +192,8 @@
  *
  * `data-theme` rather than `prefers-color-scheme`, because the toggle has three
  * states and a media query has two. Resolving *system* to one of these two
- * attribute values is the toggle's job, not this file's — see #F3. Until then
- * the absence of the attribute means light.
+ * attribute values is the toggle's job, not this file's. Until that lands, the
+ * absence of the attribute means light.
  */
 :root {
   color-scheme: light;

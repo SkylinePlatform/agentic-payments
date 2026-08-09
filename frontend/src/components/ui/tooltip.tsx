@@ -7,12 +7,15 @@ import { cn } from "../../lib/utils";
  * The shadcn/ui tooltip over Radix, re-skinned onto the six tokens.
  *
  * **Radix's `Tooltip.Root` requires a `Tooltip.Provider` above it**, and that is
- * the trap this component exists to close: forget it and the trigger does not
- * open. `Tooltip` below therefore supplies its own provider, so a caller cannot
- * forget one and a test can render a tooltip on its own. Nesting is legal — an
- * app-wide `TooltipProvider` still works — and the innermost provider is the one
- * whose `delayDuration` applies, which is why ours states 0 rather than
- * inheriting Radix's 700ms default.
+ * the trap this component exists to close. In this version forgetting one
+ * throws ``​`Tooltip` must be used within `TooltipProvider`​`` from the render —
+ * checked rather than assumed, because the failure has been a silent one in
+ * other versions and "a trigger that never opens" is the harder shape to
+ * diagnose. `Tooltip` below supplies its own provider either way, so neither
+ * shape is reachable and a test can render a tooltip on its own. Nesting is
+ * legal — an app-wide `TooltipProvider` still works — and the innermost
+ * provider is the one whose `delayDuration` applies, which is why ours states 0
+ * rather than leaving Radix's 700ms default in place.
  *
  * `TooltipBehaviour.test.tsx` is that sentence run: it renders a tooltip with no
  * provider around it and asserts the content appears.

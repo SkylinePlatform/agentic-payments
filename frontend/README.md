@@ -183,8 +183,9 @@ Self-hosted, subset, committed as `woff2` under `public/fonts/` with their
 The inversion is the design: the digests, `vct` strings, key ids and amounts are
 the content, so the mono is the face the page is built around and the sans is
 support. The mono's `@font-face` carries `font-display: block` and the 400 is
-preloaded from `index.html`, so a digest is never captured mid-swap; the other
-two `swap`.
+preloaded from `index.html` — three seconds of head start on an 11 KB
+same-origin request, which is what keeps a screenshot from catching a digest
+mid-swap. The other two `swap`.
 
 `scripts/subset-fonts.sh` is what produced the files. It pins the upstream
 google/fonts commit, instances the two variable faces at the weights above and

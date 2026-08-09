@@ -62,9 +62,12 @@ const APP_SOURCES = Object.entries(SOURCES).filter(
  * in "Tailwind's" as an opening quote and swallows the paragraph after it.
  *
  * The one construct it does not understand is a regular-expression literal
- * containing a quote — `/['"]/` would open a string that is not there. No file
- * in `APP_SOURCES` has one; a future one that does will produce a puzzling
- * failure here rather than a silent miss, which is the right way round.
+ * containing a quote — `/['"]/` would open a string that is not there, and from
+ * that point the scanner is one quote out of phase: it can both invent a
+ * violation and swallow a real one. No file in `APP_SOURCES` contains a regex
+ * literal at all today, which is why this is a note rather than a parser; if
+ * this file ever reports something baffling, that is the first thing to grep
+ * for.
  */
 function stringLiterals(source: string): string[] {
   const found: string[] = [];
@@ -240,7 +243,7 @@ function offPalette(source: string, allowed: ReadonlySet<string>): string[] {
 /**
  * Files allowed to know which theme is on.
  *
- * Empty on purpose, and it will not stay that way: #F3's toggle is the one
+ * Empty on purpose, and it will not stay that way: the theme toggle is the one
  * thing in the app that has to name a theme, because something has to write the
  * attribute. Adding a path here is a reviewed change, which is the point —
  * every *other* file gets its colours from a token whose name is the same in

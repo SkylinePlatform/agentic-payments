@@ -14,7 +14,8 @@ import { hrefOf, SURFACES } from "../surfaces";
  * here cannot point at a route that does not exist.
  *
  * The chrome here is a frame and not a design: the sidebar, the theme toggle
- * and the route rename are #F3's. What it does do is spend the six tokens on
+ * and the route rename belong to the shell change that follows this one. What
+ * it does do is spend the six tokens on
  * something visible, so that "the palette is implemented" is a claim anybody can
  * check by opening the app rather than only by reading the stylesheet.
  */

@@ -66,8 +66,8 @@ describe("the shadcn baseline", () => {
 
   it("opens a tooltip with no provider around it", async () => {
     // The trap this closes: Radix's Tooltip.Root needs a Tooltip.Provider above
-    // it, and without one the trigger simply never opens. Ours brings its own,
-    // so forgetting is not a state a caller can reach.
+    // it, and without one this version throws from the render. Ours brings its
+    // own, so forgetting is not a state a caller can reach.
     const user = userEvent.setup();
     render(
       <Tooltip>
