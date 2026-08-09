@@ -39,6 +39,11 @@ import (
 // does not need the bytes: what a second implementation reproduces is the
 // *verdict*, and the verdict is a pair (this input, that code).
 //
+// Two rows build no mandate at all, and that is the protocol rather than a
+// shortcut: payment_amount_mismatch compares two amounts and
+// credential_scope_mismatch compares two digests, and neither question has a
+// presentation to be asked of.
+//
 // So the mutation these rows cannot catch is a wrong expectation: the vector
 // *is* the expectation, and there is no third party to appeal to. What protects
 // it is review and the sentence beside it, which is why every row carries one
@@ -167,8 +172,8 @@ func rejectionVectors() []rejectionVector {
 			name:     "a mandate verified against a key that did not sign it",
 			code:     generated.ErrorCodeSignatureInvalid,
 			sentinel: sdjwt.ErrSignatureInvalid,
-			reading: "both keys here are ES256, so the header's alg matches and only the bytes disagree — " +
-				"this is the plain forgery case, distinct from the algorithm confusion the next vector covers",
+			reading: "both keys here are ES256, so the header's alg matches the resolved key and only the bytes disagree — " +
+				"this is the plain forgery case, and keeping it apart from an algorithm the verifier will not compute is why the two carry different codes",
 			provoke: func(t *testing.T) error {
 				issuer := newFixture(t)
 				stranger := newFixture(t)
