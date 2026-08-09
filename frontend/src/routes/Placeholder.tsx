@@ -20,14 +20,16 @@ export function Placeholder({
   children?: ReactNode;
 }) {
   return (
-    <section className="placeholder">
-      <h1 className="placeholder__title">{title}</h1>
-      <p className="placeholder__answers">{answers}</p>
-      <p className="placeholder__note">
+    <section>
+      <h1 className="font-display text-3xl leading-tight tracking-tight text-ink">
+        {title}
+      </h1>
+      <p className="mt-1 mb-4 font-sans text-ink">{answers}</p>
+      <p className="font-sans text-sm text-graphite">
         Not built yet. This surface is scaffolding — the shell gives it a route,
         a layout and the generated protocol types; the contents are{" "}
         <a
-          className="placeholder__issue"
+          className="text-ink underline underline-offset-2"
           href={`https://github.com/SkylinePlatform/agentic-payments/issues/${issue.replace("#", "")}`}
         >
           {issue}

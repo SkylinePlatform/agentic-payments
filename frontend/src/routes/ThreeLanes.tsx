@@ -24,17 +24,25 @@ export function ThreeLanes() {
       issue="#20"
       answers="User, Agent and Merchant side by side, with the event log between them."
     >
-      <div className="proof">
-        <p className="proof__label">
+      <div className="mt-8 rounded-sm border border-graphite bg-wash p-5">
+        <p className="mb-3 font-sans text-sm text-graphite">
           Generated types are wired up — <code>Amount</code> from{" "}
           <code>contracts/instrument/amount.json</code>, rendered from integer
           minor units:
         </p>
-        <ul className="proof__prices">
+        {/*
+          The mono here is not a caption face. `tabular-nums` is what lets the
+          three rows read as a column rather than as three sentences that happen
+          to contain numbers, and it is the reason a price falling from 240 to
+          189 will be visible as a shape rather than as text to be read.
+        */}
+        <ul className="flex flex-col gap-1.5 font-mono text-sm tabular-nums text-ink">
           {SCENARIO.map((price) => (
             <li key={price.amount}>
-              <code>{price.amount}</code> {price.currency} →{" "}
-              <strong>{formatAmount(price, "en-US")}</strong>
+              <span className="text-graphite">{price.amount}</span>{" "}
+              {price.currency} → <strong className="font-semibold">
+                {formatAmount(price, "en-US")}
+              </strong>
             </li>
           ))}
         </ul>

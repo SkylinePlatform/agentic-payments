@@ -1,6 +1,9 @@
 import { loadEnv } from "vite";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+// Tailwind v4 has no tailwind.config.js and no PostCSS step. The theme lives in
+// src/styles.css, and this plugin is the whole of the build integration.
+import tailwindcss from "@tailwindcss/vite";
 
 /**
  * The collector's default listen address, matching `-addr` in
@@ -39,7 +42,7 @@ export default defineConfig(({ mode }) => {
   const agent = env.VITE_AGENT_URL ?? DEFAULT_AGENT;
 
   return {
-    plugins: [react()],
+    plugins: [react(), tailwindcss()],
     server: {
       port: 5173,
       // Fail rather than silently moving to another port. The demo runner
@@ -116,6 +119,19 @@ export default defineConfig(({ mode }) => {
       // actually keeping this true is that neither package.json nor
       // .github/workflows/ci.yml passes that flag.
       passWithNoTests: false,
+
+      // Vitest stubs every CSS import as an empty string by default, and it
+      // does so by matching the file extension *including the query* — so
+      // `import styles from "./styles.css?raw"` comes back empty rather than
+      // as the file. That is normally what you want; here it silently disarms
+      // the two tests that read the palette out of the stylesheet, which are
+      // the only mechanical check that the palette is closed.
+      //
+      // Narrowed to the one file rather than switched on wholesale: `css: true`
+      // would put Tailwind's compiler on the path of any test that imports a
+      // stylesheet, for no benefit — nothing here asserts on rendered CSS, and
+      // jsdom computes none anyway.
+      css: { include: [/styles\.css/] },
     },
   };
 });

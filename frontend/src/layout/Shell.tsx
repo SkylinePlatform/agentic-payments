@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 
+import { cn } from "../lib/utils";
 import { hrefOf, SURFACES } from "../surfaces";
 
 /**
@@ -11,16 +12,25 @@ import { hrefOf, SURFACES } from "../surfaces";
  *
  * The nav is built from the same list App builds its routes from, so a link
  * here cannot point at a route that does not exist.
+ *
+ * The chrome here is a frame and not a design: the sidebar, the theme toggle
+ * and the route rename are #F3's. What it does do is spend the six tokens on
+ * something visible, so that "the palette is implemented" is a claim anybody can
+ * check by opening the app rather than only by reading the stylesheet.
  */
 export function Shell() {
   return (
-    <div className="shell">
-      <header className="shell__header">
-        <div className="shell__brand">
-          <span className="shell__title">Agentic Payments</span>
-          <span className="shell__subtitle">AP2 + Visa TAP · proof of concept</span>
+    <div className="flex min-h-screen flex-col bg-paper text-ink">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-8 gap-y-3 border-b border-graphite bg-wash px-6 py-4">
+        <div className="flex flex-col">
+          <span className="font-display text-base font-medium tracking-tight">
+            Agentic Payments
+          </span>
+          <span className="font-sans text-xs text-graphite">
+            AP2 + Visa TAP · proof of concept
+          </span>
         </div>
-        <nav className="shell__nav">
+        <nav className="flex flex-wrap gap-1">
           {SURFACES.map((surface) => (
             <NavLink
               key={surface.path}
@@ -29,7 +39,10 @@ export function Shell() {
               // because "/" is a prefix of every other path.
               end={surface.path === ""}
               className={({ isActive }) =>
-                isActive ? "shell__link shell__link--active" : "shell__link"
+                cn(
+                  "rounded-sm px-3 py-1.5 font-sans text-sm no-underline transition-colors",
+                  isActive ? "bg-paper text-ink" : "text-graphite hover:text-ink",
+                )
               }
             >
               {surface.label}
@@ -38,7 +51,7 @@ export function Shell() {
         </nav>
       </header>
 
-      <main className="shell__main">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
         <Outlet />
       </main>
     </div>
