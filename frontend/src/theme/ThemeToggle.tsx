@@ -5,12 +5,24 @@ import { useTheme } from "./ThemeProvider";
  * The three-state theme control.
  *
  * Radio inputs rather than buttons with `aria-pressed`, because this is one
- * exclusive choice out of three and that is what a radio group *is*: the
- * grouping, the arrow-key navigation and the announcement of "2 of 3" all come
- * from the browser, and none of it is worth reimplementing on a `<div>`. The
- * inputs are visually hidden and the label beside each carries the appearance,
- * which is why the focus ring is on the label — the thing the eye is on — while
- * focus itself is on the input.
+ * exclusive choice out of three and that is what a radio group *is*. Two things
+ * come from the browser for free and are the reason not to reimplement it on a
+ * `<div>`: the three settings are **one tab stop** rather than three, and the
+ * arrow keys move between them and apply what they land on.
+ *
+ * **Neither of those is in the suite, and that is a gap rather than an
+ * oversight.** Both are browser behaviour rather than DOM API: jsdom implements
+ * no arrow-key navigation for a radio group, and `user-event`'s `{ArrowRight}`
+ * throws in this setup rather than doing nothing, so a test for it would assert
+ * the test library's model of a browser and not a browser. They were checked in
+ * headless Chrome against the dev server — one tab stop, and ArrowRight from
+ * *Light* selecting and applying *Dark* — which is evidence that does not
+ * re-run. `ThemeProvider.test.tsx` covers what the setting does once it
+ * changes, by whatever means.
+ *
+ * The inputs are visually hidden and the label beside each carries the
+ * appearance, which is why the focus ring is on the label — the thing the eye
+ * is on — while focus itself is on the input.
  *
  * This component knows which *setting* is chosen, and that is the whole of what
  * it may know. It never learns which theme that resolved to: the resolution is

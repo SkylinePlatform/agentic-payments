@@ -37,9 +37,11 @@ import {
  * **The resolved theme is deliberately not on the context.** `useTheme` hands
  * back the *setting* and a way to change it, because that is all a control
  * needs; the resolution goes to the root element and is read from there by CSS
- * alone. Nothing in React can branch on which theme is on, which is the rule
- * `src/architecture.test.ts` enforces made structural rather than merely
- * checked.
+ * alone. Nothing in React is handed which theme is on, so branching on one
+ * takes reaching into the document by hand — which is the rule
+ * `src/architecture.test.ts` enforces, made awkward as well as forbidden. It is
+ * not made impossible, and that file says so itself: reading the attribute
+ * through `dataset` is spelled differently and the rule does not see it.
  */
 interface ThemeControl {
   /** What the user chose. The default is the absence of a choice. */
