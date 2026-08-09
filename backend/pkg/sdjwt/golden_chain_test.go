@@ -14,6 +14,14 @@ import (
 // pin values published elsewhere — nobody else has published Delegate SD-JWT
 // test vectors yet, so this one is what a second implementation of this
 // package interoperates against.
+//
+// **The second implementation has arrived**, which is why the string sits in
+// testdata rather than in a constant here. frontend/src/sdjwt is a decode-only
+// reader of this format for the Mandate Inspector, and it reads this same file
+// — so the two languages agree about the bytes because there is one copy of
+// them, rather than because somebody remembered to update a second. That is the
+// arrangement the RFC 9901 vectors in this package already have, and the reason
+// is the same one: a stale copy of a vector still looks exactly like a vector.
 func TestGoldenDelegateChainSerialisation(t *testing.T) {
 	// Salts are pinned by deterministicSalts and the signer is a fixed HMAC
 	// key, so the whole string is reproducible. It is checked as one value
@@ -21,7 +29,7 @@ func TestGoldenDelegateChainSerialisation(t *testing.T) {
 	// another implementation has to agree with.
 	chain := delegatedChain(t, "delegate")
 
-	const want = "eyJhbGciOiJIUzI1NiIsImtpZCI6Imlzc3VlciJ9.eyJjbmYiOnsiandrIjp7ImsiOiJkZWxlZ2F0ZSIsImt0eSI6Im9jdCJ9fSwidmN0Ijoib3Blbi5leGFtcGxlIn0.EyzAZyWfpF7KtuzmU1BAlrzPvMlQQn1X4lUpi4Rjv9U~~eyJhbGciOiJIUzI1NiIsInR5cCI6ImtiK3NkLWp3dCIsImtpZCI6ImRlbGVnYXRlIn0.eyJfc2RfYWxnIjoic2hhLTI1NiIsImF1ZCI6Imh0dHBzOi8vbWVyY2hhbnQuZXhhbXBsZSIsImRlbGVnYXRlX3BheWxvYWQiOlt7Ii4uLiI6InJxemYyaS1LNVdtQnkwdmloNWNtbHdFS3RfdVowTFp1UXJQX2hzX2xwVWsifV0sImlhdCI6MTc3NzMyNjE4OSwibm9uY2UiOiJuLTEiLCJzZF9oYXNoIjoidnN0dFBkTkJTemJyRzhQSUl6aFJiOUlFbW1mRndFSzhyVnpsV29zVGZNNCJ9.aABQ0MDCxzSqFnaOtZ3gejb_7zZ0-xKApxcNjvNuWPA~WyJBUUlEQkFVR0J3Z0pDZ3NNRFE0UEVBIix7ImNoZWNrb3V0X2hhc2giOiJhYmMiLCJ2Y3QiOiJjbG9zZWQuZXhhbXBsZSJ9XQ~"
+	want := loadVector(t, "delegate_chain.sdjwt")
 
 	assert.Equal(t, want, chain.String(),
 		"the wire string is what a second implementation interoperates against, so a change here is a compatibility break")
@@ -54,7 +62,7 @@ func TestGoldenDelegatePayloadWithoutSDAlg(t *testing.T) {
 	require.Contains(t, closed, "_sd_alg",
 		"this is the only vector whose delegated payload carries one, and without it the strip it exists to pin has nothing to remove")
 
-	const want = "eyJhbGciOiJIUzI1NiIsImtpZCI6Imlzc3VlciJ9.eyJjbmYiOnsiandrIjp7ImsiOiJkZWxlZ2F0ZSIsImt0eSI6Im9jdCJ9fSwidmN0Ijoib3Blbi5leGFtcGxlIn0.EyzAZyWfpF7KtuzmU1BAlrzPvMlQQn1X4lUpi4Rjv9U~~eyJhbGciOiJIUzI1NiIsInR5cCI6ImtiK3NkLWp3dCIsImtpZCI6ImRlbGVnYXRlIn0.eyJfc2RfYWxnIjoic2hhLTI1NiIsImF1ZCI6Imh0dHBzOi8vbWVyY2hhbnQuZXhhbXBsZSIsImRlbGVnYXRlX3BheWxvYWQiOlt7Ii4uLiI6Ik9Objl5WG55TDU1Z0FsdTJyZWNiUHc5N1FobS1RWFQ3bURENW8wdmVEUVEifV0sImlhdCI6MTc3NzMyNjE4OSwibm9uY2UiOiJuLTEiLCJzZF9oYXNoIjoidnN0dFBkTkJTemJyRzhQSUl6aFJiOUlFbW1mRndFSzhyVnpsV29zVGZNNCJ9.8qAc6PuZ_f_RldbLW10Ai9qrt0bOSi5LcFJb_PQjJLk~WyJFUklURkJVV0Z4Z1pHaHNjSFI0ZklBIix7Il9zZCI6WyJTMEJJamJuY2IwNW5rUnVScGxaVUZIbk50N3hPVGY3WkxHVEg5dzI5Sk1RIl0sInZjdCI6ImNsb3NlZC5leGFtcGxlIn1d~WyJBUUlEQkFVR0J3Z0pDZ3NNRFE0UEVBIiwiY2hlY2tvdXRfaGFzaCIsImFiYyJd~"
+	want := loadVector(t, "delegate_chain_disclosed.sdjwt")
 
 	assert.Equal(t, want, chain.String(),
 		"the delegate payload's array disclosure is the first component after the delegating JWT; an _sd_alg surviving into it changes those bytes and the digest the JWT carries over them")
