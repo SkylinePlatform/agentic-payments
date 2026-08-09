@@ -5,36 +5,47 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "../App";
 import { SURFACES } from "../surfaces";
+import { ThemeProvider } from "../theme/ThemeProvider";
 import { Shell } from "./Shell";
 
 /**
  * The nav as a reader of the app would describe it: what each link says, where
- * it goes, and in what order.
+ * it goes, in what order, and under which heading.
  *
  * Written out rather than derived from SURFACES, which is the whole difference
  * between a test and a tautology. A version that mapped SURFACES through
  * `hrefOf` would agree with the list by construction — rename a path and both
  * sides move together — and the only thing left under test would be that
- * `Array.prototype.map` works. These three pairs are the routes as README.md
+ * `Array.prototype.map` works. These four rows are the routes as README.md
  * states them and as every link into this app assumes them, so a path that
  * changes without a decision fails here.
+ *
+ * The console is `/` because it is where a buyer starts; the lanes moved off
+ * the index route to make room for it.
  */
 const NAV = [
-  { label: "Three lanes", href: "/" },
-  { label: "Mandate Inspector", href: "/inspector" },
-  { label: "Trusted Surface", href: "/consent" },
+  { group: "Buying", label: "Shopping console", href: "/" },
+  { group: "Buying", label: "Trusted Surface", href: "/consent" },
+  { group: "The protocol", label: "Three lanes", href: "/lanes" },
+  { group: "The protocol", label: "Mandate Inspector", href: "/inspector" },
 ];
 
 /** NotFound's heading — the thing a nav link must never reach. */
 const NOT_FOUND_HEADING = "Nothing here";
 
-describe("Shell", () => {
-  it("renders one nav link per surface, each pointing where its label says", () => {
-    render(
+function renderShell() {
+  return render(
+    <ThemeProvider>
       <MemoryRouter>
         <Shell />
-      </MemoryRouter>,
-    );
+      </MemoryRouter>
+    </ThemeProvider>,
+  );
+}
+
+describe("Shell", () => {
+  it("renders one nav link per surface, each pointing where its label says", () => {
+    renderShell();
 
     const links = within(screen.getByRole("navigation")).getAllByRole("link");
     const nav = links.map((link) => ({
@@ -47,7 +58,32 @@ describe("Shell", () => {
       "surfaces.tsx is one list because it used to be two, and the failure it " +
         "was made one to prevent — a nav link that 404s, or a route nobody can " +
         "reach — does not announce itself in the browser",
-    ).toEqual(NAV);
+    ).toEqual(NAV.map(({ label, href }) => ({ label, href })));
+  });
+
+  it("files each link under the heading that says what kind of surface it is", () => {
+    renderShell();
+    const nav = within(screen.getByRole("navigation"));
+
+    const headings = [...new Set(NAV.map((entry) => entry.group))];
+    for (const heading of headings) {
+      // The list is named by its own heading, so this asks the question the
+      // way a screen reader does rather than by walking the DOM.
+      const listed = within(nav.getByRole("list", { name: heading }))
+        .getAllByRole("link")
+        .map((link) => link.textContent);
+
+      expect(
+        listed,
+        `a surface under the wrong heading tells a reader it is a different ` +
+          `kind of thing than it is, which is the only job a heading has`,
+      ).toEqual(NAV.filter((entry) => entry.group === heading).map((entry) => entry.label));
+    }
+
+    expect(
+      nav.getAllByRole("list"),
+      "one list per heading, and no heading without a list under it",
+    ).toHaveLength(headings.length);
   });
 
   it("has no nav link that lands on the not-found route", async () => {
@@ -81,5 +117,19 @@ describe("Shell", () => {
         `the "${surface.label}" nav link reached the catch-all route: its href and the route table disagree`,
       ).toBeNull();
     }
+  });
+
+  it("carries the theme control, and nothing else that holds state", () => {
+    renderShell();
+
+    // The shell's doc comment says it fetches nothing and holds no data of its
+    // own, and that the theme is the document's rather than the shell's. This
+    // is the visible half of that: the control is here, in the frame, rather
+    // than duplicated onto every surface.
+    expect(
+      screen.getAllByRole("radio"),
+      "three settings, because `system` is one of them rather than the absence " +
+        "of the other two",
+    ).toHaveLength(3);
   });
 });

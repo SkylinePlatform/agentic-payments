@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "React + Vite + TypeScript UI. The app shell; the three-lane view, the Mandate Inspector and the Trusted Surface consent screen slot into it — see #20, #21 and #22.",
+  "description": "React + Vite + TypeScript UI. The app shell; the shopping console, the three-lane view, the Mandate Inspector and the Trusted Surface consent screen slot into it — see #109, #20, #21 and #22.",
   "license": "Apache-2.0",
   "scripts": {
     "dev": "vite",

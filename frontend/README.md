@@ -1,23 +1,31 @@
 # Frontend
 
-React + Vite + TypeScript. The app shell: a header, a nav and three routed
-surfaces, each of which is somebody else's issue to fill in.
+React + Vite + TypeScript. The app shell: a sidebar, a theme toggle and four
+routed surfaces, each of which is somebody else's issue to fill in.
 
-| Surface | Route | Owned by |
-|---|---|---|
-| Three lanes — User, Agent, Merchant, with the event log between them | `/` | #20 |
-| Mandate Inspector — what each party saw, and what was withheld | `/inspector` | #21 |
-| Trusted Surface — the consent screen | `/consent` | #22 |
+| Surface | Route | Sidebar heading | Owned by |
+|---|---|---|---|
+| Shopping console — what was asked for, what is for sale, where each mandate stands | `/` | Buying | #109 |
+| Trusted Surface — the consent screen | `/consent` | Buying | #22 |
+| Three lanes — User, Agent, Merchant, with the event log between them | `/lanes` | The protocol | #20 |
+| Mandate Inspector — what each party saw, and what was withheld | `/inspector` | The protocol | #21 |
+
+The console is the index route because it is where a buyer starts; everything
+else either follows from something bought there or explains it. The two headings
+are the difference between a surface a person *uses* and one that explains what
+using it produced.
 
 This package is the frame, not the pictures. It gives each surface a route, a
-layout, the design system and the generated protocol types, and holds no state
-and fetches nothing — a shell with opinions about data is one every surface has
-to work around.
+layout, the design system and the generated protocol types, and fetches nothing
+and holds no data of its own — a shell with opinions about a transaction is one
+every surface has to work around.
 
-Opinions about *colour and type* are a different matter, and it does hold those:
-see [The design system](#the-design-system) below. Three surfaces sharing a
-palette that four screens' worth of screenshots have to look like one product in
-is not something each of them can decide separately.
+It does hold two things, and both are the document's rather than any surface's:
+the *theme*, which is an attribute on `<html>` set before React exists — see
+[The theme](#the-theme) — and opinions about *colour and type*, which are
+[The design system](#the-design-system). Four surfaces sharing a palette that a
+deck's worth of screenshots have to look like one product in is not something
+each of them can decide separately.
 
 ## Running it
 
@@ -79,11 +87,14 @@ defaults it to the global one.** The app passes nothing; a test passes a fake it
 can open, feed and fail on demand. Polyfilling onto `globalThis` instead would
 leave the client with no seam and every test sharing one mutable global.
 
-There *is* one stub on `globalThis` in that file — `ResizeObserver`, which Radix
-constructs the moment a tooltip opens — and the same section explains why the
-two cases are different. Briefly: `EventSource` is a seam in our own code, and
-`ResizeObserver` is a requirement of a third-party component that has nothing to
-observe in a document where no element has a size.
+There *are* two stubs on `globalThis` in that file — `ResizeObserver`, which
+Radix constructs the moment a tooltip opens, and `matchMedia`, which jsdom does
+not implement at all and which the theme store calls — and the same section
+explains why those cases are different. Briefly: `EventSource` is a seam in our
+own code, and the other two are facts about the environment that a test has
+nothing to inject through. `matchMedia`'s stub answers *light* and never fires;
+`src/theme/ThemeProvider.test.tsx` replaces it with one it can flip, which is
+the only way to test what an OS theme change does to a page already open.
 
 ## Protocol types
 
@@ -122,6 +133,47 @@ serve one browser in one dev setup.
 The collector is demo infrastructure and not an AP2 role — see
 [ADR 0003](../docs/architecture/adr/0003-correlation-and-event-log.md).
 
+## The theme
+
+Three settings — **Light**, **Dark** and **System** — and **System is the
+default**, because it is what an empty `localStorage` means. Choosing it removes
+the key rather than writing the string, so "never chose" and "chose to follow
+the OS" are one state instead of two that can disagree.
+
+Two of those are settings and only two are themes: `system` is resolved to
+`light` or `dark` before anything is painted, and what lands on `<html>` is
+always one of the two. The stylesheet has one selector to key off and no media
+query of its own — a `prefers-color-scheme` duplicate of the dark block would be
+the second palette the design system exists to prevent.
+
+**The resolution happens in an inline classic script in `index.html`, before the
+stylesheet.** Every word there is load-bearing. `type="module"` is deferred by
+definition, so it would run after the stylesheet had been applied and the page
+would paint in one theme and flip to the other — which is the flash the script
+removes, arriving a moment later than it otherwise would. It is in `<head>`, and
+Vite appends the built stylesheet `<link>` to the end of `<head>`, so it runs
+first.
+
+That script cannot import, so it repeats three strings that `src/theme/theme.ts`
+also exports. `src/theme/noflash.test.ts` is what keeps them in step: it reads
+`index.html` off disk, asserts the script is inline and classic and before the
+entry module, checks each spelling against the exported constant — and then
+**runs the script** and asserts what it wrote, which is the half a text
+comparison cannot do.
+
+| | |
+|---|---|
+| `src/theme/theme.ts` | the names, the key, the queries, and how a setting resolves. **The one file in the app allowed to name a theme** — it is the single entry in `architecture.test.ts`'s exemption list |
+| `src/theme/ThemeProvider.tsx` | the store. Reads the attribute the script already set rather than working it out again, and subscribes to `matchMedia` so an OS flip moves a page that is already open |
+| `src/theme/ThemeToggle.tsx` | the control: a radio group, so the grouping and the arrow keys come from the browser |
+
+The store reads the attribute on mount for a reason worth stating: re-deriving
+it would be a second computation of one value, and the frame in which the two
+disagree is the flash wearing a different hat. **The resolved theme is not on
+the context at all** — `useTheme` hands back the *setting* and a way to change
+it, and the resolution goes to the root element where only CSS reads it. That is
+what makes "no component names a theme" structural rather than merely checked.
+
 ## The design system
 
 Tailwind v4 and six colours. `src/styles.css` is the whole of it — **there is no
@@ -151,6 +203,17 @@ equivalent of the backend's `depguard` rules:
 |---|---|
 | `src/palette.test.ts` | every foreground/background pair the design uses clears WCAG 4.5:1 **in both themes**, and the pair table is exhaustive over the tokens |
 | `src/architecture.test.ts` | the palette is closed, shadcn's second palette is absent, no component names a theme, and generated types come through the barrel |
+
+`src/test/palette.ts` builds the dark block's selector out of `THEME_ATTRIBUTE`
+rather than writing it out, and throws when the block is missing — so renaming
+the attribute in TypeScript without renaming it in the stylesheet fails there
+rather than producing an app whose dark theme quietly stopped existing.
+
+The hex rule reads code with its comments removed. `#109` is a valid three-digit
+colour *and* an issue number, and this repository writes issue numbers in
+comments constantly; over the raw source the rule made every issue from #100 up
+unmentionable. In code the ambiguity is real and stays caught, which is why
+`Placeholder` takes its issue as a number.
 
 They exist because the build cannot do this job. `--color-*: initial` deletes
 Tailwind's defaults, after which `bg-blue-500` **generates nothing** — no class,
