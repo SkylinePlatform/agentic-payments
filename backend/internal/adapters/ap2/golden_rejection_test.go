@@ -39,11 +39,20 @@ import (
 // does not need the bytes: what a second implementation reproduces is the
 // *verdict*, and the verdict is a pair (this input, that code).
 //
-// So the mutation these rows cannot catch is a wrong expectation. A row whose
-// `code` was edited to match a broken implementation passes, by construction —
-// the vector *is* the expectation, and there is no third party to appeal to.
-// What protects it is review and the sentence beside it, which is why every row
-// carries one and why `reading` is what the assertion prints on failure.
+// So the mutation these rows cannot catch is a wrong expectation: the vector
+// *is* the expectation, and there is no third party to appeal to. What protects
+// it is review and the sentence beside it, which is why every row carries one
+// and why `reading` is what the assertion prints on failure.
+//
+// It is worth being exact about the size of that hole, because it is smaller
+// than the flat statement suggests and a reader who believes the flat statement
+// will not trust the suite as far as it deserves. Retargeting one row's `code`
+// to match a broken implementation does *not* pass:
+// TestGoldenEveryErrorCodeIsClassified fails, because the code the row used to
+// carry is classified as vectored and now nothing produces it. Three edits are
+// needed to get back to green — the implementation, the row, and
+// testdata/rejections.json — and the third is a sentence somebody has to write
+// down. The hole is real and it is a hole two thirds closed.
 //
 // # Why the sentinel is asserted as well as the code
 //
@@ -630,6 +639,13 @@ func loadClassification(t *testing.T) classification {
 // which is the mirror: a classification for a code nobody defines any more is a
 // claim about a vocabulary that has moved, and it is the entry a removal would
 // otherwise leave behind, still asserting something about the implementation.
+//
+// The second direction is a backstop rather than the first thing to fire, and
+// saying so is more useful than letting somebody discover it. internal/platform/problem's
+// rendering table names every code as a generated Go constant, so deleting one
+// from the enum stops the build before any test runs. This catches the removal
+// that was done properly — enum and rendering together — and left the sentence
+// here behind.
 func TestGoldenEveryErrorCodeIsClassified(t *testing.T) {
 	t.Parallel()
 

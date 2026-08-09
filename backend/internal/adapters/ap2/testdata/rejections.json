@@ -22,11 +22,11 @@
     },
     "request_too_large": {
       "status": "transport",
-      "note": "internal/roles/serve.go and internal/platform/transport/idempotent.go, on the body a handler will read. A mandate verifier has no opinion about request framing."
+      "note": "internal/roles/serve.go and internal/platform/transport/idempotent.go, on the body a handler will read. A mandate verifier has no opinion about request framing. Tested in idempotent_test.go."
     },
     "idempotency_key_missing": {
       "status": "transport",
-      "note": "internal/platform/transport/idempotent.go. AP2 states no transport, so there is nothing here for a second AP2 implementation to reproduce."
+      "note": "internal/platform/transport/idempotent.go: a state-changing call arrived without one. AP2 states no transport, so there is nothing here for a second AP2 implementation to reproduce. Tested in idempotent_test.go."
     },
     "idempotency_conflict": {
       "status": "transport",
