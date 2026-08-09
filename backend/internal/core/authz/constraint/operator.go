@@ -123,6 +123,22 @@ func lookupOperator(op Op, f Field) (operator, error) {
 	return o, nil
 }
 
+// operatorsFor lists the leaf operators valid for a kind, sorted.
+//
+// It reads the same table lookupOperator checks against, which is the whole
+// point: what Vocabulary publishes and what a mandate is judged by cannot
+// disagree, because there is one table.
+func operatorsFor(k Kind) []string {
+	out := make([]string, 0, len(operators))
+	for op, o := range operators {
+		if slices.Contains(o.kinds, k) {
+			out = append(out, string(op))
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // OperatorNames lists the operators this verifier implements, sorted. Exported
 // for the same reason FieldNames is.
 func OperatorNames() []string {
