@@ -109,32 +109,57 @@ type Watch struct {
 	CredProviderID string
 	ProcessorID    string
 
-	// Progress, when set, is told about each attempt as it is applied. Nil is
-	// the ordinary case and records nothing — cmd/agent without -addr prints
-	// what Run returned and nobody watches it in between.
+	// Progress, when set, is told what this watch is looking at and how each
+	// attempt goes. Nil is the ordinary case and records nothing — cmd/agent
+	// without -addr prints what Run returned and nobody watches it in between.
 	Progress Progress
 }
 
-// Progress is told about each attempt as it is applied.
+// Progress is told what the watch is looking at and where each attempt stands,
+// as it happens.
 //
-// One method, and it is handed a value rather than the thing that produced one.
-// That is the whole of the design rather than economy: Attempted already carries
-// Checkout and Payment as authz.MandateState values, so a consumer can render
-// where the pair stands without anything handing out the *Tracker — which is
-// what keeps Tracker.Attempt the only caller of MandateState.Next, on the terms
-// Tracker's own comment sets out.
+// # Values, never the tracker — which is the property, not the method count
 //
-// # When it is called
+// Every payload here is a value: a Quote, and an Attempted carrying Checkout and
+// Payment as authz.MandateState values. A consumer can therefore render where
+// the pair stands without anything handing out the *Tracker, which is what keeps
+// Tracker.Attempt the only caller of MandateState.Next on the terms Tracker's
+// own comment sets out.
 //
-// After Tracker.Attempt has returned, at the point Watched.Attempts is written.
-// The state a consumer observes is therefore the state the rule reached rather
-// than the one it was about to reach, and the two differ on every attempt that
-// resolves: the pair is at StateAwaitingReceipt while the attempt is in flight.
+// **That property is about what is handed over, not about how many methods there
+// are.** This interface began as one method and is now three; nothing about the
+// containment changed, because none of the three passes a pointer to anything
+// the machine lives in. What did change is that there are now three ordering-
+// sensitive call sites instead of one, and two of them are ordering-sensitive in
+// the same way — each has its own test, named on the state a consumer would be
+// shown if the call moved.
 //
-// A re-delivery is one call for the same row, with Deliveries higher than the
-// last. It is not a second attempt — Attempted's own comment argues that at
-// length — so a consumer keying on Delegated.ID counts attempts, and one keying
-// on calls counts deliveries.
+// # The three moments, and why each exists
+//
+// **Baseline**, once, as soon as the merchant has priced the item the watch is
+// following. It is the offer in force when the watch began and it is never
+// attempted — see Watch — so a consumer with no way to hear about it could only
+// say what the agent was looking at once the watch was over, which is exactly
+// when nobody needs it. Waiting is the state a Human Not Present flow spends
+// most of its life in.
+//
+// **Attempting**, once per delivery, after Tracker.Attempt has stepped the pair
+// and before anything is presented to anybody. Both mandates are at
+// StateAwaitingReceipt at that moment — or were already, under this id, for a
+// re-delivery — and that is the state that makes the rejection-receipt rule
+// visible: outstanding, no further attempt permitted, until a receipt answers.
+// It is waiting rather than stalled; StateAwaitingReceipt's own comment says a
+// consumer drawing it as an error is misreporting a correct state.
+//
+// **Attempted**, once per delivery, after Tracker.Attempt has returned, at the
+// point Watched.Attempts is written. The state observed is the state the rule
+// reached rather than the one it was about to reach.
+//
+// So one delivery is one Attempting and one Attempted, in that order, and a
+// consumer that keys on Delegated.ID sees one row moving rather than two rows
+// appearing. A re-delivery is another pair of calls for that same row, with
+// Deliveries higher than the last — it is not a second attempt, which Attempted's
+// own comment argues at length.
 //
 // # The row is the consumer's, and Delegated is not
 //
@@ -145,8 +170,17 @@ type Watch struct {
 // call and the read. Take what is needed at the call.
 //
 // Implementations are called on the goroutine running the watch, so one that
-// blocks stops the watch.
+// blocks stops the watch. Attempting is called from inside Tracker.Attempt's own
+// run, so one that blocks there holds an attempt open as well.
 type Progress interface {
+	// Baseline is the offer in force when the watch began.
+	Baseline(Quote)
+
+	// Attempting is one delivery about to go out, with the pair where the rule
+	// has just put it. Err is always nil: nobody has answered yet.
+	Attempting(Attempted)
+
+	// Attempted is that same delivery once it has been applied.
 	Attempted(Attempted)
 }
 
@@ -182,10 +216,15 @@ type Attempted struct {
 	Delegated *Delegated
 	// Err is what the attempt returned: nil on a purchase, ErrRefused when a
 	// counterparty said no, an authz sentinel when the rule refused to begin.
+	//
+	// It is nil in every Progress.Attempting, and that is not the same nil: the
+	// attempt has begun and nobody has answered it. The pair being at
+	// StateAwaitingReceipt is what says so, and is why the states travel beside
+	// this field rather than being inferred from it.
 	Err error
-	// Deliveries is how many times these documents were presented. One on the
-	// ordinary path; more when a delivery reached no verifier and the same
-	// attempt was presented again.
+	// Deliveries is how many times these documents were presented, counting
+	// this one. One on the ordinary path; more when a delivery reached no
+	// verifier and the same attempt was presented again.
 	Deliveries int
 	// Checkout and Payment are where the two open mandates stood once the
 	// attempt had been applied.
@@ -250,6 +289,14 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 	}
 	out.Baseline = baseline
 	last := baseline.Step
+	// Published here rather than left to the Watched this function returns,
+	// because the whole of what a consumer can say while nothing is being
+	// attempted is what the agent is looking at. A watch that reported its
+	// baseline only on the way out would have one exactly when the waiting was
+	// over.
+	if w.Progress != nil {
+		w.Progress.Baseline(baseline)
+	}
 
 	tick, stop := w.ticker()
 	defer stop()
@@ -313,18 +360,26 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 			d, quoted = minted, q
 		}
 
-		err := w.Attempt(ctx, &tracker, d)
+		// Which delivery of this attempt is about to go out. Counted before it
+		// rather than after, because Attempt has to be able to say so when it
+		// tells Progress the attempt has begun — and it is the same number the
+		// completed row carries, so there is one count rather than two.
+		delivery := 1
+		if i, seen := recorded[d.ID]; seen {
+			delivery = out.Attempts[i].Deliveries + 1
+		}
+
+		err := w.Attempt(ctx, &tracker, d, quoted, delivery)
 
 		row := Attempted{
 			Quote:      quoted,
 			Delegated:  d,
 			Err:        err,
-			Deliveries: 1,
+			Deliveries: delivery,
 			Checkout:   tracker.Checkout(),
 			Payment:    tracker.Payment(),
 		}
 		if i, seen := recorded[d.ID]; seen {
-			row.Deliveries = out.Attempts[i].Deliveries + 1
 			out.Attempts[i] = row
 		} else {
 			recorded[d.ID] = len(out.Attempts)
@@ -381,15 +436,55 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 // drive the composition the watch actually uses rather than a re-creation of it
 // beside it. A test that composed the hops itself would keep passing while this
 // function was split in two.
-func (w *Watch) Attempt(ctx context.Context, tracker *Tracker, d *Delegated) error {
+//
+// # q and delivery are carried for Progress and for nothing else
+//
+// Neither reaches a verifier and neither is compared to anything. They are here
+// because the moment a consumer has to be told about — the pair having stepped
+// to StateAwaitingReceipt — is inside Tracker.Attempt's own run, and a row
+// published there with no offer and no delivery number would be one the consumer
+// had to merge with a later one to draw at all.
+//
+// # The tracker is read here and handed to nobody
+//
+// The closure below calls tracker.Checkout and tracker.Payment, which are the
+// read-only accessors, and passes the two values out. It does not hand the
+// tracker to Deliver, Fund or Settle — Tracker's third arrangement is that `run`
+// takes no arguments, and it still does. What Tracker's comment already says
+// about this function holds unchanged: it holds the *Tracker, so the per-hop
+// mistake remains an edit somebody could make here, and the tests are what make
+// that fail rather than the shape.
+func (w *Watch) Attempt(
+	ctx context.Context, tracker *Tracker, d *Delegated, q Quote, delivery int,
+) error {
 	if tracker == nil {
 		return errors.New("agent: an attempt needs a tracker; the rejection-receipt rule is kept by nobody else")
 	}
 	if d == nil {
 		return errors.New("agent: nothing to present")
 	}
+	if delivery < 1 {
+		delivery = 1
+	}
 
 	return tracker.Attempt(d.ID, func() (Verdict, error) {
+		// Inside the run and before the delivery, which is after the rule has
+		// licensed this attempt: both open mandates are at StateAwaitingReceipt
+		// here, and that is the state a consumer has to be able to see. Published
+		// before Tracker.Attempt instead, it would report the pair as still
+		// spendable at the moment it had just been committed —
+		// TestTheConsoleSeesAnAttemptBeginAfterTheRuleLicensedIt is what fails on
+		// that.
+		if w.Progress != nil {
+			w.Progress.Attempting(Attempted{
+				Quote:      q,
+				Delegated:  d,
+				Deliveries: delivery,
+				Checkout:   tracker.Checkout(),
+				Payment:    tracker.Payment(),
+			})
+		}
+
 		delivered := w.Deliver(ctx, d)
 		return verdictOf(d, delivered), delivered
 	})

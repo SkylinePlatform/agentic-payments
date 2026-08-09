@@ -399,7 +399,8 @@ func newID() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b[:]), nil
 }
 
-// Compile-time proof that a Run is what the watch reports to. The interface is
-// one method and Run has it; this line is what makes a rename fail here rather
-// than at the go statement in Start.
+// Compile-time proof that a Run is what the watch reports to. It is what makes
+// a method added to or renamed on the port fail here rather than at the go
+// statement in Start, where the failure would name a goroutine instead of an
+// interface.
 var _ agent.Progress = (*Run)(nil)

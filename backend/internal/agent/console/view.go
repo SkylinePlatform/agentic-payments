@@ -77,8 +77,12 @@ type view struct {
 	// failed — and never a mandate's. The mandate states are on the attempts.
 	State string `json:"state"`
 
-	// Baseline is the offer in force when the watch began, and is null until the
-	// watch has ended. Run.finished argues why.
+	// Baseline is the offer in force when the watch began, present from the
+	// moment the merchant first priced the item and never attempted — see Watch.
+	// It is null only for a watch that stopped before it got a quote.
+	//
+	// It is what a screen draws while nothing is being attempted, which is where
+	// a Human Not Present flow spends most of its life.
 	Baseline *quoteView `json:"baseline"`
 
 	Attempts []attemptView `json:"attempts"`
@@ -86,7 +90,8 @@ type view struct {
 	// Unminted counts the step changes that could not be turned into a
 	// delegation. They are not attempts — nothing was presented to anybody — and
 	// are deliberately not in Attempts, which is agent.Watched's own distinction.
-	// Like Baseline it is known when the watch ends.
+	// Unlike Baseline it is a summary of the whole run, so it is known when the
+	// watch ends.
 	Unminted int `json:"unminted"`
 
 	Bought *boughtView `json:"bought"`

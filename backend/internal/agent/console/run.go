@@ -181,7 +181,36 @@ type boughtRow struct {
 	settled bool
 }
 
-// Attempted records one attempt, as agent.Progress hands it over.
+// Baseline records the offer in force when the watch began.
+//
+// It is the whole of what this console can say while nothing is being attempted,
+// and waiting is where a Human Not Present flow spends most of its life: beat 4
+// of the built scenario is the agent watching $240 and presenting nothing. There
+// is no second source for it — finished deliberately does not write this field —
+// so a watch that never got a quote reads null, which is the truth.
+func (r *Run) Baseline(q agent.Quote) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.baseline = &quoteRow{price: q.Price, step: q.Step, final: q.Final}
+}
+
+// Attempting records one delivery about to go out, and Attempted records that
+// same delivery once it has been applied.
+//
+// **Two moments, one row.** Both are "this attempt, as it stands", so both write
+// the same row through record: a console sees a row appear at
+// `awaiting_receipt` and then move to `ready` or `spent`, rather than a row
+// appearing only once it is over. The port keeps them as two methods anyway
+// because which moment it is has to be the watch's statement rather than
+// something a consumer infers from the states — and because each one is
+// ordering-sensitive on its own, with its own test.
+func (r *Run) Attempting(a agent.Attempted) { r.record(a) }
+
+// Attempted records one attempt as applied. See Attempting.
+func (r *Run) Attempted(a agent.Attempted) { r.record(a) }
+
+// record writes the row both moments share.
 //
 // It is called on the watch's goroutine, so it takes the lock and returns — a
 // consumer that blocked here would stop the watch, which agent.Progress says out
@@ -191,7 +220,7 @@ type boughtRow struct {
 // attempt's identity. That is what makes the length of the list a count of
 // attempts and Deliveries the place a lost response shows, which is the
 // distinction every other file in internal/agent turns on.
-func (r *Run) Attempted(a agent.Attempted) {
+func (r *Run) record(a agent.Attempted) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -224,27 +253,21 @@ func (r *Run) Attempted(a agent.Attempted) {
 
 // finished records what the watch did, once it has stopped doing it.
 //
-// The baseline, the unminted count and the purchase all arrive here rather than
-// through agent.Progress, because agent.Watch.Run reports them when it returns
-// and this console does not ask the merchant anything of its own. **A watch is
-// therefore reading `baseline: null` for as long as it is watching**, which is
-// the honest answer: the offer in force when the loop began is the loop's to
-// state, and a console that quoted the merchant itself to fill the field in
-// sooner would be publishing a different offer under the same name.
+// The unminted count and the purchase arrive here rather than through
+// agent.Progress, because agent.Watch.Run reports them when it returns. Both are
+// summaries of the whole run rather than moments in it, and neither is what a
+// screen draws while the agent is waiting.
+//
+// **It deliberately does not write the baseline.** Baseline above is the only
+// source, so deleting that call makes a watch read `baseline: null` for its
+// whole life rather than quietly filling the field in at the end — which is a
+// visible failure with a test on it, and was the behaviour this console shipped
+// with before #137's review. A console that quoted the merchant itself instead
+// would be publishing a different offer under the loop's name.
 func (r *Run) finished(watched agent.Watched, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// A run that ended before its first quote has no baseline, and a zero Amount
-	// rendered as one would read as a free flight. The merchant's signed offer is
-	// what says a quote happened.
-	if watched.Baseline.Checkout != "" {
-		r.baseline = &quoteRow{
-			price: watched.Baseline.Price,
-			step:  watched.Baseline.Step,
-			final: watched.Baseline.Final,
-		}
-	}
 	r.unminted = watched.Unminted
 
 	if watched.Bought != nil {

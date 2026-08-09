@@ -76,9 +76,9 @@ type scripted struct {
 //
 // watch runs in place of the entire watch loop, on the goroutine Service.Start
 // leaves behind. It is handed the agent.Progress the console gave the watch, so
-// a test publishes attempts by calling Attempted on it — which is the same
-// method internal/agent calls, and the reason nothing here needs a second way
-// in.
+// a test publishes by calling Baseline, Attempting and Attempted on it — the
+// same three methods internal/agent calls, and the reason nothing here needs a
+// second way in.
 func newConsole(t *testing.T, watch func(agent.Progress) (agent.Watched, error)) *scripted {
 	t.Helper()
 
@@ -396,6 +396,103 @@ func TestTheStateNamesTheConsoleServesAreTheOnesTheMachineWrites(t *testing.T) {
 	assert.Equal(t, "awaiting_receipt", rows[1]["payment_mandate"])
 }
 
+// TestAWatchThatHasAttemptedNothingSaysWhatItIsLookingAt is beat 4 on the wire.
+//
+// The agent watches $240 and presents nothing, and that is where a Human Not
+// Present flow spends most of its life — the approved screen design gives the
+// waiting state the most pixels on the page. A console whose baseline arrived
+// only with the watch's final result would have nothing at all to draw for it,
+// and would get one exactly when the waiting was over.
+//
+// The watch is held open rather than allowed to finish, because "while it is
+// still watching" is the whole claim.
+func TestAWatchThatHasAttemptedNothingSaysWhatItIsLookingAt(t *testing.T) {
+	t.Parallel()
+
+	published := make(chan struct{})
+	c := newConsole(t, func(p agent.Progress) (agent.Watched, error) {
+		p.Baseline(agent.Quote{
+			Checkout: "the-offer",
+			Price:    generated.Amount{Amount: 24000, Currency: "USD"},
+		})
+		close(published)
+		<-t.Context().Done()
+		return agent.Watched{}, context.Canceled
+	})
+
+	run, err := c.service.Start(t.Context(), console.Watching{Prompt: "buy a flight to Palma"})
+	require.NoError(t, err)
+	<-published
+
+	status, view := c.get(t, "/watches/"+run.ID())
+	require.Equal(t, http.StatusOK, status)
+
+	assert.Equal(t, "watching", view["state"],
+		"nothing has been attempted, and the resting state is the one this endpoint has to be able to draw")
+	assert.Empty(t, attempts(t, view), "the baseline is not an attempt — the user said 'when it drops'")
+	assert.Equal(t, float64(24000), view.nested(t, "baseline")["price"].(map[string]any)["amount"],
+		"what the agent is looking at right now is the whole of what a waiting screen has to show")
+}
+
+// TestAnAttemptInFlightIsDrawnAwaitingAReceipt is the third mandate state on the
+// wire, and the only window in which it exists.
+//
+// A row published only once its attempt had resolved would leave a tracker
+// showing `ready` and `spent` and nothing else — and the state in between is the
+// one that makes the rejection-receipt rule visible: outstanding, no further
+// attempt permitted until a receipt answers it. It is waiting rather than
+// stalled, which is what StateAwaitingReceipt's own comment insists a consumer
+// must not get wrong.
+//
+// The scripted watch stops between the two calls so that the test can read the
+// row exactly there. Against a healthy stack that window is a few milliseconds
+// wide, which is why this is asserted here rather than left to a demonstration.
+func TestAnAttemptInFlightIsDrawnAwaitingAReceipt(t *testing.T) {
+	t.Parallel()
+
+	d := delegated("in-flight", 18900)
+
+	begun := make(chan struct{})
+	resolve := make(chan struct{})
+	c := newConsole(t, func(p agent.Progress) (agent.Watched, error) {
+		p.Baseline(agent.Quote{Checkout: "the-offer", Price: generated.Amount{Amount: 24000, Currency: "USD"}})
+		p.Attempting(attempted(d, 2, 1, authz.StateAwaitingReceipt, authz.StateAwaitingReceipt, nil))
+		close(begun)
+		<-resolve
+
+		d.Settled = true
+		d.Receipts = []agent.Receipt{{From: "merchant", Token: "merchant-receipt"}}
+		p.Attempted(attempted(d, 2, 1, authz.StateSpent, authz.StateSpent, nil))
+		return agent.Watched{Bought: d}, nil
+	})
+
+	run, err := c.service.Start(t.Context(), console.Watching{Prompt: "buy a flight to Palma"})
+	require.NoError(t, err)
+	<-begun
+
+	_, inFlight := c.get(t, "/watches/"+run.ID())
+	rows := attempts(t, inFlight)
+	require.Len(t, rows, 1, "an attempt has to be on the screen while it is happening, not only afterwards")
+	assert.Equal(t, "awaiting_receipt", rows[0]["checkout_mandate"],
+		"the pair is committed to this attempt and no other may begin until a receipt answers it")
+	assert.Equal(t, "awaiting_receipt", rows[0]["payment_mandate"])
+	assert.Equal(t, float64(18900), rows[0].nested(t, "price")["amount"],
+		"a row with no price in it is one a console cannot draw, so the offer travels at the beginning too")
+	assert.Equal(t, false, rows[0]["settled"])
+	assert.Equal(t, "watching", inFlight["state"],
+		"an attempt in flight is the watch working, not a state of its own")
+
+	close(resolve)
+	<-run.Done()
+
+	_, done := c.get(t, "/watches/"+run.ID())
+	after := attempts(t, done)
+	require.Len(t, after, 1, "the same attempt moved; it did not become a second row")
+	assert.Equal(t, "spent", after[0]["payment_mandate"],
+		"and the row a console had already drawn is the one that changes")
+	assert.Equal(t, float64(1), after[0]["n"])
+}
+
 // TestARefusedAttemptStaysOnTheRecordAfterTheNextOne is §5 of the HNP screen
 // brief made answerable.
 //
@@ -418,12 +515,13 @@ func TestARefusedAttemptStaysOnTheRecordAfterTheNextOne(t *testing.T) {
 	}
 
 	c := newConsole(t, func(p agent.Progress) (agent.Watched, error) {
+		p.Baseline(agent.Quote{
+			Checkout: "the-offer",
+			Price:    generated.Amount{Amount: 24000, Currency: "USD"},
+		})
 		p.Attempted(attempted(refused, 1, 1, authz.StateReady, authz.StateReady, agent.ErrRefused))
 		p.Attempted(attempted(bought, 2, 1, authz.StateSpent, authz.StateSpent, nil))
-		return agent.Watched{
-			Baseline: agent.Quote{Checkout: "the-offer", Price: generated.Amount{Amount: 24000, Currency: "USD"}},
-			Bought:   bought,
-		}, nil
+		return agent.Watched{Bought: bought}, nil
 	})
 
 	run, err := c.service.Start(t.Context(), console.Watching{Prompt: "buy a flight to Palma"})
@@ -671,6 +769,13 @@ func (o object) nested(t *testing.T, key string) object {
 	t.Helper()
 
 	out, ok := o[key].(map[string]any)
+	// assert rather than require, because this is a helper and a helper carrying
+	// require is unsafe the moment a caller invokes it from a goroutine. The
+	// empty object is what stops a missing key becoming a panic that takes the
+	// whole package down and names nothing.
 	assert.True(t, ok, "%s has to be an object for this assertion to mean anything", key)
+	if !ok {
+		return object{}
+	}
 	return out
 }
