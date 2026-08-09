@@ -575,18 +575,26 @@ make generate-verify  # prove generation is reproducible and touches nothing tra
 make diagrams         # export inline mermaid from docs/ to SVG     ⟵ needs Node
 make demo             # bring the whole stack up, one Ctrl-C stops it ⟵ needs Node
 make frontend         # the frontend dev server on its own           ⟵ needs Node
-make frontend-check   # type-check and build the frontend            ⟵ needs Node
+make frontend-test    # the frontend suite: Vitest in jsdom          ⟵ needs Node
+make frontend-check   # type-check, build and test the frontend      ⟵ needs Node
 ```
 
 **`make check` needs only Go.** Node is required by `make generate`,
-`make generate-ts`, `make diagrams`, `make demo` and the two frontend targets —
-`diagrams` pulls a headless Chromium, which is exactly why it was kept out of
+`make generate-ts`, `make diagrams`, `make demo` and the three frontend targets
+— `diagrams` pulls a headless Chromium, which is exactly why it was kept out of
 `check`. `check` regenerates the *Go* half of the canonical model and the mocks
 before linting — testing a tree whose generated half came from an older schema
 checks the wrong thing, and the mocks are what the tests are written against —
 but it stops there, so work that touches neither the frontend nor a diagram
 never needs npm. mockery is a Go program like the schema generator, so neither
 half of that generation costs a Node toolchain.
+
+**The frontend suite is where that trade-off shows.** `frontend-test` is Vitest
+in jsdom, and it is deliberately not a prerequisite of `check` — a gate that
+made npm mandatory for backend work is the first thing anyone would route
+around. It runs in the *Contracts* job instead, which already installs Node for
+the frontend build, so a frontend change cannot merge unrun even though nothing
+local is obliged to run it.
 
 **`make check` is no longer the whole of CI.** It is the local gate; the
 *Build and test*, *Lint* and *Contracts* jobs in `.github/workflows/ci.yml`
