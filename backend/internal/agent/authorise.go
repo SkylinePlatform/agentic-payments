@@ -121,6 +121,31 @@ type Intent struct {
 	// as roles.PublicKey reads it out of the agent's own key set. It ends up in
 	// both open mandates' cnf claim.
 	AgentKey generated.PublicKey
+
+	// Item, when set, is the catalogue offer the caller has already chosen, and
+	// discovery is skipped.
+	//
+	// It is for a caller that has one: the shopping console of #109 shows the
+	// merchant's own search results in a table and the user picks a row, so by
+	// the time this agent is asked for a mandate the choosing has happened
+	// somewhere a person could see it. Empty is the command line's case, where
+	// nobody was there and Discover picks the first match.
+	//
+	// **What is skipped is the search, never the narrowing.** The constraint
+	// saying this exact item is appended either way, so the Trusted Surface
+	// renders `the item is …` and the user reads it before signing — which is
+	// the property #22 exists for and is exactly what a caller-supplied item
+	// would otherwise quietly bypass.
+	//
+	// **The agent does not check it against the rest of the interpretation**,
+	// and that is not an oversight to be closed later. Asking whether this offer
+	// satisfies a bound the user set is evaluating a constraint, which AGENTS.md
+	// gives to the verifier and to nobody else; internal/agent cannot even
+	// import the evaluator, and TestTheAgentCannotReachAConstraintEvaluator is
+	// what keeps that true. A caller that names an item its own prompt does not
+	// describe gets a mandate saying both things, signed by the user, and
+	// refused at the moment of purchase by the party whose job that is.
+	Item string
 }
 
 // Authorisation is what the user signed, together with the two things the agent
@@ -165,8 +190,10 @@ type Authorisation struct {
 //
 // The interpretation is what the user is shown, so it has to exist before the
 // surface is called. The search is what turns "a flight to Palma" into a
-// specific thing this merchant sells, so it has to run before the narrowing. And
-// the narrowing has to happen before the signature, because the point of it is
+// specific thing this merchant sells, so it has to run before the narrowing —
+// unless Intent.Item says a caller has already done the picking, which is the
+// one step of the four that can be skipped and the field's own comment argues
+// why. And the narrowing has to happen before the signature, because the point of it is
 // that the user approves buying *that* item rather than anything matching a
 // description — an open mandate constraining only a category authorises every
 // offer in it, for as long as it lives.
@@ -228,9 +255,16 @@ func (c *Client) Authorise(ctx context.Context, in Intent) (Authorisation, error
 			in.Prompt, err)
 	}
 
-	item, err := c.discover(ctx, constraints)
-	if err != nil {
-		return out, err
+	// A caller that already picked one skips the search and nothing else. See
+	// Intent.Item: the narrowing below runs either way, so the user still reads
+	// which offer they are authorising.
+	item := in.Item
+	if item == "" {
+		found, err := c.discover(ctx, constraints)
+		if err != nil {
+			return out, err
+		}
+		item = found
 	}
 
 	narrowed := narrow(constraints, item)

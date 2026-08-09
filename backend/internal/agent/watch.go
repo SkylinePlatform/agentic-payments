@@ -108,6 +108,46 @@ type Watch struct {
 	// chains — each verifier's own identifier, as it sets Audience on its rules.
 	CredProviderID string
 	ProcessorID    string
+
+	// Progress, when set, is told about each attempt as it is applied. Nil is
+	// the ordinary case and records nothing — cmd/agent without -addr prints
+	// what Run returned and nobody watches it in between.
+	Progress Progress
+}
+
+// Progress is told about each attempt as it is applied.
+//
+// One method, and it is handed a value rather than the thing that produced one.
+// That is the whole of the design rather than economy: Attempted already carries
+// Checkout and Payment as authz.MandateState values, so a consumer can render
+// where the pair stands without anything handing out the *Tracker — which is
+// what keeps Tracker.Attempt the only caller of MandateState.Next, on the terms
+// Tracker's own comment sets out.
+//
+// # When it is called
+//
+// After Tracker.Attempt has returned, at the point Watched.Attempts is written.
+// The state a consumer observes is therefore the state the rule reached rather
+// than the one it was about to reach, and the two differ on every attempt that
+// resolves: the pair is at StateAwaitingReceipt while the attempt is in flight.
+//
+// A re-delivery is one call for the same row, with Deliveries higher than the
+// last. It is not a second attempt — Attempted's own comment argues that at
+// length — so a consumer keying on Delegated.ID counts attempts, and one keying
+// on calls counts deliveries.
+//
+// # The row is the consumer's, and Delegated is not
+//
+// Attempted.Delegated points at the attempt this loop is still holding. A
+// re-delivery calls Fund and Settle on that same value, which fills Credential,
+// sets Settled and appends receipts — so an implementation that stores the
+// pointer and reads it later publishes a row that rewrote itself between the
+// call and the read. Take what is needed at the call.
+//
+// Implementations are called on the goroutine running the watch, so one that
+// blocks stops the watch.
+type Progress interface {
+	Attempted(Attempted)
 }
 
 // DefaultPoll is how often a watch re-quotes when Interval is unset.
@@ -289,6 +329,12 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 		} else {
 			recorded[d.ID] = len(out.Attempts)
 			out.Attempts = append(out.Attempts, row)
+		}
+		// Here rather than anywhere else in the iteration: the row is complete,
+		// and tracker.Attempt has returned, so what is published is the state the
+		// rule reached. See Progress.
+		if w.Progress != nil {
+			w.Progress.Attempted(row)
 		}
 
 		switch {

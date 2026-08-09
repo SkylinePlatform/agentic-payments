@@ -35,6 +35,15 @@ packages:
     interfaces:
       Sink:
 
+  # The watch's Progress port. It is called from the goroutine running the
+  # watch, which is the case this file's opening paragraph names as the one
+  # hand-rolling gets wrong: testify's own mutex is what makes the recorded
+  # calls readable afterwards, and reading them once the watch has finished is
+  # what keeps every assertion on the test goroutine.
+  github.com/SkylinePlatform/agentic-payments/backend/internal/agent:
+    interfaces:
+      Progress:
+
   # The merchant's Processor. What its tests are about is whether the money was
   # asked for at all: the merchant refuses a purchase before initiating payment,
   # and the response shape cannot show that — a refusal omits the payment
