@@ -99,9 +99,11 @@ type Role struct {
 // instead of dying with the process, which is most of the value of emitting at
 // all when the thing being watched is a shutdown.
 //
-// Exported because the agent is not a server and so does not go through Main,
-// but shuts its own emitter down for exactly the same reason and must not
-// answer the question differently. One budget, one place: two constants of the
+// Exported because cmd/agent does not go through Main and still has to answer
+// the same question. It mints its emitter before it knows whether it will serve
+// at all — -buy and -watch run against counterparties before anything listens,
+// and -addr is what decides whether there is a handler afterwards — so it calls
+// Run itself rather than being built by Main. One budget, one place: two constants of the
 // same value in two files are free to drift, and the drift would show up as a
 // demonstration whose last events arrive from four processes and not the fifth.
 const FlushGrace = 2 * time.Second

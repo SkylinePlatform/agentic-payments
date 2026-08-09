@@ -314,7 +314,7 @@ func TestTheCredentialProvidersReceiptDoesNotSpendTheMandate(t *testing.T) {
 		require.NoError(t, err, "minting the four closed mandates")
 
 		var tracker agent.Tracker
-		require.NoError(t, watch.Attempt(t.Context(), &tracker, d),
+		require.NoError(t, watch.Attempt(t.Context(), &tracker, d, quoted, 1),
 			"a purchase inside the limits the user signed has to go through")
 
 		assert.True(t, d.Settled, "the money has to have moved")
@@ -502,7 +502,7 @@ func TestTheRefusalAtTwoHundredAndTenIsAVerifiersOwnSignedAnswer(t *testing.T) {
 	require.NoError(t, err, "the agent has to be able to assemble a purchase it will be refused for")
 
 	var tracker agent.Tracker
-	err = watch.Attempt(t.Context(), &tracker, d)
+	err = watch.Attempt(t.Context(), &tracker, d, quoted, 1)
 	require.ErrorIs(t, err, agent.ErrRefused)
 
 	token := d.Receipt("credprovider")
@@ -543,7 +543,7 @@ func TestARejectedAttemptLicensesTheNext(t *testing.T) {
 	require.NoError(t, err)
 
 	var tracker agent.Tracker
-	require.ErrorIs(t, watch.Attempt(t.Context(), &tracker, first), agent.ErrRefused)
+	require.ErrorIs(t, watch.Attempt(t.Context(), &tracker, first, over, 1), agent.ErrRefused)
 	require.Equal(t, authz.StateReady, tracker.Payment(),
 		"the rejection receipt is what returns the pair here, and this state is what the retry rests on")
 
@@ -553,14 +553,14 @@ func TestARejectedAttemptLicensesTheNext(t *testing.T) {
 
 	second, err := watch.Delegate(t.Context(), under)
 	require.NoError(t, err)
-	require.NoError(t, watch.Attempt(t.Context(), &tracker, second),
+	require.NoError(t, watch.Attempt(t.Context(), &tracker, second, under, 1),
 		"a mandate returned to ready by a refusal has to be usable again")
 	assert.Equal(t, authz.StateSpent, tracker.Payment())
 
 	// And a third is refused by the rule rather than by anybody's verifier.
 	third, err := watch.Delegate(t.Context(), under)
 	require.NoError(t, err)
-	err = watch.Attempt(t.Context(), &tracker, third)
+	err = watch.Attempt(t.Context(), &tracker, third, under, 1)
 	require.ErrorIs(t, err, authz.ErrMandateSpent,
 		"only a rejection licenses another attempt, and this one was accepted")
 	assert.Empty(t, third.Receipts,
@@ -994,7 +994,7 @@ func TestADeliveryNobodyAnsweredHoldsTheAttemptOpen(t *testing.T) {
 	a.breaks = func(r *http.Request) bool { return strings.HasSuffix(r.URL.Path, "/credential") }
 
 	var tracker agent.Tracker
-	err = watch.Attempt(t.Context(), &tracker, d)
+	err = watch.Attempt(t.Context(), &tracker, d, quoted, 1)
 	require.Error(t, err, "a delivery that reached nobody is not a purchase")
 	assert.NotErrorIs(t, err, agent.ErrRefused,
 		"nobody refused this — reading a broken wire as a refusal would license an attempt no receipt paid for")
@@ -1012,12 +1012,15 @@ func TestADeliveryNobodyAnsweredHoldsTheAttemptOpen(t *testing.T) {
 	other, err := watch.Delegate(t.Context(), quoted)
 	require.NoError(t, err)
 	require.NotEqual(t, d.ID, other.ID, "two mints are two attempts, or this proves nothing")
-	require.ErrorIs(t, watch.Attempt(t.Context(), &tracker, other), authz.ErrOpenMandateOutstanding)
+	require.ErrorIs(t, watch.Attempt(t.Context(), &tracker, other, quoted, 1), authz.ErrOpenMandateOutstanding)
 	assert.Empty(t, other.Receipts, "the rule refused it, so no verifier was troubled")
 
-	// And the same attempt, re-delivered once the wire is back, is answered.
+	// And the same attempt, re-delivered once the wire is back, is answered. The
+	// second delivery of the same documents, which is what the 2 says — the
+	// number reaches no verifier and exists so that a consumer can see a lost
+	// response without a second row appearing.
 	a.breaks = nil
-	require.NoError(t, watch.Attempt(t.Context(), &tracker, d),
+	require.NoError(t, watch.Attempt(t.Context(), &tracker, d, quoted, 2),
 		"re-delivering the same attempt is not a second attempt, and this one settles")
 	assert.Equal(t, authz.StateSpent, tracker.Payment())
 	assert.Empty(t, tracker.Outstanding(), "an answered attempt is no longer outstanding")

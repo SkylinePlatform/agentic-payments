@@ -1,10 +1,9 @@
 // Command agent runs the mock Shopping Agent.
 //
-// It is the only role that is a client rather than a server, and the only one an
-// LLM may ever appear in — inside internal/agent/interpret and nowhere else.
-// None appears here, and none appears in the watch either: the interpretation
-// happens once, before the user signs, and everything after that is
-// deterministic. That is beat 4 of the built scenario, and it is a property
+// It is the only role an LLM may ever appear in — inside internal/agent/interpret
+// and nowhere else. None appears here, and none appears in the watch either: the
+// interpretation happens once, before the user signs, and everything after that
+// is deterministic. That is beat 4 of the built scenario, and it is a property
 // rather than a coincidence of the demo's wiring — -watch builds an
 // interpret.Demo(), which is a fixed table, and no model is configured anywhere.
 //
@@ -42,6 +41,34 @@
 // whole of issue #20's three-lane view; running it repeatedly would only repeat
 // the same eleven events. The flow worth watching over time is -watch, where the
 // agent waits on a condition the user described.
+//
+// # -addr makes it a server, and by default it is not one
+//
+// This was the one role that was a client and nothing else, until #137 gave it a
+// console to answer: internal/agent/console serves POST /watches, GET /watches,
+// GET /watches/{id} and GET /healthz, so a browser can start a watch and read
+// where each mandate in it stands.
+//
+// **-addr defaults to empty, meaning do not serve.** deploy/demo.json runs two
+// agent processes and the Human Present one has no business listening, so both
+// are what they were byte for byte until one is given the flag. With it set,
+// -watch still runs one watch on startup from -prompt, registered in the console
+// so that a first load has something to show.
+//
+// -once with -addr is refused at parse time. The two ask for opposite things: a
+// server that exits after its first watch is a server nobody can use, and
+// answering that with a precedence rule would leave whoever passed both to find
+// out which one won by watching.
+//
+// # Two signal handlers fire under -addr, and that is correct
+//
+// This process installs signal.NotifyContext for the context its flows run
+// under, and roles.Run installs its own so that a served handler drains rather
+// than being cut off mid-request. Both fire on one Ctrl-C, and neither is
+// redundant: the first ends the watch, which is what leaves that run reading
+// "stopped" on the console, and the second stops accepting and drains. Neither
+// cancels the other. It is worth naming because two handlers in one process
+// reads like a leftover, and this one is not.
 package main
 
 import (
@@ -56,6 +83,7 @@ import (
 	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/console"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
@@ -86,6 +114,7 @@ func run() error {
 	buy := flag.Bool("buy", false, "run one Human Present purchase once the counterparties are up")
 	watch := flag.Bool("watch", false, "run the Human Not Present flow: authorise once, then watch a price")
 	once := flag.Bool("once", false, "exit after the purchase instead of staying up")
+	addr := flag.String("addr", "", "address to serve the console API on; empty means do not serve")
 
 	// The Human Not Present flags. The prompt is the built scenario's sentence,
 	// character for character, because internal/agent/interpret is scripted on it
@@ -107,6 +136,10 @@ func run() error {
 
 	collector := roles.CollectorFlag()
 	flag.Parse()
+
+	if err := flagsAgree(*addr, *once); err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -136,15 +169,24 @@ func run() error {
 		}
 	}
 
+	cfg := watching{
+		prompt:         *prompt,
+		quantity:       *quantity,
+		poll:           *poll,
+		merchant:       generated.Merchant{ID: *merchantID, Name: *merchantName},
+		credProviderID: *credProviderID,
+		processorID:    *processorID,
+	}
+
+	// Serving takes over from here: the watch runs inside the console rather
+	// than in front of it, so that the browser and the terminal are looking at
+	// the same run rather than at two.
+	if *addr != "" {
+		return serveConsole(ctx, endpoints, events, *addr, cfg, *watch)
+	}
+
 	if *watch {
-		err := watchOnce(ctx, endpoints, events, watching{
-			prompt:         *prompt,
-			quantity:       *quantity,
-			poll:           *poll,
-			merchant:       generated.Merchant{ID: *merchantID, Name: *merchantName},
-			credProviderID: *credProviderID,
-			processorID:    *processorID,
-		})
+		err := watchOnce(ctx, endpoints, events, cfg)
 		if err := afterWatch(os.Stderr, err, *once); err != nil {
 			return err
 		}
@@ -155,6 +197,26 @@ func run() error {
 
 	fmt.Println("  agent: ready. Waiting for work — try -buy or -watch.")
 	<-ctx.Done()
+	return nil
+}
+
+// flagsAgree refuses a combination that cannot be honoured.
+//
+// At parse time rather than when the console is built, because it is a
+// contradiction in what was asked for rather than a failure to do it — and
+// because the alternative is a precedence rule, which leaves whoever passed both
+// to find out which one won by watching. -once wants the shell back after one
+// purchase; -addr wants a server. There is no reading of the pair that serves
+// both.
+//
+// A function rather than four lines inside run, so that the decision is
+// assertable without a process: TestOnceAndAddrCannotBothBeGiven is what holds
+// it.
+func flagsAgree(addr string, once bool) error {
+	if addr != "" && once {
+		return errors.New("agent: -once and -addr ask for opposite things — " +
+			"a server that exits after its first watch is a server nobody can use")
+	}
 	return nil
 }
 
@@ -204,6 +266,99 @@ func afterWatch(out io.Writer, err error, once bool) error {
 	default:
 		return err
 	}
+}
+
+// serveConsole runs the agent as a server: the console API, and optionally one
+// watch started on the way up.
+//
+// # Why the startup watch goes through the console rather than beside it
+//
+// A second watch running outside the registry would be invisible to every route
+// this process serves, so a console loaded during a demonstration would show
+// nothing until somebody pressed the button — while the interesting run, the one
+// deploy/demo.json starts, moved through its states unobserved. One registry, one
+// list, whether a watch was started by a flag or by a click.
+//
+// The context handed to Start is this process's signal context, so Ctrl-C ends
+// that watch and the console records it as stopped. Watches started over HTTP
+// get a context of their own that outlives their request; Service.Start argues
+// why the caller decides.
+//
+// # A startup watch that cannot be authorised is fatal
+//
+// The same as without -addr, and deliberately not softened into a console that
+// comes up empty. ready has already confirmed the Trusted Surface is listening,
+// so a refusal here is a real failure of the flow this process exists to run,
+// and demo.Runner reporting a process that exited during startup is how anybody
+// finds out.
+func serveConsole(
+	ctx context.Context, e agent.Endpoints, events *obs.Emitter,
+	addr string, cfg watching, initial bool,
+) error {
+	identity, err := roles.NewIdentity("agent")
+	if err != nil {
+		return err
+	}
+	agentKey, err := roles.PublicKey(ctx, identity.Keys)
+	if err != nil {
+		return fmt.Errorf("reading the key the open mandates will endorse: %w", err)
+	}
+	blinder, err := sdjwt.NewBlinder()
+	if err != nil {
+		return fmt.Errorf("building the blinder: %w", err)
+	}
+
+	service := &console.Service{
+		Watcher: &console.Agent{
+			Client: &agent.Client{Endpoints: e, Events: events},
+			// The scripted table, which is what the demo runs. The model-backed
+			// implementation is #17's and goes behind this same interface — it is
+			// the one thing in this process an LLM may ever sit behind, and it is
+			// called once per authorisation, before the user signs.
+			Interpreter:    interpret.Demo(),
+			AgentKey:       agentKey,
+			Signer:         identity.Signer,
+			Blinder:        blinder,
+			Clock:          identity.Clock,
+			Interval:       cfg.poll,
+			Merchant:       cfg.merchant,
+			CredProviderID: cfg.credProviderID,
+			ProcessorID:    cfg.processorID,
+		},
+		Clock: identity.Clock,
+	}
+
+	handler, err := service.Handler()
+	if err != nil {
+		return err
+	}
+
+	if initial {
+		// One transaction, from the interpretation to the receipt, so every event
+		// the roles emit for this watch lands in one group — and the console
+		// carries the same identifier, which is what lets a row on one screen be
+		// matched to a lane on another.
+		watchCtx, id, err := obs.EnsureCorrelationID(ctx, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent: minting a correlation ID: %v\n", err)
+		}
+		if id != "" {
+			fmt.Printf("\n  corr       %s\n", id)
+		}
+
+		run, err := service.Start(watchCtx, console.Watching{
+			Prompt:   cfg.prompt,
+			Quantity: cfg.quantity,
+		})
+		if err != nil {
+			return fmt.Errorf("starting the watch this process was asked for: %w", err)
+		}
+		fmt.Printf("  typed      %q\n", cfg.prompt)
+		fmt.Printf("  watch      %s — GET http://%s/watches/%s\n", run.ID(), addr, run.ID())
+	}
+
+	fmt.Printf("  console    http://%s/watches\n", addr)
+	return roles.Run("agent", addr, handler)
 }
 
 // watching is what the Human Not Present run is configured with.

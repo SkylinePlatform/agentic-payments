@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
 )
@@ -85,6 +86,55 @@ func TestAfterWatch(t *testing.T) {
 			assert.Contains(t, said.String(), tc.wantSaid,
 				"a watch that stayed up having stopped attempting anything is indistinguishable"+
 					" from one still waiting, unless it says so")
+		})
+	}
+}
+
+// TestOnceAndAddrCannotBothBeGiven is the refusal flagsAgree exists for.
+//
+// The table's four rows are the whole of the decision, and the two that matter
+// are the pair on the last line: -addr on its own is a server, -once on its own
+// is a shell prompt after one purchase, and together they are a request nothing
+// can satisfy. Refusing at parse time is what keeps a caller from discovering
+// which one won by watching a process it expected to still be there.
+func TestOnceAndAddrCannotBothBeGiven(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		addr    string
+		once    bool
+		wantErr bool
+		why     string
+	}{
+		{
+			name: "neither", why: "the default is a client that stays up, which is what it always was",
+		},
+		{
+			name: "addr alone", addr: "127.0.0.1:8086",
+			why: "a console with no exit path is the ordinary way to serve one",
+		},
+		{
+			name: "once alone", once: true,
+			why: "somebody smoke-testing the stack by hand wants the receipts and the shell back",
+		},
+		{
+			name: "both", addr: "127.0.0.1:8086", once: true, wantErr: true,
+			why: "a server that exits after its first watch is a server nobody can use",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := flagsAgree(tc.addr, tc.once)
+			if !tc.wantErr {
+				assert.NoError(t, err, tc.why)
+				return
+			}
+			require.Error(t, err, tc.why)
+			assert.Contains(t, err.Error(), "-addr",
+				"a refusal that does not name both flags leaves the caller to guess which one to drop")
+			assert.Contains(t, err.Error(), "-once")
 		})
 	}
 }
