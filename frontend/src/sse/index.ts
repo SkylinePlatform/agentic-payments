@@ -1,0 +1,32 @@
+/**
+ * The collector's event stream, typed.
+ *
+ * `connect()` and nothing else is what a surface needs: it opens `/events`,
+ * registers a listener for each of the five kinds — the collector names its
+ * events, and a named SSE event never reaches `onmessage` — and hands back a
+ * subscription per kind, a report of anything the stream skipped, and a
+ * connection state.
+ *
+ * This is a library. It builds no React and holds no state a component can see;
+ * wiring it into an effect is #20's job, and `stream.ts`'s own comment gives
+ * the cleanup that makes `StrictMode` behave.
+ *
+ * `EventSourceLike` is the one export deliberately missing from this barrel.
+ * The app never names it — passing nothing gets the browser's — and
+ * `src/architecture.test.ts` allows the identifier in `./stream.ts` alone, so a
+ * test injecting a fake imports it from there.
+ */
+
+export { EVENT_KINDS, isEventKind, parseRecord } from "./events";
+export type { EventKind, EventRecord, ParsedRecord, ProtocolEvent } from "./events";
+
+export { connect } from "./stream";
+export type {
+  ConnectionState,
+  EventStream,
+  Gap,
+  MalformedFrame,
+  RecordListener,
+  StreamOptions,
+  Unsubscribe,
+} from "./stream";
