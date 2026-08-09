@@ -8,12 +8,17 @@
  *
  * # Why a second renderer exists at all, and where it may not go
  *
- * Two surfaces render a constraint with no signature anywhere near them. The
+ * Two screens render a constraint with no signature anywhere near them. The
  * Mandate Inspector decodes a mandate signed some time ago and shows what it
- * says, with no live Trusted Surface to ask. The console shows what a prompt
- * would authorise before anything is signed. Both are reading, and a reader that
- * had to round-trip through a role to put a sentence on the screen would be
- * reachable only while that role is up.
+ * says, with no live Trusted Surface to ask. The agent console shows what a
+ * prompt would authorise before anything is signed. Both are reading, and a
+ * reader that had to round-trip through a role to put a sentence on the screen
+ * would be reachable only while that role is up.
+ *
+ * Neither screen is built yet — both routes are still Placeholder components,
+ * and nothing in this package imports this module. That is stated rather than
+ * left to be found: what is above is what the module is for, not a list of its
+ * callers.
  *
  * The consent screen is the opposite case and this module is forbidden there.
  * The surface exposes `/authorise/preview` precisely so that the sentences a
@@ -394,10 +399,11 @@ function plainObject(raw: unknown): Record<string, unknown> | null {
  * The characters Go's `strings.TrimSpace` removes: Unicode's White_Space
  * property, which is `\s` in JavaScript with U+FEFF taken out and U+0085 put in.
  *
- * Spelled out rather than written as `\s` because those two differences are
- * real. `"label"` keeps its prefix under `String.prototype.trim` and loses
- * it in Go, which would be a sentence disagreeing across the two languages about
- * what the user approved.
+ * Spelled out rather than written as `\s` because both differences are real. A
+ * label padded with U+0085 keeps that padding under `String.prototype.trim` and
+ * loses it in Go; one padded with U+FEFF loses it here and keeps it in Go.
+ * Either way the two languages disagree about what the user approved, and
+ * `label-with-whitespace-only-one-language-trims` is the vector that says so.
  */
 const GO_SPACE = "\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
 const SURROUNDING_SPACE_START = new RegExp("^[" + GO_SPACE + "]+", "u");
@@ -504,10 +510,13 @@ function sayValue(v: Value): string {
  * `Intl.NumberFormat` gets JPY right and would then get every other vector
  * wrong, starting with the thousands separator it inserts.
  *
- * The sign branch cannot be reached through `render`: `parseMoney` refuses a
- * negative amount, exactly as Go's does. It is here because Go's is, and Go's is
- * reachable — through the rejection reason, where the *subject's* own amount is
- * rendered rather than a constraint's operand.
+ * The sign branch cannot be reached through `render`, here or in Go:
+ * `parseMoney` refuses a negative amount on both sides. It is kept because Go's
+ * `renderValue` has a second caller — the rejection reason, which renders the
+ * *subject's* own amount rather than a constraint's operand, and a Subject is
+ * built in Go rather than decoded, so nothing enforces `amount.json`'s minimum
+ * on one. Dropping the branch here would leave `-7` printing `0.-7 USD`, because
+ * `padStart` pads the minus sign like any other character.
  */
 function renderMoney(money: Money): string {
   const MINOR_DIGITS = 2;
@@ -528,10 +537,12 @@ function renderMoney(money: Money): string {
 /**
  * The month names, hardcoded.
  *
- * `Intl.DateTimeFormat` is not an option even set to a fixed locale: `en-US`
- * gives "June 1, 2026" and `en-GB` gives "1 June 2026" only by luck of the
- * default format, and both depend on the ICU data the runtime happens to ship.
- * Go's layout is a fixed English string, so the table is too.
+ * `Intl.DateTimeFormat` is not an option even pinned to a locale. Asked for a
+ * numeric day, a long month and a numeric year it gives "June 1, 2026" under
+ * `en-US` and "1 June 2026" under `en-GB`, so matching Go would mean picking
+ * `en-GB` and then depending on that locale's word order and on whichever ICU
+ * data the runtime happens to ship. Go's layout is a fixed English string with
+ * no locale behind it, so the table is one too.
  */
 const MONTHS = [
   "January",

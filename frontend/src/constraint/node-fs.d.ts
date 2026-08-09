@@ -4,12 +4,18 @@
  *
  * `render.test.ts` reads `contracts/testdata/render_vectors.json`, which lives
  * outside this package. A bundler import would be the shorter route and is the
- * wrong one: `import.meta.glob` and a plain JSON import both make the fixture a
- * module Vite resolves, so the production build would be reaching outside its
- * own root for a test file. `src/test/palette.ts` reaches for `?raw` instead,
- * and that is right for what it does — `styles.css` is *in* `src/` and is a
- * source file the app ships. A fixture in `contracts/` is a different case, and
- * reading it from disk is what keeps it out of the module graph entirely.
+ * wrong one: `import.meta.glob`, a plain JSON import and even
+ * `new URL("literal", import.meta.url)` all make the fixture a module Vite
+ * resolves, and it can only reach outside the package root through the dev
+ * server's `/@fs/` escape hatch. That is not a theory — the URL form was tried,
+ * and the expression came back as `http://localhost:3000/@fs/...`, which is what
+ * `render.test.ts` documents beside the line that avoids it. Reading the file
+ * from disk keeps it a fixture rather than a module.
+ *
+ * `src/test/palette.ts` reaches for `?raw` instead, and that is right for what
+ * it does — `styles.css` is *in* `src/`, is a source file the app ships, and
+ * wants the same resolution the app builds with. A fixture in `contracts/` is
+ * the other case.
  *
  * What that would normally cost is `@types/node`, and its globals are the thing
  * `src/test/palette.ts` was written to avoid: adding them puts `process.env`

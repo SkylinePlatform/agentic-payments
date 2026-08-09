@@ -103,7 +103,7 @@
     },
     {
       "name": "amount-negative-is-refused",
-      "note": "A mandate authorises a payment; money moving the other way is a refund, which is a different object with a different authorisation. renderMoney carries a sign branch that no constraint can reach through Render — in Go it is reachable only through the rejection reason, where the subject's own amount is rendered.",
+      "note": "A mandate authorises a payment; money moving the other way is a refund, which is a different object with a different authorisation. So renderMoney's sign branch is unreachable through Render in both languages, and is kept because renderValue also renders the subject's own amount inside a rejection reason — and a Subject is built in Go rather than decoded, so nothing enforces the schema's minimum on one.",
       "constraint": {
         "op": "lte",
         "field": "amount",

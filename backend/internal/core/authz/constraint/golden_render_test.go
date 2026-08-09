@@ -19,14 +19,22 @@ import (
 // # Why a golden file rather than the table in render_test.go
 //
 // TestRenderSaysWhatTheUserIsSigning already pins sentences, and it is enough
-// while Go is the only thing that renders one. It stopped being enough when a
-// second implementation appeared: frontend/src/constraint/render.ts renders
-// constraints in the Mandate Inspector, which decodes a mandate signed some time
-// ago with no live surface to ask, and in the console, which shows what a prompt
+// while Go is the only thing that renders one. It stopped being enough when
+// frontend/src/constraint/render.ts arrived. That module exists for the two
+// screens that show a constraint with no signature anywhere near them: the
+// Mandate Inspector (#21), which decodes a mandate signed some time ago with no
+// live surface to ask, and the agent console (#22), which shows what a prompt
 // would authorise before anything is signed. Neither has a signature in it,
 // which is what makes a TypeScript renderer legitimate at all — the consent path
 // keeps asking the surface, because the sentence the user reads has to be the
 // sentence the signature covers.
+//
+// **Neither screen is built yet, and nothing imports that module**, which is
+// worth saying rather than leaving a reader to discover: both routes are still
+// Placeholder components. What that changes is nothing about this file — the
+// second implementation exists and the two can drift from today — but it does
+// mean the description above is what the renderer is for rather than a list of
+// its callers.
 //
 // Two renderers means the sentence is now an interoperable artefact rather than
 // one package's output, and this file is what stops them drifting. Go owns
@@ -48,9 +56,9 @@ const goldenPath = "../../../../../contracts/testdata/render_vectors.json"
 //
 //	go test ./internal/core/authz/constraint -run TestGoldenRenderVectors -update
 //
-// A flag rather than an environment variable so that it shows up in `go test
-// -args -h` beside the toolchain's own, and so that a stray export cannot
-// silently turn a comparison into a rewrite.
+// A flag rather than an environment variable, so that a stray export in a shell
+// cannot silently turn a comparison into a rewrite — which would make the whole
+// file agree with whatever the renderer currently does.
 var update = flag.Bool("update", false, "rewrite the render vectors from the renderer")
 
 // renderVector is one sentence, and the constraint that produces it.
@@ -138,7 +146,7 @@ var vectors = []struct {
 	},
 	{
 		name: "amount-negative-is-refused",
-		note: "A mandate authorises a payment; money moving the other way is a refund, which is a different object with a different authorisation. renderMoney carries a sign branch that no constraint can reach through Render — in Go it is reachable only through the rejection reason, where the subject's own amount is rendered.",
+		note: "A mandate authorises a payment; money moving the other way is a refund, which is a different object with a different authorisation. So renderMoney's sign branch is unreachable through Render in both languages, and is kept because renderValue also renders the subject's own amount inside a rejection reason — and a Subject is built in Go rather than decoded, so nothing enforces the schema's minimum on one.",
 		raw:  `{"op":"lte","field":"amount","value":{"amount":-500,"currency":"USD"}}`,
 	},
 	{

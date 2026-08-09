@@ -569,10 +569,13 @@ reconcile against the code for no benefit.
   on one of our own Go types. That is a unit test, and it already exists in
   `lifecycle_test.go`. **That rule is still out, and for the same reason.** What
   #19 named as the case that *would* qualify is the one that arrived:
-  `Expression.Render()`'s sentence is an artefact, it travels — it is what the
-  user read and signed, and what the Mandate Inspector re-renders from a mandate
-  signed some time ago — and `frontend/src/constraint/render.ts` is a second
-  implementation that has to reproduce it exactly.
+  `Expression.Render()`'s sentence is an artefact and it travels — it is what the
+  user read and signed, and it is what the Mandate Inspector will re-render from
+  a mandate signed some time ago, with no live surface to ask — and
+  `frontend/src/constraint/render.ts` is a second implementation that has to
+  reproduce it exactly. The Inspector is still a placeholder and nothing imports
+  that module yet; the two implementations can drift from today regardless,
+  which is what the vectors are for.
   `contracts/testdata/render_vectors.json` is where the two meet, and Go owns
   it: `TestGoldenRenderVectors` generates the file from a table and compares
   against it, so a `Render()` change with no regeneration fails in the language

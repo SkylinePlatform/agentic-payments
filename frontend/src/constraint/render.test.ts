@@ -61,9 +61,10 @@ const VECTORS = FILE.vectors;
  * A suite over a file is only as good as the file, and nothing in a
  * `for`-over-the-file assertion notices a vector that is no longer in it: the
  * loop simply runs one fewer time and stays green. On the Go side that cannot
- * happen, because the file is generated from a table and the comparison
- * restores what was deleted. On this side the file is the only input, so the
- * names below are asserted present before anything is asserted about them.
+ * happen, because the file is generated from a table and the comparison against
+ * that table fails on anything missing. On this side the file is the only input,
+ * so the names below are asserted present before anything is asserted about
+ * them.
  *
  * Not the whole list — pinning all seventy-odd names here would mean editing
  * this file to add a vector, which is exactly the friction that stops people
@@ -241,8 +242,9 @@ describe("no timezone can make a Date-based renderer agree with these vectors", 
 /**
  * Every UTC offset a reader can be at, in the quarter-hour steps real zones use.
  *
- * The real range is UTC-12 to UTC+14; two hours of slack on each end costs
- * nothing and covers a runtime with a zone database of its own ideas.
+ * The real range is UTC-12:00 to UTC+14:00. This sweeps -14:00 to +14:00, which
+ * is the whole of it plus two hours of slack at the western end — symmetry
+ * costs nothing here, and the eastern end is where the trap actually lives.
  */
 function everyOffset(): [string, number][] {
   const out: [string, number][] = [];

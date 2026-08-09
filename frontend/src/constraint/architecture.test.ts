@@ -97,9 +97,9 @@ function specifiers(source: string): string[] {
  * Resolves a specifier to a key of the graph, or null when it leaves it.
  *
  * Null covers a package (`react`, `node:fs`) and a file the glob does not hold
- * (`../styles.css`, `../protocol/generated`). Both are leaves: nothing beyond
- * them can lead back to this module, because nothing outside `src/` imports
- * anything inside it.
+ * (`../styles.css`, `../protocol/generated`). Both are leaves rather than gaps: a
+ * package in `node_modules` cannot import back into `src/`, a stylesheet imports
+ * nothing, and the generated protocol types are types.
  */
 function resolve(importer: string, specifier: string, graph: ReadonlyMap<string, string>) {
   if (!specifier.startsWith(".")) return null;
