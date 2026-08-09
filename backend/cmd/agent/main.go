@@ -19,14 +19,20 @@
 //
 // The two are independent. Both can be given, in which case the Human Present
 // purchase runs first, which is what puts a full set of events in the log before
-// the watch has anything to show.
+// the watch has anything to show. deploy/demo.json gives them to two processes
+// rather than one anyway, and its $comment says why: the reason is failure
+// isolation rather than ordering.
 //
 // # Why it stays up afterwards
 //
-// The demo runner treats a process that exits as a failure, so an agent that
-// vanished the moment its purchase completed would leave the stack looking
-// broken when nothing is. -once is for the other caller: somebody smoke-testing
-// the stack by hand who wants the receipts printed and the shell back.
+// The demo runner reports a process that exits during startup as a failure, so
+// an agent that vanished the moment its purchase completed would leave the stack
+// looking broken when nothing is. -once is for the other caller: somebody
+// smoke-testing the stack by hand who wants the receipts printed and the shell
+// back.
+//
+// That applies to a watch that ran out of schedule as much as to one that
+// bought something, and afterWatch is where the argument for it lives.
 //
 // # Why -buy is one purchase and not a loop
 //
@@ -43,6 +49,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -138,10 +145,7 @@ func run() error {
 			credProviderID: *credProviderID,
 			processorID:    *processorID,
 		})
-		// A watch stopped by Ctrl-C is not a failure. Every other way it can end
-		// is, including a schedule that ran out — the agent was asked to buy
-		// something and did not.
-		if err != nil && !errors.Is(err, context.Canceled) {
+		if err := afterWatch(os.Stderr, err, *once); err != nil {
 			return err
 		}
 		if *once {
@@ -152,6 +156,54 @@ func run() error {
 	fmt.Println("  agent: ready. Waiting for work — try -buy or -watch.")
 	<-ctx.Done()
 	return nil
+}
+
+// afterWatch turns the end of a watch into what the process should do about it,
+// writing anything the reader has to see to out.
+//
+// A watch stopped by Ctrl-C is not a failure, and neither is one that bought
+// something. Every other way it can end is. The interesting one is
+// agent.ErrScheduleExhausted: the merchant has committed to its last price, an
+// attempt was made against it, and it did not buy.
+//
+// # Exhaustion is fatal under -once and not otherwise
+//
+// The case for exiting 1 on it is a good one — the agent was asked to buy
+// something and did not, and a non-zero status is how a program says its job
+// failed. What it does not survive is what this process is without -once.
+//
+// There is no exit path there at all. A completed purchase falls through to the
+// wait at the end of run, and the process ends only on a signal. A status that
+// appeared for exhaustion and never for success is one nothing can read: no
+// caller can wait on it to learn the purchase went through, because that case
+// never returns. What it would do instead is take the agent out of a stack
+// somebody is watching — demo.Runner settles each process's state during startup
+// and demo.Banner prints it once, and neither is revised afterwards, so an agent
+// that exits minutes later is still listed as up while the next press of
+// POST /demo/advance is answered by nobody.
+//
+// Under -once the process always terminates, the status is the answer somebody
+// asked for, and exhaustion stays fatal.
+//
+// # Staying up is not staying quiet
+//
+// report has already printed every attempt and the receipt each verifier
+// answered with. What it cannot say is that there will be no more of them: a
+// watch that was refused on the last step looks exactly like one still waiting
+// for a price to move. The two lines below are that difference, on stderr,
+// because it is the reason a demonstration stops producing anything.
+func afterWatch(out io.Writer, err error, once bool) error {
+	switch {
+	case err == nil, errors.Is(err, context.Canceled):
+		return nil
+	case errors.Is(err, agent.ErrScheduleExhausted) && !once:
+		_, _ = fmt.Fprintf(out, "agent: %v\n", err)
+		_, _ = fmt.Fprintln(out, "agent: the watch is over and nothing further will be attempted"+
+			" against this authorisation; the process stays up so the rest of the stack keeps its shape.")
+		return nil
+	default:
+		return err
+	}
 }
 
 // watching is what the Human Not Present run is configured with.

@@ -17,7 +17,7 @@ import (
 // the sentence saying what it is not, printed verbatim beneath it.
 //
 // Grouping rather than listing is deliberate. A flat list in startup order puts
-// the collector first, above seven roles, which reads as billing.
+// the collector first, above every protocol participant, which reads as billing.
 func Banner(out io.Writer, statuses []Status) {
 	w := func(format string, args ...any) {
 		_, _ = fmt.Fprintf(out, format+"\n", args...)
