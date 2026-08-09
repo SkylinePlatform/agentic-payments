@@ -31,15 +31,13 @@ import (
 // agent naming checkout_jwt would be the adapter's job done in the one package
 // forbidden to know it.
 //
-// No production code calls either of them yet, and that is worth saying rather
-// than leaving a reader to discover it. Their caller is the agent's watch loop,
-// which is #121. Until it lands the exercise they get is their own tests, the
-// golden vector, and the Human Not Present tests in internal/roles, which use
-// DelegatePayment to mint the chains the Credential Provider and the Merchant
-// Payment Processor are then shown — so the two ends of the chain are at least
-// checked against each other. What that still means for a reader deciding
-// whether a change here is safe: the compiler will not find the call sites for
-// you, and the tests are the whole of the contract.
+// Their caller is the agent's watch loop, added by #121: internal/agent mints
+// one DelegateCheckout and three DelegatePayment chains per purchase attempt,
+// one per verifier. Beyond that call site they are exercised by their own tests,
+// the golden vector, and the Human Not Present tests in internal/roles, which
+// use DelegatePayment to mint the chains the Credential Provider and the
+// Merchant Payment Processor are then shown — so the two ends of the chain are
+// checked against each other as well as through the agent.
 
 // DelegateCheckout signs a closed Checkout Mandate as a delegation of the open
 // Checkout Mandate that endorsed the signer's key.

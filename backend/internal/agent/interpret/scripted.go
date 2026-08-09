@@ -47,14 +47,13 @@ type Script struct {
 // it for a mock returning canned values would delete what its tests prove, in
 // the same way it would for pkg/sdjwt's hmacKey or for clock.Fake.
 //
-// And it is not only a test double. It is what the demo will run: no model is
+// And it is not only a test double. It is what the demo runs: no model is
 // configured there, and beat 2 has to happen for beats 3 to 10 to exist at all.
 // A type declared in a _test.go file is reachable only from its own package's
-// test binary, so cmd/agent could not name one.
-//
-// **Nothing outside this package imports it yet.** The caller arrives with the
-// agent leg of #15, and saying so beats letting a reader go looking for the
-// non-test dependency this comment would otherwise be claiming.
+// test binary, so cmd/agent could not name one — and cmd/agent does name one,
+// through Demo(), when it is started with -watch. internal/agent's own tests
+// name it too, for the same reason: hard rule 4 forbids a test from depending on
+// a live model, and this is what stands in for one.
 //
 // A value is safe to share between goroutines once built: nothing mutates it
 // after NewScripted returns, and Interpret hands back a freshly decoded tree

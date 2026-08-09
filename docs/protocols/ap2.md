@@ -244,36 +244,62 @@ sequenceDiagram
     actor U as User
     participant S as Trusted Surface
     participant A as Shopping Agent
+    participant C as Credential Provider
     participant M as Merchant
     U->>S: approve constraints: BEG→PMI, max USD 20000, Jun–Aug
     S-->>A: open Checkout + Payment Mandate<br/>user-signed, carrying agent cnf key
     loop deterministic polling — no model
-        A->>M: current price?
-        M-->>A: 24000
+        A->>M: quote route:BEG-PMI
+        M-->>A: 24000, step 0
     end
-    A->>M: current price?
-    M-->>A: 21000
-    A->>A: assemble closed mandates, sign with agent key
-    A->>M: open + closed mandates
-    M->>M: does closed satisfy every constraint?
-    M-->>A: rejected — the amount bound is exceeded + rejection receipt
-    A->>M: current price?
-    M-->>A: 18900
-    A->>M: open + closed mandates
+    A->>M: quote route:BEG-PMI
+    M-->>A: 21000, step 1
+    Note over A: the step moved — assemble four closed<br/>mandates, one per verifier, sign with agent key
+    A->>C: delegated Payment Mandate
+    C->>C: does the closed mandate satisfy every constraint?
+    C-->>A: rejected — the amount bound is exceeded + rejection receipt
+    A->>M: quote route:BEG-PMI
+    M-->>A: 18900, step 2
+    A->>C: delegated Payment Mandate
+    C-->>A: accepted + scoped credential + Payment Receipt
+    A->>M: delegated Checkout + Payment Mandate + credential
     M-->>A: accepted + Checkout Receipt
 ```
 
-That sequence is the **authorisation leg only**, and stops where the open
-mandate's distinctive work is done. The payment leg is not different in this
-mode: from the Payment Mandate onward — Credential Provider, scoped
-credential, MPP, Payment Receipt — it is identical to the Human Present
-diagram above, and is left out here rather than drawn a second time. The
-built scenario in `../business/use-cases.md` runs to the end, which is why its
-beat 7 has the Credential Provider returning a scoped token and its beat 9 has
-both receipts signed.
+The one hop left out is the merchant presenting the payment side to the
+Merchant Payment Processor, which the Human Present diagram above already
+shows: AP2 gives that leg to the merchant, so the agent has no part in it in
+either mode.
 
-**The rejection at 21000 is refused by the merchant, not by the agent.** An
-agent that skipped its own check, or one whose model hallucinated that 21000
+**Everything else about the payment leg does differ under Human Not Present**,
+and the fourth difference is why the refusal above is drawn where it is:
+
+- What is presented is a **delegation chain** — the open mandate the user
+  signed with the agent's Key Binding JWT over it — rather than a closed
+  mandate the user signed directly. It reaches a different verification entry
+  point, `AuthorisePaymentChain` rather than `VerifyPayment`.
+- **One chain per verifier.** `aud` is signed and compared, so the Payment
+  Mandate the Credential Provider reads, the one the merchant reads and the one
+  the processor reads are three different documents bound to three different
+  challenges.
+- The merchant **forwards the processor's chain and the processor's challenge
+  unread**, because it is the audience of neither.
+- The user's constraints are **evaluated on this leg**. Under Human Present a
+  payment-side verifier compares nothing — the user signed this exact purchase.
+  Here the open mandate's surviving constraints are evaluated by whichever
+  verifier reads the chain.
+
+**The rejection at 21000 comes from a verifier rather than from the agent, and
+the verifier is the Credential Provider.** The merchant initiates payment, so
+the agent must be funded before it can present anything to the merchant at all;
+and the user's cap constrains the amount, which is one of the three facts a
+payment-side verifier can state (see the disclosure section). So the Credential
+Provider reads it first, refuses, and the merchant is never asked. The merchant
+refuses plenty under this mode — an `item.id` violation, a price that does not
+match its own offer, a chain addressed elsewhere — it simply cannot get to an
+amount constraint first.
+
+An agent that skipped its own check, or one whose model hallucinated that 21000
 was under the cap, would fail at exactly the same point and in exactly the same
 way. That is the property that makes a hallucinating model harmless here, and
 it only holds because the constraint evaluation sits with the verifier — see
@@ -281,9 +307,13 @@ the constraint section below.
 
 The loop is labelled deterministic on purpose. The user's sentence is
 interpreted into typed constraints **once**, before anything is signed; after
-the signature, watching a price is an integer comparison and not a model call.
-`../architecture/README.md` shows where that boundary sits in the module
-layout.
+the signature the agent is watching the merchant's own quote move to a new
+`step` of the merchant's own schedule. **It compares no money at all** — not to
+the cap, not to the previous price — which is what makes "the verifier evaluates
+the constraint" structural here rather than a matter of discipline, and it is
+why the $210 candidate is presented rather than filtered out.
+`internal/agent/watch.go` argues it; `../architecture/README.md` shows where the
+boundary sits in the module layout.
 
 ### The delegation mechanism
 
@@ -359,11 +389,15 @@ and before the merchant was ever asked. An attempt is outstanding until some
 verifier in it answers, is rejected if any of them refuses, and is accepted when
 the purchase goes through.
 
-Nothing calls the machine yet: the autonomous loop that will is issue #15's, and
-until it lands the rule binds by being the one place the sequence is written
-down. That also means the unit is an obligation on the caller rather than a
-property of the type — `MandateState` sees no verifiers and counts calls, so an
-agent stepping it per hop gets the bug above silently.
+One caller steps the machine: `internal/agent`'s `Tracker`, which holds one
+state per open mandate and steps both together, and which the autonomous watch
+loop drives once per attempt. The unit remains an obligation on the caller
+rather than a property of the type — `MandateState` sees no verifiers and counts
+calls, so an agent stepping it per hop gets the bug above silently. What closes
+it is that caller's own test,
+`TestTheCredentialProvidersReceiptDoesNotSpendTheMandate`, which drives one
+attempt across both hops and asserts that the Credential Provider's receipt
+leaves the mandate awaiting a receipt rather than spent.
 
 Single use is this implementation's reading of AP2's own answer, which is scope
 reduction — "the agent reduces the scope of the open mandate based on the

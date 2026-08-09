@@ -58,9 +58,17 @@ decided.*
 
 ## 5. Rejection
 
-*The built scenario has three attempts: the merchant refuses at 21000 and
-accepts at 18900. So a rejection is not the end of the story, it is a beat in
-the middle.*
+*The built scenario has **two** attempts. 24000 is the baseline — the agent
+watches it and presents nothing, because the user said "when it drops" and that
+presupposes a price now. 21000 is attempted and refused; 18900 is attempted and
+bought. So a rejection is not the end of the story, it is a beat in the middle —
+and the screen has to draw a state where nothing has been attempted yet, which
+is not the same as a state where an attempt is pending.*
+
+*The refusal at 21000 is the **Credential Provider's**, not the merchant's: the
+merchant initiates payment, so funding comes first, and the amount bound is one
+of the three facts a payment-side verifier can state. A screen drawing a merchant
+receipt for that beat would be drawing an artefact that never exists.*
 
 *Does a refused attempt stay on screen, or does the next one replace it? A
 viewer who cannot see the refusal afterwards cannot see that the agent tried

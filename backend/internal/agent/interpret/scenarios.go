@@ -130,6 +130,17 @@ const thisBicycle = `[
 // on the count says nothing about the price. "Two tickets, up to $160 all in" is
 // both, and the quantity is part of what was approved rather than a detail of
 // how it gets filled.
+//
+// **What the quantity is not is an instruction, and the agent currently buys
+// one.** `quantity lte 2` says at most two; nothing here says how many to put in
+// the basket, and internal/agent takes that from its own -quantity flag, which
+// defaults to one. So this prompt authorises two tickets and purchases one.
+// Nothing is violated — one satisfies the bound, and the verifiers authorise
+// what they are shown — but the sentence asked for two. Reading a bound as the
+// number to buy would be the agent deciding what the user meant from a limit
+// they set, which is the same move as evaluating a constraint; carrying an
+// intended basket size properly means IntentInterpreter returning one and the
+// surface rendering it. Issue #133.
 const concertTickets = `[
 	{"op":"eq","field":"item.id","value":"event:vlado-georgijev-2026-11-14"},
 	{"op":"lte","field":"quantity","value":2},

@@ -18,6 +18,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/credprovider"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/mpp"
@@ -33,6 +34,19 @@ import (
 // the role that refused.
 
 var base = time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+
+// The three identifiers each verifier compares against a delegation's aud, and
+// the defaults cmd/merchant, cmd/credprovider and cmd/mpp carry.
+//
+// They are constants here because a Human Not Present test has to name the same
+// string in three places — the role's own ID, the audience its rules compare,
+// and the audience the agent addresses a chain to — and a typo in the third is
+// a refusal that reads exactly like a broken signature.
+const (
+	merchantID     = "air-serbia"
+	credProviderID = "mock-credential-provider"
+	processorID    = "mock-payment-processor"
+)
 
 // world is the four roles, standing.
 type world struct {
@@ -149,46 +163,88 @@ func newWorldEmitting(t *testing.T, events emitters) *world {
 	}
 	w.endpoints.Surface = serve(t, surfaceSvc.Handler)
 
-	inventory, err := merchant.NewDemoInventory(clk, base, merchant.DefaultStep)
-	require.NoError(t, err, "seeding the inventory")
-
-	// Built with a placeholder processor and pointed at the real one below,
-	// because the two need each other's addresses and only one can be first.
-	merchantSvc := &merchant.Service{
-		ID: "air-serbia", Inventory: inventory,
-		Rules: ap2.MerchantRules{Issuer: w.user.verifier, Clock: clk},
-		// The user signs both closed mandates in Human Present mode, so the
-		// merchant checks the payment side against the same key it checks the
-		// Checkout Mandate with. It needs it to compare the amount against the
-		// offer it made — see ap2.AmountMatches.
-		Payments: ap2.CredentialProviderRules{Issuer: w.user.verifier, Clock: clk},
-		Signer:   w.shop.signer, Own: w.shop.verifier, Keys: w.shop.keys, Clock: clk,
-		Processor: &merchant.HTTPProcessor{},
-		Events:    events.merchant,
+	providerRules := ap2.CredentialProviderRules{
+		Issuer: w.user.verifier, Clock: clk,
+		AgentKey: roles.AgentKey, Audience: credProviderID,
+		RequireConstrained: []string{"amount"},
 	}
-	w.endpoints.Merchant = serve(t, merchantSvc.Handler)
+	providerChallenge, err := crypto.NewChallenger(clk, roles.ChallengeTTL)
+	require.NoError(t, err, "minting the provider's challenge key")
 
 	providerSvc := &credprovider.Service{
-		ID:     "mock-credential-provider",
-		Rules:  ap2.CredentialProviderRules{Issuer: w.user.verifier, Clock: clk},
+		ID:     credProviderID,
+		Rules:  providerRules,
+		Chains: providerRules,
 		Signer: w.provider.signer, Keys: w.provider.keys, Clock: clk,
-		Events: events.credprovider,
+		Challenge: providerChallenge,
+		Events:    events.credprovider,
 	}
 	w.endpoints.CredProvider = serve(t, providerSvc.Handler)
 
+	processorRules := ap2.CredentialProviderRules{
+		Issuer: w.user.verifier, Clock: clk,
+		AgentKey: roles.AgentKey, Audience: processorID,
+		RequireConstrained: []string{"amount"},
+	}
+	processorChallenge, err := crypto.NewChallenger(clk, roles.ChallengeTTL)
+	require.NoError(t, err, "minting the processor's challenge key")
+
 	mppSvc := &mpp.Service{
-		ID:       "mock-payment-processor",
-		Payments: ap2.CredentialProviderRules{Issuer: w.user.verifier, Clock: clk},
-		Rules:    ap2.MPPRules{Clock: clk},
-		Signer:   w.processor.signer, Keys: w.processor.keys, Clock: clk,
-		Events: events.mpp,
+		ID:       processorID,
+		Payments: processorRules, PaymentChains: processorRules,
+		Rules:  ap2.MPPRules{Clock: clk},
+		Signer: w.processor.signer, Keys: w.processor.keys, Clock: clk,
+		Challenge: processorChallenge,
+		Events:    events.mpp,
 	}
 	w.endpoints.MPP = serve(t, mppSvc.Handler)
 
-	// The merchant is stood up last because it needs the processor's address:
-	// AP2 gives the merchant the payment leg, so it is the merchant that calls
-	// the processor and the agent never does.
-	merchantSvc.Processor = &merchant.HTTPProcessor{Base: w.endpoints.MPP}
+	// The merchant comes last because it needs the processor's address: AP2
+	// gives the merchant the payment leg, so it is the merchant that calls the
+	// processor and the agent never does.
+	//
+	// # Through merchant.NewDemoService rather than built here
+	//
+	// This used to be a Service literal that matched cmd/merchant field for
+	// field, and a reviewer had confirmed it did. That confirmation expired the
+	// moment #122 extracted the composition: cmd/merchant is now four lines and
+	// a call to NewDemoService, so a hand-built merchant here would be a *third*
+	// wiring — and the specific bug #122 exists to prevent is a merchant whose
+	// collaborators do not all read the same clock, which every wiring gets to
+	// rediscover on its own. Going through the constructor is what makes "the
+	// agent's tests drive the merchant the demo runs" a fact rather than a
+	// comparison somebody has to redo after every change over there.
+	//
+	// Two things about the arguments are worth stating, because both looked like
+	// blockers and neither is:
+	//
+	//   - **Controls is false, so the clock passes straight through.**
+	//     NewDemoService wraps role.Clock in a clock.Offset only under Controls;
+	//     without it every collaborator reads exactly the clk below, which is the
+	//     clock.Fake these tests advance directly. POST /demo/advance is not
+	//     registered, which is right — a test that moved time through an endpoint
+	//     would be testing #122's control rather than this agent.
+	//   - **The schedules seed from role.Clock.Now() rather than a start
+	//     parameter.** Nothing has advanced clk at this point, so that instant is
+	//     `base` and the prices are the ones every assertion in this package is
+	//     written against. A test that advanced the clock before building its
+	//     world would get a different schedule, and would deserve to.
+	merchantSvc, err := merchant.NewDemoService(
+		roles.Role{
+			Identity: roles.Identity{
+				Signer: w.shop.signer, Verifier: w.shop.verifier,
+				Keys: w.shop.keys, Clock: clk,
+			},
+			Events: events.merchant,
+		},
+		merchant.DemoOptions{
+			ID:        merchantID,
+			User:      w.user.verifier,
+			Processor: &merchant.HTTPProcessor{Base: w.endpoints.MPP},
+			Step:      merchant.DefaultStep,
+		})
+	require.NoError(t, err, "standing up the merchant the demonstration runs")
+	w.endpoints.Merchant = serve(t, merchantSvc.Handler)
 
 	w.agentEvents = events.agent
 	return w

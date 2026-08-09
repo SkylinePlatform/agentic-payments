@@ -38,10 +38,12 @@ import (
 // saying a limit was enforced.
 //
 // The chains are minted with ap2.DelegateCheckout and ap2.DelegatePayment
-// rather than through the agent, which does not exist yet (#121). That is not a
-// shortcut: those two functions are the issuing half of the same file this
-// merchant's verification reads, so what is presented here is what an agent will
-// present rather than something assembled to look like it.
+// rather than through internal/agent, and that stays right now that the agent
+// exists (#121): those two functions are the issuing half of the same file this
+// merchant's verification reads, so what is presented here is what the agent
+// presents rather than something assembled to look like it — and a merchant test
+// that stood the agent up would be testing the agent. The round trip through the
+// real loop is internal/agent's, in TestTheWatchBuysWhenTheMerchantsPriceComesIntoRange.
 
 // chainMerchantID is who this merchant trades as, and it is also the audience
 // every chain addressed to it carries. The two being one string is the whole

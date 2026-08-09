@@ -330,14 +330,21 @@ as an opaque string that is only hashed and nothing in `generated` models a cart
 `AuthoriseCheckoutChain` still takes a subject, its doc comment says why in
 place, and keeping that row in step is `internal/roles/merchant`'s obligation.
 
-## What this deliberately does not build
+## What this deliberately did not build, and what has since arrived
 
-The agent that calls `Minimise` in a real flow. Nothing outside
-`internal/adapters/ap2` and its tests presents an open mandate yet; the Human Not
-Present agent loop is #15's, and writing the call site ahead of it would be the
-same speculative surface `Chain.Root()` was deleted for.
+The agent that calls `Minimise` in a real flow. When this spec was written
+nothing outside `internal/adapters/ap2` and its tests presented an open mandate,
+and writing the call site ahead of the loop would have been the same speculative
+surface `Chain.Root()` was deleted for.
+
+That caller landed with #121. `internal/agent`'s `Watch.Delegate` runs the
+derivation four times per purchase attempt — `DelegateCheckout` and
+`DelegatePayment` both fold `Minimise` in, so every chain the watch mints is
+narrowed for the audience its own root names, and the withholding this spec
+describes is what a Credential Provider actually sees. Nothing in the design
+below changed to accommodate it.
 
 So of #14's two boxes, *"presentation derives the minimal disclosure set from the
 constraints under evaluation"* and *"test asserts unrelated disclosures are not
-transmitted"* both close here. What waits for #15 is an agent that runs the
-derivation on a live presentation.
+transmitted"* both closed here, and the live presentation they were waiting on
+now exists.

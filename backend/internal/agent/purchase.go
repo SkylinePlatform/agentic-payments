@@ -2,10 +2,16 @@
 // carries it between the other four.
 //
 // It is the only role an LLM may ever appear in, and it does not appear here.
-// internal/agent/interpret is the one permitted home for one, and the Human
-// Present flow this package implements has no interpretation step at all — the
-// user approves the closed mandates directly, so there is nothing to infer and
-// no constraint for anybody to evaluate. That arrives with #15.
+// internal/agent/interpret is the one permitted home for one, and this file's
+// Human Present flow has no interpretation step at all — the user approves the
+// closed mandates directly, so there is nothing to infer and no constraint for
+// anybody to evaluate.
+//
+// The Human Not Present flow is in authorise.go, tracker.go, chain.go and
+// watch.go. It has exactly one interpretation step, in Client.Authorise, which
+// runs once before the user signs; nothing in the watch loop or in an attempt
+// calls an interpreter, and internal/agent imports no constraint evaluator at
+// all — TestTheAgentCannotReachAConstraintEvaluator is what keeps that true.
 //
 // What this package does is sequencing and nothing else. Every decision along
 // the way belongs to somebody else: the merchant decides whether the mandate

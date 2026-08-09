@@ -27,7 +27,7 @@ It breaks into ten beats, each one a screenshot.
 | 4 | Agent watches the price deterministically — $240, no model call | after signing there is no model |
 | 5 | A candidate at $210; the agent assembles mandates and **the verifier rejects** | the verifier rejects, not the agent |
 | 6 | Price falls to $189; the agent signs closed mandates with **its own** key | the core of Human Not Present |
-| 7 | Merchant checks `checkout_hash` and constraints; CP returns a scoped token | the agent never sees a PAN |
+| 7 | CP verifies the delegated Payment Mandate and returns a scoped token; the merchant then checks `checkout_hash` and constraints | the agent never sees a PAN |
 | 8 | Inspector: the merchant sees route and price, the CP sees amount and instrument, neither sees the whole set | the most valuable screenshot |
 | 9 | Both receipts signed, references matching the closed mandate hashes | non-repudiation |
 | 10 | The same flow with every HTTP call carrying an RFC 9421 signature verified at the proxy | the three-layer thesis on one transaction |
@@ -54,19 +54,35 @@ sequenceDiagram
     actor U as User
     participant A as Agent
     participant S as Trusted Surface
+    participant C as Credential Provider
     participant M as Merchant
     U->>A: "buy a flight to Palma under $200, this summer"
     A->>S: here is what I understood
     S->>U: route BEG→PMI · max $200 · Jun–Aug
     U->>S: approve and sign
-    Note over A,M: agent watches, no model involved
-    A->>M: $240 — too expensive
-    A->>M: $210 — assembles offer
-    M-->>A: rejected, exceeds the approved limit
-    A->>M: $189 — assembles offer
+    Note over A,M: agent watches the step index, no model and no price comparison
+    A->>M: quote?
+    M-->>A: $240, step 0 — the baseline, nothing is attempted
+    A->>M: quote?
+    M-->>A: $210, step 1
+    A->>C: delegated Payment Mandate
+    C-->>A: rejected, exceeds the approved limit + receipt
+    A->>M: quote?
+    M-->>A: $189, step 2
+    A->>C: delegated Payment Mandate
+    C-->>A: scoped credential + receipt
+    A->>M: delegated mandates + credential
     M-->>A: accepted, receipt
     A->>U: booked, $189
 ```
+
+Two things in that diagram are easy to read past and are the whole of why the
+scenario is built this way. **The agent never compares a price**: it asks for a
+quote and acts when the merchant's own `step` index moves, so the $200 bound is
+read by verifiers and by nobody else. And **the refusal at $210 is the Credential
+Provider's**, because the merchant initiates payment and so cannot be reached
+until the purchase has been funded — the merchant refuses plenty under this flow,
+but never an amount bound, because that one is answered upstream of it.
 
 ## Described, not built
 

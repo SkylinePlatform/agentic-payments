@@ -152,6 +152,24 @@ type authorised struct {
 	// out of the mandate would mean parsing a credential to learn a fact the
 	// issuer already knows.
 	ExpiresAt time.Time `json:"expires_at"`
+	// PaymentInstrument is the instrument this surface pinned into the open
+	// Payment Mandate, on the same terms ExpiresAt is returned: the holder has
+	// to reproduce it and reading it out of the mandate would mean parsing a
+	// credential to learn a fact the issuer already knows.
+	//
+	// authz.checkPinned refuses a closed Payment Mandate whose
+	// payment_instrument.id differs from the one the open mandate pinned, so an
+	// agent signing a delegation has to name the same instrument — and its only
+	// other source for the value is the mandate itself, which would have
+	// internal/agent reading AP2 claims.
+	//
+	// It leaks nothing and concedes nothing. The value came from this role's own
+	// configuration rather than from the request — the Instrument field says why
+	// the agent has no business naming the card — so this is the surface stating
+	// its own choice back to the party that has to reproduce it, and an agent
+	// that names a different one is refused by every verifier that reads the
+	// pair.
+	PaymentInstrument generated.PaymentInstrument `json:"payment_instrument"`
 }
 
 // Handler returns the surface's routes.
@@ -338,6 +356,8 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 		OpenPaymentMandate:  signedPayment.String(),
 		Rendered:            rendered,
 		ExpiresAt:           expiry,
+		// The same copy that went into the mandate, so the two cannot disagree.
+		PaymentInstrument: instrument,
 	})
 }
 
