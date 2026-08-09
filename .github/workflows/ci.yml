@@ -92,6 +92,23 @@ jobs:
         working-directory: backend
         run: go test -race ./...
 
+      # The step above already ran every one of these. This runs them again
+      # under the name that says what they are, and that is the whole of what
+      # it buys — a suite whose result is only visible as "everything passed"
+      # is one nobody outside this repository can point at, and pointing at it
+      # is the deliverable: the audience is somebody implementing AP2 against
+      # ours, asking what our verifier refuses and what it calls each refusal.
+      #
+      # Here rather than in Lint or Contracts because it is a test run and
+      # needs the same `make generate` this job has already done; a job of its
+      # own would repeat that to re-run a suite that takes under a second.
+      # `make vectors` runs from the repository root and does its own cd, so it
+      # takes no working-directory. It is not raced — `go test -race ./...`
+      # above is where that coverage comes from — and it is -v, so the log is
+      # a list of every vector by name.
+      - name: Conformance vectors
+        run: make vectors
+
       - name: Test contracts tooling
         working-directory: contracts/tools
         run: go test ./...

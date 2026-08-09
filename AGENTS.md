@@ -558,6 +558,36 @@ reconcile against the code for no benefit.
   RFC 9901 prints its own disclosures, digests and processed payloads, and
   those are conformance evidence in a way our own fixtures are not.
 
+  The scope has stayed where it was through #19, and the case for widening it
+  was considered rather than skipped. `internal/core/authz` produces one code no
+  adapter does — `open_mandate_outstanding` — and it stays out because a vector
+  is over an *artefact*, and that rule produces none: `authz.CodeOf`'s own
+  comment records that no verifier can reach a verdict on it, so the refusal is
+  the agent's about its own bookkeeping and never travels. A row for it would be
+  a sequence of calls on one of our own Go types, which is a unit test and
+  already exists in `lifecycle_test.go`. Widen the directory list when something
+  lands in `core/` that a second implementation has to *reproduce* — the
+  constraint renderer's output would qualify — and say so here when you do.
+
+  **The suite has a rejection half, and it is closed over the error
+  vocabulary.** `internal/adapters/ap2/golden_rejection_test.go` provokes each
+  refusal through a real verification entry point and pins the canonical code it
+  carries, and `testdata/rejections.json` classifies every code
+  `contracts/evidence/error_code.json` declares — vectored, or TAP's, or the
+  HTTP layer's, or the agent's own, or produced by nothing — each with a
+  reason. **Adding a code to `contracts/` fails `make check` until it is
+  classified.** Removing one fails too, though at the build rather than at that
+  check — `internal/platform/problem`'s rendering table names every code as a
+  generated constant — and the classification is the backstop for a removal done
+  properly, enum and rendering together, that left the entry behind. That is the point
+  rather than a side effect: the schema's own description says the list
+  describes the domain and not what is built, so without this a code can be
+  promised to a counterparty that nothing here can send. A status is a claim
+  about this implementation, so write the one that is true — "TAP, not this
+  milestone", "nothing produces it and here is what arrives instead" and "I
+  could not construct an input" are three different things, and a wrong
+  "unreachable" stops the next person looking.
+
 Run everything from the repository root:
 
 ```bash
