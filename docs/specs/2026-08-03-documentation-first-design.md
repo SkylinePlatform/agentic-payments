@@ -247,7 +247,7 @@ and the screenshots. It breaks into beats, each of which is one screenshot.
 | 4 | Agent watches the price deterministically — $240, no model call | after signing there is no model |
 | 5 | A candidate at $210; the agent assembles mandates and **the verifier rejects** | the verifier rejects, not the agent |
 | 6 | Price falls to $189; the agent signs closed mandates with **its own** key | the core of Human Not Present |
-| 7 | Merchant checks `checkout_hash` and constraints; CP returns a scoped token | the agent never sees a PAN |
+| 7 | CP verifies the delegated Payment Mandate and returns a scoped token; the merchant then checks `checkout_hash` and constraints | the agent never sees a PAN |
 | 8 | Inspector: the merchant sees route and price, the CP sees amount and instrument, neither sees the whole set | the most valuable screenshot |
 | 9 | Both receipts signed, references matching the closed mandate hashes | non-repudiation |
 | 10 | The same flow with every HTTP call carrying an RFC 9421 signature verified at the proxy | the three-layer thesis on one transaction |

@@ -39,8 +39,8 @@ one header. ADR 0002 scoped `Idempotency-Key` to one state-changing operation
 and its retries — the same key resubmitted must reproduce the same outcome
 rather than repeat it. A correlation ID scopes an entire transaction, which
 may span several distinct operations, each with its own `Idempotency-Key`:
-in the built scenario, the mandate assembly the merchant rejects at $210
-(beat 5), the closed-mandate signing at $189 (beat 6), the merchant's
+in the built scenario, the mandate assembly the Credential Provider rejects at
+$210 (beat 5), the closed-mandate signing at $189 (beat 6), the merchant's
 `checkout_hash` check (beat 7), and the receipt issuance (beat 9) are four
 separate operations under one correlation ID, and conflating the two headers
 would mean either the correlation ID changes mid-transaction every time a new

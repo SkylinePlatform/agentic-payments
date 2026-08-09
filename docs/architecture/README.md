@@ -104,8 +104,13 @@ flowchart LR
     SIGN --> VER
 ```
 
-The interpreter runs once, before anything is signed. After that the system
-is deterministic — watching a price is `price < 20000`, not a model call.
+The interpreter runs once, before anything is signed. After that the system is
+deterministic, and stronger than "no model call": the agent compares no money at
+all. It watches the `step` index on the merchant's own quote and attempts a
+purchase when that moves, so the bound the user set is read only by the
+verifiers. `price < 20000` is the line `internal/agent/watch.go` is built not to
+contain — a watch that made that comparison would filter out the $210 candidate
+the merchant has to be shown refusing.
 
 ## What is mocked
 

@@ -53,11 +53,14 @@ table above is what says how far along each protocol is.
 - Full SD-JWT issuance, disclosure and verification — **built**
 - Real ECDSA / Ed25519 signing and verification — **built**
 - Correlation IDs, the event log and its live stream — **built**
-- Real constraint schemas and deterministic evaluation — *not yet built*
-- Real mandate binding, receipts and dispute evidence assembly — *not yet built*
+- Real constraint schemas and deterministic evaluation — **built**
+- Real mandate binding and receipts, in both flows — **built**
+- Dispute evidence assembly — **built for Human Present only**
 
-The two unbuilt lines are the next work, not a different plan. When they land
-they will be real in the same sense as the rest; see
+The last line is the one with work left in it. A Human Not Present purchase
+produces four delegation chains rather than two closed mandates, and the bundle
+a dispute is decided from takes one of each — so the artefacts exist, verify and
+are collected, and nothing yet assembles them into a bundle for that flow. See
 [Running it](#running-it) for what starts today.
 
 ### What is mocked, deliberately and loudly
