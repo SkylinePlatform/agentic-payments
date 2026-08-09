@@ -347,7 +347,21 @@ func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 		name    string
 		mutate  func(*merchant.CatalogueFile)
 		wantErr bool
-		why     string
+
+		// mentions is a phrase the refusal has to carry, for the rows where a
+		// later check would refuse the same file anyway and the message is the
+		// whole of what the earlier one adds.
+		//
+		// The absolute-URL case is exactly that, and it was found by deleting it
+		// and watching this table stay green: "https://cdn.example.com/…" does
+		// not begin with a slash either, so the root-relative case catches it
+		// regardless. What is lost without the earlier case is the reason —
+		// somebody who pasted a CDN URL reads "it has to be root-relative" and
+		// learns nothing about why a screenshot must not depend on a host this
+		// project does not control.
+		mentions string
+
+		why string
 	}{
 		{
 			name: "as shipped", mutate: func(*merchant.CatalogueFile) {}, wantErr: false,
@@ -407,7 +421,7 @@ func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 			name: "an image at an absolute URL",
 			mutate: func(f *merchant.CatalogueFile) {
 				entry(f).ImageURL = "https://cdn.example.com/flight.svg"
-			}, wantErr: true,
+			}, wantErr: true, mentions: "does not control",
 			why: "a screenshot would depend on somebody else's uptime, and a network call would " +
 				"be one careless test away — the guard exists because the data moved out of Go",
 		},
@@ -415,7 +429,7 @@ func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 			name: "an image at a protocol-relative URL",
 			mutate: func(f *merchant.CatalogueFile) {
 				entry(f).ImageURL = "//cdn.example.com/flight.svg"
-			}, wantErr: true,
+			}, wantErr: true, mentions: "with the scheme left off",
 			why: "it begins with a slash and is still another host, so a bare root-relative " +
 				"check would let it through",
 		},
@@ -521,6 +535,11 @@ func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 			err := f.Validate()
 			if tc.wantErr {
 				assert.ErrorIs(t, err, merchant.ErrInvalidCatalogue, tc.why)
+				if tc.mentions != "" && err != nil {
+					assert.Contains(t, err.Error(), tc.mentions,
+						"the refusal does not say why, and whoever wrote the line has only the "+
+							"message to go on")
+				}
 				return
 			}
 			assert.NoError(t, err, tc.why)
