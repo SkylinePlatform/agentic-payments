@@ -145,6 +145,15 @@ func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 				" and a verifier reporting it as an unsatisfied limit would lie about what was approved",
 		},
 		{
+			name: "one good constraint and one nobody can read",
+			raw: `[{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}},
+			       {"op":"eq","field":"weather","value":"sunny"}]`,
+			want: constraint.ErrUnknownField,
+			why: "this is the row that makes dropping the offending constraint a failure rather" +
+				" than a tidy-up: what is left parses, so an implementation that dropped it would" +
+				" return a mandate with fewer limits than the sentence the user typed",
+		},
+		{
 			name: "no limits at all",
 			raw:  `[]`,
 			want: interpret.ErrNoConstraints,
