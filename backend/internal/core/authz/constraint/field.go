@@ -182,3 +182,50 @@ func FieldNames() []string {
 	slices.Sort(out)
 	return out
 }
+
+// FieldSpec is one entry of the closed registry as a caller outside this
+// package can see it: how a constraint addresses the fact, the type of its
+// value, and the operators that may be applied to it.
+//
+// It carries no Noun and no reader. The sentence a constraint renders as is
+// Render's job and the value is pulled out of a Subject only during evaluation,
+// so publishing either here would offer a caller a second way to do something
+// this package already does once.
+type FieldSpec struct {
+	// Name is how a constraint addresses it: "amount", "item.category".
+	Name string
+
+	// Kind is the type of its value.
+	Kind Kind
+
+	// Operators are the leaf operators valid for that kind, sorted. The three
+	// group operators are absent, because they combine nodes rather than
+	// compare a field and no field accepts one — OperatorNames is where the
+	// whole set including those three is published.
+	Operators []string
+}
+
+// Vocabulary lists the closed part of the constraint vocabulary: every field
+// this verifier knows, with its kind and the operators that fit it.
+//
+// FieldNames answers half of that and OperatorNames the other half, and a
+// caller that has to put the two together cannot: which operators a field
+// accepts is decided by its kind, and neither function publishes a kind. The
+// caller this was added for is the model-backed IntentInterpreter in
+// internal/agent/interpret, which describes the vocabulary to a language model
+// and must describe the one the verifier will actually apply. Deriving the
+// pairing outside this package means a second copy of the field-by-operator
+// matrix, and a copy drifts in the one direction that costs something: naming a
+// comparison the verifier goes on to refuse.
+//
+// The open half is deliberately absent, on the grounds FieldNames gives:
+// item.attr.<name> admits any name and is text by construction, so it is a rule
+// rather than a list.
+func Vocabulary() []FieldSpec {
+	out := make([]FieldSpec, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, FieldSpec{Name: f.Name, Kind: f.Kind, Operators: operatorsFor(f.Kind)})
+	}
+	slices.SortFunc(out, func(a, b FieldSpec) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}

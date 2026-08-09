@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 )
 
 // TestAfterWatch is the decision in afterWatch's doc comment, as a table.
@@ -137,6 +139,88 @@ func TestOnceAndAddrCannotBothBeGiven(t *testing.T) {
 			assert.Contains(t, err.Error(), "-once")
 		})
 	}
+}
+
+// TestInterpreterFor is decision 5 of #17: the flag selects, and there is no
+// silent fallback.
+//
+// **The row that matters is gemini with no key.** The tempting behaviour is to
+// warn and carry on with the scripted table, and it is the one that must not be
+// written: an agent asked for a model and quietly handed a fixed table produces
+// a screenshot nobody can attribute, and the failure shows up as a demonstration
+// that works suspiciously well. A fallback added to interpreterFor turns this
+// row red rather than leaving a demo that looks fine.
+//
+// This test is legal under hard rule 4 — no test may depend on a live LLM — for
+// a structural reason rather than a careful one: interpret.NewGemini and
+// interpret.NewModel perform no I/O, so building one reaches nothing. The row
+// below hands over a key-shaped string and no network is touched by it.
+func TestInterpreterFor(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		flag    string
+		key     string
+		wantErr bool
+		says    string
+		why     string
+	}{
+		{
+			name: "the default", flag: "scripted",
+			says: "scripted",
+			why:  "make demo has to come up with no key and no network, and its golden numbers are the scripted five",
+		},
+		{
+			name: "gemini with a key", flag: "gemini", key: "AIza-not-a-real-key",
+			says: "gemini",
+			why:  "the banner is what makes a screenshot attributable to the implementation that produced it",
+		},
+		{
+			name: "gemini with no key", flag: "gemini", wantErr: true,
+			says: "GEMINI_API_KEY",
+			why: "quietly handing back the scripted table would produce a demonstration that works" +
+				" suspiciously well, and a screenshot nobody can attribute",
+		},
+		{
+			name: "a name this build does not have", flag: "claude", wantErr: true,
+			says: "scripted",
+			why:  "a typo that silently selected the default is the same unattributable screenshot",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			reader, reading, err := interpreterFor(tc.flag, tc.key, "", clock.NewFake(time.Unix(0, 0).UTC()))
+
+			if tc.wantErr {
+				require.Error(t, err, tc.why)
+				assert.Nil(t, reader, "an interpreter handed back beside an error is one a caller may still use")
+				assert.Contains(t, err.Error(), tc.says, tc.why)
+				return
+			}
+
+			require.NoError(t, err, tc.why)
+			assert.NotNil(t, reader, "the flag was accepted and nothing was built to read the prompt with")
+			assert.Contains(t, reading, tc.says, tc.why)
+		})
+	}
+}
+
+// TestTheGeminiModelReachesTheBanner is the half of interpreterFor's second
+// return value that a wrong wiring would make useless.
+//
+// Naming a model and being told about a different one is worse than being told
+// nothing, because the banner is the only record of which model read the
+// sentence.
+func TestTheGeminiModelReachesTheBanner(t *testing.T) {
+	t.Parallel()
+
+	_, reading, err := interpreterFor("gemini", "AIza-not-a-real-key", "some-other-model",
+		clock.NewFake(time.Unix(0, 0).UTC()))
+	require.NoError(t, err)
+	assert.Contains(t, reading, "some-other-model",
+		"the banner names the model that will be called, or it is a record of the default")
 }
 
 // TestAfterWatchSaysWhatEndedTheWatch pins the first of the two lines rather

@@ -729,6 +729,89 @@ func TestVocabularyIsPublished(t *testing.T) {
 	}
 }
 
+// TestTheVocabularyAgreesWithTheParser is the property Vocabulary has to have
+// and FieldNames plus OperatorNames cannot: that the pairing it publishes is
+// the pairing a mandate is judged by.
+//
+// So it is asserted against Parse rather than against a second table. For every
+// field and every leaf operator, an operator Vocabulary lists for that field
+// must parse, and one it omits must be refused as a type mismatch — which is
+// what makes this fail if operatorsFor and lookupOperator ever stop reading the
+// same table. A test comparing Vocabulary against a written-out matrix would
+// pass in exactly the case that matters least.
+func TestTheVocabularyAgreesWithTheParser(t *testing.T) {
+	t.Parallel()
+
+	vocab := constraint.Vocabulary()
+	require.ElementsMatch(t, constraint.FieldNames(), fieldNamesOf(vocab),
+		"Vocabulary and FieldNames publish the same closed registry, so a caller"+
+			" choosing between them should never get a different answer")
+
+	// Values that parse for each kind, so that a refusal below is the operator
+	// being refused rather than the value.
+	operands := map[constraint.Kind]any{
+		constraint.KindMoney:  map[string]any{"amount": 20000.0, "currency": "USD"},
+		constraint.KindTime:   "2026-06-01T00:00:00Z",
+		constraint.KindNumber: 2.0,
+		constraint.KindText:   "flights",
+	}
+	ranges := map[constraint.Kind]any{
+		constraint.KindMoney: map[string]any{
+			"from": map[string]any{"amount": 0.0, "currency": "USD"},
+			"to":   map[string]any{"amount": 20000.0, "currency": "USD"},
+		},
+		constraint.KindTime:   map[string]any{"from": "2026-06-01T00:00:00Z", "to": "2026-08-31T23:59:59Z"},
+		constraint.KindNumber: map[string]any{"from": 1.0, "to": 2.0},
+		constraint.KindText:   map[string]any{"from": "a", "to": "b"},
+	}
+
+	for _, spec := range vocab {
+		for _, op := range leafOperators() {
+			field := spec.Name
+			value := operands[spec.Kind]
+			switch op {
+			case "in", "nin":
+				value = []any{operands[spec.Kind]}
+			case "between", "within":
+				value = ranges[spec.Kind]
+			}
+
+			_, err := constraint.Parse(generated.Constraint{Op: op, Field: &field, Value: value})
+			if slices.Contains(spec.Operators, op) {
+				assert.NoError(t, err,
+					"Vocabulary offers %s on %s, so an interpreter told that would propose a"+
+						" constraint the verifier then refuses", op, field)
+				continue
+			}
+			assert.ErrorIs(t, err, constraint.ErrTypeMismatch,
+				"Vocabulary withholds %s on %s, so withholding it has to be the parser's"+
+					" answer too — otherwise the published matrix is narrower than the real one", op, field)
+		}
+	}
+}
+
+func fieldNamesOf(vocab []constraint.FieldSpec) []string {
+	out := make([]string, 0, len(vocab))
+	for _, spec := range vocab {
+		out = append(out, spec.Name)
+	}
+	return out
+}
+
+// leafOperators is OperatorNames without the three that combine nodes. Taken
+// from the published list rather than written out, so an operator added to the
+// table is exercised above without anybody remembering to add it here.
+func leafOperators() []string {
+	out := make([]string, 0, len(constraint.OperatorNames()))
+	for _, op := range constraint.OperatorNames() {
+		if op == "all" || op == "any" || op == "not" {
+			continue
+		}
+		out = append(out, op)
+	}
+	return out
+}
+
 // TestAnExpressionReportsTheFactsItReads covers Fields, which exists so that a
 // holder narrowing a presentation can decide per constraint whether the
 // verifier it is presenting to could reach a verdict on it at all.

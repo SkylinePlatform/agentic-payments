@@ -45,20 +45,33 @@
 // signed, and then rejected as constraint_type_unknown at the moment of
 // purchase, having looked like a limit the whole way along.
 //
-// # Nothing here calls a model yet
+// # Two implementations, and the suite that holds both to the same promise
 //
 // ScriptedInterpreter maps fixed prompts to fixed constraint sets. It is what
-// every test uses and what the demo runs — cmd/agent's -watch mode builds
-// interpret.Demo() — because no test may depend on a live model or on an
-// external network call. A model-backed implementation satisfies the same interface,
-// calls Validate on what came back, and lives beside it rather than replacing
-// it.
+// every test uses and what the demo runs — cmd/agent builds interpret.Demo()
+// unless it is given -interpreter gemini — because no test may depend on a live
+// model or on an external network call, and because a non-deterministic demo
+// would take every golden number in this repository with it.
 //
-// One honest note about that last obligation. ScriptedInterpreter does call
-// Validate before returning, and for this implementation the call cannot fail:
-// NewScripted validated the same text and decoding is deterministic. So the
-// call is the interface's contract written down rather than a check that earns
-// its keep here — and nothing yet forces a second implementation to make it.
-// The place to fix that is when there is a second implementation to hold to it:
-// a shared conformance test the model-backed one has to pass, which is #17.
+// ModelInterpreter is the other one. It calls a Model, the narrower port inside
+// this package over which nothing about a provider crosses, decodes the answer
+// with the same decode the scripted one uses, and calls Validate. Gemini is that
+// port's one implementation: one POST, no SDK. Adding a second provider is a
+// file beside it and a case in cmd/agent's flag — nothing outside this package
+// changes, which is the third box on issue #17.
+//
+// The obligation to call Validate used to be exactly that — an obligation. It
+// could not be enforced while ScriptedInterpreter was the only implementation:
+// it does call Validate, and for it the call cannot fail, because NewScripted
+// validated the same text and decoding is deterministic. So the call was the
+// interface's contract written down rather than a check earning its keep, and
+// nothing held the next implementation to it.
+//
+// TestNoInterpreterReturnsSomethingAVerifierCouldNotRead is what closed that. It
+// is a suite over implementations, each registering a rig that makes it answer
+// arbitrary raw JSON, and the property is that the implementation refuses it
+// either at construction or at Interpret and never returns it — two moments,
+// because the scripted one refuses at construction and the model-backed one at
+// Interpret. The built scenario has to come back deep-equal, so passing by
+// refusing everything is not available.
 package interpret
