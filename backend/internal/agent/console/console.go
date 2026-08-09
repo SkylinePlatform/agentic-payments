@@ -24,8 +24,9 @@
 //     through all three and reads them back off the wire.
 //   - **No route accepts a state.** The DTO is only ever marshalled; the request
 //     shapes in this file decode a prompt, an item and a quantity, and nothing
-//     else. An agent that could be *told* where its mandate stood would be
-//     taking somebody else's word for its own bookkeeping.
+//     else, and the paths carry a watch's name and an attempt's number. An agent
+//     that could be *told* where its mandate stood would be taking somebody
+//     else's word for its own bookkeeping.
 //
 // # The agent reports what it presented and what came back, never a verdict
 //
@@ -36,6 +37,16 @@
 // and a rendered `constraint_violated` here would be exactly that — the buyer
 // narrating the verifier's finding. Whoever wants the code decodes the receipt,
 // which is signed, and which is #21's Mandate Inspector.
+//
+// The presentations themselves are the other half of that sentence, and they are
+// a sub-resource: GET /watches/{id}/attempts/{n}/presented answers with the four
+// chains one attempt put on the wire, each beside the audience it was addressed
+// to. It is the same rule at its sharpest — these are the documents, so a status
+// field beside one would read as the document's own — and it is the one thing an
+// Inspector cannot derive from anywhere else, because what a verifier was shown
+// is the difference between issuance and presentation. Nothing here decodes one;
+// that is the browser's job, and it is what the chain being served unaltered is
+// for.
 //
 // Nothing in this package is evidence, for the same reason the collector is not:
 // it is the buyer's account of a transaction. `console-containment` in
@@ -50,6 +61,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -161,6 +173,16 @@ func (s *Service) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /watches", s.start)
 	mux.HandleFunc("GET /watches", s.list)
 	mux.HandleFunc("GET /watches/{id}", s.read)
+
+	// A GET, which is what settles the idempotency question for it: RFC 9110
+	// §9.2.1 safe methods sit outside the middleware by method semantics rather
+	// than by a route exemption, which is the argument GET /nonce and GET
+	// /search already make in this repository. It reads what an attempt put on
+	// the wire minutes ago and changes nothing, so there is no state a repeated
+	// call could double — and the standing rule that every state-changing
+	// operation takes an idempotency key is untouched, because this changes
+	// nothing.
+	mux.HandleFunc("GET /watches/{id}/attempts/{n}/presented", s.readPresented)
 
 	// Matching the collector's, byte for byte, because deploy/demo.json wants a
 	// health check and a runner that had to learn a second shape for the eighth
@@ -382,6 +404,38 @@ func (s *Service) read(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	roles.OK(w, http.StatusOK, run.view())
+}
+
+// readPresented is GET /watches/{id}/attempts/{n}/presented.
+//
+// Three ways to answer 404 and a different sentence for each: a watch nobody
+// started, a number that is not one, and an attempt that watch never made are
+// three different mistakes, and a caller given one message for all of them
+// cannot tell a stale identifier from a number it counted wrong.
+func (s *Service) readPresented(w http.ResponseWriter, r *http.Request) {
+	run, ok := s.lookup(r.PathValue("id"))
+	if !ok {
+		http.Error(w, "console: no watch by that name", http.StatusNotFound)
+		return
+	}
+
+	n, err := strconv.Atoi(r.PathValue("n"))
+	if err != nil {
+		http.Error(w, "console: an attempt is named by its number, counting from one",
+			http.StatusNotFound)
+		return
+	}
+
+	out, ok := run.presented(n)
+	if !ok {
+		// Not an empty presentation. An attempt that does not exist and an
+		// attempt that presented nothing are different facts, and this endpoint
+		// exists to be believed about the second one — see Run.presented. It is
+		// TestAnUnknownWatchIsNotFound's reasoning one level down.
+		http.Error(w, "console: this watch has no attempt by that number", http.StatusNotFound)
+		return
+	}
+	roles.OK(w, http.StatusOK, out)
 }
 
 // newID mints the name a watch is known by.
