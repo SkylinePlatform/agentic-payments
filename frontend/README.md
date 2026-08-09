@@ -161,6 +161,15 @@ entry module, checks each spelling against the exported constant — and then
 **runs the script** and asserts what it wrote, which is the half a text
 comparison cannot do.
 
+`src/theme/built.test.ts` closes the part `index.html` cannot show. The
+stylesheet link is not in the source file — it is the build's, and where the
+build puts it is Vite's decision rather than ours. That test runs `vite build`
+with `write: false` and compares the two positions in the document a browser is
+actually served, so an assumption about somebody else's tool is checked rather
+than remembered. It is the one test here that needs Node's environment instead
+of jsdom, which is why it is a file of its own, and it costs about a second and
+a half.
+
 | | |
 |---|---|
 | `src/theme/theme.ts` | the names, the key, the queries, and how a setting resolves. **The one file in the app allowed to name a theme** — it is the single entry in `architecture.test.ts`'s exemption list |
