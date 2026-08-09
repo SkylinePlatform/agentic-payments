@@ -43,6 +43,36 @@ globalThis.ResizeObserver ??= class {
   disconnect() {}
 };
 
+/**
+ * jsdom has no `matchMedia` either — not a stub that always answers false, no
+ * constructor at all, so `window.matchMedia(...)` is a `TypeError` — and the
+ * theme store calls it while resolving the setting that follows the OS. Without
+ * this, every test that renders anything inside `ThemeProvider` fails on that
+ * call rather than on whatever it was asserting.
+ *
+ * This is `ResizeObserver`'s case rather than `EventSource`'s, and the note
+ * below is what makes the difference worth stating twice. There is nothing to
+ * inject: the OS's colour preference is not a collaborator our code chose, it
+ * is a fact about the machine, and the only way to ask is this API. What the
+ * seam argument does buy is that the answer is drivable — `vi.stubGlobal`
+ * replaces this one in `src/theme/ThemeProvider.test.tsx` with a list a test can
+ * flip, which is how the OS-changed-under-an-open-page path is tested at all.
+ *
+ * The default answers false to everything, which is the light theme. A test
+ * that cares says so.
+ */
+globalThis.matchMedia ??= (query: string) =>
+  ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  }) as MediaQueryList;
+
 /*
  * jsdom has no `EventSource`. Do not polyfill one here.
  *

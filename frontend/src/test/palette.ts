@@ -15,6 +15,7 @@
  */
 
 import stylesheet from "../styles.css?raw";
+import { THEME_ATTRIBUTE, THEMES, type Theme } from "../theme/theme";
 
 /**
  * The six, in the order `docs/specs/2026-08-06-three-lane-view-design.md`
@@ -24,14 +25,28 @@ export const TOKENS = ["ink", "paper", "graphite", "seal", "broken", "wash"] as 
 
 export type Token = (typeof TOKENS)[number];
 
-export const THEMES = ["light", "dark"] as const;
+/**
+ * The two themes, from the module that names them.
+ *
+ * Re-exported rather than declared again: `src/theme/theme.ts` is the one file
+ * allowed to name a theme, and a second copy of the pair here would be a second
+ * place to rename.
+ */
+export { THEMES, type Theme };
 
-export type Theme = (typeof THEMES)[number];
-
-/** Where each theme's values are declared in `styles.css`. */
+/**
+ * Where each theme's values are declared in `styles.css`.
+ *
+ * The dark selector is *built* from `THEME_ATTRIBUTE` rather than written out,
+ * which closes the third spelling of that name. It appears in TypeScript, in
+ * the script in `index.html` and in this stylesheet, and `blockOf` throws when
+ * the selector it is handed is not in the file — so renaming the attribute
+ * without renaming it in `styles.css` fails here, loudly, instead of producing
+ * an app whose dark theme silently stops existing.
+ */
 export const BLOCK_OF: Record<Theme, string> = {
   light: "@theme",
-  dark: ':root[data-theme="dark"]',
+  dark: `:root[${THEME_ATTRIBUTE}="dark"]`,
 };
 
 export const STYLESHEET = stylesheet;

@@ -10,6 +10,50 @@
     />
 
     <!--
+      The theme, resolved before the first paint.
+
+      **Inline and classic, and both words are load-bearing.** `type="module"`
+      is deferred by definition: it would run after the document is parsed and
+      after the stylesheet has been applied, so the page would paint in one
+      theme and flip to the other — which is the flash this script exists to
+      remove, arriving a few milliseconds later than it otherwise would. An
+      external `src` is deferred in practice for a different reason: a second
+      request.
+
+      It sits in <head> and index.html declares no stylesheet of its own. Vite
+      appends the built <link rel="stylesheet"> to the end of <head> — verified
+      against dist/index.html, not assumed — so everything already in <head>
+      runs first. src/theme/noflash.test.ts pins both halves of that.
+
+      Nothing here is bundled or transformed, so it is ES5 and it repeats three
+      strings that src/theme/theme.ts also exports. A string in HTML cannot
+      import one; that test is what stops the two spellings drifting, and it
+      runs this script rather than only reading it.
+
+      An absent key means "follow the OS", which is why the default writes
+      nothing and why a user who resets the toggle is not pinned to whatever
+      their OS said at the time.
+    -->
+    <script>
+      (function () {
+        var setting = "system";
+        try {
+          var stored = localStorage.getItem("agentic-payments.theme");
+          if (stored === "light" || stored === "dark") setting = stored;
+        } catch (unavailable) {
+          // Reading storage throws outright in some privacy modes rather than
+          // returning null. The OS preference is still readable and is a better
+          // answer than defaulting to a theme.
+        }
+        var dark =
+          setting === "dark" ||
+          (setting === "system" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+      })();
+    </script>
+
+    <!--
       The mono is the content, not the caption face — see src/styles.css. Its
       @font-face carries `font-display: block`, so the browser holds the paint
       rather than showing a digest in a fallback and swapping it mid-screenshot.

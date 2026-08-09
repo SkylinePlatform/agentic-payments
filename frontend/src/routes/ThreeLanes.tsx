@@ -21,7 +21,7 @@ export function ThreeLanes() {
   return (
     <Placeholder
       title="Three lanes"
-      issue="#20"
+      issue={20}
       answers="User, Agent and Merchant side by side, with the event log between them."
     >
       <div className="mt-8 rounded-sm border border-graphite bg-wash p-5">

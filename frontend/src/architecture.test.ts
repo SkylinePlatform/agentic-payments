@@ -53,13 +53,23 @@ const APP_SOURCES = Object.entries(SOURCES).filter(
 
 // --- reading source --------------------------------------------------------
 
+/** What one pass over a TypeScript source pulls out of it. */
+interface Scan {
+  /** The contents of every string literal, with comments skipped. */
+  readonly literals: readonly string[];
+  /** The source with every comment blanked out, and nothing else moved. */
+  readonly code: string;
+}
+
 /**
- * The contents of every string literal in a TypeScript source, with comments
- * skipped.
+ * Reads a TypeScript source once, separating what it says from what it does.
  *
  * Hand-scanned rather than regexed because comments in this repository are
  * long and full of apostrophes, and a regex for string literals treats the one
- * in "Tailwind's" as an opening quote and swallows the paragraph after it.
+ * in "Tailwind's" as an opening quote and swallows the paragraph after it. The
+ * same walk answers both questions because the hard part — knowing whether a
+ * `//` is a comment or the middle of `"https://…"` — is the same hard part, and
+ * two scanners would be two chances to get it wrong differently.
  *
  * The one construct it does not understand is a regular-expression literal
  * containing a quote — `/['"]/` would open a string that is not there, and from
@@ -69,34 +79,52 @@ const APP_SOURCES = Object.entries(SOURCES).filter(
  * this file ever reports something baffling, that is the first thing to grep
  * for.
  */
-function stringLiterals(source: string): string[] {
-  const found: string[] = [];
+function scan(source: string): Scan {
+  const literals: string[] = [];
+  let code = "";
   let i = 0;
+
+  // Same length and same line breaks, so a failure reported by line still
+  // points at the right line.
+  const blanked = (text: string) => text.replace(/[^\n]/g, " ");
+
   while (i < source.length) {
     const c = source[i];
     if (c === "/" && source[i + 1] === "/") {
+      const from = i;
       while (i < source.length && source[i] !== "\n") i++;
+      code += blanked(source.slice(from, i));
       continue;
     }
     if (c === "/" && source[i + 1] === "*") {
+      const from = i;
       i += 2;
       while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++;
       i += 2;
+      code += blanked(source.slice(from, Math.min(i, source.length)));
       continue;
     }
     if (c === '"' || c === "'" || c === "`") {
+      const from = i;
       i++;
       const start = i;
       while (i < source.length && source[i] !== c) {
         i += source[i] === "\\" ? 2 : 1;
       }
-      found.push(source.slice(start, i));
+      literals.push(source.slice(start, i));
       i++;
+      code += source.slice(from, Math.min(i, source.length));
       continue;
     }
+    code += c;
     i++;
   }
-  return found;
+
+  return { literals, code };
+}
+
+function stringLiterals(source: string): readonly string[] {
+  return scan(source).literals;
 }
 
 /**
@@ -243,13 +271,16 @@ function offPalette(source: string, allowed: ReadonlySet<string>): string[] {
 /**
  * Files allowed to know which theme is on.
  *
- * Empty on purpose, and it will not stay that way: the theme toggle is the one
- * thing in the app that has to name a theme, because something has to write the
- * attribute. Adding a path here is a reviewed change, which is the point —
- * every *other* file gets its colours from a token whose name is the same in
- * both themes.
+ * One entry, and keeping it at one is the point. Something has to write the
+ * attribute and something has to resolve *system* to one of two values, so the
+ * rule could never be absolute — but the file that does it exports names, and
+ * every other file in the theme's own directory imports them rather than
+ * spelling a theme itself. The store never writes one; neither does the toggle,
+ * which knows which *setting* is chosen and never learns what it resolved to.
+ *
+ * Adding a path here is a reviewed change, which is what it is for.
  */
-const MAY_NAME_A_THEME: readonly string[] = [];
+const MAY_NAME_A_THEME: readonly string[] = ["./theme/theme.ts"];
 
 function themeNaming(source: string): string[] {
   const offenders: string[] = [];
@@ -271,7 +302,19 @@ const GENERATED_IMPORT = /(?:from|import)\s*\(?\s*["'][^"']*protocol\/generated[
 
 // --- rule: no colour literal in a component --------------------------------
 
-/** Global, so `String.prototype.match` returns every occurrence. */
+/**
+ * Global, so `String.prototype.match` returns every occurrence.
+ *
+ * Run over `scan(source).code` rather than over the source, for the reason
+ * `withoutCssComments` exists further down: a hex in prose is not a colour
+ * reaching a component. The case that forced it is sharper than tidiness —
+ * **`#109` is a valid three-digit hex** and it is also an issue number, and
+ * this repository writes issue numbers in comments constantly. Over the raw
+ * source, the rule makes every issue from #100 to #999 unmentionable in a
+ * frontend comment, which is not a rule anybody follows deliberately; they hit
+ * it, and then argue with it. In code the ambiguity is real and stays caught,
+ * which is why `Placeholder` takes its issue as a number.
+ */
 const HEX_LITERAL = /#[0-9a-fA-F]{3,8}\b/g;
 
 /**
@@ -436,6 +479,19 @@ describe("the frontend's architecture", () => {
   describe("no component names a theme", () => {
     const governed = APP_SOURCES.filter(([path]) => !MAY_NAME_A_THEME.includes(path));
 
+    it("exempts only files that exist", () => {
+      // An exemption naming a file that was renamed or deleted stops exempting
+      // anything and starts being a comment. Worse, it reads as though the
+      // exemption is still in force, so the next person moving that code puts
+      // the theme names somewhere new and the list grows a second dead entry.
+      const paths = new Set(APP_SOURCES.map(([path]) => path));
+      expect(
+        MAY_NAME_A_THEME.filter((path) => !paths.has(path)),
+        "an exemption for a path no longer in the app is a line that looks " +
+          "like a rule and enforces nothing",
+      ).toEqual([]);
+    });
+
     it.each(governed)("%s asks for a token, not for a theme", (_path, source) => {
       expect(
         themeNaming(source),
@@ -489,9 +545,11 @@ describe("the frontend's architecture", () => {
   });
 
   describe("no colour literal reaches a component", () => {
+    const hexes = (source: string) => scan(source).code.match(HEX_LITERAL) ?? [];
+
     it.each(APP_SOURCES)("%s writes no hex", (_path, source) => {
       expect(
-        source.match(HEX_LITERAL) ?? [],
+        hexes(source),
         "every colour in this app is a token, and a token is a name that means " +
           "the same thing in both themes; a hex in a component is a colour that " +
           "means one of them",
@@ -499,7 +557,23 @@ describe("the frontend's architecture", () => {
     });
 
     it("catches the literal it claims to catch", () => {
-      expect(`const bg = "#12100E";`.match(HEX_LITERAL) ?? []).toEqual(["#12100E"]);
+      expect(hexes(`const bg = "#12100E";`)).toEqual(["#12100E"]);
+      expect(hexes(`const bg = "#fff";`), "the three-digit form counts").toEqual(["#fff"]);
+
+      // …and does not report prose. The line it draws is a comment, not a
+      // digit: `#109` in code is still a violation and is why Placeholder
+      // takes a number.
+      expect(hexes(`// see #109 for the console\n`), "an issue number in a comment").toEqual([]);
+      expect(hexes(`/* #12100E is ink */\n`), "a colour quoted in a comment").toEqual([]);
+      expect(hexes(`const issue = "#109";`), "the same digits, in code").toEqual(["#109"]);
+
+      // The trap the shared scanner exists for: a `//` inside a string is not
+      // a comment, and a scanner that thought it was would blank the rest of
+      // the line and stop looking for anything on it.
+      expect(
+        hexes(`const url = "https://example.test/#abc123";`),
+        "a scanner that mistook `//` in a URL for a comment would report nothing here",
+      ).toEqual(["#abc123"]);
     });
   });
 });

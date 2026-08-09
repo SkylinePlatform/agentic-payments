@@ -7,6 +7,13 @@ import type { ReactNode } from "react";
  * because a reader who lands here — or a screenshot taken by accident — should
  * be able to tell that this is scaffolding by design and find out who fills it
  * in. An empty div would leave them guessing whether it is broken.
+ *
+ * The issue is a number and the `#` is added here, which is not only tidiness:
+ * `#109` is a valid three-digit CSS colour, and `architecture.test.ts` reads it
+ * as one. A caller writing `issue="#109"` fails the rule that keeps colour
+ * literals out of components — correctly, since the rule cannot tell an issue
+ * number from a hex — and the fix that keeps both true is to stop writing the
+ * `#` where a scanner has to guess.
  */
 export function Placeholder({
   title,
@@ -15,7 +22,7 @@ export function Placeholder({
   children,
 }: {
   title: string;
-  issue: string;
+  issue: number;
   answers: string;
   children?: ReactNode;
 }) {
@@ -30,9 +37,9 @@ export function Placeholder({
         a layout and the generated protocol types; the contents are{" "}
         <a
           className="text-ink underline underline-offset-2"
-          href={`https://github.com/SkylinePlatform/agentic-payments/issues/${issue.replace("#", "")}`}
+          href={`https://github.com/SkylinePlatform/agentic-payments/issues/${issue}`}
         >
-          {issue}
+          #{issue}
         </a>
         .
       </p>
