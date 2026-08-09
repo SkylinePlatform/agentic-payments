@@ -8,6 +8,24 @@
       name="description"
       content="An implementation of Google AP2 and Visa TAP behind one protocol-neutral authorization model."
     />
+
+    <!--
+      The mono is the content, not the caption face — see src/styles.css. Its
+      @font-face carries `font-display: block`, so the browser holds the paint
+      rather than showing a digest in a fallback and swapping it mid-screenshot.
+      Preloading is what keeps that block short: the request starts with the
+      document instead of after the stylesheet has been parsed.
+
+      Only the 400. The other six faces swap or are used sparingly enough that a
+      preload each would compete with this one for the first connection.
+    -->
+    <link
+      rel="preload"
+      href="/fonts/IBMPlexMono-400.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
   </head>
   <body>
     <div id="root"></div>

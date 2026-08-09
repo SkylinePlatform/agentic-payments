@@ -10,9 +10,14 @@ surfaces, each of which is somebody else's issue to fill in.
 | Trusted Surface — the consent screen | `/consent` | #22 |
 
 This package is the frame, not the pictures. It gives each surface a route, a
-layout and the generated protocol types, and holds no state and fetches
-nothing — a shell with opinions about data is one every surface has to work
-around.
+layout, the design system and the generated protocol types, and holds no state
+and fetches nothing — a shell with opinions about data is one every surface has
+to work around.
+
+Opinions about *colour and type* are a different matter, and it does hold those:
+see [The design system](#the-design-system) below. Three surfaces sharing a
+palette that four screens' worth of screenshots have to look like one product in
+is not something each of them can decide separately.
 
 ## Running it
 
@@ -74,6 +79,12 @@ defaults it to the global one.** The app passes nothing; a test passes a fake it
 can open, feed and fail on demand. Polyfilling onto `globalThis` instead would
 leave the client with no seam and every test sharing one mutable global.
 
+There *is* one stub on `globalThis` in that file — `ResizeObserver`, which Radix
+constructs the moment a tooltip opens — and the same section explains why the
+two cases are different. Briefly: `EventSource` is a seam in our own code, and
+`ResizeObserver` is a requirement of a third-party component that has nothing to
+observe in a document where no element has a size.
+
 ## Protocol types
 
 Generated from `contracts/` into `src/protocol/generated`, which is
@@ -111,9 +122,85 @@ serve one browser in one dev setup.
 The collector is demo infrastructure and not an AP2 role — see
 [ADR 0003](../docs/architecture/adr/0003-correlation-and-event-log.md).
 
-## No component library
+## The design system
 
-Three surfaces are still to be designed, and choosing one here would be
-choosing for them from the one part of the app that has no interface to build.
-Custom properties and a flexbox frame lay out a header and a page, and are the
-part any later choice would keep anyway.
+Tailwind v4 and six colours. `src/styles.css` is the whole of it — **there is no
+`tailwind.config.js`**, because v4 has none; the plugin is `@tailwindcss/vite`
+and the theme is an `@theme` block in the stylesheet. Most of what a search
+turns up about configuring Tailwind and about shadcn's setup is v3 and will send
+you looking for a file that is not there.
+
+The palette comes from
+[the three-lane design spec](../docs/specs/2026-08-06-three-lane-view-design.md):
+`ink`, `paper`, `graphite`, `seal`, `broken`, `wash`. No pure black, no pure
+white, and only two saturated values in the system — `seal` means *verified* and
+`broken` means *the spine failed*, so neither is spent on a button.
+
+**The dark theme keeps the names and changes the values.** A component writes
+`bg-paper text-ink` and never learns which theme it is in, and
+`src/architecture.test.ts` fails a component that tries to find out. The dark
+values are derived — hue held, lightness raised in OKLCH until the contrast
+clears 4.5:1 — and the OKLCH each hex came from is in the comment beside it.
+`seal #1e4d3f` on `ink #12100e` is 1.98:1, which is why the second palette is
+computed rather than picked.
+
+Two tests hold this together, and between them they are this package's
+equivalent of the backend's `depguard` rules:
+
+| | |
+|---|---|
+| `src/palette.test.ts` | every foreground/background pair the design uses clears WCAG 4.5:1 **in both themes**, and the pair table is exhaustive over the tokens |
+| `src/architecture.test.ts` | the palette is closed, shadcn's second palette is absent, no component names a theme, and generated types come through the barrel |
+
+They exist because the build cannot do this job. `--color-*: initial` deletes
+Tailwind's defaults, after which `bg-blue-500` **generates nothing** — no class,
+no error, and an element that quietly inherits a colour. Nothing fails. So the
+guard is a test, and it is an allow-list of token names rather than a scan for
+hex literals: `bg-primary` is neither a hex nor a default ramp, and a hex scan
+would wave it through.
+
+### Components
+
+shadcn/ui, admitted as **behaviour rather than appearance**: `button`, `dialog`
+and `tooltip`, in `src/components/ui/`, re-skinned onto the six tokens. What is
+worth taking is `asChild`, the focus trap, Escape-to-dismiss and the ARIA — not
+a visual identity. The spine and the lanes are hand-written CSS grid.
+
+`src/components/ui/behaviour.test.tsx` tests exactly that: the behaviour the
+components were admitted for, and nothing about how they look.
+
+### Fonts
+
+Self-hosted, subset, committed as `woff2` under `public/fonts/` with their
+`OFL.txt` beside them. Nothing loads from a CDN.
+
+| Role | Face | Weights |
+|---|---|---|
+| Data — **the protagonist** | IBM Plex Mono | 400, 500, 600 |
+| Body | IBM Plex Sans | 400, 600 |
+| Display | Space Grotesk | 500, 700 |
+
+The inversion is the design: the digests, `vct` strings, key ids and amounts are
+the content, so the mono is the face the page is built around and the sans is
+support. The mono's `@font-face` carries `font-display: block` and the 400 is
+preloaded from `index.html` — three seconds of head start on an 11 KB
+same-origin request, which is what keeps a screenshot from catching a digest
+mid-swap. The other two `swap`.
+
+`scripts/subset-fonts.sh` is what produced the files. It pins the upstream
+google/fonts commit, instances the two variable faces at the weights above and
+runs `pyftsubset` over each — the repertoire is Google's `latin` range plus
+arrows and box drawing, with `tnum` kept on top of pyftsubset's default feature
+list. Run it when a face, a weight or the repertoire changes, then commit what
+it wrote:
+
+```bash
+pip install 'fonttools[woff]' brotli
+frontend/scripts/subset-fonts.sh
+```
+
+The `.woff2` files are committed, unlike everything else this repository
+generates. A font is not derived from anything in the tree, so a rule that
+rebuilt it would put a network fetch and a Python toolchain on the path of `npm
+run build`, and the output is a binary that would then differ between
+contributors for reasons no diff could explain.

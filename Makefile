@@ -90,6 +90,14 @@ tidy: ## go mod tidy
 # them. That is the same shape as the Go half, where `check` regenerates
 # before it lints, and it applies to the tests as much as to the build: a test
 # that renders a surface imports whatever that surface imports.
+#
+# They depend on generate-disclosure for the same reason and it is easy to
+# miss, because the two generators write into the same gitignored directory:
+# src/protocol/index.ts re-exports DISCLOSABLE from generated/disclosure.ts,
+# which generate-ts does not produce. Without this a fresh clone running
+# `make frontend-test` fails on an unresolved import rather than on anything to
+# do with the frontend. It costs no Node — generate-disclosure is a `go run`
+# that happens to emit a .ts file.
 
 # The whole stack, one command. Needs Node, because the frontend is part of it.
 #
@@ -102,7 +110,7 @@ demo: generate-go generate-disclosure generate-ts ## Bring up every role, the co
 	$(BACKEND)/bin/demo -manifest deploy/demo.json -root .
 
 .PHONY: frontend
-frontend: generate-ts ## Run the frontend dev server (needs Node)
+frontend: generate-disclosure generate-ts ## Run the frontend dev server (needs Node)
 	cd $(FRONTEND) && npm run dev
 
 # Vitest in jsdom, reading the same vite.config.ts the app builds with. Its
@@ -110,11 +118,11 @@ frontend: generate-ts ## Run the frontend dev server (needs Node)
 # frontend build — a fourth job would install it a fourth time to run a suite
 # that takes a second.
 .PHONY: frontend-test
-frontend-test: generate-ts ## Run the frontend test suite (needs Node)
+frontend-test: generate-disclosure generate-ts ## Run the frontend test suite (needs Node)
 	cd $(FRONTEND) && npm test
 
 .PHONY: frontend-check
-frontend-check: generate-ts frontend-test ## Type-check, build and test the frontend (needs Node)
+frontend-check: generate-disclosure generate-ts frontend-test ## Type-check, build and test the frontend (needs Node)
 	cd $(FRONTEND) && npm run build
 
 # core.hooksPath is repository-local rather than per-worktree, so setting it once

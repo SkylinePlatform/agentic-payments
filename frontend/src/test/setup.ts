@@ -21,6 +21,28 @@ import { afterEach } from "vitest";
  */
 afterEach(cleanup);
 
+/**
+ * jsdom has no `ResizeObserver`, and Radix's floating layer constructs one the
+ * moment a tooltip or a popover opens. Without this a tooltip test does not
+ * fail on an assertion — it throws `ResizeObserver is not defined` from inside
+ * a layout effect, which Vitest reports as an unhandled error beside a
+ * confusing "unable to find role" failure.
+ *
+ * This is a polyfill and the note below says not to write one, so the
+ * difference is worth stating rather than leaving as an apparent contradiction.
+ * `EventSource` is a seam in *our* code: the client that reads the collector's
+ * stream takes a factory, so a test can drive it. `ResizeObserver` is a
+ * requirement of a third-party component that never observes anything under
+ * jsdom, where nothing has a size and no element ever resizes. There is nothing
+ * to inject and nothing to assert about it; a stub that does nothing is exactly
+ * as truthful as the environment it stands in for.
+ */
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+
 /*
  * jsdom has no `EventSource`. Do not polyfill one here.
  *

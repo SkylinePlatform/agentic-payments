@@ -1,163 +1,247 @@
 /*
- * The shell's own styling, and no more.
+ * The design system, and the whole of it.
  *
- * Deliberately no framework: three surfaces are still to be designed, and
- * picking a component library here would be choosing for them from the one
- * place in the app that has no interface to build. Custom properties and a
- * flexbox frame are enough to lay out a header and a page, and are the part a
- * later choice would keep anyway.
+ * `docs/specs/2026-08-06-three-lane-view-design.md` fixes six colours and
+ * inverts the type hierarchy so that monospace is the protagonist rather than
+ * the caption face. This file is where that becomes something a machine can
+ * check: every colour the app is allowed to use is declared once, in one block,
+ * and `src/architecture.test.ts` reads that block back out.
+ *
+ * Tailwind v4, configured here rather than in a `tailwind.config.js` — v4 has
+ * no such file, and every v3 tutorial that says otherwise will send you looking
+ * for one. The plugin is `@tailwindcss/vite`, not PostCSS.
  */
 
+@import "tailwindcss";
+
+/*
+ * The three faces, self-hosted. Nothing loads from a CDN: a screenshot that
+ * carries an article should not depend on a third party being up, and the
+ * licences (SIL OFL 1.1 for all three) are committed beside the files.
+ *
+ * `frontend/scripts/subset-fonts.sh` is what produced these. It pins the
+ * upstream commit and records the character repertoire, so "regenerate them"
+ * has an answer that does not start with "find the fonts again".
+ *
+ * `font-display` differs by role and that is the point. IBM Plex Mono carries
+ * the digests, the `vct` strings and the amounts — it *is* the content — so it
+ * blocks: nothing is painted in a fallback for the first three seconds. Paired
+ * with the preload in `index.html` for an 11 KB file served from the same
+ * origin, that is the difference between a screenshot of a digest and a
+ * screenshot of a digest changing shape. It is not a guarantee — past the block
+ * period `block` swaps like anything else — it is a three-second head start on
+ * a request that takes milliseconds. The other two swap, because a heading
+ * appearing in a fallback for 80ms costs nothing.
+ */
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("/fonts/IBMPlexMono-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: block;
+  src: url("/fonts/IBMPlexMono-500.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: block;
+  src: url("/fonts/IBMPlexMono-600.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/IBMPlexSans-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/fonts/IBMPlexSans-600.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/SpaceGrotesk-500.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/SpaceGrotesk-700.woff2") format("woff2");
+}
+
+/*
+ * `dark:` means the attribute, not the media query.
+ *
+ * Declared even though nothing in this app should need it — `src/architecture.test.ts`
+ * forbids a component naming a theme, and the token names below are the reason
+ * it can: `bg-paper text-ink` is correct in both themes because the *values*
+ * move and the *names* do not.
+ *
+ * It is declared anyway because Tailwind's built-in `dark:` keys off
+ * `prefers-color-scheme`, so a stray `dark:` utility would not fail — it would
+ * quietly key off the wrong signal while a three-state toggle stamped the
+ * attribute. A variant that cannot mean the wrong thing is worth three lines;
+ * the test is what stops it being used at all.
+ */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/*
+ * `static` rather than a bare `@theme`: Tailwind emits only the variables some
+ * utility used, and with `seal` and `broken` reserved for a verdict that no
+ * screen has reached yet, a built stylesheet would carry four of the six in the
+ * light theme and all six in the dark one. The palette is a closed set that was
+ * approved as a set, so it is emitted as one — and the dark block below, which
+ * is ordinary CSS and therefore always emitted, cannot end up overriding a
+ * variable that the light theme never declared.
+ */
+@theme static {
+  /*
+   * Delete Tailwind's default colours before declaring ours. After this line
+   * `bg-blue-500` matches no utility.
+   *
+   * Read that precisely, because the guard depends on it: an off-palette
+   * utility **generates nothing**. No class, no error, no build failure — the
+   * element simply inherits its colour and the screen looks almost right. The
+   * build is therefore not what keeps the palette closed. `architecture.test.ts`
+   * is.
+   */
+  --color-*: initial;
+
+  --color-ink: #12100e;
+  --color-paper: #fbf9f5;
+  --color-graphite: #5e5a52;
+  --color-seal: #1e4d3f;
+  --color-broken: #8c2f1e;
+  --color-wash: #ede8df;
+
+  /*
+   * Three faces, and no fourth. The serif Tailwind ships by default is deleted
+   * along with the colours, for the same reason: a face nobody chose is a face
+   * that turns up in a screenshot.
+   */
+  --font-*: initial;
+
+  /* The protagonist. Digests, `vct` strings, key ids, amounts. */
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+  /* Support. Descriptions, labels, prose. */
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* Display. Lane headings and the thesis line: tight tracking, low contrast. */
+  --font-display: "Space Grotesk", "IBM Plex Sans", ui-sans-serif, system-ui,
+    sans-serif;
+}
+
+/*
+ * The dark theme, derived rather than picked.
+ *
+ * A second palette is two palettes that drift, so these are not new colours.
+ * Every value below is the light value's OKLCH with the lightness moved and the
+ * hue held; the comment beside each is the OKLCH it was computed from, and the
+ * hex is what that OKLCH resolves to in sRGB. `frontend/src/palette.test.ts`
+ * recomputes the contrast of every pair the design uses, from these literals.
+ *
+ * Two of the six are chosen and four are derived:
+ *
+ *   paper   chosen. `ink`'s hue and chroma at L 0.19 rather than ink's own
+ *           0.1747, so that the ground is not literally the stroke drawn on it.
+ *   ink     chosen. `paper`'s hue and chroma at L 0.95 rather than 0.9825, so
+ *           the brightest thing on a dark screen is no brighter than the light
+ *           theme's ground.
+ *   wash    derived. The lightness at which `wash` sits the same distance off
+ *           `paper` as it does in the light theme solves to L 0.2516; 0.25 is
+ *           that rounded to something a reader can hold, and it lands at
+ *           1.158:1 against the light theme's 1.161:1. In light a lane sits
+ *           into the page; in dark it lifts off it; in both it is one step, and
+ *           `palette.test.ts` asserts the two steps agree.
+ *   graphite, seal, broken
+ *           derived. Hue and chroma held, lightness raised by bisection until
+ *           the contrast against `wash` — the lighter of the two dark grounds,
+ *           and therefore the harder one — reaches 4.5:1, then rounded up to
+ *           the next 0.01 in L. `seal #1e4d3f` on `ink #12100e` is 1.98:1,
+ *           which is why none of this is optional.
+ *
+ * Literals rather than `color-mix()`, `light-dark()` or an `oklch()` value, and
+ * the trade is deliberate. Those three would put the derivation in the file and
+ * keep it honest, but a test cannot assert a contrast ratio it would have to
+ * get out of a browser's computed style — and jsdom computes none. A hex a Node
+ * test can read is what makes the guard cost nothing to run. The derivation
+ * survives as the comment beside each value; recompute with the numbers below
+ * if you need to move one.
+ *
+ * `data-theme` rather than `prefers-color-scheme`, because the toggle has three
+ * states and a media query has two. Resolving *system* to one of these two
+ * attribute values is the toggle's job, not this file's. Until that lands, the
+ * absence of the attribute means light.
+ */
 :root {
-  --bg: #0f1115;
-  --surface: #171a21;
-  --border: #262b36;
-  --text: #e6e9ef;
-  --muted: #9aa3b2;
-  --accent: #7c8cff;
+  color-scheme: light;
+}
 
+:root[data-theme="dark"] {
   color-scheme: dark;
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
-    Arial, sans-serif;
-  line-height: 1.55;
+
+  --color-ink: #f0eeea; /* oklch(0.9500 0.0057 84.57) */
+  --color-paper: #151311; /* oklch(0.1900 0.0052 67.47) */
+  --color-graphite: #8d8980; /* oklch(0.6300 0.0136 84.59) */
+  --color-seal: #629281; /* oklch(0.6200 0.0570 170.93) */
+  --color-broken: #d26e5a; /* oklch(0.6500 0.1299 32.55) */
+  --color-wash: #25211b; /* oklch(0.2500 0.0132 82.40) */
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f7f8fa;
-    --surface: #ffffff;
-    --border: #dfe3ea;
-    --text: #1a1d24;
-    --muted: #5b6472;
-    --accent: #4351d8;
-
-    color-scheme: light;
+@layer base {
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    line-height: 1.55;
   }
-}
 
-* {
-  box-sizing: border-box;
-}
+  /*
+   * Figures that do not shift width, wherever the mono is the content. The one
+   * people forget is the sans count sitting beside a mono column — `tabular-nums`
+   * is a utility and the component has to ask for it there.
+   */
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
 
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-}
+  /*
+   * One focus ring for the whole app, in `ink`, which is the text colour in
+   * both themes and therefore legible on every ground the design has. shadcn's
+   * components inherit it rather than each carrying their own.
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+  }
 
-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.9em;
-  background: color-mix(in srgb, var(--border) 55%, transparent);
-  padding: 0.1em 0.35em;
-  border-radius: 4px;
-}
-
-a {
-  color: var(--accent);
-}
-
-.shell {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.shell__header {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 2rem;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: 1rem 1.5rem;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-}
-
-.shell__brand {
-  display: flex;
-  flex-direction: column;
-}
-
-.shell__title {
-  font-weight: 650;
-  font-size: 1.05rem;
-  letter-spacing: -0.01em;
-}
-
-.shell__subtitle {
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.shell__nav {
-  display: flex;
-  gap: 0.25rem;
-  flex-wrap: wrap;
-}
-
-.shell__link {
-  padding: 0.4rem 0.75rem;
-  border-radius: 6px;
-  text-decoration: none;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-.shell__link:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--border) 45%, transparent);
-}
-
-.shell__link--active {
-  color: var(--text);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-.shell__main {
-  flex: 1;
-  padding: 2rem 1.5rem;
-  max-width: 60rem;
-  width: 100%;
-  margin: 0 auto;
-}
-
-.placeholder__title {
-  margin: 0 0 0.25rem;
-  font-size: 1.6rem;
-  letter-spacing: -0.02em;
-}
-
-.placeholder__answers {
-  margin: 0 0 1rem;
-  color: var(--text);
-}
-
-.placeholder__note {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.9rem;
-}
-
-.proof {
-  margin-top: 2rem;
-  padding: 1rem 1.25rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-
-.proof__label {
-  margin: 0 0 0.75rem;
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
-.proof__prices {
-  margin: 0;
-  padding-left: 1.1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
+  ::selection {
+    background-color: var(--color-wash);
+    color: var(--color-ink);
+  }
 }

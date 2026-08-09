@@ -40,6 +40,47 @@ Mastercard Agent Pay / Agentic Tokens
   credentials are included in this repository.
 
 -------------------------------------------------------------------------------
+THIRD-PARTY WORKS COMMITTED IN THIS REPOSITORY
+-------------------------------------------------------------------------------
+
+Almost every dependency of this project is resolved at build time and is not
+redistributed here. Two kinds are, and are therefore listed: fonts, committed
+as binaries, and component source copied into the tree rather than installed.
+
+IBM Plex Mono and IBM Plex Sans
+  Copyright (c) 2017 IBM Corp. with Reserved Font Name "Plex"
+  SIL Open Font License, Version 1.1
+  https://github.com/IBM/plex
+  Subset copies are committed at frontend/public/fonts/. The licence text is
+  beside them at frontend/public/fonts/IBMPlex-OFL.txt, and the upstream source
+  and the exact subsetting commands are in frontend/scripts/subset-fonts.sh.
+
+Space Grotesk
+  Copyright (c) 2020 The Space Grotesk Project Authors
+  SIL Open Font License, Version 1.1
+  https://github.com/floriankarsten/space-grotesk
+  Subset copy committed at frontend/public/fonts/, licence text at
+  frontend/public/fonts/SpaceGrotesk-OFL.txt.
+
+shadcn/ui
+  Copyright (c) 2023 shadcn
+  MIT License
+  https://github.com/shadcn-ui/ui
+  frontend/src/components/ui/button.tsx, dialog.tsx and tooltip.tsx are adapted
+  from shadcn/ui, which is published as source intended to be copied into a
+  project rather than as an installable package. The component structure and
+  the accessibility behaviour are theirs; the styling is this project's own
+  six-token palette and the upstream animation utilities are removed.
+
+Radix UI Primitives
+  Copyright (c) 2022 WorkOS
+  MIT License
+  https://github.com/radix-ui/primitives
+  A build-time dependency and not vendored, listed because the three components
+  above are thin wrappers over it — a reader of that directory should be able
+  to see where the focus management and the dismissal behaviour come from.
+
+-------------------------------------------------------------------------------
 TRADEMARKS
 -------------------------------------------------------------------------------
 
