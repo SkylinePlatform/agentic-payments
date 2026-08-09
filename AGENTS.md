@@ -589,12 +589,12 @@ but it stops there, so work that touches neither the frontend nor a diagram
 never needs npm. mockery is a Go program like the schema generator, so neither
 half of that generation costs a Node toolchain.
 
-**The frontend suite is one of the things this buys, and one of the things it
-costs.** `frontend-test` is Vitest in jsdom and is deliberately not a
-prerequisite of `check` — a gate that made npm mandatory for backend work is
-the first thing anyone would route around. It runs in the *Contracts* job
-instead, which already installs Node for the frontend build, so a frontend
-change cannot merge unrun even though nothing local is obliged to run it.
+**The frontend suite is where that trade-off shows.** `frontend-test` is Vitest
+in jsdom, and it is deliberately not a prerequisite of `check` — a gate that
+made npm mandatory for backend work is the first thing anyone would route
+around. It runs in the *Contracts* job instead, which already installs Node for
+the frontend build, so a frontend change cannot merge unrun even though nothing
+local is obliged to run it.
 
 **`make check` is no longer the whole of CI.** It is the local gate; the
 *Build and test*, *Lint* and *Contracts* jobs in `.github/workflows/ci.yml`

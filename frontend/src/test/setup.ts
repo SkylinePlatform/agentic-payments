@@ -12,13 +12,16 @@ import { afterEach } from "vitest";
  *
  * Testing Library registers this hook itself, but only when Vitest runs with
  * `globals: true`. This project does not — a test that uses `expect` says where
- * it came from — so the registration happens here instead. Without it every
- * render accumulates in one document and the second call to `getAllByRole`
- * counts the first test's markup as well as its own.
+ * it came from — so the registration happens here instead.
+ *
+ * It is load-bearing rather than defensive. Without it every render
+ * accumulates in the same document, and with only the two tests in
+ * Shell.test.tsx the second already fails with `Found multiple elements with
+ * the role "link" and name "Three lanes"`.
  */
 afterEach(cleanup);
 
-/**
+/*
  * jsdom has no `EventSource`. Do not polyfill one here.
  *
  * Not a partial implementation, not one behind a flag: the constructor does not

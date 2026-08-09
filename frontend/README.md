@@ -46,7 +46,7 @@ directly — so the range is also written where somebody would think to look.
 Vitest, jsdom and Testing Library. Vitest reads `vite.config.ts`, so the tests
 resolve imports and run plugins exactly as the app does — one config rather
 than two that can disagree about what `../protocol` means. Its `test` block is
-at the bottom of that file and is short; the comments there are the reasoning.
+at the end of that file, and the comments there carry the reasoning.
 
 ```bash
 make frontend-test   # from the repository root: generates types, then runs it

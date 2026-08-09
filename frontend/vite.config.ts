@@ -29,11 +29,11 @@ export default defineConfig(({ mode }) => {
   // needs nothing else from them.
   //
   // Vitest resolves it the same way, against the working directory. `npm test`
-  // and `make frontend-test` both run from frontend/, so it lands here; the
-  // mode is "test" rather than "development", so a .env.test would be the file
-  // it picked up. Verified, not assumed — a config that threw under the test
-  // runner would have made every test unrunnable for a reason nothing about a
-  // failing test would point at.
+  // and `make frontend-test` both run from frontend/, so it lands here, and
+  // the mode is "test" rather than "development" — so .env and .env.test are
+  // what it reads. Verified with a temporary .env.test rather than assumed: a
+  // config that threw under the test runner would have made every test
+  // unrunnable for a reason nothing about a failing test would point at.
   const env = loadEnv(mode, ".", "VITE_");
   const collector = env.VITE_COLLECTOR_URL ?? DEFAULT_COLLECTOR;
   const agent = env.VITE_AGENT_URL ?? DEFAULT_AGENT;
@@ -95,8 +95,8 @@ export default defineConfig(({ mode }) => {
       setupFiles: ["./src/test/setup.ts"],
 
       // Tests live beside what they test, under src/. Stated rather than left
-      // to the default so that scripts/ and the generated protocol types are
-      // not somewhere a test could hide.
+      // to the default, which sweeps the whole package: scripts/ is a build
+      // tool run by npm and has no business being collected by the runner.
       include: ["src/**/*.test.{ts,tsx}"],
 
       // An empty suite is a broken suite. Deleting every test, breaking the
