@@ -117,7 +117,7 @@ func TestTheDemoMerchantMovesEveryClockItWasBuiltWith(t *testing.T) {
 	require.Equal(t, http.StatusUnprocessableEntity, status,
 		"a verdict about a mandate is answered with a receipt, never Problem Details")
 
-	receipt, err := ap2.VerifyReceipt(out["receipt"].(string), s.merchant)
+	receipt, err := ap2.VerifyReceipt(out["receipt"].(string), s.own)
 	require.NoError(t, err, "the receipt has to verify under the merchant's own key")
 	assert.Equal(t, generated.ReceiptMandateTypeCheckout, receipt.MandateType,
 		"a rule set left on the process clock accepts this mandate and the refusal moves to the "+

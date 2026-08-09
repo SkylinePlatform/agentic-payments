@@ -52,8 +52,9 @@ type demoKeys struct {
 	// closed mandates at the Trusted Surface.
 	user authz.Signer
 
-	// merchant verifies the receipts this merchant answers with.
-	merchant authz.Verifier
+	// own verifies the receipts this merchant answers with — the same key
+	// Service.Own holds, named after it.
+	own authz.Verifier
 
 	// blinder salts the disclosures. A real one rather than a double: it
 	// computes, and what it computes has to verify.
@@ -97,6 +98,14 @@ func (s demoShop) as(c *http.Client) demoShop {
 // builds it there.
 func demoService(t *testing.T) (*merchant.Service, *clock.Fake, demoKeys) {
 	t.Helper()
+	return demoServiceWith(t, true)
+}
+
+// demoServiceWith is demoService with the demo control's flag as a parameter, so
+// that the off path — which is what every merchant but this one runs — is
+// reachable from a test rather than only from cmd/merchant.
+func demoServiceWith(t *testing.T, controls bool) (*merchant.Service, *clock.Fake, demoKeys) {
+	t.Helper()
 
 	under := clock.NewFake(base)
 
@@ -130,11 +139,11 @@ func demoService(t *testing.T) (*merchant.Service, *clock.Fake, demoKeys) {
 			User:      userVerifier,
 			Processor: merchant.NewMockProcessor(t),
 			Step:      demoStep,
-			Controls:  true,
+			Controls:  controls,
 		})
 	require.NoError(t, err, "standing up the demo merchant")
 
-	return svc, under, demoKeys{user: userSigner, merchant: shopVerifier, blinder: blinder}
+	return svc, under, demoKeys{user: userSigner, own: shopVerifier, blinder: blinder}
 }
 
 // newDemoShop serves the service demoService builds.
@@ -297,6 +306,42 @@ func TestTheControlDoesNotExistWithoutTheFlag(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
 		"an endpoint that moves a verifier's clock must be absent, not present and refusing")
+}
+
+// TestTheCompositionLeavesTheControlOffByDefault is the same guard rail one
+// layer up: not "the Service refuses to register it", but "the constructor every
+// merchant goes through does not ask for it unless told".
+//
+// It also pins a trap with no other test: DemoClock is an interface, and a nil
+// *clock.Offset assigned into one is not nil. Getting that wrong does not open
+// the endpoint — Handler would refuse the merchant outright — so the symptom
+// would be every merchant without demo controls failing to start, with nothing
+// pointing at why. See demoAdvancer.
+func TestTheCompositionLeavesTheControlOffByDefault(t *testing.T) {
+	t.Parallel()
+
+	svc, _, _ := demoServiceWith(t, false)
+	require.Nil(t, svc.DemoClock,
+		"a nil pointer in an interface field is not nil, and this field's nil-ness is what "+
+			"decides whether the route exists")
+
+	handler, err := svc.Handler()
+	require.NoError(t, err, "a merchant without demo controls has to start")
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		srv.URL+merchant.AdvancePath, nil)
+	require.NoError(t, err)
+	req.Header.Set(transport.KeyHeader, t.Name())
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+		"the composition asked for no control, so there is no route to refuse with")
 }
 
 // TestAdvancingMovesThePriceOnAStepAtATime walks the built scenario: $240 while

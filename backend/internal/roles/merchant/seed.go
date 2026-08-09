@@ -427,10 +427,15 @@ func NewDemoService(role roles.Role, opts DemoOptions) (*Service, error) {
 // demoAdvancer keeps a nil *clock.Offset from becoming a non-nil interface.
 //
 // A nil pointer assigned straight into an interface field produces an interface
-// that is not nil, which here would register POST /demo/advance on a merchant
-// that was never given a clock to move — and the first call would panic. The
-// one-line conversion is the whole guard, and it is a function rather than an
-// inline if so that the shape cannot be copied wrong at a second call site.
+// that is not nil, and DemoClock's nil-ness is what decides whether the route
+// exists. What that costs is not a panic — Handler would find that interface
+// holding a clock the Service does not read and refuse the merchant outright —
+// so the symptom is **every merchant without demo controls failing to start**,
+// which is loud but says nothing about its cause.
+//
+// A function rather than an inline if, so the shape cannot be got wrong at a
+// second call site. TestTheCompositionLeavesTheControlOffByDefault is what
+// fails if it is removed.
 func demoAdvancer(c *clock.Offset) MovableClock {
 	if c == nil {
 		return nil
