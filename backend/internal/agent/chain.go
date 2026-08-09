@@ -16,7 +16,7 @@ import (
 )
 
 // One purchase attempt under Human Not Present: three challenges, four
-// delegations, two requests.
+// delegations, two presentations.
 //
 // # Why four, when there are two mandates
 //
@@ -38,8 +38,15 @@ import (
 // travels beside its chain as processor_nonce and the merchant forwards it
 // unread, because a key binding is checked by whoever issued the value it names.
 //
-// A test that minted one payment chain and presented it three times would fail,
-// and would fail at the first verifier that is not its audience.
+// An agent that minted one payment chain and presented it three times is
+// refused, and **which verifier refuses, and for which of the two reasons, is
+// measured rather than assumed**: reusing the Credential Provider's copy is
+// funded by the Credential Provider — it is that chain's audience — and refused
+// by the merchant, with a signed receipt naming key_binding_invalid. The
+// description says the *nonce* does not match rather than the audience, because a
+// chain minted for one verifier carries that verifier's challenge as well as its
+// identifier, and the nonce is compared first. The two comparisons are one
+// claim: this proof was made for somebody else.
 
 // closedMandateLifetime is how long the mandates this agent signs stay usable.
 //
@@ -52,10 +59,11 @@ import (
 // different question, and a constant reached across the two would make one
 // role's policy the other's by accident.
 //
-// Nothing verifies it today. AuthoriseCheckoutChain and AuthorisePaymentChain
-// check the *open* mandate's window, because that is the user's authorisation;
-// the closed mandate's own exp is carried and unread under a chain. It is set
-// anyway, because a signed instruction with no expiry is worse than one whose
+// Nothing checks it today. AuthoriseCheckoutChain and AuthorisePaymentChain run
+// the window check against the *open* mandate, because that is the user's
+// authorisation; the closed mandate's own exp is decoded into the canonical
+// model by decodeCheckout and decodePayment and then never compared to a clock.
+// It is set anyway, because a signed instruction with no expiry is worse than one whose
 // expiry nobody currently checks, and because the day a verifier does check it
 // the agent should not be the reason it fails.
 const closedMandateLifetime = 15 * time.Minute

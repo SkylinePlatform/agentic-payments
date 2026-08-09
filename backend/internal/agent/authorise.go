@@ -241,10 +241,16 @@ type candidate struct {
 //
 // **Choosing among candidates is a product decision this demo does not make.**
 // The first result wins, and the merchant returns them in catalogue order, so
-// the choice is stable rather than considered. A real agent ranks, or asks; each
-// of the four scripted prompts matches exactly one offer once the price bound is
-// out of the query — TestTheCatalogueAnswersTheScriptedPrompts is where that is
-// pinned — so the demo never reaches a case where the difference shows.
+// the choice is stable rather than considered. A real agent ranks, or asks.
+//
+// Every scripted prompt matches exactly one offer once the terms are out of the
+// query, so the demo never reaches a case where the difference shows —
+// TestEveryScriptedPromptFindsOneCandidate is what pins that, by driving this
+// path for every prompt interpret.Demo() answers and naming the offer each one
+// has to land on. Note which test does *not* pin it:
+// TestTheCatalogueAnswersTheScriptedPrompts, in internal/roles/merchant, searches
+// with the **whole** constraint set, which is the query this function
+// deliberately does not send.
 func (c *Client) discover(ctx context.Context, constraints []generated.Constraint) (string, error) {
 	query := identifying(constraints)
 	if len(query) == 0 {

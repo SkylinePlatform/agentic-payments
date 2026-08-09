@@ -34,8 +34,10 @@ import (
 // that package can prevent it: "whether one call corresponds to one attempt is
 // entirely the caller's doing".
 //
-// **Attempt is the only place in this repository that calls MandateState.Next**,
-// and three things rather than a convention are what keep it so:
+// **Attempt is the only place in this repository that calls MandateState.Next**
+// — outside internal/core/authz's own tests, which drive the machine directly
+// because that is what they are for — and three things rather than a convention
+// are what keep it so:
 //
 //   - The states are unexported and there is no setter. Checkout and Payment
 //     read them; nothing hands one back out to be stepped.
@@ -121,8 +123,12 @@ func (v Verdict) String() string {
 //
 // The machine's own error is wrapped rather than replaced, so errors.Is still
 // reaches authz.ErrMandateSpent and authz.ErrOpenMandateOutstanding at the call
-// site. The watch turns on exactly that distinction: a mandate awaiting a
-// receipt is worth waiting for and a spent one never becomes attemptable again.
+// site. Watch.Run turns on the first of those and stops, because a receipt that
+// cannot arrive is not worth waiting for. It never sees the second — it
+// re-delivers an outstanding attempt rather than beginning a second one — and
+// the wrapping preserves it anyway, because a caller that did not re-deliver
+// would have to tell "wait for a receipt" from "this mandate is finished", which
+// is the whole reason those are two sentinels.
 //
 // # What happens after it
 //

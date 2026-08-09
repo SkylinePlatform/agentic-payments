@@ -200,9 +200,11 @@ func (p pulse) RoundTrip(r *http.Request) (*http.Response, error) {
 // price.
 //
 // The advance comes first and the tick second, and the ordering is safe because
-// of where this is called: only once the previous iteration has signalled that
-// it is finished. The tick channel is unbuffered, so the send returns when the
-// loop receives — which is the loop having come back round.
+// of where this is called: only after the previous iteration has signalled that
+// it is over — its attempt, or its poll when nothing followed the poll. The loop
+// reads no clock between either signal and its next poll. The tick channel is
+// unbuffered, so the send returns when the loop receives, which is the loop
+// having come back round.
 func (a *authorisedAgent) step() {
 	a.world.clock.Advance(merchant.DefaultStep)
 	a.beat()
@@ -787,4 +789,68 @@ func (r *recorder) kinds(role string) []obs.Kind {
 		}
 	}
 	return out
+}
+
+// TestEveryScriptedPromptFindsOneCandidate is what makes discover's claim about
+// choosing among candidates true rather than asserted.
+//
+// The agent takes the first offer a search returns, which is only defensible
+// because every scripted prompt matches exactly one. That is a property of the
+// interpretations in internal/agent/interpret and the offers in
+// internal/roles/merchant together, and neither package can hold it: the
+// constraint sets live in one, the catalogue in the other, and
+// core-isolation keeps them from sharing a table. It is held here, at the one
+// place both are in scope.
+//
+// **It is not TestTheCatalogueAnswersTheScriptedPrompts over again.** That test
+// searches with the whole constraint set, which is the query discover
+// deliberately does not send — and under it two of these prompts match nothing
+// at the opening prices, which is the entire reason the agent narrows the query.
+// This drives the real path, at the opening prices, and names what each prompt
+// has to find.
+//
+// The table is walked from interpret.Demo().Prompts() rather than written out,
+// so a scripted prompt added without a catalogue offer to match fails here
+// instead of failing as a demo that watches nothing.
+func TestEveryScriptedPromptFindsOneCandidate(t *testing.T) {
+	t.Parallel()
+
+	finds := map[string]string{
+		"buy a flight to Palma when it drops below $200, this summer":               merchant.DemoFlightID,
+		"buy a flight to Palma under $200, this summer":                             merchant.DemoFlightID,
+		"buy me this bicycle when it drops below $400":                              merchant.DemoBicycleID,
+		"two tickets to the Vlado Georgijev concert in November, up to $160 all in": merchant.DemoConcertID,
+		"find and buy telescopic ladders, cheapest":                                 merchant.DemoLadderID,
+	}
+
+	prompts := interpret.Demo().Prompts()
+	require.Len(t, prompts, len(finds),
+		"a prompt was scripted without saying what it should find, which is a demo that watches nothing")
+
+	for _, prompt := range prompts {
+		want, named := finds[prompt]
+		require.True(t, named, "no offer named for the scripted prompt %q", prompt)
+
+		t.Run(prompt, func(t *testing.T) {
+			t.Parallel()
+
+			// The opening prices, untouched. Two of these prompts are for things
+			// that are still too expensive here, and finding them anyway is the
+			// point: an agent that could only discover what it could already buy
+			// would have nothing to wait for.
+			w := newWorld(t)
+			key := newParty(t, "agent", w.clock)
+			agentKey, err := roles.PublicKey(t.Context(), key.keys)
+			require.NoError(t, err)
+
+			auth, err := w.client().Authorise(t.Context(), agent.Intent{
+				Prompt:      prompt,
+				Interpreter: interpret.Demo(),
+				AgentKey:    agentKey,
+			})
+			require.NoError(t, err, "every scripted prompt has to reach a signature")
+			assert.Equal(t, want, auth.Item,
+				"the prompt found the wrong thing to watch, so the demo would wait on a price nobody asked about")
+		})
+	}
 }

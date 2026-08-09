@@ -229,9 +229,12 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 			minted, err := w.Delegate(ctx, q)
 			if err != nil {
 				// Nothing was presented, so no attempt was begun and the rule
-				// has nothing to say about it. Three of the four things that can
-				// fail here are round trips to a verifier for a challenge, which
-				// is exactly the kind of failure worth another tick.
+				// has nothing to say about it. Retrying is worth it because the
+				// three challenge round trips are the part of Delegate most
+				// likely to fail and the part most likely to succeed next time;
+				// the rest of it — parsing the open mandates, four signatures —
+				// would fail the same way on every tick, and the context is what
+				// bounds that rather than a count kept here.
 				out.Attempts = append(out.Attempts, Attempted{
 					Quote:    q,
 					Err:      err,
