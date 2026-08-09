@@ -10,6 +10,14 @@ import { SdJwtError } from "./errors";
  * failure they produce is partial: a string with no `-` or `_` in it decodes
  * identically under either alphabet, so a reader that never translated would
  * work for most inputs and mangle the rest.
+ *
+ * **These two tests are the only thing standing under that rule**, and it is
+ * worth saying which is doing the work. None of the four conformance vectors
+ * exercises it: every `-` and every `_` in all four sits in a *signature*
+ * segment, and a reader that never verifies never decodes one. Deleting the
+ * translation in `base64url.ts` leaves `golden.test.ts` entirely green —
+ * measured, by doing it. So the alphabet is checked here, on inputs chosen to
+ * contain the two characters, rather than incidentally by a credential.
  */
 describe("base64url", () => {
   it("decodes the alphabet base64 spells differently", () => {

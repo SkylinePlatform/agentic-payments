@@ -96,6 +96,40 @@ nothing to inject through. `matchMedia`'s stub answers *light* and never fires;
 `src/theme/ThemeProvider.test.tsx` replaces it with one it can flip, which is
 the only way to test what an OS theme change does to a page already open.
 
+There *is* a `crypto.subtle`, and it needs no wiring — Vitest's jsdom
+environment leaves Node's global `crypto` in place, which has one, even though
+jsdom's own `window.crypto` does not. `src/sdjwt/digest.test.ts` asserts that
+outright so the claim cannot rot, and stubs it away per test to exercise the
+other case.
+
+## Reading an SD-JWT
+
+`src/sdjwt` decodes RFC 9901 SD-JWTs and two-hop Delegate SD-JWT chains: split
+the compact serialisation on `~`, decode the JWTs and the disclosures,
+recompute the digests, and report which claims a verifier was shown and which
+were withheld from it. It is a library, not a surface — the Mandate Inspector
+consumes it.
+
+**It never verifies a signature, and that is structural rather than promised.**
+A browser holds no verifier's key, so a page that checked one against a key it
+fetched from whoever sent the token would have established that a document is
+self-consistent and rendered it as proof. `src/sdjwt/never-verifies.test.ts`
+reads the directory's own sources and fails if any Web Crypto operation but
+`digest` is called, or a key type named, or Web Crypto reached from more than
+one file. Verification happens in the roles under `backend/`, and a receipt
+those roles signed is what a screen shows to say something was verified.
+
+Everything that touches a digest is asynchronous, because `crypto.subtle` is —
+and it is absent outside a secure context, so `localhost` has it and a LAN
+address does not. That case throws `SdJwtError` with the code `no_web_crypto`
+rather than resolving to a payload in which every claim reads as withheld.
+
+The conformance vectors are read from `backend/pkg/sdjwt/testdata` with a
+`?raw` import, not copied here. RFC 9901 publishes its own disclosures,
+digests, `sd_hash` and processed payloads, and a copy of a published vector
+still looks like a vector after the original moves. That is the one entry in
+`server.fs.allow` in `vite.config.ts`.
+
 ## Protocol types
 
 Generated from `contracts/` into `src/protocol/generated`, which is
