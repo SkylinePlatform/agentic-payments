@@ -63,9 +63,9 @@ func stateOf(t *testing.T, statuses []demo.Status, name string) demo.Status {
 	return demo.Status{}
 }
 
-// TestStubIsPendingNotFailed is the distinction the whole banner turns on
-// today. Seven of the nine processes are stubs that exit 1, and reporting those
-// as failures would bury the two real ones under noise nobody reads.
+// TestStubIsPendingNotFailed is the distinction the whole banner turns on. Some
+// of the manifest is still binaries that exit 1 on sight, and reporting those as
+// failures would bury a real one under noise nobody reads.
 func TestStubIsPendingNotFailed(t *testing.T) {
 	t.Parallel()
 

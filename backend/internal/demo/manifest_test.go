@@ -2,6 +2,7 @@ package demo_test
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -13,6 +14,14 @@ import (
 
 // manifestPath is the shipped topology, from this package's directory.
 const manifestPath = "../../../deploy/demo.json"
+
+// cmdDir holds one directory per binary this module builds, and runner is the
+// one of them that is not started by a manifest because it is the thing reading
+// one.
+const (
+	cmdDir = "../../cmd"
+	runner = "demo"
+)
 
 func valid() demo.Process {
 	return demo.Process{
@@ -37,31 +46,67 @@ func TestShippedManifestIsValid(t *testing.T) {
 		t.Fatal("the shipped manifest starts nothing")
 	}
 
-	var roles, infra, ui int
+	var infra, ui int
 	for _, p := range m.Processes {
 		switch p.Kind {
-		case demo.KindRole:
-			roles++
 		case demo.KindInfrastructure:
 			infra++
 		case demo.KindUI:
 			ui++
+		case demo.KindRole:
+			// Counted by TestEveryBinaryIsStarted, against the directory
+			// rather than against a number.
 		}
 	}
 
-	// Seven role binaries live under backend/cmd, and the demo brings up all
-	// of them. A manifest that quietly dropped one would produce a
-	// demonstration missing a participant, which is the kind of gap a viewer
-	// notices and a reader does not.
-	if roles != 7 {
-		t.Errorf("manifest has %d roles, want the 7 under backend/cmd", roles)
-	}
 	if infra != 1 {
 		t.Errorf("manifest has %d infrastructure processes, want 1 (the collector)", infra)
 	}
 	if ui != 1 {
 		t.Errorf("manifest has %d interfaces, want 1 (the frontend)", ui)
 	}
+}
+
+// TestEveryBinaryIsStarted is what the role count used to be, checking the thing
+// that count was standing in for.
+//
+// It was `roles != 7`, against "the 7 under backend/cmd", and it broke the
+// moment the Human Not Present flow arrived as a second `bin/agent` process: a
+// number that counts processes cannot answer a question about binaries, and
+// bumping it to 8 would have made the demonstration's participant list agree
+// with a constant instead of with the tree. What the check is actually for is
+// that nothing this module builds is missing from the demonstration — a gap a
+// viewer notices and a reader does not — so it reads the directory.
+//
+// It is deliberately one-directional. Every binary must be started; a manifest
+// entry need not be a binary, which is what leaves room for the frontend, for
+// one binary run twice under two names, and for a compose file or a second
+// topology later.
+func TestEveryBinaryIsStarted(t *testing.T) {
+	t.Parallel()
+
+	m, err := demo.Load(manifestPath)
+	require.NoError(t, err, "the shipped manifest does not load")
+
+	started := make(map[string]bool, len(m.Processes))
+	for _, p := range m.Processes {
+		started[filepath.Base(p.Command)] = true
+	}
+
+	entries, err := os.ReadDir(cmdDir)
+	require.NoError(t, err, "backend/cmd is where this module's binaries are declared")
+
+	var binaries int
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == runner {
+			continue
+		}
+		binaries++
+		assert.True(t, started[e.Name()],
+			"backend/cmd/"+e.Name()+" builds a binary the demo never starts; the demonstration"+
+				" would be missing a participant, and nothing else says so")
+	}
+	assert.NotZero(t, binaries, "no binaries were found to check, so this test proved nothing")
 }
 
 // TestCollectorIsNotAProtocolParticipant pins ADR 0003's requirement at the

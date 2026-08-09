@@ -28,8 +28,8 @@ import (
 //
 // It also detaches the child from the terminal's foreground group, so Ctrl-C
 // reaches the runner and nothing else. That makes shutdown something the runner
-// performs in a known order rather than a race between nine processes all
-// signalled at once.
+// performs in a known order rather than a race between every process in the
+// manifest, all signalled at once.
 func isolate(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }

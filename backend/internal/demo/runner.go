@@ -118,9 +118,11 @@ func NewRunner(m *Manifest, root string, out io.Writer, opts ...Option) *Runner 
 // Start brings every process up, in manifest order, waiting on each health
 // check before moving to the next. It returns what became of each one.
 //
-// A process that fails does not tear down the others. Seven of the nine are
-// stubs today, and a supervisor that quit when one child died would be useless
-// for exactly the period this exists to cover.
+// A process that fails does not tear down the others, and that is true of one
+// that exits long afterwards as well — the statuses below are what startup
+// settled on, and nothing revises them later. Some of the manifest is still
+// stubs, and a supervisor that quit when one child died would be useless for
+// exactly the period this exists to cover.
 //
 // It returns once startup has settled. Call Wait to block until the processes
 // stop, which is what leaves room to print a banner in between.
