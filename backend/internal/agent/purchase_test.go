@@ -163,46 +163,6 @@ func newWorldEmitting(t *testing.T, events emitters) *world {
 	}
 	w.endpoints.Surface = serve(t, surfaceSvc.Handler)
 
-	inventory, err := merchant.NewDemoInventory(clk, base, merchant.DefaultStep)
-	require.NoError(t, err, "seeding the inventory")
-	catalogue, err := merchant.NewDemoCatalogue(clk, merchantID, base, merchant.DefaultStep)
-	require.NoError(t, err, "seeding the catalogue")
-
-	// Every role below is wired for both flows, exactly as its cmd/ binary
-	// wires it: one rule set held twice, once behind the interface the Human
-	// Present entry point takes and once behind the chain one. The Human
-	// Present tests in this file send no chain and reach none of it, which is
-	// the point — a world that could only do one flow would be two worlds.
-	checkoutRules := ap2.MerchantRules{
-		Issuer: w.user.verifier, Clock: clk,
-		AgentKey: roles.AgentKey, Audience: merchantID,
-		RequireConstrained: []string{"amount"},
-	}
-	// The user signs both closed mandates in Human Present mode, so the
-	// merchant checks the payment side against the same key it checks the
-	// Checkout Mandate with. It needs it to compare the amount against the
-	// offer it made — see ap2.AmountMatches.
-	merchantPayments := ap2.CredentialProviderRules{
-		Issuer: w.user.verifier, Clock: clk,
-		AgentKey: roles.AgentKey, Audience: merchantID,
-		RequireConstrained: []string{"amount"},
-	}
-	merchantChallenge, err := crypto.NewChallenger(clk, roles.ChallengeTTL)
-	require.NoError(t, err, "minting the merchant's challenge key")
-
-	// Built with a placeholder processor and pointed at the real one below,
-	// because the two need each other's addresses and only one can be first.
-	merchantSvc := &merchant.Service{
-		ID: merchantID, Inventory: inventory, Catalogue: catalogue,
-		Rules: checkoutRules, ChainRules: checkoutRules,
-		Payments: merchantPayments, ChainPayments: merchantPayments,
-		Signer: w.shop.signer, Own: w.shop.verifier, Keys: w.shop.keys, Clock: clk,
-		Challenge: merchantChallenge,
-		Processor: &merchant.HTTPProcessor{},
-		Events:    events.merchant,
-	}
-	w.endpoints.Merchant = serve(t, merchantSvc.Handler)
-
 	providerRules := ap2.CredentialProviderRules{
 		Issuer: w.user.verifier, Clock: clk,
 		AgentKey: roles.AgentKey, Audience: credProviderID,
@@ -239,10 +199,52 @@ func newWorldEmitting(t *testing.T, events emitters) *world {
 	}
 	w.endpoints.MPP = serve(t, mppSvc.Handler)
 
-	// The merchant is stood up last because it needs the processor's address:
-	// AP2 gives the merchant the payment leg, so it is the merchant that calls
-	// the processor and the agent never does.
-	merchantSvc.Processor = &merchant.HTTPProcessor{Base: w.endpoints.MPP}
+	// The merchant comes last because it needs the processor's address: AP2
+	// gives the merchant the payment leg, so it is the merchant that calls the
+	// processor and the agent never does.
+	//
+	// # Through merchant.NewDemoService rather than built here
+	//
+	// This used to be a Service literal that matched cmd/merchant field for
+	// field, and a reviewer had confirmed it did. That confirmation expired the
+	// moment #122 extracted the composition: cmd/merchant is now four lines and
+	// a call to NewDemoService, so a hand-built merchant here would be a *third*
+	// wiring — and the specific bug #122 exists to prevent is a merchant whose
+	// collaborators do not all read the same clock, which every wiring gets to
+	// rediscover on its own. Going through the constructor is what makes "the
+	// agent's tests drive the merchant the demo runs" a fact rather than a
+	// comparison somebody has to redo after every change over there.
+	//
+	// Two things about the arguments are worth stating, because both looked like
+	// blockers and neither is:
+	//
+	//   - **Controls is false, so the clock passes straight through.**
+	//     NewDemoService wraps role.Clock in a clock.Offset only under Controls;
+	//     without it every collaborator reads exactly the clk below, which is the
+	//     clock.Fake these tests advance directly. POST /demo/advance is not
+	//     registered, which is right — a test that moved time through an endpoint
+	//     would be testing #122's control rather than this agent.
+	//   - **The schedules seed from role.Clock.Now() rather than a start
+	//     parameter.** Nothing has advanced clk at this point, so that instant is
+	//     `base` and the prices are the ones every assertion in this package is
+	//     written against. A test that advanced the clock before building its
+	//     world would get a different schedule, and would deserve to.
+	merchantSvc, err := merchant.NewDemoService(
+		roles.Role{
+			Identity: roles.Identity{
+				Signer: w.shop.signer, Verifier: w.shop.verifier,
+				Keys: w.shop.keys, Clock: clk,
+			},
+			Events: events.merchant,
+		},
+		merchant.DemoOptions{
+			ID:        merchantID,
+			User:      w.user.verifier,
+			Processor: &merchant.HTTPProcessor{Base: w.endpoints.MPP},
+			Step:      merchant.DefaultStep,
+		})
+	require.NoError(t, err, "standing up the merchant the demonstration runs")
+	w.endpoints.Merchant = serve(t, merchantSvc.Handler)
 
 	w.agentEvents = events.agent
 	return w
