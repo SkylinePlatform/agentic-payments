@@ -104,6 +104,20 @@ func newConsole(t *testing.T, watch func(agent.Progress) (agent.Watched, error))
 	return &scripted{service: service, watcher: watcher, url: server.URL}
 }
 
+// authorisations asserts how many times the user was asked for a signature.
+//
+// Through testify's own accessor rather than by reading Mock.Calls, and that is
+// not a style choice: a watch goroutine may still be inside the mock, which
+// appends to that slice under the mock's own mutex, so reading it beside one is
+// a data race and -race says so. AssertNumberOfCalls takes the same lock.
+//
+// It carries no reasoning message because testify's signature has nowhere to put
+// one. The reasoning is a comment at each call site instead.
+func (s *scripted) authorisations(t *testing.T, want int) {
+	t.Helper()
+	s.watcher.AssertNumberOfCalls(t, "Authorise", want)
+}
+
 // nothing is a watch that publishes nothing and ends immediately, for the tests
 // that are about the routes rather than about what a watch does.
 func nothing(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil }
@@ -217,9 +231,10 @@ func TestStartingAWatchWithoutAnIdempotencyKeyIsRefused(t *testing.T) {
 	assert.Equal(t, string(generated.ErrorCodeIdempotencyKeyMissing), body["code"],
 		"and it is refused as the missing key rather than as a bad request, so a caller knows what to add")
 
-	assert.Empty(t, c.watcher.Calls,
-		"the agent was never asked to authorise anything, which is the whole point of refusing "+
-			"before the handler: no signature is collected for a request that will not be remembered")
+	// The agent was never asked to authorise anything, which is the whole point
+	// of refusing before the handler runs: no signature is collected for a
+	// request the store will not remember.
+	c.authorisations(t, 0)
 }
 
 // TestARepeatedKeyStartsOneWatch mirrors TestARepeatedKeyAdvancesTimeOnce in the
@@ -249,14 +264,9 @@ func TestARepeatedKeyStartsOneWatch(t *testing.T) {
 	require.True(t, ok)
 	assert.Len(t, watches, 1, "one intent, one authorisation, one watch")
 
-	authorisations := 0
-	for _, call := range c.watcher.Calls {
-		if call.Method == "Authorise" {
-			authorisations++
-		}
-	}
-	assert.Equal(t, 1, authorisations,
-		"the expensive half is the user's signature, and a replayed press must not collect a second one")
+	// The expensive half is the user's signature, and a replayed press must not
+	// collect a second one.
+	c.authorisations(t, 1)
 }
 
 // TestTheResponseCarriesWhatTheUserSigned is decision 5 of #137 seen from the
@@ -522,14 +532,9 @@ func TestManyWatchesAreBoundedRatherThanUnlimited(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, status,
 		"the ninth is refused, and refused before a signature is collected for it")
 
-	authorisations := 0
-	for _, call := range c.watcher.Calls {
-		if call.Method == "Authorise" {
-			authorisations++
-		}
-	}
-	assert.Equal(t, console.DefaultLimit, authorisations,
-		"the refusal has to come before the user is asked, or it leaves an open mandate nothing will spend")
+	// The refusal comes before the user is asked, or it leaves an open mandate
+	// nothing is going to spend.
+	c.authorisations(t, console.DefaultLimit)
 }
 
 // TestAReloadedConsoleFindsItsWatches is what GET /watches is for.

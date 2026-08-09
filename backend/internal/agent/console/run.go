@@ -105,6 +105,23 @@ func (s runState) String() string {
 // ID is the name this watch is known by, as GET /watches/{id} takes it.
 func (r *Run) ID() string { return r.id }
 
+// String names this run, so that anything formatting one prints a watch rather
+// than walking into it.
+//
+// It is worth more than tidiness, and the reason is the lock two fields down.
+// fmt reflects field by field into a struct with no String method — the mutex
+// and everything it guards included — and a *Run is handed out as an
+// agent.Progress, so whatever holds it may format it while the watch goroutine
+// and an HTTP request are both using that lock. The race detector calls that
+// what it is, and it found it here: testify formats a mock's arguments on every
+// call. A Stringer stops the reflection at the boundary and takes the lock
+// properly on the way past.
+func (r *Run) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return "watch " + r.id + " (" + r.state.String() + ")"
+}
+
 // Done is closed once the watch has ended and this run's terminal state has
 // been recorded.
 //
