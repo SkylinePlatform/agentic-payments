@@ -112,8 +112,15 @@ type approved struct {
 	PaymentMandate  string `json:"payment_mandate"`
 }
 
-// authorisation is what POST /authorise takes: the limits a user is willing to
-// be held to, and the agent that may act inside them.
+// authorisation is what both POST /authorise and POST /authorise/preview take:
+// the limits a user is willing to be held to, and the agent that may act inside
+// them.
+//
+// One type for the two routes rather than a narrower one for the preview, and
+// that is what makes "the same decode" mean anything: a caller previews the
+// request it is about to submit, through the same decoder, so the two cannot
+// disagree about what a body says. The preview reads only Constraints out of
+// it — there is nothing for it to endorse and nothing to record a prompt on.
 //
 // Nothing here is taken on trust. Constraints is parsed with the verifier's own
 // parser before anything is signed, and AgentKey is refused by
@@ -148,10 +155,11 @@ type authorisation struct {
 	// ConstraintsDigest is what POST /authorise/preview returned for the
 	// constraint set being signed, from a caller that previewed it.
 	//
-	// Present, it is checked before anything is signed: the digest is over the
-	// parsed constraint set, so a caller holding the digest of one set cannot
-	// present it alongside another, and two callers who were shown different
-	// sentences cannot both pass.
+	// Present, it is checked before anything is signed. The digest is over the
+	// parsed constraint set, so one digest passes with exactly one set of
+	// limits: a caller shown one set of sentences cannot present that digest
+	// alongside a different set, whoever computed the difference and whether or
+	// not they meant to.
 	//
 	// Absent, the request is authorised anyway, and that is a decision rather
 	// than a gap. The digest cannot prove that a preview happened, let alone
@@ -353,8 +361,9 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 	expiry := now.Add(openMandateLifetime)
 
 	// checked rather than req.Constraints, in both mandates. It is the same
-	// slice, and taking it from render's return value is what makes two things
-	// structural rather than a matter of statement order: a mandate here cannot
+	// slice, and taking it from what vetted returned — which is what render
+	// returned — is what makes two things structural rather than a matter of
+	// statement order: a mandate here cannot
 	// be built out of constraints nobody parsed, and the two mandates cannot
 	// come to carry different sets without somebody first inventing a second
 	// local to build the second one from.
@@ -431,16 +440,16 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 // body. It is not what holds the property — a later edit could make it a method
 // in one token — which is what TestThePreviewNeverReachesTheUsersKey is for.
 //
-// It takes an Idempotency-Key like every other POST here, and the rule it
-// satisfies vacuously. A preview changes nothing, so nothing about it needs to
-// happen only once; what it cannot be is a GET, because the request is a
-// constraint tree and a caller has to be able to preview the exact body it is
-// about to authorise. The middleware every role shares reads the method rather
-// than the route, so the key is what a POST costs, and the cost is nil here:
-// the answer is a function of the request body alone, with no clock and no
-// state in it, so a replayed answer and a recomputed one are the same bytes.
-// That is what makes this unlike GET /search, whose price moves with the clock
-// and which had to leave the middleware to keep moving.
+// It takes an Idempotency-Key, like every other POST here, and satisfies the
+// standing rule vacuously: a preview changes nothing, so there is nothing about
+// it that needs to happen only once. What it cannot be is a GET, because the
+// request is a constraint tree and a caller has to be able to preview the exact
+// body it is about to authorise. The middleware every role shares reads the
+// method rather than the route, so a key is what any POST costs here — and the
+// cost is nil: the answer is a function of the request body alone, with no
+// clock and no state in it, so a replayed answer and a recomputed one are the
+// same bytes. That is what makes this unlike GET /search, whose price moves
+// with the clock and which had to leave the middleware to keep moving.
 //
 // Nothing calls it yet. The consent screen is #22, several branches away, and
 // the agent has no screen to show sentences on.
@@ -466,7 +475,7 @@ func preview(w http.ResponseWriter, r *http.Request) {
 //		return
 //	}
 //
-// Both doors into this package go through it, which is what makes "the preview
+// Both authorisation routes go through it, which is what makes "the preview
 // refuses on the same terms as authorise" a property of the code rather than
 // two copies somebody has to keep in step. The alternative is worse than
 // duplication: a preview that refused an unknown field under a different code,
