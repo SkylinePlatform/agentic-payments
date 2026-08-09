@@ -53,10 +53,20 @@ describe("Shell", () => {
   it("has no nav link that lands on the not-found route", async () => {
     const user = userEvent.setup();
     render(
-      <MemoryRouter>
+      // Start somewhere that genuinely is not a route, so the sentinel below
+      // is proved live before it is used as a negative. Without this the test
+      // passes the moment NotFound's heading changes wording: every query for
+      // a heading nobody renders comes back null, which is what it is looking
+      // for. A never-matching query is the quietest way to lose a test.
+      <MemoryRouter initialEntries={["/definitely-not-a-surface"]}>
         <App />
       </MemoryRouter>,
     );
+
+    expect(
+      screen.queryByRole("heading", { name: NOT_FOUND_HEADING }),
+      "the catch-all route no longer renders this heading, so the assertions below would pass without checking anything",
+    ).not.toBeNull();
 
     // Driven from SURFACES on purpose, unlike the assertion above: this asks
     // the question of every link the nav actually shows, and answers it from
