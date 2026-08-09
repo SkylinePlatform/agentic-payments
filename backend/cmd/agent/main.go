@@ -40,7 +40,7 @@
 // purchase — no constraints, nothing waited for, nothing inferred. Running it
 // once on startup is what makes the event log have something in it, which is the
 // whole of issue #20's three-lane view; running it repeatedly would only repeat
-// the same nine events. The flow worth watching over time is -watch, where the
+// the same eleven events. The flow worth watching over time is -watch, where the
 // agent waits on a condition the user described.
 package main
 
