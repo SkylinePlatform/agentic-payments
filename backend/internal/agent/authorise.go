@@ -76,9 +76,10 @@ const (
 // duplicated here as a string prefix, in the one package that must not ask the
 // registry.
 //
-// That tension is real and is tracked: see the issue linked from
-// TestTheAgentCannotReachAConstraintEvaluator. Two consequences worth knowing
-// before the next field lands, because neither announces itself:
+// That tension is real and is tracked as issue #132, which sets out the three
+// ways out and why a test walking the registry from the *test* package is
+// probably the first step. Two consequences worth knowing before the next field
+// lands, because neither announces itself:
 //
 //   - **A selective field added to the registry outside these prefixes is
 //     silently dropped from discovery.** Nothing fails to compile and no test
