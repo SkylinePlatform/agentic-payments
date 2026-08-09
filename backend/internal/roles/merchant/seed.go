@@ -78,7 +78,12 @@ func usd(minor int) generated.Amount {
 	return generated.Amount{Amount: minor, Currency: DemoCurrency}
 }
 
-// DemoPrices is the sequence, in order.
+// DemoPrices is the documented sequence, in order.
+//
+// Not what the merchant serves: that is the flight offer's own prices in
+// deploy/catalogue.json, and TestTheCatalogueFileIsTheDocumentedScenario is
+// what holds the two together. This is the sequence a test can name when the
+// subject is a Schedule rather than a catalogue.
 func DemoPrices() []generated.Amount {
 	return []generated.Amount{
 		usd(DemoPriceWatched),

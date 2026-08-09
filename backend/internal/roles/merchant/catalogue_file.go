@@ -38,14 +38,15 @@ const (
 // says whether that prompt finds it at the opening price, only once the
 // schedule has run out, or never at all.
 //
-// Those three claims are exactly what TestTheCatalogueAnswersTheScriptedPrompts
-// asserts, one row per product, about the four the demonstration ships with.
-// Holding them in the file rather than in that table is what makes a *fifth*
-// product state one too — and the failure it catches is one nothing else would.
-// A price edited past its cap does not fail to compile, does not fail to load
-// and does not fail a test written against four Go constants a new product would
-// never acquire: it produces a search box that answers nothing for a prompt the
-// documentation says works.
+// Two of the three are what TestTheCatalogueAnswersTheScriptedPrompts asserts,
+// one row per product, about the four the demonstration ships with; the third
+// is the remaining combination of that test's two lists, and nothing shipped is
+// scenery. Holding the claim in the file rather than in that table is what makes
+// a *fifth* product state one too — and the failure it catches is one nothing
+// else would. A price edited past its cap does not fail to compile, does not
+// fail to load and does not fail a test written against four Go constants a new
+// product would never acquire: it produces a search box that answers nothing for
+// a prompt the documentation says works.
 type Found string
 
 const (
@@ -62,6 +63,10 @@ const (
 	// FoundNever is outside the cap at every price it steps through. Scenery: a
 	// product the search is meant *not* to return, which is what shows a reader
 	// that the list was filtered rather than merely short.
+	//
+	// Nothing in deploy/catalogue.json claims it today, so the value's only
+	// coverage is TestAProductAddedToTheFileIsSoldWithoutASourceChange, which
+	// adds one.
 	FoundNever Found = "never"
 )
 
@@ -129,8 +134,8 @@ type CatalogueEntry struct {
 
 	// Prices is what this costs over time, in the file's currency and its minor
 	// unit, one entry per step. A single price is a schedule that holds still,
-	// which two of the four deliberately are — a screen where everything moves
-	// at once is one a viewer cannot read.
+	// which two of the four the demonstration ships deliberately are — a screen
+	// where everything moves at once is one a viewer cannot read.
 	Prices []int `json:"prices"`
 
 	// Scenario is what this offer is for. See the type.
@@ -351,9 +356,10 @@ func (f *CatalogueFile) Route() (Route, error) {
 //
 // Exactly one, and both the zero case and the two case are load-time refusals.
 // The inventory sells one route — see Inventory — so two would mean choosing,
-// and choosing by iteration order is how a demonstration quotes a different
-// flight on Tuesday. None would mean a merchant whose Human Present flow, which
-// buys through GET /checkout?from=&to=, has nothing to sell.
+// and taking the first would put that choice on the order entries happen to sit
+// in, which is the one thing about this file nothing else depends on. None would
+// mean a merchant whose Human Present flow, which buys through
+// GET /checkout?from=&to=, has nothing to sell.
 //
 // The rule is the attributes and not the category, deliberately. "flights" is a
 // string the file's author picked and core does not know what a flight is;
