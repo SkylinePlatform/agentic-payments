@@ -85,14 +85,22 @@ func (f *Fake) Set(t time.Time) {
 // nobody advances only their own view, and there is no second answer to "which
 // step are we on" sitting beside the schedule.
 //
-// # It moves the whole clock, and that is the point
+// # What moves with it is decided by whoever wires it, not by this type
 //
-// Whoever holds one holds it for everything: offer expiry, mandate expiry and
-// challenge freshness all move with the price, because all of them are read from
-// here. So advancing two steps in the middle of an attempt will make an expiry
-// fire, and that is the correct behaviour rather than a wart — the control says
-// *time passed*, not *the price changed*, and a demonstration whose prices moved
-// while every deadline stood still would be showing a verifier nobody deploys.
+// The intent is that everything moves together — offer expiry, mandate expiry,
+// challenge freshness and the retention window an idempotency store ages its
+// records against — so that advancing two steps in the middle of an attempt
+// makes an expiry fire. That is the correct behaviour rather than a wart: the
+// control says *time passed*, not *the price changed*, and a demonstration whose
+// prices moved while every deadline stood still would be showing a verifier
+// nobody deploys.
+//
+// **But that is a property of a composition and this type cannot supply it.** An
+// Offset moves whatever was built to read it, and a process that hands this to
+// its schedules and the clock underneath to its verifier gets a merchant whose
+// prices step while nothing expires. Where the claim is actually made good is
+// merchant.NewDemoService, which builds all of them from one clock, and the test
+// that drives it.
 //
 // # Distinct from Fake, deliberately
 //
@@ -106,8 +114,9 @@ func (f *Fake) Set(t time.Time) {
 // type would compile in any package. It is here because it is a clock, next to
 // the other two.
 //
-// **Exactly one caller.** cmd/merchant constructs one under -demo-controls;
-// nothing else in this repository constructs one outside its own tests.
+// **One production caller.** merchant.NewDemoService constructs one when
+// cmd/merchant is given -demo-controls, and no other non-test code in this
+// repository does. Tests construct one here and in internal/roles/merchant.
 type Offset struct {
 	mu sync.RWMutex
 	// under is fixed at construction, so it is read without the lock. Only
@@ -143,14 +152,18 @@ func (o *Offset) Now() time.Time {
 //
 // **A negative d is refused**, and that is where this differs from Fake.Advance.
 // A test that rewinds is exercising a not-before check and knows exactly what it
-// is doing; a demonstration that rewinds past an offer's iat mints a mandate
-// issued in the future, and whoever did it by miscounting a click has no way to
-// tell that from a verifier bug. Time in a demonstration goes one way.
+// is doing. A demonstration that rewinds does two things nobody asked for, and
+// mandates are not among them — the merchant holding this clock mints offers and
+// receipts, never a mandate. It would stamp those with an instant earlier than
+// documents that already exist, and it would judge mandates the user genuinely
+// signed a moment ago as issued in the future, because its own clock now says
+// so. Whoever did it by miscounting a click has no way to tell either from a
+// verifier bug, so time in a demonstration goes one way.
 func (o *Offset) Advance(d time.Duration) (time.Time, error) {
 	if d < 0 {
 		return time.Time{}, fmt.Errorf(
 			"clock: an offset clock does not rewind, and %s would; "+
-				"a demonstration that goes backwards issues mandates dated in the future", d)
+				"a verifier that goes backwards reads honest documents as dated in the future", d)
 	}
 	o.mu.Lock()
 	o.offset += d

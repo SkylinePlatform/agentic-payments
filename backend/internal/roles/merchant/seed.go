@@ -1,11 +1,16 @@
 package merchant
 
 import (
+	"errors"
 	"time"
 
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 )
 
 // The built scenario's numbers, from docs/business/use-cases.md.
@@ -42,13 +47,14 @@ var DemoRoute = Route{Origin: "BEG", Destination: "PMI"}
 // Thirty seconds is long enough that a viewer can read the screen between
 // moves and short enough that the whole sequence fits inside one sitting.
 //
-// It is the default of cmd/merchant's -step, and deploy/demo.json passes this
-// same value back explicitly, so the pacing of the demonstration is stated
-// where the demonstration is configured rather than inherited from here. A
-// runner that wants a shorter one passes it there; a test passes a fake clock
-// and advances it, so nothing waits. Whoever is running it live has a third
-// option that needs no restart — POST /demo/advance, which moves the merchant's
-// clock on by one step.
+// It is the default of cmd/merchant's -step, and deploy/demo.json states a
+// value of its own so that the pacing is visible where the demonstration is
+// configured rather than inherited from here. **Nothing checks that the two
+// agree, and they do not have to** — a run that wants a different cadence
+// passing a different number is what the flag is for, so a test pinning them
+// together would be a test of nothing. A unit test passes a fake clock and
+// advances it, so nothing waits; whoever is running it live has a third option
+// that needs no restart, POST /demo/advance.
 const DefaultStep = 30 * time.Second
 
 // usd is an amount in the demo currency.
@@ -232,4 +238,202 @@ func NewDemoCatalogue(
 			Schedule:    ladder,
 		},
 	)
+}
+
+// DemoOptions is what the process standing a demo merchant up decides, and what
+// this package therefore does not.
+type DemoOptions struct {
+	// ID names this merchant in the offers and receipts it signs, and is the
+	// audience a delegation addressed to it has to carry.
+	ID string
+
+	// User is the key both closed mandates are verified against. Under Human
+	// Present the user signs them at the Trusted Surface, so cmd/merchant
+	// fetches this from there with roles.AwaitPeer — which is the one part of
+	// this composition that talks to the network, and the reason it stayed in
+	// main rather than moving here with the rest.
+	User authz.Verifier
+
+	// Processor is who this merchant asks to move the money. AP2 gives the
+	// merchant the payment leg, so nothing the agent sends decides whether
+	// money moves.
+	Processor Processor
+
+	// Step is how long each price holds, and how far one call to
+	// POST /demo/advance moves the clock. A non-positive value is refused by
+	// NewSchedule rather than defaulted here: a flag somebody set to zero
+	// should stop the process, not quietly become thirty seconds.
+	Step time.Duration
+
+	// Controls registers POST /demo/advance. False is the default in every
+	// sense — the zero value here, the flag's default in cmd/merchant, and what
+	// anything but a demonstration should run with.
+	Controls bool
+}
+
+// NewDemoService stands up the merchant a demonstration runs: the built
+// scenario's inventory and catalogue, the challenger, one rule set per mandate,
+// and — under opts.Controls — the clock a person watching can move.
+//
+// # Why this is not in cmd/merchant
+//
+// A composition root is exactly where a wiring mistake hides, and a main() is
+// the one thing in this repository no test can call. The mistake worth naming
+// is a merchant holding two clocks: give the schedules the demo clock and the
+// rule sets or the challenger the process clock, and advancing time moves the
+// prices while every deadline goes on being judged against a clock nobody
+// moved — an offer that stays purchasable at $240 after the price has become
+// $210. Handler can only check one binding of that (see the guard there);
+// everything else is checked by TestTheDemoMerchantMovesEveryClockItWasBuiltWith,
+// which needs to be able to build this.
+//
+// # What is on the demo clock, and what is not
+//
+// Under opts.Controls this reassigns role.Clock rather than keeping a second
+// variable beside it, so every collaborator below reads one clock and writing
+// the two-clock bug takes a binding somebody has to add on purpose.
+//
+// Two things stay on the process clock, and neither is an oversight:
+//
+//   - **role.Events.** roles.Main built the emitter before this function ran,
+//     so events carry the moment they were emitted while receipts carry the
+//     advanced one. The event log is observability and never evidence — ADR
+//     0003 — so those are answers to different questions.
+//   - **The key store behind role.Signer, role.Verifier and role.Keys.**
+//     roles.NewIdentity builds it on the process clock, and crypto.Store reads
+//     that clock at every sign and verify to decide whether the key's lifecycle
+//     state permits the operation. So a merchant advanced far enough would
+//     judge its own key against real time while judging everything it signs
+//     against the moved one. Nothing gives a demo key a lifetime, so it cannot
+//     bite today; it is named because "the whole clock moves" is otherwise a
+//     claim with an exception in it.
+func NewDemoService(role roles.Role, opts DemoOptions) (*Service, error) {
+	if opts.User == nil || opts.Processor == nil {
+		return nil, errors.New(
+			"merchant: a demo service needs the key its mandates are signed with and a " +
+				"processor to present the payment to")
+	}
+
+	var demoClock *clock.Offset
+	if opts.Controls {
+		demoClock = clock.NewOffset(role.Clock)
+		role.Clock = demoClock
+	}
+
+	// One instant seeds both, so the flight the catalogue lists and the route
+	// the inventory quotes step through their prices together. Read twice they
+	// would be a schedule apart, and a search and a checkout taken a moment
+	// later would disagree about what one flight costs.
+	start := role.Clock.Now()
+
+	inventory, err := NewDemoInventory(role.Clock, start, opts.Step)
+	if err != nil {
+		return nil, err
+	}
+
+	catalogue, err := NewDemoCatalogue(role.Clock, opts.ID, start, opts.Step)
+	if err != nil {
+		return nil, err
+	}
+
+	// What GET /nonce hands out, and what this merchant checks a delegation's
+	// key binding against afterwards. It remembers nothing; crypto.Challenger's
+	// own doc comment is explicit about the replay that leaves open and about
+	// #27 being where it closes.
+	challenge, err := crypto.NewChallenger(role.Clock, roles.ChallengeTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	// One rule set per mandate, held twice each: once behind the interface the
+	// Human Present entry point takes and once behind the chain one. Building
+	// each once rather than writing the literal twice is what stops this
+	// merchant enforcing a different policy depending on which flow a caller
+	// reached it through — a divergence nothing would fail on, since each
+	// flow's tests would keep passing against its own copy.
+	checkoutRules := ap2.MerchantRules{
+		Issuer:             opts.User,
+		Clock:              role.Clock,
+		AgentKey:           roles.AgentKey,
+		Audience:           opts.ID,
+		RequireConstrained: []string{"amount"},
+	}
+	paymentRules := ap2.CredentialProviderRules{
+		Issuer:             opts.User,
+		Clock:              role.Clock,
+		AgentKey:           roles.AgentKey,
+		Audience:           opts.ID,
+		RequireConstrained: []string{"amount"},
+	}
+
+	return &Service{
+		ID:        opts.ID,
+		Inventory: inventory,
+		Catalogue: catalogue,
+		// Handed in rather than constructed inside the service, which is what
+		// makes AP2's delegation allowance reachable: a merchant built with
+		// somebody else's CheckoutVerifier has delegated.
+		//
+		// All three chain fields are read by AuthoriseCheckoutChain and by
+		// nothing else — VerifyCheckout, which is the whole of the Human Present
+		// flow, ignores every one of them. The same value is handed to Rules and
+		// to ChainRules below, which is what makes both flows this one
+		// merchant's rather than two merchants' opinions: a MerchantRules
+		// satisfies CheckoutVerifier and CheckoutChainVerifier both, and the
+		// fields are separate so that neither entry point can be reached by a
+		// caller that meant the other.
+		//
+		// AgentKey is roles.AgentKey: the cnf claim of the open mandate, turned
+		// into the one Verifier the delegating hop is ever checked with. That
+		// there is exactly one resolution, and no second key to compare it
+		// against by hand, is the property the whole delegation design turns on.
+		//
+		// RequireConstrained is a policy rather than a protocol rule: this
+		// merchant will not authorise a purchase against a mandate that says
+		// nothing about the amount. Leaving it empty would not select a
+		// different check — ChainOptions.RequireConstrained says so — it would
+		// fall back to trusting whatever narrowing the agent chose.
+		Rules:      checkoutRules,
+		ChainRules: checkoutRules,
+		// The Payment Mandate travelling beside it, verified so that the
+		// merchant can compare what it pays against what this checkout costs.
+		// Same key: in Human Present mode the user signs both closed mandates,
+		// so the surface's key is whose signature both checks.
+		//
+		// The audience is this merchant and not the Credential Provider, because
+		// sdjwt.Delegate writes aud and VerifyChain compares it: a closed
+		// mandate is minted for one verifier, so the payment chain presented
+		// here is a different document from the one presented for funding, and
+		// carries this identifier.
+		Payments:      paymentRules,
+		ChainPayments: paymentRules,
+		Own:           role.Verifier,
+		Signer:        role.Signer,
+		Keys:          role.Keys,
+		Clock:         role.Clock,
+		Events:        role.Events,
+		Challenge:     challenge,
+		// nil unless opts.Controls, and nil is what keeps POST /demo/advance
+		// unregistered. Assigning a typed nil pointer into the interface field
+		// would defeat that, which is why demoClock is declared as the concrete
+		// type and this branch is not written as a bare assignment.
+		DemoClock: demoAdvancer(demoClock),
+		DemoStep:  opts.Step,
+		// The merchant initiates payment, not the agent.
+		Processor: opts.Processor,
+	}, nil
+}
+
+// demoAdvancer keeps a nil *clock.Offset from becoming a non-nil interface.
+//
+// A nil pointer assigned straight into an interface field produces an interface
+// that is not nil, which here would register POST /demo/advance on a merchant
+// that was never given a clock to move — and the first call would panic. The
+// one-line conversion is the whole guard, and it is a function rather than an
+// inline if so that the shape cannot be copied wrong at a second call site.
+func demoAdvancer(c *clock.Offset) MovableClock {
+	if c == nil {
+		return nil
+	}
+	return c
 }

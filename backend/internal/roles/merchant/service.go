@@ -15,7 +15,6 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
-	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
@@ -140,17 +139,21 @@ type Service struct {
 	// OfferLifetime is how long a quoted checkout stays purchasable.
 	OfferLifetime time.Duration
 	// DemoClock is the clock POST /demo/advance moves, and it has to be the
-	// clock this Service reads — Handler refuses a Service where it is not, for
-	// the reason on that check.
+	// clock this Service reads — Handler refuses a Service where it is not, on
+	// the narrow terms that check states.
 	//
 	// Optional, and **absent means the route is not registered at all**, which
 	// is the same shape Catalogue and Challenge use and here it is a guard rail
 	// rather than a courtesy. An endpoint that lets a caller move a verifier's
 	// clock is catastrophic anywhere but a demonstration, and a route that
 	// exists and refuses is a route somebody can be talked into enabling; a
-	// route that was never registered is a 404. cmd/merchant builds one only
-	// under -demo-controls, which is off by default.
-	DemoClock *clock.Offset
+	// route that was never registered is a 404. NewDemoService sets it only
+	// under DemoOptions.Controls, which cmd/merchant leaves off by default.
+	//
+	// A local interface rather than *clock.Offset, so that a role service does
+	// not name a platform implementation — every other clock here is the
+	// authz.Clock port. See MovableClock.
+	DemoClock MovableClock
 	// DemoStep is how far one call to that endpoint moves it: one step of the
 	// price schedule, so whoever is working the demonstration does not have to
 	// know the schedule to move it on.
@@ -413,19 +416,37 @@ func (s *Service) Handler() (http.Handler, error) {
 				"to say what is being bought")
 	}
 
-	// The demo control moves a clock; this is what makes it move *this*
-	// merchant's. Handing the endpoint an Offset while the Service reads the
-	// clock underneath it is the bug this whole feature most easily creates —
-	// the prices would step and every expiry would still be judged against the
-	// wall clock, so an offer would go on being purchasable after the price it
-	// names had moved. Refusing here makes that a merchant that will not start
-	// rather than a demonstration that quietly lies.
+	// **One binding, and it is not the interesting one.** This checks that the
+	// clock the endpoint moves is the clock this Service reads — the clock
+	// ownOffer judges an offer's expiry against, that stamps offers and
+	// receipts, and that roles.Middleware ages its idempotency records against.
+	// A Service holding an Offset for one and something else for the other is
+	// refused here rather than serving a control that answers 200 having moved
+	// nothing this object reads.
+	//
+	// **What it cannot check is most of it.** The prices come from Inventory and
+	// Catalogue, the mandate deadlines from Rules and Payments, and challenge
+	// freshness from Challenge — each captured a clock when it was built,
+	// outside this Service, behind a type that cannot be asked which one. A
+	// merchant assembled with the demo clock here and the process clock there
+	// passes this guard, answers 200 to every advance, and quotes a price that
+	// does not move. That is not hypothetical; it is what a reviewer built from
+	// this package's own fixture.
+	//
+	// So this is the half a constructor can check, and NewDemoService is the
+	// other half: it builds all five from one clock, and
+	// TestTheDemoMerchantMovesEveryClockItWasBuiltWith drives that composition
+	// over HTTP and fails if any of them stayed behind.
 	if s.DemoClock != nil {
-		held, ok := s.Clock.(*clock.Offset)
-		if !ok || held != s.DemoClock {
+		// Interface comparison rather than a type assertion, which is what lets
+		// the field be a narrow port instead of *clock.Offset: two interface
+		// values are equal only when the dynamic type and the value both match,
+		// so this is exactly as strong and names no platform type.
+		if authz.Clock(s.DemoClock) != s.Clock {
 			return nil, errors.New(
 				"merchant: the demo clock has to be the clock this merchant reads, or advancing " +
-					"time would move the prices and leave every expiry judged against the wall clock")
+					"time would leave this merchant's own offers and receipts judged against a " +
+					"clock nobody moved")
 		}
 		if s.DemoStep <= 0 {
 			return nil, fmt.Errorf(

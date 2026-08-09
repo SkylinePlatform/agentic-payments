@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,44 +13,65 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/transport"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant"
+	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
 
 // POST /demo/advance, at the layer where the two things that make it safe can
-// be seen: that it does not exist unless somebody asked for it, and that what it
-// moves is the clock this merchant reads rather than a step counter beside the
-// schedule.
+// be seen: that it does not exist unless somebody asked for it, and that one
+// call is one step for everybody at once.
 //
-// Neither is visible from a passing purchase. A merchant with a second clock
-// quotes exactly the prices a correctly wired one does — right up to the moment
-// an offer's expiry is judged against a clock nobody moved, which is why the
-// expiry case below is the one that earns its place.
+// Whether advancing moves the rest of the merchant — the prices, the deadlines,
+// the challenge window — is a property of the composition rather than of this
+// endpoint, and it is pinned in wiring_test.go. The fixture here is that same
+// composition, so nothing in this file is testing a merchant nobody deploys.
 
-// demoOfferLifetime is how long an offer from the fixture stays purchasable.
+// demoStep is the step every fixture in this file runs at, and the number is
+// chosen rather than convenient.
 //
-// Deliberately shorter than one step, so that a single advance carries the clock
-// past an offer this merchant has just made. The production default is fifteen
-// minutes and would need thirty advances to say the same thing.
-const demoOfferLifetime = 15 * time.Second
+// One advance has to cross both deadlines a correctly wired merchant carries
+// with the price: Service.OfferLifetime, which defaults to fifteen minutes, and
+// roles.ChallengeTTL, which is two. At DefaultStep's thirty seconds an advance
+// moves the price and says nothing about either — which is exactly how a
+// merchant holding a second clock would pass.
+//
+// It is also not DefaultStep, deliberately. A fixture at the default cannot tell
+// "advance by DemoStep" from "advance by thirty seconds".
+const demoStep = 20 * time.Minute
 
-// demoShop is a merchant with the demonstration's time control fitted, and the
-// two clocks it is fitted over.
+// demoKeys is who signs what around this fixture.
+type demoKeys struct {
+	// user signs the mandates a test presents. It is the key the merchant's
+	// rule sets verify against, because under Human Present the user signs both
+	// closed mandates at the Trusted Surface.
+	user authz.Signer
+
+	// merchant verifies the receipts this merchant answers with.
+	merchant authz.Verifier
+
+	// blinder salts the disclosures. A real one rather than a double: it
+	// computes, and what it computes has to verify.
+	blinder *sdjwt.Blinder
+}
+
+// demoShop is a served demo merchant and the keys around it.
 type demoShop struct {
+	demoKeys
+
 	url string
 
-	// under is the clock the Offset wraps — the demo's stand-in for the wall
-	// clock, which a test can also move by hand to prove the Offset adds to it
-	// rather than replacing it.
+	// under is the process clock the demo clock is fitted over — the fixture's
+	// stand-in for the wall clock, which a test can also move by hand to prove
+	// the offset is added to it rather than substituted for it.
 	under *clock.Fake
 
-	// step is how far one call to the control moves things: the schedule's own
-	// step, which is what makes one call one price.
+	// step is how far one call to the control moves things.
 	step time.Duration
 
 	// client is who asks. A field rather than http.DefaultClient at each call
@@ -62,21 +85,23 @@ func (s demoShop) as(c *http.Client) demoShop {
 	return s
 }
 
-// demoService builds a merchant wired the way cmd/merchant wires one under
-// -demo-controls: an offset clock over the process clock, and every part of the
-// merchant reading it.
+// demoService builds the merchant cmd/merchant builds, through the same
+// constructor, and returns it unserved so that a test can mis-wire one field and
+// ask Handler what it thinks — which is what chainCapableService exists for one
+// file over.
 //
-// It returns the service unserved so that a test can take one field away and ask
-// Handler what it thinks, which is what chainCapableService exists for one file
-// over.
-func demoService(t *testing.T) (*merchant.Service, *clock.Fake, *clock.Offset) {
+// It goes through merchant.NewDemoService rather than assembling a Service
+// literal, and that is the whole reason this fixture is worth anything: a
+// literal here would be a second wiring, and the wiring is what these tests are
+// about. The key store is built on the process clock because roles.NewIdentity
+// builds it there.
+func demoService(t *testing.T) (*merchant.Service, *clock.Fake, demoKeys) {
 	t.Helper()
 
 	under := clock.NewFake(base)
-	moving := clock.NewOffset(under)
 
 	party := func(name string) (authz.Signer, authz.Verifier, authz.KeySetPublisher) {
-		store, err := crypto.NewStore(moving)
+		store, err := crypto.NewStore(under)
 		require.NoError(t, err, "standing up the %s key store", name)
 		ref, err := store.Generate(crypto.Slot(name), authz.ES256, name)
 		require.NoError(t, err, "minting the %s key", name)
@@ -88,48 +113,72 @@ func demoService(t *testing.T) (*merchant.Service, *clock.Fake, *clock.Offset) {
 	}
 
 	shopSigner, shopVerifier, shopKeys := party("merchant")
-	_, userVerifier, _ := party("user")
+	userSigner, userVerifier, _ := party("user")
 
-	inventory, err := merchant.NewDemoInventory(moving, base, merchant.DefaultStep)
-	require.NoError(t, err, "seeding the inventory")
+	blinder, err := sdjwt.NewBlinder()
+	require.NoError(t, err, "building the blinder")
 
-	return &merchant.Service{
-		ID:            demoMerchantID,
-		Inventory:     inventory,
-		Rules:         ap2.MerchantRules{Issuer: userVerifier, Clock: moving},
-		Payments:      ap2.CredentialProviderRules{Issuer: userVerifier, Clock: moving},
-		Signer:        shopSigner,
-		Own:           shopVerifier,
-		Keys:          shopKeys,
-		Clock:         moving,
-		Processor:     merchant.NewMockProcessor(t),
-		OfferLifetime: demoOfferLifetime,
-		DemoClock:     moving,
-		DemoStep:      merchant.DefaultStep,
-	}, under, moving
+	svc, err := merchant.NewDemoService(
+		roles.Role{Identity: roles.Identity{
+			Signer:   shopSigner,
+			Verifier: shopVerifier,
+			Keys:     shopKeys,
+			Clock:    under,
+		}},
+		merchant.DemoOptions{
+			ID:        demoMerchantID,
+			User:      userVerifier,
+			Processor: merchant.NewMockProcessor(t),
+			Step:      demoStep,
+			Controls:  true,
+		})
+	require.NoError(t, err, "standing up the demo merchant")
+
+	return svc, under, demoKeys{user: userSigner, merchant: shopVerifier, blinder: blinder}
 }
 
 // newDemoShop serves the service demoService builds.
 func newDemoShop(t *testing.T) demoShop {
 	t.Helper()
 
-	svc, under, _ := demoService(t)
+	svc, under, keys := demoService(t)
 	handler, err := svc.Handler()
 	require.NoError(t, err, "building the merchant handler")
 
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	return demoShop{url: srv.URL, under: under, step: svc.DemoStep, client: http.DefaultClient}
+	return demoShop{
+		demoKeys: keys,
+		url:      srv.URL,
+		under:    under,
+		step:     svc.DemoStep,
+		client:   http.DefaultClient,
+	}
 }
 
 // price asks the merchant what the demo route costs now, and what it signed to
 // say so.
 func (s demoShop) price(t *testing.T) (string, generated.Amount, int) {
 	t.Helper()
+	return s.quote(t, "/checkout?from=BEG&to=PMI")
+}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
-		s.url+"/checkout?from=BEG&to=PMI", nil)
+// quoteItem asks for a catalogue offer, which is the shape that names an item —
+// the only shape a delegation can be presented against.
+func (s demoShop) quoteItem(t *testing.T, id string, quantity int) (string, generated.Amount, int) {
+	t.Helper()
+
+	query := url.Values{}
+	query.Set(merchant.ItemParam, id)
+	query.Set(merchant.QuantityParam, strconv.Itoa(quantity))
+	return s.quote(t, "/checkout?"+query.Encode())
+}
+
+func (s demoShop) quote(t *testing.T, path string) (string, generated.Amount, int) {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, s.url+path, nil)
 	require.NoError(t, err)
 
 	resp, err := s.client.Do(req)
@@ -143,7 +192,29 @@ func (s demoShop) price(t *testing.T) (string, generated.Amount, int) {
 		Step     int              `json:"step"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	require.NotEmpty(t, out.Checkout)
 	return out.Checkout, out.Price, out.Step
+}
+
+// nonce takes a challenge from the merchant, which is what a delegation's key
+// binding is signed over.
+func (s demoShop) nonce(t *testing.T) string {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, s.url+"/nonce", nil)
+	require.NoError(t, err)
+
+	resp, err := s.client.Do(req)
+	require.NoError(t, err, "asking the merchant for a challenge")
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var out struct {
+		Nonce string `json:"nonce"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
+	require.NotEmpty(t, out.Nonce)
+	return out.Nonce
 }
 
 // advance posts to the control under key and returns the status, the decoded
@@ -171,8 +242,7 @@ func (s demoShop) advance(t *testing.T, key string) (int, map[string]any, bool) 
 	return resp.StatusCode, out, resp.Header.Get(transport.ReplayedHeader) == "true"
 }
 
-// present sends a purchase, which is all these tests need it to do: every case
-// here is refused before a mandate is examined.
+// present sends a purchase and returns the status and the decoded body.
 func (s demoShop) present(t *testing.T, key string, body map[string]any) (int, map[string]any) {
 	t.Helper()
 
@@ -246,7 +316,9 @@ func TestAdvancingMovesThePriceOnAStepAtATime(t *testing.T) {
 
 	status, out, _ := s.advance(t, "first")
 	require.Equal(t, http.StatusOK, status)
-	assert.Equal(t, s.step.String(), out["by"], "the answer says how far it moved")
+	assert.Equal(t, s.step.String(), out["by"],
+		"the answer says how far it moved, and it moved by this merchant's step rather than a "+
+			"duration chosen in the handler")
 	assert.NotEmpty(t, out["now"], "the answer says what time it now is, so a caller can see it worked")
 
 	_, price, step = s.price(t)
@@ -260,52 +332,6 @@ func TestAdvancingMovesThePriceOnAStepAtATime(t *testing.T) {
 	assert.Equal(t, merchant.DemoPriceAccepted, price.Amount,
 		"two advances have to be two steps, or the price the purchase completes at is unreachable")
 	assert.Equal(t, 2, step)
-}
-
-// TestAdvancingMovesEveryDeadlineAndNotOnlyThePrice pins that the price and the
-// offer's expiry are read from one clock.
-//
-// A merchant that moved its schedules and left its deadlines behind quotes
-// exactly the prices this one does, and nothing about the prices looks wrong —
-// right up to the moment it honours an offer at $240 after the price has moved
-// to $210, which is a viewer watching the protocol appear to work while it does
-// not.
-//
-// **What it does not reach**, said out loud because the obvious reading is that
-// it covers the whole mis-wiring: a Service holds its rule sets and its
-// challenger behind types that cannot be asked what clock they read, so a
-// cmd/merchant that handed those the wall clock while the schedules got the
-// offset one passes every test in this repository. Handler's guard closes the
-// half where Service.Clock is the odd one out, and cmd/merchant reassigning
-// role.Clock instead of keeping a second variable closes the rest by
-// construction rather than by a test.
-func TestAdvancingMovesEveryDeadlineAndNotOnlyThePrice(t *testing.T) {
-	t.Parallel()
-
-	s := newDemoShop(t)
-	offer, _, _ := s.price(t)
-
-	// Neither mandate is genuine, and neither needs to be: an offer that is not
-	// current is refused before any mandate is examined, so what these strings
-	// have to be is present. The mirror below is what shows the refusal is the
-	// advance's doing rather than theirs.
-	purchase := map[string]any{
-		"mandate": "not-examined", "payment": "not-examined", "checkout": offer,
-	}
-
-	status, out := s.present(t, "before", purchase)
-	require.Equal(t, http.StatusBadRequest, status)
-	require.Equal(t, string(generated.ErrorCodeMandateMalformed), out["code"],
-		"before the clock moves, this offer is current and the request gets as far as the mandate")
-
-	status, _, _ = s.advance(t, "advance")
-	require.Equal(t, http.StatusOK, status)
-
-	status, out = s.present(t, "after", purchase)
-	assert.Equal(t, http.StatusBadRequest, status)
-	assert.Equal(t, string(generated.ErrorCodeRequestMalformed), out["code"])
-	assert.Contains(t, out["detail"], "expired",
-		"advancing says time passed, not that the price changed — so the merchant's own offer lapses")
 }
 
 // TestOneAdvanceIsOneAnswerForEverybody is the property that makes this an
@@ -375,7 +401,7 @@ func TestTheOffsetIsAddedToAClockThatIsStillRunning(t *testing.T) {
 	require.Equal(t, http.StatusOK, status)
 
 	// Time passes on its own, as it does under a live demonstration.
-	s.under.Advance(merchant.DefaultStep)
+	s.under.Advance(s.step)
 
 	_, price, step := s.price(t)
 	assert.Equal(t, merchant.DemoPriceAccepted, price.Amount,
@@ -412,28 +438,41 @@ func TestTheControlTakesNoParameters(t *testing.T) {
 }
 
 // TestAMerchantWillNotServeAControlOverAClockItDoesNotRead is the wiring guard,
-// and it is the half of the two-clock bug that can be refused at construction.
+// and it is deliberately the *small* half of the property.
 //
-// The other half — the challenger or the rule sets holding a different clock
-// from the schedules — cannot be seen from here, because a Service holds those
-// behind types that cannot be asked what clock they read, and no test in this
-// repository catches it. What closes it is cmd/merchant reassigning role.Clock
-// rather than keeping a second variable, so there is one clock in that function
-// and writing the bug takes a binding somebody has to add on purpose.
+// It compares one binding: the clock the endpoint moves against the clock the
+// Service itself reads. It cannot see the clocks the schedules, the rule sets
+// and the challenger captured when they were built — those are checked by
+// TestTheDemoMerchantMovesEveryClockItWasBuiltWith, which drives the composition
+// instead of inspecting it.
+//
+// The second case is the one that makes the comparison an identity rather than a
+// type check. Two Offsets are the same type and are not the same clock, and a
+// cmd/merchant that called clock.NewOffset twice would produce exactly that: an
+// endpoint moving a clock nothing else in the process reads.
 func TestAMerchantWillNotServeAControlOverAClockItDoesNotRead(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a control over some other clock", func(t *testing.T) {
+	t.Run("a control over a clock of another type", func(t *testing.T) {
 		t.Parallel()
 
 		svc, under, _ := demoService(t)
-		// The classic mis-wiring: the endpoint moves an offset clock, and the
-		// merchant reads the clock underneath it.
 		svc.Clock = under
 
 		_, err := svc.Handler()
 		assert.Error(t, err,
 			"advancing a clock this merchant does not read would move nothing and answer 200")
+	})
+
+	t.Run("a control over a second clock of the same type", func(t *testing.T) {
+		t.Parallel()
+
+		svc, under, _ := demoService(t)
+		svc.DemoClock = clock.NewOffset(under)
+
+		_, err := svc.Handler()
+		assert.Error(t, err,
+			"two Offsets are the same type and not the same clock; a type check would pass this")
 	})
 
 	t.Run("a control that advances by nothing", func(t *testing.T) {
