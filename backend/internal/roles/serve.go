@@ -121,11 +121,13 @@ func Middleware(clk authz.Clock, h http.Handler) (http.Handler, error) {
 	return correlation.Wrap(idempotency.Wrap(h)), nil
 }
 
-// Fingerprint names a value stably, for use as an idempotency key.
+// Fingerprint names a value stably: the same value always produces the same
+// name, and two different values practically never share one.
 //
-// Not a hash of anything secret and not a security boundary — the point is only
-// that the same step of the same purchase produces the same key, so that a retry
-// is recognised as one rather than treated as a second purchase.
+// Not a hash of anything secret and not a security boundary. As an idempotency
+// key that property is enough to make a retry recognisable as one rather than
+// as a second purchase, and it is the same property any two calls need when
+// they have to agree that they are about the same thing.
 func Fingerprint(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return base64.RawURLEncoding.EncodeToString(sum[:])

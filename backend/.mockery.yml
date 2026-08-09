@@ -55,3 +55,23 @@ packages:
       pkgname: transport
     interfaces:
       Handler:
+
+  # The port the user's key sits behind. What the Trusted Surface's test is
+  # about is whether that key was reached at all: POST /authorise/preview
+  # renders sentences and returns no mandate, and a response carrying no
+  # mandate is not the same claim as no signature having been made. A surface
+  # that signed and dropped the result would look identical from outside, so
+  # only a double that counts the call can tell the two apart.
+  #
+  # Redirected to internal/roles/surface the way net/http's Handler is
+  # redirected, and for a sharper reason than that one: the default would write
+  # mocks_test.go into internal/core/authz, where it is compiled only into that
+  # package's own test binary and no surface test could name it. Nothing about
+  # core changes — a _test.go file in package surface is not an import of
+  # anything by core, and core-isolation still holds.
+  github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz:
+    config:
+      dir: internal/roles/surface
+      pkgname: surface
+    interfaces:
+      Signer:

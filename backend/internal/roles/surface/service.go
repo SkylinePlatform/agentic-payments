@@ -15,16 +15,26 @@
 // signed. There is no summarisation step, because a summary is a place for a
 // description to drift from what the signature covers.
 //
-// POST /authorise returns sentences and is not an exception to that. Each one
-// is constraint.Expression.Render() applied to a constraint this package has
-// already parsed and is about to sign — a total function of the signed value,
-// computed after parsing and before signing, in that order. Nothing here reads
+// The two authorisation routes return sentences and are not an exception to
+// that. Each one is constraint.Expression.Render() applied to a constraint this
+// package has already parsed — a total function of the value that gets signed,
+// computed after parsing, by the same call on both routes. Nothing here reads
 // the prompt to produce it. A sentence that could say something the constraint
 // does not is the failure that rule is about, and rendering from the parsed
 // constraint is what makes it unexpressible rather than merely discouraged.
+//
+// POST /authorise/preview is the route that has the sentences without the
+// signature, and it exists because a consent screen needs render → show →
+// decide → sign. While /authorise was the only door, the sentences arrived
+// attached to mandates the user's key had already made, so a screen offering to
+// reject one would have been offering to discard a signature that already
+// existed. The digest the preview returns is what lets two calls be one
+// decision — see authorisation.ConstraintsDigest for what that does and does
+// not prove.
 package surface
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -102,8 +112,15 @@ type approved struct {
 	PaymentMandate  string `json:"payment_mandate"`
 }
 
-// authorisation is what POST /authorise takes: the limits a user is willing to
-// be held to, and the agent that may act inside them.
+// authorisation is what both POST /authorise and POST /authorise/preview take:
+// the limits a user is willing to be held to, and the agent that may act inside
+// them.
+//
+// One type for the two routes rather than a narrower one for the preview, and
+// that is what makes "the same decode" mean anything: a caller previews the
+// request it is about to submit, through the same decoder, so the two cannot
+// disagree about what a body says. The preview reads only Constraints out of
+// it — there is nothing for it to endorse and nothing to record a prompt on.
 //
 // Nothing here is taken on trust. Constraints is parsed with the verifier's own
 // parser before anything is signed, and AgentKey is refused by
@@ -135,6 +152,50 @@ type authorisation struct {
 	// is what produces one; it ends up in both mandates' cnf claim, and a
 	// closed mandate signed by any other key is refused.
 	AgentKey generated.PublicKey `json:"agent_key"`
+	// ConstraintsDigest is what POST /authorise/preview returned for the
+	// constraint set being signed, from a caller that previewed it.
+	//
+	// Present, it is checked before anything is signed. The digest is over the
+	// parsed constraint set, so one digest passes with exactly one set of
+	// limits: a caller shown one set of sentences cannot present that digest
+	// alongside a different set, whoever computed the difference and whether or
+	// not they meant to.
+	//
+	// Absent, the request is authorised anyway, and that is a decision rather
+	// than a gap. The digest cannot prove that a preview happened, let alone
+	// that a person read it: it is a plain hash of data the caller sent, so a
+	// caller that never previewed can compute one, and this endpoint is reached
+	// by the agent — the party the whole role exists to be unable to be talked
+	// round by. What it can prove is narrower and still worth having, which is
+	// that the set being signed is the set some rendering described. Requiring
+	// it would buy no property beyond that, while obliging a caller with no
+	// screen to make a round trip for a token it echoes back unread — and a
+	// check every caller satisfies by rote is one nobody reads.
+	//
+	// So the honest statement of what /authorise guarantees is unchanged by
+	// this field: the user signs the interpretation, and the sentences are
+	// derived from what was signed. That a human saw them is #22's to
+	// establish, on a route only a screen calls; requiring the digest there is
+	// a change to this field's rules rather than to its meaning.
+	ConstraintsDigest string `json:"constraints_digest,omitempty"`
+}
+
+// previewed is what comes back from POST /authorise/preview: the sentences, and
+// the name of the set they describe.
+//
+// No mandate, no expiry and no instrument, because nothing was signed and there
+// is nothing yet to state a lifetime or a card for.
+type previewed struct {
+	// Rendered says what each constraint means, one sentence per constraint, in
+	// the order they would be signed. It is what POST /authorise returns for
+	// the same constraints, from the same call to render — a preview that said
+	// something else would be the drift this route exists to prevent.
+	Rendered []string `json:"rendered"`
+	// ConstraintsDigest names the parsed constraint set. A caller that shows
+	// Rendered to somebody and then sends this back with POST /authorise is
+	// saying which set those sentences described, and is refused if the two
+	// disagree.
+	ConstraintsDigest string `json:"constraints_digest"`
 }
 
 // authorised is what comes back: the two open mandates, signed by the user, and
@@ -191,6 +252,7 @@ func (s *Service) Handler() (http.Handler, error) {
 	mux.Handle("GET "+roles.JWKSPath, roles.JWKS(s.Keys))
 	mux.HandleFunc("POST /approve", s.approve)
 	mux.HandleFunc("POST /authorise", s.authorise)
+	mux.HandleFunc("POST /authorise/preview", preview)
 	return roles.Middleware(s.Clock, mux)
 }
 
@@ -251,10 +313,10 @@ func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 // one decision. A user who authorised an agent to assemble a purchase but not
 // to pay for it has authorised nothing usable.
 //
-// This is the Human Not Present flow's only human step. Everything the user
-// will ever be asked happens here, before they walk away, which is what makes
-// the three properties below worth more than they would be on a screen the user
-// is still watching:
+// This is where the Human Not Present flow's only human decision is recorded.
+// Everything the user will ever be asked has been asked by the time this
+// returns, before they walk away, which is what makes the properties below
+// worth more than they would be on a screen the user is still watching:
 //
 //   - The constraints are parsed here, by the verifier's own parser, so a limit
 //     nobody could enforce is refused at the last moment before a signature
@@ -262,31 +324,32 @@ func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 //   - The sentences returned are rendered from the parsed constraints, so what
 //     a consent screen shows is derived from what the signature covers rather
 //     than sent alongside it.
+//   - A digest, where the caller presents one, is checked before anything is
+//     signed, so a caller that rendered one set of limits and is signing
+//     another is refused rather than answered with mandates.
 //   - The instrument comes from this surface's own configuration, so the agent
 //     cannot name the card.
+//
+// Where the asking happens is the caller's own arrangement. POST
+// /authorise/preview renders the same sentences without signing, so a consent
+// screen can put them in front of somebody and come back here only if they say
+// yes; an agent watching a price has no screen and calls this directly.
 func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 	var req authorisation
 	if !roles.DecodeJSON(w, r, &req) {
 		return
 	}
-	if len(req.Constraints) == 0 {
-		// An open mandate with no constraints authorises every purchase its
-		// agent key can sign for, up to its expiry. That is not a smaller
-		// authorisation than a constrained one; it is an unbounded one, and it
-		// is not something a user can meaningfully be shown.
-		roles.Fail(w, generated.ErrorCodeRequestMalformed,
-			"an open mandate with no constraints authorises every purchase, which is not something a user can approve")
+	rendered, checked, digest, ok := vetted(w, req.Constraints)
+	if !ok {
 		return
 	}
-
-	rendered, checked, err := render(req.Constraints)
-	if err != nil {
-		// constraint.CodeOf rather than ap2.CodeOf: this failure is the
-		// constraint package's own verdict and ap2 maps none of its sentinels,
-		// so routing it through there would report a field no verifier knows as
-		// verifier_unavailable — blaming this surface for the agent's
-		// interpretation.
-		roles.Fail(w, constraint.CodeOf(err), err.Error())
+	// Before any signature, for the reason the parse is: a signature that
+	// exists and is discarded is still one the user's key made, and this is the
+	// case where the caller is about to sign limits other than the ones it
+	// rendered.
+	if req.ConstraintsDigest != "" && req.ConstraintsDigest != digest {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			"these constraints are not the ones that digest was issued for")
 		return
 	}
 
@@ -298,8 +361,9 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 	expiry := now.Add(openMandateLifetime)
 
 	// checked rather than req.Constraints, in both mandates. It is the same
-	// slice, and taking it from render's return value is what makes two things
-	// structural rather than a matter of statement order: a mandate here cannot
+	// slice, and taking it from what vetted returned — which is what render
+	// returned — is what makes two things structural rather than a matter of
+	// statement order: a mandate here cannot
 	// be built out of constraints nobody parsed, and the two mandates cannot
 	// come to carry different sets without somebody first inventing a second
 	// local to build the second one from.
@@ -359,6 +423,131 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 		// The same copy that went into the mandate, so the two cannot disagree.
 		PaymentInstrument: instrument,
 	})
+}
+
+// preview renders a constraint set without signing it.
+//
+// The same decode, the same refusals and the same sentences as authorise, minus
+// the signature — which is the whole of what this route adds, and the reason a
+// consent screen can be a gate rather than a receipt. It is the seam render
+// already had being given its own door, not a second path: everything both
+// routes agree on happens in vetted, so there is no rendering here to drift
+// from the one that gets signed.
+//
+// A package-level function rather than a method on Service, and that is the
+// point: a handler that is not a method cannot reach s.Signer at all, so "the
+// preview signs nothing" is visible in the signature before anybody reads the
+// body. It is not what holds the property — a later edit could make it a method
+// in one token — which is what TestThePreviewNeverReachesTheUsersKey is for.
+//
+// It takes an Idempotency-Key, like every other POST here, and satisfies the
+// standing rule vacuously: a preview changes nothing, so there is nothing about
+// it that needs to happen only once. What it cannot be is a GET, because the
+// request is a constraint tree and a caller has to be able to preview the exact
+// body it is about to authorise. The middleware every role shares reads the
+// method rather than the route, so a key is what any POST costs here — and the
+// cost is nil: the answer is a function of the request body alone, with no
+// clock and no state in it, so a replayed answer and a recomputed one are the
+// same bytes. That is what makes this unlike GET /search, whose price moves
+// with the clock and which had to leave the middleware to keep moving.
+//
+// Nothing calls it yet. The consent screen is #22, several branches away, and
+// the agent has no screen to show sentences on.
+func preview(w http.ResponseWriter, r *http.Request) {
+	var req authorisation
+	if !roles.DecodeJSON(w, r, &req) {
+		return
+	}
+	rendered, _, digest, ok := vetted(w, req.Constraints)
+	if !ok {
+		return
+	}
+	roles.OK(w, http.StatusOK, previewed{Rendered: rendered, ConstraintsDigest: digest})
+}
+
+// vetted parses a constraint set, says what each constraint means and names the
+// set, answering the caller directly when it will not do.
+//
+// It reports whether the handler may go on, so a route reads as
+//
+//	rendered, checked, digest, ok := vetted(w, req.Constraints)
+//	if !ok {
+//		return
+//	}
+//
+// Both authorisation routes go through it, which is what makes "the preview
+// refuses on the same terms as authorise" a property of the code rather than
+// two copies somebody has to keep in step. The alternative is worse than
+// duplication: a preview that refused an unknown field under a different code,
+// or accepted one authorise refuses, would put a sentence on a consent screen
+// for a limit that is refused a moment later — and the user would have read a
+// limit nobody was ever going to enforce.
+func vetted(w http.ResponseWriter, cs []generated.Constraint) (
+	sentences []string, checked []generated.Constraint, digest string, ok bool,
+) {
+	if len(cs) == 0 {
+		// An open mandate with no constraints authorises every purchase its
+		// agent key can sign for, up to its expiry. That is not a smaller
+		// authorisation than a constrained one; it is an unbounded one, and it
+		// is not something a user can meaningfully be shown.
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			"an open mandate with no constraints authorises every purchase, which is not something a user can approve")
+		return nil, nil, "", false
+	}
+
+	sentences, checked, err := render(cs)
+	if err != nil {
+		// constraint.CodeOf rather than ap2.CodeOf: this failure is the
+		// constraint package's own verdict and ap2 maps none of its sentinels,
+		// so routing it through there would report a field no verifier knows as
+		// verifier_unavailable — blaming this surface for the agent's
+		// interpretation.
+		roles.Fail(w, constraint.CodeOf(err), err.Error())
+		return nil, nil, "", false
+	}
+
+	digest, err = digestOf(checked)
+	if err != nil {
+		reject(w, "naming the constraint set", err)
+		return nil, nil, "", false
+	}
+	return sentences, checked, digest, true
+}
+
+// digestOf names a constraint set, so that a caller shown one set of sentences
+// can say which set they were about.
+//
+// Over the parsed constraints — the slice render hands back, which is the one
+// that goes into both mandates — rather than over the request body or over the
+// sentences, and both of those are wrong in a way worth writing down. A digest
+// of the body would differ between two requests carrying identical limits with
+// different whitespace, key order or spelling of a number, so it would refuse
+// callers who did nothing wrong, and a guard that fires on honest callers is
+// one that gets switched off. A digest of the sentences would tie the check to
+// the wording: rephrasing a renderer would invalidate every digest in flight,
+// and two limits that happened to render alike would be interchangeable. The
+// signed value is the thing worth naming, because it is the thing a verifier
+// reads an hour later.
+//
+// encoding/json is the canonicalisation and needs no help: struct fields are
+// written in declaration order and map keys are sorted. A value that arrived
+// through a JSON decode is already normalised as well — 20000, 20000.0 and 2e4
+// are one float64 by the time they reach here — which is what makes two
+// spellings of one limit produce one digest.
+//
+// Not a MAC, and it does not need to be. Everything hashed here is data the
+// caller sent, so a caller could always compute a digest without previewing,
+// and one that would rather not be checked can omit the field. What this makes
+// impossible is presenting the digest of one constraint set alongside another.
+func digestOf(cs []generated.Constraint) (string, error) {
+	canonical, err := json.Marshal(cs)
+	if err != nil {
+		return "", fmt.Errorf("encoding the constraint set: %w", err)
+	}
+	// roles.Fingerprint, rather than a second sha256 and base64 written here.
+	// It is the same job under both names: name a value stably so that two
+	// calls can agree they are about the same thing.
+	return roles.Fingerprint(string(canonical)), nil
 }
 
 // render parses every constraint, says what each one means, and hands the
