@@ -190,9 +190,24 @@ var vectors = []struct {
 		raw:  `{"op":"eq","field":"item.id","value":"  iata:JU324  "}`,
 	},
 	{
+		name: "label-with-whitespace-only-one-language-trims",
+		note: "U+0085 is whitespace to Go's TrimSpace and not to JavaScript's trim; U+00A0 is whitespace to both. A renderer using trim() unaided keeps the U+0085 and shows a label the verifier folded away.",
+		raw:  `{"op":"eq","field":"item.category","value":"\u0085Flights\u00a0"}`,
+	},
+	{
 		name: "text-with-a-quote",
 		note: "Go renders text with %q and TypeScript with JSON.stringify; this is where the two would part company if either hand-rolled the escaping.",
 		raw:  `{"op":"eq","field":"item.id","value":"sku:\"odd\""}`,
+	},
+	{
+		name: "text-with-escapes-only-go-writes",
+		note: "%q and JSON.stringify agree on everything printable and part company below it: Go writes \\a, \\v and \\x01 where JSON writes \\u escapes, and escapes U+007F where JSON passes it through. Nobody types this; that is why it would go unnoticed.",
+		raw:  `{"op":"eq","field":"item.id","value":"sku:\u0007\u000b\u0001\u007f"}`,
+	},
+	{
+		name: "text-with-an-unprintable-rune-past-ascii",
+		note: "%q escapes anything outside Unicode's L, M, N, P and S categories plus the ASCII space, so an interior non-breaking space becomes \\u00a0 where JSON.stringify would print it as itself.",
+		raw:  `{"op":"eq","field":"merchant.category","value":"Air\u00a0Serbia"}`,
 	},
 	{
 		name: "text-list",
