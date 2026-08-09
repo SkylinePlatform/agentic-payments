@@ -26,12 +26,53 @@ or, once the types exist:
 npm run dev          # http://localhost:5173
 npm run build        # type-check, then production build
 npm run typecheck    # type-check alone
+npm test             # the suite, once
+npm run test:watch   # the suite, re-run on save
 ```
 
 `make frontend` is the one to reach for, because it regenerates the protocol
 types first. Running `npm run dev` in a fresh clone fails on a missing import,
 and that is correct rather than unfriendly: `src/protocol/generated` is build
 output, not source.
+
+Node 20.19, 22.13 or 24 and up. `engines` in package.json states that exact
+range rather than a round `>=20` because it is the real one: jsdom is the
+strictest thing in the tree, at `^20.19.0 || ^22.13.0 || >=24.0.0`. npm only
+warns on a mismatch, and it warns naming jsdom — a package nobody here chose
+directly — so the range is also written where somebody would think to look.
+
+## Tests
+
+Vitest, jsdom and Testing Library. Vitest reads `vite.config.ts`, so the tests
+resolve imports and run plugins exactly as the app does — one config rather
+than two that can disagree about what `../protocol` means. Its `test` block is
+at the bottom of that file and is short; the comments there are the reasoning.
+
+```bash
+make frontend-test   # from the repository root: generates types, then runs it
+make frontend-check  # the same, plus the type-check and the production build
+```
+
+`make check` stays Go-only, so the suite's other home is the *Contracts* job in
+CI, which already had Node installed for the build. Backend work never needs
+npm; frontend work never merges unrun.
+
+**An empty suite fails.** Deleting every test, or breaking the `include` glob,
+exits non-zero rather than reporting success — a green tick that asserts
+nothing is worse than a red one, because nobody looks into green.
+
+### There is no `EventSource` in jsdom
+
+Not a partial implementation and not one behind a flag: the constructor does
+not exist, and `new EventSource(...)` under test is a `ReferenceError`. The
+collector streams protocol events over SSE — that is the `/events` proxy two
+sections down — so the client that reads them runs straight into this.
+
+The decision is recorded in `src/test/setup.ts`, in the file where the polyfill
+would otherwise go: **the client takes an `EventSourceLike` factory and
+defaults it to the global one.** The app passes nothing; a test passes a fake it
+can open, feed and fail on demand. Polyfilling onto `globalThis` instead would
+leave the client with no seam and every test sharing one mutable global.
 
 ## Protocol types
 

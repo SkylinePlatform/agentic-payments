@@ -85,9 +85,11 @@ tidy: ## go mod tidy
 # same reasoning as generate-ts: work that never touches the frontend should
 # not need npm installed to pass the local gate.
 #
-# Both depend on generate-ts because src/protocol/generated is not committed —
-# a fresh checkout has no canonical types, and the app imports them. That is
-# the same shape as the Go half, where `check` regenerates before it lints.
+# All three depend on generate-ts because src/protocol/generated is not
+# committed — a fresh checkout has no canonical types, and the app imports
+# them. That is the same shape as the Go half, where `check` regenerates
+# before it lints, and it applies to the tests as much as to the build: a test
+# that renders a surface imports whatever that surface imports.
 
 # The whole stack, one command. Needs Node, because the frontend is part of it.
 #
@@ -103,8 +105,16 @@ demo: generate-go generate-disclosure generate-ts ## Bring up every role, the co
 frontend: generate-ts ## Run the frontend dev server (needs Node)
 	cd $(FRONTEND) && npm run dev
 
+# Vitest in jsdom, reading the same vite.config.ts the app builds with. Its
+# other home is the Contracts job in CI, which already installs Node for the
+# frontend build — a fourth job would install it a fourth time to run a suite
+# that takes a second.
+.PHONY: frontend-test
+frontend-test: generate-ts ## Run the frontend test suite (needs Node)
+	cd $(FRONTEND) && npm test
+
 .PHONY: frontend-check
-frontend-check: generate-ts ## Type-check and build the frontend (needs Node)
+frontend-check: generate-ts frontend-test ## Type-check, build and test the frontend (needs Node)
 	cd $(FRONTEND) && npm run build
 
 # core.hooksPath is repository-local rather than per-worktree, so setting it once

@@ -52,6 +52,15 @@ jobs:
           npm ci
           npm run build
 
+      # Here rather than in a job of its own, because the install above is what
+      # it needs and a fourth job would repeat it to run a suite that takes a
+      # second. This is the only place the frontend tests run before a merge:
+      # `make check` is Go-only on purpose, so nothing local is obliged to have
+      # npm, and that obligation has to land somewhere.
+      - name: Frontend tests
+        working-directory: frontend
+        run: npm test
+
   test:
     name: Build and test
     runs-on: ubuntu-latest
