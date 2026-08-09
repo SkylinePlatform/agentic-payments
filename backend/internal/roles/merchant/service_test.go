@@ -76,7 +76,7 @@ func newShop(t *testing.T) shop {
 	shopVerifier, err := shopStore.Resolve(t.Context(), shopRef)
 	require.NoError(t, err)
 
-	inventory, err := merchant.NewDemoInventory(clk, base, merchant.DefaultStep)
+	inventory, err := shippedCatalogue(t).Inventory(clk, base, merchant.DefaultStep)
 	require.NoError(t, err, "seeding the inventory")
 
 	blinder, err := sdjwt.NewBlinder()

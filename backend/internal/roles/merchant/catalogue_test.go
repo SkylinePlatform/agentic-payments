@@ -30,18 +30,25 @@ func flatSchedule(t *testing.T, minor int) *merchant.Schedule {
 //
 // The Human Present flow buys BEG→PMI through GET /checkout; a search finds the
 // same flight through GET /search. They are priced by separate Schedule values
-// built from one function, and if that ever stops being one function the symptom
-// is a product list and a checkout naming different prices for one purchase —
-// which is not something a demonstration recovers from on screen, and not
-// something a test of either half alone would notice.
+// built from one list of prices, in one offer, in one file — and if that ever
+// stops being one list the symptom is a product list and a checkout naming
+// different prices for one purchase, which is not something a demonstration
+// recovers from on screen and not something a test of either half alone would
+// notice.
+//
+// A Go function used to be what closed that hole. The data file re-opens it,
+// because a second "prices" array is one line of JSON away, so what closes it
+// now is that CatalogueFile.Inventory reads the flight offer rather than
+// carrying prices of its own.
 func TestTheCatalogueAndTheInventoryQuoteOneFlight(t *testing.T) {
 	t.Parallel()
 
 	clk := clock.NewFake(base)
-	inv, err := merchant.NewDemoInventory(clk, base, merchant.DefaultStep)
-	require.NoError(t, err, "NewDemoInventory")
-	cat, err := merchant.NewDemoCatalogue(clk, demoMerchantID, base, merchant.DefaultStep)
-	require.NoError(t, err, "NewDemoCatalogue")
+	listing := shippedCatalogue(t)
+	inv, err := listing.Inventory(clk, base, merchant.DefaultStep)
+	require.NoError(t, err, "building the inventory the shipped file describes")
+	cat, err := listing.Catalogue(clk, demoMerchantID, base, merchant.DefaultStep)
+	require.NoError(t, err, "building the catalogue the shipped file describes")
 
 	for range 4 {
 		quoted, err := inv.Quote(merchant.DemoRoute)
@@ -218,8 +225,8 @@ func TestAnEarlySearchSeesTheOpeningPrices(t *testing.T) {
 	t.Parallel()
 
 	clk := clock.NewFake(base)
-	cat, err := merchant.NewDemoCatalogue(clk, demoMerchantID, base.Add(time.Hour), merchant.DefaultStep)
-	require.NoError(t, err, "NewDemoCatalogue")
+	cat, err := shippedCatalogue(t).Catalogue(clk, demoMerchantID, base.Add(time.Hour), merchant.DefaultStep)
+	require.NoError(t, err, "building the catalogue the shipped file describes")
 
 	flight, err := cat.Price(merchant.DemoFlightID)
 	require.NoError(t, err)

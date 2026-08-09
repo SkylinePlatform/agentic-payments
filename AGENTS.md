@@ -271,6 +271,7 @@ backend/                ⬅ the Go module root. go.mod lives here, not at the to
 frontend/               React + Vite + TypeScript
 docs/                   architecture, business, protocols, diagrams, specs, plans
 deploy/                demo.json — the topology `make demo` starts
+                       catalogue.json — what the mock Merchant sells
 ```
 
 A specification belongs in `docs/specs/` — see Conventions. There is no second

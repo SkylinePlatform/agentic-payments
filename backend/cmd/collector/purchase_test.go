@@ -120,7 +120,9 @@ func newWorld(t *testing.T, ingest string) *world {
 		Instrument: generated.PaymentInstrument{ID: "card-4242", Type: "CARD"},
 	}).Handler)
 
-	inventory, err := merchant.NewDemoInventory(clk, base, merchant.DefaultStep)
+	listing, err := merchant.LoadCatalogue(cataloguePath)
+	require.NoError(t, err, "the shipped catalogue does not load, so the demonstration sells nothing")
+	inventory, err := listing.Inventory(clk, base, merchant.DefaultStep)
 	require.NoError(t, err, "seeding the inventory")
 
 	// Built with a placeholder processor and pointed at the real one below,
@@ -358,3 +360,8 @@ func TestARejectionReachesTheStreamWithItsCode(t *testing.T) {
 		[]obs.Kind{obs.KindMandateRejected, obs.KindReceiptIssued},
 		seen.byRole["credprovider"])
 }
+
+// cataloguePath is the shipped catalogue, from this package's directory. The
+// merchant here quotes the route that file's flight offer describes, on that
+// offer's own prices.
+const cataloguePath = "../../../deploy/catalogue.json"

@@ -196,6 +196,7 @@ backend/
 frontend/             React + Vite + TypeScript
 docs/                 architecture, business, protocol notes, diagrams
 deploy/               demo.json — the topology `make demo` starts
+                      catalogue.json — what the mock Merchant sells
 ```
 
 **The one rule that matters:** `core/` never imports from `adapters/`. If the

@@ -18,11 +18,13 @@ import (
 // advancing the fake clock, never by sleeping through a schedule.
 var base = time.Date(2026, 6, 15, 9, 0, 0, 0, time.UTC)
 
+// demoInventory is the inventory the demonstration quotes, on the route
+// deploy/catalogue.json describes and at that offer's own prices.
 func demoInventory(t *testing.T) (*merchant.Inventory, *clock.Fake) {
 	t.Helper()
 	c := clock.NewFake(base)
-	inv, err := merchant.NewDemoInventory(c, base, merchant.DefaultStep)
-	require.NoError(t, err, "NewDemoInventory")
+	inv, err := shippedCatalogue(t).Inventory(c, base, merchant.DefaultStep)
+	require.NoError(t, err, "building the inventory the shipped file describes")
 	return inv, c
 }
 
@@ -139,8 +141,8 @@ func TestAnEarlyReadSeesTheOpeningPrice(t *testing.T) {
 
 	c := clock.NewFake(base)
 	// The schedule starts an hour after the clock does.
-	inv, err := merchant.NewDemoInventory(c, base.Add(time.Hour), merchant.DefaultStep)
-	require.NoError(t, err, "NewDemoInventory")
+	inv, err := shippedCatalogue(t).Inventory(c, base.Add(time.Hour), merchant.DefaultStep)
+	require.NoError(t, err, "building the inventory the shipped file describes")
 
 	q := quote(t, inv)
 	if q.Price.Amount != merchant.DemoPriceWatched {
@@ -159,8 +161,8 @@ func TestQuotesAreReproducible(t *testing.T) {
 
 	read := func() []int {
 		c := clock.NewFake(base)
-		inv, err := merchant.NewDemoInventory(c, base, merchant.DefaultStep)
-		require.NoError(t, err, "NewDemoInventory")
+		inv, err := shippedCatalogue(t).Inventory(c, base, merchant.DefaultStep)
+		require.NoError(t, err, "building the inventory the shipped file describes")
 		var prices []int
 		for range 6 {
 			prices = append(prices, quote(t, inv).Price.Amount)
@@ -269,19 +271,41 @@ func TestRejectsNonsense(t *testing.T) {
 // while claiming to enforce the code format. contracts/instrument/amount.json
 // says `^[A-Z]{3}$`, and an Amount that fails its own schema on the way out is
 // worse than one refused here.
+//
+// Two subjects, one list. deploy/catalogue.json names the currency its prices
+// are quoted in, and the empty string at the end of the list is the case that
+// file made reachable: a `currency` key nobody typed. Defaulted to USD it would
+// be a currency nobody wrote down, and the prompts the demonstration is written
+// around all bound an amount in one — so the failure would not be a wrong price
+// but a search that matched nothing, since constraint's money comparison refuses
+// a currency mismatch rather than converting.
 func TestCurrencyMustBeAnISO4217Code(t *testing.T) {
 	t.Parallel()
 
-	for _, currency := range []string{"usd", "Usd", "u$d", "US", "USDC", "US1", "   "} {
+	rejected := []string{"usd", "Usd", "u$d", "US", "USDC", "US1", "   ", ""}
+
+	for _, currency := range rejected {
 		if _, err := merchant.NewSchedule(base, time.Minute,
 			generated.Amount{Amount: 100, Currency: currency}); err == nil {
-			t.Errorf("currency %q was accepted", currency)
+			t.Errorf("a schedule accepted currency %q", currency)
 		}
 	}
 	if _, err := merchant.NewSchedule(base, time.Minute,
 		generated.Amount{Amount: 100, Currency: "EUR"}); err != nil {
 		t.Errorf("a valid currency was refused: %v", err)
 	}
+
+	for _, currency := range rejected {
+		f := shippedCatalogue(t)
+		f.Currency = currency
+		assert.ErrorIs(t, f.Validate(), merchant.ErrInvalidCatalogue,
+			"a catalogue accepted currency %q", currency)
+	}
+	f := shippedCatalogue(t)
+	f.Currency = "EUR"
+	assert.NoError(t, f.Validate(),
+		"the rule is the code's shape, not the demonstration's currency; a catalogue priced "+
+			"in euros is a file edit and nothing more")
 }
 
 // TestConcurrentQuotes earns the claim in Inventory's doc comment. Every role

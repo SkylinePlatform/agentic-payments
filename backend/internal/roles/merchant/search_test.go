@@ -70,11 +70,17 @@ var scripted = []struct {
 	{"telescopic ladders, cheapest", telescopicLadders},
 }
 
+// demoCatalogue builds the catalogue the demonstration serves, from the file the
+// demonstration serves it from.
+//
+// Loaded rather than assembled here, and that is the point rather than
+// convenience: a fixture built in Go would keep passing while deploy/catalogue.
+// json said something else, which is the one failure a data file introduces.
 func demoCatalogue(t *testing.T) (*merchant.Catalogue, *clock.Fake) {
 	t.Helper()
 	c := clock.NewFake(base)
-	cat, err := merchant.NewDemoCatalogue(c, demoMerchantID, base, merchant.DefaultStep)
-	require.NoError(t, err, "NewDemoCatalogue")
+	cat, err := shippedCatalogue(t).Catalogue(c, demoMerchantID, base, merchant.DefaultStep)
+	require.NoError(t, err, "building the catalogue the shipped file describes")
 	return cat, c
 }
 

@@ -215,6 +215,7 @@ backend/                ⬅ the Go module root. go.mod lives here, not at the to
 frontend/               React + Vite + TypeScript
 docs/                   architecture, business, protocols, diagrams
 deploy/                demo.json — the topology `make demo` starts
+                       catalogue.json — what the mock Merchant sells
 ```
 
 That split has a cost for an editor opened at the repository root: `gopls`

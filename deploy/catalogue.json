@@ -1,0 +1,135 @@
+{
+  "$comment": [
+    "What the mock Merchant sells. `cmd/merchant -catalogue` reads it, and a fifth product is an",
+    "edit here rather than a source change, a pull request and a review.",
+    "",
+    "Nothing above this file was ever the obstacle. `item.attr.<name>` is open by construction —",
+    "AGENTS.md: 'core does not know what a flight is and should not have to' — the field registry",
+    "names nothing aviation, and Catalogue.Search evaluates constraints against a subject without",
+    "knowing what it is selling. Four Go literals were the whole of what stood in the way.",
+    "",
+    "The rules are in merchant.CatalogueFile.Validate and nowhere else. There is deliberately no",
+    "JSON Schema beside this file: contracts/ is a model generator, every schema there becomes a Go",
+    "type and a TypeScript type, and a catalogue is instances — so `make generate` would emit a type",
+    "per product. A schema written here instead, purely to validate, would state the loader's rules",
+    "a second time, and the second copy is the one that drifts.",
+    "",
+    "`currency` is one field for the whole file. Per-offer currency would let a `lte 40000 USD` cap",
+    "sit against a `38000 EUR` price, and constraint's money comparison refuses a mismatch rather",
+    "than converting — so the symptom is not a wrong answer but a prompt that matches nothing, with",
+    "no failing test anywhere. Amounts are minor units: 24000 is $240.00.",
+    "",
+    "`merchant` carries no identifier. Who this merchant is has to agree with cmd/merchant, which is",
+    "given it on the command line, so a value written here could only ever drift from the binary it",
+    "names — the same reason deploy/demo.json does not restate the four role identifiers. 5399 is",
+    "miscellaneous general merchandise, which is what a shop selling flights, bicycles, concert",
+    "tickets and ladders from one counter would trade under.",
+    "",
+    "The offer carrying `route.origin` and `route.destination` is the flight, and the inventory the",
+    "Human Present flow buys through — GET /checkout?from=BEG&to=PMI — quotes that route on that",
+    "offer's own prices. Exactly one offer may carry them; none and two are both refused at load.",
+    "The rule is the attributes rather than the category, because 'flights' is a string whoever",
+    "wrote this file picked, while those two attribute names are already load-bearing: the scripted",
+    "prompt that goes looking for the flight constrains on both by name.",
+    "",
+    "`scenario` is the offer declaring what it is for, and it is the part of this file that is not",
+    "obvious. `cap` is the bound the prompt going looking for this offer places on the price; `found`",
+    "is what that prompt is then supposed to do — `always`, `at-the-last-price`, or `never` for",
+    "something the search is meant not to return. Those are the same claims a Go table makes about",
+    "these four products, one row each, and holding them here is what makes a fifth product state",
+    "one too. A price edited past its cap does not fail to compile, does not fail to load, and would",
+    "not fail a test written against four constants a new product never acquires: it produces a",
+    "search box that answers nothing for a prompt the documentation says works.",
+    "",
+    "`image_url` is root-relative and refused at load if it is not, including a protocol-relative",
+    "`//host/…`. That argument is older than this file — an image fetched from a host this project",
+    "does not control would make a screenshot depend on somebody else's uptime, and would put a",
+    "network call one careless test away — but it used to be a comment beside a literal a reviewer",
+    "had read. The guard exists because the data moved: an editor is now enough to change it.",
+    "",
+    "Two of the four move and two do not, deliberately. A screen where everything changes at once is",
+    "one a viewer cannot read, so the concert and the ladders hold still while the flight and the",
+    "bicycle fall into range around them.",
+    "",
+    "The bicycle's and the concert's identifiers are named character for character by the scripted",
+    "constraint sets in internal/agent/interpret/scenarios.go, because those prompts approve one",
+    "specific object rather than a class of object. Nothing enforces the match — core-isolation keeps",
+    "that package and the merchant from sharing a table — and the symptom of a divergence is not a",
+    "failing test but a demo where the prompt finds nothing. Grep for the identifier before changing",
+    "either side. The flight and the ladders are matched on attributes and category instead."
+  ],
+  "currency": "USD",
+  "merchant": {
+    "category": "5399"
+  },
+  "offers": [
+    {
+      "id": "route:BEG-PMI",
+      "category": "flights",
+      "attributes": {
+        "route.origin": "BEG",
+        "route.destination": "PMI"
+      },
+      "title": "Belgrade → Palma de Mallorca",
+      "description": "Direct, 2h 40m. Cabin bag included, hold bag extra.",
+      "image_url": "/images/catalogue/flight-beg-pmi.svg",
+      "retailer": "Adria Wings",
+      "prices": [24000, 21000, 18900],
+      "scenario": {
+        "cap": 20000,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "gtin:05012345678900",
+      "category": "bicycles",
+      "attributes": {
+        "frame.size": "54",
+        "colour": "slate"
+      },
+      "title": "Vitesse Urbain 7",
+      "description": "Seven-speed city bicycle, aluminium frame, 54 cm.",
+      "image_url": "/images/catalogue/bicycle-vitesse-urbain-7.svg",
+      "retailer": "Sever Cycles",
+      "prices": [45000, 38000],
+      "scenario": {
+        "cap": 40000,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "event:vlado-georgijev-2026-11-14",
+      "category": "concert-tickets",
+      "attributes": {
+        "venue": "Belgrade Arena",
+        "date": "2026-11-14"
+      },
+      "title": "Vlado Georgijev — Belgrade, 14 November 2026",
+      "description": "Standing, general admission. Price is per ticket.",
+      "image_url": "/images/catalogue/concert-vlado-georgijev.svg",
+      "retailer": "Arena Box Office",
+      "prices": [7500],
+      "scenario": {
+        "cap": 16000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "gtin:05014477390221",
+      "category": "ladders",
+      "attributes": {
+        "height.metres": "3.8",
+        "material": "aluminium"
+      },
+      "title": "Telescopic ladder, 3.8 m",
+      "description": "Aluminium, 13 rungs, collapses to 0.9 m. EN 131 rated.",
+      "image_url": "/images/catalogue/ladder-telescopic-38.svg",
+      "retailer": "Balkan Hardware",
+      "prices": [13900],
+      "scenario": {
+        "cap": 15000,
+        "found": "always"
+      }
+    }
+  ]
+}

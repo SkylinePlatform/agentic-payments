@@ -6,7 +6,6 @@ import (
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
-	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
@@ -17,9 +16,21 @@ import (
 //
 // That document says the exact numbers matter more than they look, because
 // every later diagram showing a real transaction reuses them and the
-// screenshots have to match the prose. They are constants here so that the
-// documentation and the demonstration have one source between them rather than
-// two that drift.
+// screenshots have to match the prose.
+//
+// # Why these are still here now that deploy/catalogue.json holds the prices
+//
+// They are what the documentation is asserted against, and the file is what the
+// merchant serves. That is two copies, which is normally the thing this
+// repository refuses — and the third layer is what makes it safe:
+// TestTheScenarioHolds pins these against the prose, and
+// TestTheCatalogueFileIsTheDocumentedScenario pins the file against these. A
+// data edit that moved the demonstration off the documentation therefore fails a
+// test rather than a screenshot.
+//
+// A constant per product does not scale and is not meant to: a fifth product
+// acquires none of these, and what holds *it* to what it claims is its own
+// scenario block in the file. See merchant.Found.
 const (
 	// DemoCurrency is USD, and the amounts below are its minor unit — cents.
 	DemoCurrency = "USD"
@@ -40,6 +51,11 @@ const (
 
 // DemoRoute is Belgrade to Palma de Mallorca, the one route the mock merchant
 // sells.
+//
+// The running merchant does not read this: its route is derived from the offer
+// in deploy/catalogue.json that carries route.origin and route.destination. This
+// is the documented figure that offer has to agree with, on the terms the
+// prices above are stated on.
 var DemoRoute = Route{Origin: "BEG", Destination: "PMI"}
 
 // DefaultStep is how long each price holds in a live demonstration.
@@ -62,41 +78,18 @@ func usd(minor int) generated.Amount {
 	return generated.Amount{Amount: minor, Currency: DemoCurrency}
 }
 
-// DemoPrices is the sequence, in order.
+// DemoPrices is the documented sequence, in order.
+//
+// Not what the merchant serves: that is the flight offer's own prices in
+// deploy/catalogue.json, and TestTheCatalogueFileIsTheDocumentedScenario is
+// what holds the two together. This is the sequence a test can name when the
+// subject is a Schedule rather than a catalogue.
 func DemoPrices() []generated.Amount {
 	return []generated.Amount{
 		usd(DemoPriceWatched),
 		usd(DemoPriceRejected),
 		usd(DemoPriceAccepted),
 	}
-}
-
-// NewDemoInventory returns the mock merchant's inventory for the built
-// scenario: one route, three prices, stepping every step from start.
-//
-// start is when the first price gives way to the second, not when the demo
-// begins — before it, the opening price is in force, so a runner that seeds the
-// inventory and then takes a moment to wire everything else up still shows
-// $240 for its first poll rather than having quietly moved on.
-func NewDemoInventory(clk authz.Clock, start time.Time, step time.Duration) (*Inventory, error) {
-	schedule, err := demoFlightSchedule(start, step)
-	if err != nil {
-		return nil, err
-	}
-	return New(clk, map[Route]*Schedule{DemoRoute: schedule})
-}
-
-// demoFlightSchedule builds the BEG→PMI price sequence.
-//
-// One function rather than a literal in each constructor, because the route the
-// inventory quotes and the offer the catalogue lists are the same flight. Two
-// schedules assembled separately would agree today and drift the first time
-// somebody edited one of them, and the symptom would be a search result and a
-// checkout naming different prices for one purchase — a disagreement a
-// demonstration cannot recover from on screen, and one no test of either half
-// alone would catch.
-func demoFlightSchedule(start time.Time, step time.Duration) (*Schedule, error) {
-	return NewSchedule(start, step, DemoPrices()...)
 }
 
 // The other three offers' numbers, and the caps the scripted prompts in
@@ -106,8 +99,8 @@ func demoFlightSchedule(start time.Time, step time.Duration) (*Schedule, error) 
 // is evaluated by the verifier, never by the seller. They are here for the same
 // reason DemoPriceCap is: what makes the catalogue demonstrate anything is how
 // each price sits against the cap of the prompt that goes looking for it, and
-// TestTheCatalogueAnswersTheScriptedPrompts is what stops somebody adjusting a
-// price and quietly making a prompt find nothing.
+// TestTheCatalogueFileIsTheDocumentedScenario is what stops somebody adjusting a
+// price in deploy/catalogue.json and quietly making a prompt find nothing.
 //
 // Two of the four move and two do not, deliberately. A screen where everything
 // changes at once is one a viewer cannot read; the concert and the ladders hold
@@ -135,7 +128,7 @@ const (
 	DemoLadderCap   = 15000
 )
 
-// The catalogue's four identifiers.
+// The catalogue's four identifiers, as deploy/catalogue.json states them.
 //
 // Two of them are load-bearing: the bicycle and the concert are named
 // character for character by the constraint sets in
@@ -146,7 +139,12 @@ const (
 // finds nothing. Grep for the identifier before changing either side.
 //
 // The flight and the ladders are matched on their attributes and their category
-// instead, so their identifiers are this package's own business.
+// instead, so their identifiers are the file's own business.
+//
+// These four are constants for the same reason the prices above are: they are
+// what tests written against the built scenario name, and
+// TestTheCatalogueFileIsTheDocumentedScenario is what keeps the file agreeing
+// with them. A fifth product acquires no constant here.
 const (
 	DemoFlightID  = "route:BEG-PMI"
 	DemoBicycleID = "gtin:05012345678900"
@@ -160,85 +158,10 @@ const (
 // flights, bicycles, concert tickets and ladders from one counter would carry.
 // A merchant per vertical would be more realistic and would cost the
 // demonstration four processes to make one point.
-const DemoMerchantCategory = "5399"
-
-// NewDemoCatalogue returns the four offers the scripted prompts go looking for,
-// sold by merchantID and priced against clk.
 //
-// start and step mean what they mean for NewDemoInventory: start is when the
-// first price gives way to the second, and a search run before it sees opening
-// prices rather than an error.
-func NewDemoCatalogue(
-	clk authz.Clock, merchantID string, start time.Time, step time.Duration,
-) (*Catalogue, error) {
-	flight, err := demoFlightSchedule(start, step)
-	if err != nil {
-		return nil, err
-	}
-	bicycle, err := NewSchedule(start, step, usd(DemoBicycleWatched), usd(DemoBicycleAccepted))
-	if err != nil {
-		return nil, err
-	}
-	concert, err := NewSchedule(start, step, usd(DemoConcertPrice))
-	if err != nil {
-		return nil, err
-	}
-	ladder, err := NewSchedule(start, step, usd(DemoLadderPrice))
-	if err != nil {
-		return nil, err
-	}
-
-	return NewCatalogue(clk,
-		constraint.Party{ID: merchantID, Category: DemoMerchantCategory},
-		Offer{
-			ID:       DemoFlightID,
-			Category: "flights",
-			// The route is two attributes rather than a typed field, which is
-			// the decision subject.go argues for at length: a Route on the
-			// subject would be the flight vertical leaking into a model that
-			// also has to describe a bicycle.
-			Attributes: map[string]string{
-				"route.origin":      DemoRoute.Origin,
-				"route.destination": DemoRoute.Destination,
-			},
-			Title:       "Belgrade → Palma de Mallorca",
-			Description: "Direct, 2h 40m. Cabin bag included, hold bag extra.",
-			ImageURL:    "/images/catalogue/flight-beg-pmi.svg",
-			Retailer:    "Adria Wings",
-			Schedule:    flight,
-		},
-		Offer{
-			ID:          DemoBicycleID,
-			Category:    "bicycles",
-			Attributes:  map[string]string{"frame.size": "54", "colour": "slate"},
-			Title:       "Vitesse Urbain 7",
-			Description: "Seven-speed city bicycle, aluminium frame, 54 cm.",
-			ImageURL:    "/images/catalogue/bicycle-vitesse-urbain-7.svg",
-			Retailer:    "Sever Cycles",
-			Schedule:    bicycle,
-		},
-		Offer{
-			ID:          DemoConcertID,
-			Category:    "concert-tickets",
-			Attributes:  map[string]string{"venue": "Belgrade Arena", "date": "2026-11-14"},
-			Title:       "Vlado Georgijev — Belgrade, 14 November 2026",
-			Description: "Standing, general admission. Price is per ticket.",
-			ImageURL:    "/images/catalogue/concert-vlado-georgijev.svg",
-			Retailer:    "Arena Box Office",
-			Schedule:    concert,
-		},
-		Offer{
-			ID:          DemoLadderID,
-			Category:    "ladders",
-			Attributes:  map[string]string{"height.metres": "3.8", "material": "aluminium"},
-			Title:       "Telescopic ladder, 3.8 m",
-			Description: "Aluminium, 13 rungs, collapses to 0.9 m. EN 131 rated.",
-			ImageURL:    "/images/catalogue/ladder-telescopic-38.svg",
-			Retailer:    "Balkan Hardware",
-			Schedule:    ladder,
-		},
-	)
-}
+// The running merchant reads it from deploy/catalogue.json; this is the figure
+// that file has to agree with.
+const DemoMerchantCategory = "5399"
 
 // DemoOptions is what the process standing a demo merchant up decides, and what
 // this package therefore does not.
@@ -246,6 +169,19 @@ type DemoOptions struct {
 	// ID names this merchant in the offers and receipts it signs, and is the
 	// audience a delegation addressed to it has to carry.
 	ID string
+
+	// Catalogue is what this merchant sells, already loaded and validated.
+	//
+	// Required, and the file rather than a path: a constructor that read a file
+	// would put the demonstration's stock behind a filesystem call in a package
+	// every test of this role goes through, and would leave "which path" a
+	// second thing to get right in each of them. cmd/merchant owns the flag,
+	// LoadCatalogue owns the rules, and this owns neither.
+	//
+	// The inventory the Human Present flow buys through is derived from it too —
+	// see CatalogueFile.Inventory, which is where the one-flight property is
+	// argued.
+	Catalogue *CatalogueFile
 
 	// User is the key both closed mandates are verified against. Under Human
 	// Present the user signs them at the Trusted Surface, so cmd/merchant
@@ -313,6 +249,13 @@ func NewDemoService(role roles.Role, opts DemoOptions) (*Service, error) {
 			"merchant: a demo service needs the key its mandates are signed with and a " +
 				"processor to present the payment to")
 	}
+	if opts.Catalogue == nil {
+		// Refused rather than defaulted to something built in. A merchant that
+		// started with an empty catalogue would answer 404 on GET /search, and
+		// the symptom is a demonstration where discovery silently finds nothing
+		// — which reads as a protocol failure rather than as a missing file.
+		return nil, errors.New("merchant: a demo service needs a catalogue; load one with LoadCatalogue")
+	}
 
 	var demoClock *clock.Offset
 	if opts.Controls {
@@ -324,14 +267,18 @@ func NewDemoService(role roles.Role, opts DemoOptions) (*Service, error) {
 	// the inventory quotes step through their prices together. Read twice they
 	// would be a schedule apart, and a search and a checkout taken a moment
 	// later would disagree about what one flight costs.
+	//
+	// One file seeds both as well, which is the other half of that property and
+	// the half a data file put at risk: the prices below come from one list, in
+	// one entry, read twice. See CatalogueFile.Inventory.
 	start := role.Clock.Now()
 
-	inventory, err := NewDemoInventory(role.Clock, start, opts.Step)
+	inventory, err := opts.Catalogue.Inventory(role.Clock, start, opts.Step)
 	if err != nil {
 		return nil, err
 	}
 
-	catalogue, err := NewDemoCatalogue(role.Clock, opts.ID, start, opts.Step)
+	catalogue, err := opts.Catalogue.Catalogue(role.Clock, opts.ID, start, opts.Step)
 	if err != nil {
 		return nil, err
 	}

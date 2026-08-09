@@ -229,6 +229,13 @@ func newWorldEmitting(t *testing.T, events emitters) *world {
 	//     `base` and the prices are the ones every assertion in this package is
 	//     written against. A test that advanced the clock before building its
 	//     world would get a different schedule, and would deserve to.
+	// What the merchant sells, from the file the demonstration sells it from.
+	// Loaded rather than assembled here for the reason the constructor call
+	// below is a constructor call: a catalogue built in this fixture would be a
+	// second one, and the prices these tests assert against are the file's.
+	listing, err := merchant.LoadCatalogue("../../../deploy/catalogue.json")
+	require.NoError(t, err, "the shipped catalogue does not load, so the merchant sells nothing")
+
 	merchantSvc, err := merchant.NewDemoService(
 		roles.Role{
 			Identity: roles.Identity{
@@ -239,6 +246,7 @@ func newWorldEmitting(t *testing.T, events emitters) *world {
 		},
 		merchant.DemoOptions{
 			ID:        merchantID,
+			Catalogue: listing,
 			User:      w.user.verifier,
 			Processor: &merchant.HTTPProcessor{Base: w.endpoints.MPP},
 			Step:      merchant.DefaultStep,
