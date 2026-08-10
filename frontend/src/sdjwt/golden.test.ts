@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import { encodeBase64Url } from "./base64url";
@@ -25,24 +27,44 @@ import { confirmationKey, resolveChain, resolveHop, resolveSdJwt } from "./resol
  * `golden_chain_test.go` and moved into the same directory for this import to
  * reach, so the Go writer and this reader compare against one string.
  *
- * The coupling this buys is one path in one test file, pointing at a directory
- * AGENTS.md pins by name — and it fails as an unresolved import, at build time,
- * rather than by quietly reading nothing.
+ * The coupling this buys is four paths in one test file, pointing at a
+ * directory AGENTS.md pins by name — and it fails loudly, because
+ * `readFileSync` throws on a path that moved.
  *
  * `contracts/` was the alternative and is the wrong home. It is the single
  * source of truth for *our* canonical model, and everything under it is
  * something both languages must reproduce from a schema we wrote. RFC 9901's
  * examples are not ours to define, and putting them there would say they were.
+ *
+ * # Read from disk, not imported
+ *
+ * `?raw` was the shorter route and is the wrong one, for the reason
+ * `src/test/node-fs.d.ts` sets out at length: a module outside the package root
+ * is reachable only through the dev server's `/@fs/` escape hatch, which has to
+ * be opened by widening `server.fs.allow` in `vite.config.ts` — and that list
+ * governs what the **dev server serves to a page**. A fixture this suite reads
+ * in Node would have been buying HTTP surface area on every developer's machine
+ * to solve a problem that never leaves Node. It also fails better: an
+ * unreachable `?raw` import resolves to an empty string, which the guard below
+ * then has to catch, where `readFileSync` throws with the path in the message.
+ *
+ * Each path is bound to a constant before it reaches `new URL`, which is
+ * load-bearing rather than style — Vite's asset transform fires only on a string
+ * literal, and rewrites the expression to `http://localhost:3000/@fs/...`, which
+ * `readFileSync` refuses with "The URL must be of scheme file". An identifier it
+ * cannot analyse statically is left alone.
  */
-import delegateChainRaw from "../../../backend/pkg/sdjwt/testdata/delegate_chain.sdjwt?raw";
-import delegateChainDisclosedRaw from "../../../backend/pkg/sdjwt/testdata/delegate_chain_disclosed.sdjwt?raw";
-import issuanceRaw from "../../../backend/pkg/sdjwt/testdata/rfc9901_issuance.sdjwt?raw";
-import presentationRaw from "../../../backend/pkg/sdjwt/testdata/rfc9901_presentation.sdjwt?raw";
+const VECTOR_DIRECTORY = "../../../backend/pkg/sdjwt/testdata/";
 
-const issuance = issuanceRaw.trim();
-const presentation = presentationRaw.trim();
-const delegateChain = delegateChainRaw.trim();
-const delegateChainDisclosed = delegateChainDisclosedRaw.trim();
+function loadVector(name: string): string {
+  const path = VECTOR_DIRECTORY + name;
+  return readFileSync(new URL(path, import.meta.url), "utf8").trim();
+}
+
+const issuance = loadVector("rfc9901_issuance.sdjwt");
+const presentation = loadVector("rfc9901_presentation.sdjwt");
+const delegateChain = loadVector("delegate_chain.sdjwt");
+const delegateChainDisclosed = loadVector("delegate_chain_disclosed.sdjwt");
 
 const VECTORS = {
   "rfc9901_issuance.sdjwt": issuance,
@@ -52,9 +74,10 @@ const VECTORS = {
 };
 
 describe("the vectors themselves", () => {
-  // Vitest stubs a CSS import as an empty string, and `?raw` on a file the
-  // resolver cannot reach is the same kind of quiet nothing. Every assertion
-  // below this point is over these four strings, so an empty one would make the
+  // `readFileSync` throws on a path that moved, so this is no longer the only
+  // thing standing between a missing fixture and a green suite — but a file
+  // that exists and is empty, or truncated, still reads as one. Every assertion
+  // below this point is over these four strings, so a wrong one would make the
   // whole file pass without looking at anything.
   it.each(Object.entries(VECTORS))("%s loaded, and looks like a serialisation", (_name, vector) => {
     expect(vector.length).toBeGreaterThan(200);
