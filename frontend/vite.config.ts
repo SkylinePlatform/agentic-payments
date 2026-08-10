@@ -49,6 +49,14 @@ export default defineConfig(({ mode }) => {
       // prints a URL, and a dev server that quietly picked 5174 makes that
       // URL wrong.
       strictPort: true,
+
+      // `server.fs.allow` is deliberately left at its default, which confines
+      // the dev server to this package. The SD-JWT conformance vectors live in
+      // `backend/pkg/sdjwt/testdata` and `src/sdjwt/golden.test.ts` compares
+      // against them, but it reads them from disk in Node rather than importing
+      // them — so nothing here needs widening. A fixture that only a test reads
+      // must not buy itself HTTP surface area on every developer's machine;
+      // `src/test/node-fs.d.ts` carries the full argument.
       proxy: {
         // The event stream is served same-origin in development, so nothing
         // downstream has to solve CORS or learn the collector's address. It is

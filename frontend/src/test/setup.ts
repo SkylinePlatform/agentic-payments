@@ -93,3 +93,23 @@ globalThis.matchMedia ??= (query: string) =>
  * a comment in the file where the polyfill would have gone, rather than advice
  * somewhere else.
  */
+
+/*
+ * `crypto.subtle` needs nothing here either, and that is measured rather than
+ * assumed.
+ *
+ * The expectation is reasonable and wrong: jsdom's own `window.crypto` carries
+ * `getRandomValues` and no `subtle`, so wiring Node's `webcrypto` onto the
+ * global looks necessary. It is not — Vitest's jsdom environment leaves Node's
+ * global `crypto` in place, which has both, so `crypto.subtle.digest` is a
+ * function under test with no setup at all. Checked by running it, not by
+ * reading a changelog.
+ *
+ * The SD-JWT reader in `src/sdjwt` is what needs it, and its first test in
+ * `digest.test.ts` asserts the property outright, so this paragraph cannot
+ * quietly stop being true. That test is also where the *absence* of
+ * `crypto.subtle` is exercised — stubbed away per test rather than removed
+ * here, because outside a secure context a real browser has none, and a reader
+ * that reported every disclosure as withheld in that case would look like it
+ * was working.
+ */
