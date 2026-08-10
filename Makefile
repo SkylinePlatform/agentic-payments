@@ -65,9 +65,17 @@ test: ## Unit tests
 # and Processed SD-JWT Payload; a suite that called itself the conformance
 # suite and skipped them would be checking only the half of the system whose
 # vectors we wrote ourselves.
+#
+# core/ joined them when the constraint renderer got a second implementation.
+# AGENTS.md set the criterion for widening this list — something in core/ that a
+# second implementation has to reproduce — and named the renderer's output as
+# the case that would qualify. frontend/src/constraint/render.ts is that second
+# implementation, and contracts/testdata/render_vectors.json is the artefact the
+# two agree on. See the paragraph in AGENTS.md beside this list for why the one
+# core rule that stayed out is still out.
 .PHONY: vectors
 vectors: ## Conformance suite against the golden vectors
-	cd $(BACKEND) && $(GO) test ./internal/adapters/... ./pkg/... -run 'TestGolden' -v
+	cd $(BACKEND) && $(GO) test ./internal/adapters/... ./internal/core/... ./pkg/... -run 'TestGolden' -v
 
 .PHONY: lint
 lint: ## golangci-lint, including the depguard architecture rules
