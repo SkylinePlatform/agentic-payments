@@ -354,56 +354,23 @@ function withoutCssComments(css: string): string {
 const MAY_NAME_THE_EVENT_SOURCE: readonly string[] = ["./sse/stream.ts"];
 
 /**
- * The source with its comments blanked out, newlines kept.
+ * Every line of code that names the global, with its line number.
  *
- * The rule below is about code and not prose: a comment elsewhere explaining
- * why this seam exists is worth having, and flagging it would push the
- * explanation out of the tree.
+ * Over `scan(source).code` — the same walk the palette and hex rules use, and
+ * deliberately not a second one. The rule here is about code and not prose: a
+ * comment elsewhere explaining why this seam exists is worth having, and
+ * flagging it would push the explanation out of the tree. That is the same
+ * distinction `scan` was written to make, down to the same blind spot, and the
+ * doc comment there is explicit that two scanners would be two chances to get
+ * it wrong differently.
  *
- * String literals are copied through rather than skipped — they are code, and a
- * URL is the reason this has to know about them at all. Without that branch the
- * `//` in `"http://…"` starts a line comment, and everything after it on that
- * line stops being scanned. Same hand-scan as `stringLiterals` above and the
- * same single blind spot: a regex literal containing a quote desyncs it, and no
- * file in APP_SOURCES contains a regex literal at all.
+ * What the shared walk buys beyond one implementation is that comments are
+ * blanked to spaces rather than dropped, so a line number reported here still
+ * points at the line it came from even when a block comment precedes it.
  */
-function codeOf(source: string): string {
-  let out = "";
-  let i = 0;
-  while (i < source.length) {
-    const c = source[i];
-    if (c === "/" && source[i + 1] === "/") {
-      while (i < source.length && source[i] !== "\n") i++;
-      continue;
-    }
-    if (c === "/" && source[i + 1] === "*") {
-      const start = i;
-      i += 2;
-      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++;
-      i += 2;
-      out += source.slice(start, i).replace(/[^\n]/g, " ");
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      const start = i;
-      i++;
-      while (i < source.length && source[i] !== c) {
-        i += source[i] === "\\" ? 2 : 1;
-      }
-      i++;
-      out += source.slice(start, i);
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out;
-}
-
-/** Every line of code that names the global, with its line number. */
 function namesTheEventSource(source: string): string[] {
-  return codeOf(source)
-    .split("\n")
+  return scan(source)
+    .code.split("\n")
     .map((line, n) => `${n + 1}: ${line.trim()}`)
     .filter((line) => line.includes("EventSource"));
 }
