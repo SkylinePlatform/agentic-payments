@@ -33,9 +33,11 @@ export interface Lane {
    * position in the middle of the agent's column, which is the one thing the
    * design says is not negotiable.
    *
-   * They are not folded into the merchant, though: `sub` below is what keeps
-   * them nameable, so "every step is visible" survives the compromise. A step
-   * whose party is invisible would fail the standard this screen is held to.
+   * They are not folded into the merchant, though. Every step keeps its own
+   * role and {@link titleOf} names it on the card, so "every step is visible"
+   * survives the compromise — a reader sees three columns and five parties. A
+   * step whose party was invisible would fail the standard this screen is held
+   * to before the layout ever came into it.
    */
   readonly roles: readonly string[];
 }
@@ -194,7 +196,7 @@ export function verdictOf(attempt: Attempt): Verdict {
   return { state: "bound", digest: attempt.digest };
 }
 
-/**
+/*
  * What this screen cannot see, stated rather than left to be discovered.
  *
  * Two parties disagreeing about one presentation and two attempts at different
@@ -208,7 +210,6 @@ export function verdictOf(attempt: Attempt): Verdict {
  * read here as two attempts. That is the honest failure mode: it under-reports
  * rather than crying wolf on every clean run, which is what the alternative did.
  */
-export const CANNOT_SEE_DISAGREEMENT_WITHOUT_AN_ATTEMPT_ID = true;
 
 /**
  * How much of a digest is shown.

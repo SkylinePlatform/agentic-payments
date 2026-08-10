@@ -11,7 +11,7 @@
  * Everything else is a hairline rule and a label.
  */
 
-import { DIGEST_SHOWN, LANES, shortDigest, stepsIn, titleOf, verdictOf } from "./model";
+import { LANES, shortDigest, stepsIn, titleOf, verdictOf } from "./model";
 import type { Attempt, Lane, Step, Transaction, Verdict } from "./model";
 
 /** What a step's kind says, in words a reader who has not read AP2 can follow. */
@@ -38,7 +38,7 @@ function toneOf(step: Step): string {
 
 function StepCard({ step }: { readonly step: Step }) {
   return (
-    <li className="lane-step flex flex-col gap-1 border border-graphite/40 bg-paper px-3 py-2">
+    <li className="flex flex-col gap-1 border border-graphite/40 bg-paper px-3 py-2">
       <div className="flex items-baseline justify-between gap-2">
         <span className={`font-mono text-xs font-semibold tracking-tight ${toneOf(step)}`}>
           {KIND_WORDS[step.kind]}
@@ -97,62 +97,91 @@ function LaneColumn({ lane, attempt }: { readonly lane: Lane; readonly attempt: 
 }
 
 /**
- * The spine, and the one place this screen raises its voice.
+ * The spine: the axis this page hangs from, in two parts.
  *
- * - **pending** — no party has confirmed a checkout. The axis is drawn as a rule
- *   with nothing on it, because a step that has not attached yet is a thing the
- *   design says a viewer should be able to see.
- * - **bound** — every party in this attempt named the same checkout. One digest,
- *   in ink, running the height of the column.
- * - **refused** — somebody said no, and the colour depends on *why*. A limit the
- *   user set being enforced is the protocol working, and the spine stays ink. A
- *   binding that did not hold is the thesis failing, and the rule turns `broken`
- *   — which is the design's account of how that reads: not a red badge
- *   somewhere, but the failure where the eye already is.
+ * **It was one part and it was wrong.** The first version drew the digest inside
+ * an absolutely-positioned overlay running down the centre of the grid — which
+ * is exactly the middle of the agent's column, and therefore exactly on top of
+ * the agent's own step cards. A positioned element paints above non-positioned
+ * in-flow ones whatever the DOM order, so the signature element of the whole
+ * design rendered over the content it was meant to organise.
+ *
+ * Split, both halves get room:
+ *
+ * - {@link SpineHead} is the value, at the head of the axis, in the largest mono
+ *   on the page. This is the bold move the brief allows exactly one of.
+ * - {@link SpineRule} is the axis itself, a hairline behind the column. The
+ *   cards are opaque `paper`, so it shows in the gaps between them and threads
+ *   the column rather than crossing it.
+ *
+ * `broken` is reserved for the binding not holding. A verifier enforcing a limit
+ * the user set is the protocol working exactly as designed, and colouring the
+ * two the same would teach a viewer the opposite of the truth.
  */
-function Spine({ verdict }: { readonly verdict: Verdict }) {
-  // `broken` is reserved for the binding not holding. A refusal on a limit the
-  // user set is the protocol working exactly as designed, and colouring it the
-  // same as a failure would teach a viewer the opposite of the truth.
-  const failed = verdict.state === "refused" && verdict.bindingFailed;
-  const tone = failed ? "bg-broken" : "bg-ink";
-  const text = failed ? "text-broken" : "text-ink";
-  const digest = verdict.state === "pending" ? undefined : verdict.digest;
+function failed(verdict: Verdict): boolean {
+  return verdict.state === "refused" && verdict.bindingFailed;
+}
+
+function SpineHead({ verdict }: { readonly verdict: Verdict }) {
+  if (verdict.state === "pending") return null;
+  const digest = verdict.digest;
+  if (digest === undefined) return null;
 
   return (
-    <div className="pointer-events-none absolute inset-y-0 left-1/2 flex -translate-x-1/2 flex-col items-center">
-      <span className={`w-px flex-1 ${tone}`} />
-      {digest !== undefined && (
-        <span
-          className={`spine-value my-3 font-mono text-sm font-semibold ${text}`}
-          title={digest}
-        >
-          {shortDigest(digest)}
-        </span>
-      )}
-      <span className={`w-px flex-1 ${tone}`} />
+    <div className="flex justify-center">
+      <span
+        className={`font-mono text-xl font-semibold tracking-tight sm:text-2xl ${
+          failed(verdict) ? "text-broken" : "text-ink"
+        }`}
+        title={digest}
+      >
+        {shortDigest(digest)}
+      </span>
     </div>
   );
 }
 
-/** One sentence saying what the screen is claiming, and whether it holds. */
+/**
+ * The axis, behind the lanes.
+ *
+ * Hidden below the breakpoint where the three columns stack: an axis down the
+ * middle of a single stacked column would run through all three parties and say
+ * something that is not true.
+ */
+function SpineRule({ verdict }: { readonly verdict: Verdict }) {
+  return (
+    <div
+      aria-hidden="true"
+      className={`pointer-events-none absolute inset-y-0 left-1/2 hidden w-px -translate-x-1/2 md:block ${
+        failed(verdict) ? "bg-broken" : "bg-ink"
+      }`}
+    />
+  );
+}
+
+/**
+ * One sentence saying what happened, in words somebody who has not read AP2 can
+ * follow.
+ *
+ * The digest is deliberately **not** repeated here. SpineHead shows it directly
+ * above, at the size the design reserves for it, and every step that named it
+ * carries it too — a third copy inside the sentence made the prose fight the
+ * value for attention and neither won.
+ */
 function Thesis({ verdict }: { readonly verdict: Verdict }) {
   switch (verdict.state) {
     case "pending":
       return (
         <p className="font-sans text-sm text-graphite">
-          Nobody has confirmed a checkout yet. The spine is drawn once a party
+          Nobody has confirmed a checkout yet. The axis is drawn once a party
           verifies a mandate that names one.
         </p>
       );
     case "bound":
       return (
         <p className="font-sans text-sm text-ink">
-          Every party that named a checkout named{" "}
-          <span className="font-mono font-semibold" title={verdict.digest}>
-            {shortDigest(verdict.digest)}
-          </span>
-          . Different signatures, one purchase.
+          Every party that named a checkout named this one. Different signatures,
+          one purchase.
         </p>
       );
     case "refused": {
@@ -166,17 +195,20 @@ function Thesis({ verdict }: { readonly verdict: Verdict }) {
           </p>
         );
       }
+      if (verdict.digest === undefined) {
+        // Refused before anything confirmed a checkout. Saying "the binding
+        // held" here would be claiming something nothing established.
+        return (
+          <p className="font-sans text-sm text-ink">
+            <span className="text-broken">{who}</span> refused before any party
+            had confirmed a checkout, so there is no binding to have held.
+          </p>
+        );
+      }
       return (
         <p className="font-sans text-sm text-ink">
-          The binding held{verdict.digest === undefined ? "" : " — "}
-          {verdict.digest !== undefined && (
-            <span className="font-mono font-semibold" title={verdict.digest}>
-              {shortDigest(verdict.digest)}
-            </span>
-          )}
-          {verdict.digest === undefined ? "" : " — "}and{" "}
-          <span className="text-broken">{who}</span> refused the purchase anyway.
-          That is a verifier enforcing a limit the user set.
+          The binding held, and <span className="text-broken">{who}</span> refused
+          the purchase anyway. That is a verifier enforcing a limit the user set.
         </p>
       );
     }
@@ -206,9 +238,15 @@ function AttemptView({
       )}
 
       <Thesis verdict={verdict} />
+      <SpineHead verdict={verdict} />
 
-      <div className="relative grid grid-cols-3 gap-6">
-        <Spine verdict={verdict} />
+      {/*
+        One column until there is room for three. Three columns of step cards on
+        a phone is three unreadable columns, and the left-to-right order the
+        design fixes — user, agent, merchant — survives as top-to-bottom.
+      */}
+      <div className="relative grid grid-cols-1 gap-6 md:grid-cols-3">
+        <SpineRule verdict={verdict} />
         {LANES.map((lane) => (
           <LaneColumn key={lane.id} lane={lane} attempt={attempt} />
         ))}
@@ -259,4 +297,3 @@ export function Lanes({ transaction }: { readonly transaction: Transaction }) {
   );
 }
 
-export { DIGEST_SHOWN };
