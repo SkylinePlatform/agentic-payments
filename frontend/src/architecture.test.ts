@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { BLOCK_OF, blockOf, colourDeclarations, STYLESHEET, THEMES, TOKENS } from "./test/palette";
+import { codeOf, scan, stringLiterals } from "./test/source";
 
 /**
  * The frontend's depguard.
@@ -50,82 +51,6 @@ const SOURCES = import.meta.glob(["./**/*.{ts,tsx}", "!./protocol/generated/**"]
 const APP_SOURCES = Object.entries(SOURCES).filter(
   ([path]) => !/\.test\.tsx?$/.test(path) && !path.startsWith("./test/"),
 );
-
-// --- reading source --------------------------------------------------------
-
-/** What one pass over a TypeScript source pulls out of it. */
-interface Scan {
-  /** The contents of every string literal, with comments skipped. */
-  readonly literals: readonly string[];
-  /** The source with every comment blanked out, and nothing else moved. */
-  readonly code: string;
-}
-
-/**
- * Reads a TypeScript source once, separating what it says from what it does.
- *
- * Hand-scanned rather than regexed because comments in this repository are
- * long and full of apostrophes, and a regex for string literals treats the one
- * in "Tailwind's" as an opening quote and swallows the paragraph after it. The
- * same walk answers both questions because the hard part — knowing whether a
- * `//` is a comment or the middle of `"https://…"` — is the same hard part, and
- * two scanners would be two chances to get it wrong differently.
- *
- * The one construct it does not understand is a regular-expression literal
- * containing a quote — `/['"]/` would open a string that is not there, and from
- * that point the scanner is one quote out of phase: it can both invent a
- * violation and swallow a real one. No file in `APP_SOURCES` contains a regex
- * literal at all today, which is why this is a note rather than a parser; if
- * this file ever reports something baffling, that is the first thing to grep
- * for.
- */
-function scan(source: string): Scan {
-  const literals: string[] = [];
-  let code = "";
-  let i = 0;
-
-  // Same length and same line breaks, so a failure reported by line still
-  // points at the right line.
-  const blanked = (text: string) => text.replace(/[^\n]/g, " ");
-
-  while (i < source.length) {
-    const c = source[i];
-    if (c === "/" && source[i + 1] === "/") {
-      const from = i;
-      while (i < source.length && source[i] !== "\n") i++;
-      code += blanked(source.slice(from, i));
-      continue;
-    }
-    if (c === "/" && source[i + 1] === "*") {
-      const from = i;
-      i += 2;
-      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++;
-      i += 2;
-      code += blanked(source.slice(from, Math.min(i, source.length)));
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      const from = i;
-      i++;
-      const start = i;
-      while (i < source.length && source[i] !== c) {
-        i += source[i] === "\\" ? 2 : 1;
-      }
-      literals.push(source.slice(start, i));
-      i++;
-      code += source.slice(from, Math.min(i, source.length));
-      continue;
-    }
-    code += c;
-    i++;
-  }
-
-  return { literals, code };
-}
-
-function stringLiterals(source: string): readonly string[] {
-  return scan(source).literals;
-}
 
 /**
  * The whitespace-separated words in a literal that could be utility classes.
@@ -356,21 +281,19 @@ const MAY_NAME_THE_EVENT_SOURCE: readonly string[] = ["./sse/stream.ts"];
 /**
  * Every line of code that names the global, with its line number.
  *
- * Over `scan(source).code` — the same walk the palette and hex rules use, and
- * deliberately not a second one. The rule here is about code and not prose: a
- * comment elsewhere explaining why this seam exists is worth having, and
- * flagging it would push the explanation out of the tree. That is the same
- * distinction `scan` was written to make, down to the same blind spot, and the
- * doc comment there is explicit that two scanners would be two chances to get
- * it wrong differently.
+ * Over `codeOf` — the same walk the palette and hex rules use, and deliberately
+ * not a second one. The rule here is about code and not prose: a comment
+ * elsewhere explaining why this seam exists is worth having, and flagging it
+ * would push the explanation out of the tree.
  *
- * What the shared walk buys beyond one implementation is that comments are
- * blanked to spaces rather than dropped, so a line number reported here still
- * points at the line it came from even when a block comment precedes it.
+ * The line number in each entry is why `src/test/source.ts` blanks a comment
+ * rather than deleting it: the stripped source keeps its line breaks, so what is
+ * reported here points at the line the code came from even when a block comment
+ * precedes it.
  */
 function namesTheEventSource(source: string): string[] {
-  return scan(source)
-    .code.split("\n")
+  return codeOf(source)
+    .split("\n")
     .map((line, n) => `${n + 1}: ${line.trim()}`)
     .filter((line) => line.includes("EventSource"));
 }
