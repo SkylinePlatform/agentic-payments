@@ -12,7 +12,10 @@
  * and only the drawing lives in a component.
  */
 
+import { DIGEST_SHOWN, shortDigest } from "../digest";
 import type { EventKind, EventRecord } from "../sse";
+
+export { DIGEST_SHOWN, shortDigest };
 
 /** The three columns, left to right, in the order the protocol puts them. */
 export const LANE_IDS = ["user", "agent", "merchant"] as const;
@@ -211,20 +214,6 @@ export function verdictOf(attempt: Attempt): Verdict {
  * rather than crying wolf on every clean run, which is what the alternative did.
  */
 
-/**
- * How much of a digest is shown.
- *
- * Twelve characters, which the design fixes and which is not arbitrary: it is
- * long enough that two digests in one screenshot are obviously different and
- * short enough to sit in a column heading without wrapping. The full value is
- * never truncated in the DOM — `title` carries it — so a reader who wants to
- * compare by eye can, and a reader who wants to copy one gets all of it.
- */
-export const DIGEST_SHOWN = 12;
-
-export function shortDigest(digest: string): string {
-  return digest.slice(0, DIGEST_SHOWN);
-}
 
 /**
  * Groups records into transactions, newest first.
