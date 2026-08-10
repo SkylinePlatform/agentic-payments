@@ -86,6 +86,27 @@ export interface ProtocolEvent {
    */
   readonly detail?: string;
 
+  /**
+   * The checkout digest this event is about, when it is about one.
+   *
+   * This is the three-lane view's spine — the design spec makes it "the literal
+   * axis the layout hangs from", because the claim that screen exists to make is
+   * that three parties signed three different things and one value proves they
+   * were talking about the same purchase.
+   *
+   * **`correlation_id` above cannot carry that claim**, which is why this field
+   * exists at all rather than the spine reusing it. We mint a correlation ID; it
+   * groups events for a demonstration and proves nothing about what anybody
+   * signed. The digest is the protocol's own binding, and each role emits the
+   * one *it* computed rather than one passed along — a value copied down the
+   * chain would prove nothing either.
+   *
+   * Absent on an event emitted before any mandate has been read, which is the
+   * honest answer rather than a gap: that step has not attached to the spine
+   * yet, and the design says a viewer should be able to see exactly that.
+   */
+  readonly digest?: string;
+
   /** The canonical error code, set only when the kind is a rejection. */
   readonly code?: string;
 }
@@ -173,6 +194,9 @@ export function parseRecord(data: string): ParsedRecord {
   if (!optionalText(event.detail)) {
     return { ok: false, reason: "detail is present and is not a string" };
   }
+  if (!optionalText(event.digest)) {
+    return { ok: false, reason: "digest is present and is not a string" };
+  }
   if (!optionalText(event.code)) {
     return { ok: false, reason: "code is present and is not a string" };
   }
@@ -187,6 +211,7 @@ export function parseRecord(data: string): ParsedRecord {
         role: event.role,
         at: event.at,
         detail: event.detail,
+        digest: event.digest,
         code: event.code,
       },
     },

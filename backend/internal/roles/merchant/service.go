@@ -855,6 +855,19 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Every event below names the checkout this purchase is about, so that the
+	// three-lane view can hang this merchant's verdict, its receipt and its hop
+	// to the processor on one spine. Rebound once here rather than passed at
+	// each emission: a call site that had to remember is a call site that can
+	// forget, and the gap would read on screen as a step that belongs to no
+	// purchase.
+	//
+	// The digest is one this merchant confirmed rather than one it was handed —
+	// see decide. That distinction is the whole point of the spine: it holds
+	// because each party independently arrives at the same value, not because
+	// one value was copied along the chain.
+	r = r.WithContext(obs.WithDigest(r.Context(), answered.digest))
+
 	if answered.err != nil {
 		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(answered.err)),
 			"the purchase was refused: "+answered.err.Error())
@@ -991,7 +1004,21 @@ type answered struct {
 	kind    generated.ReceiptMandateType
 	// err is the verdict: nil when the purchase may proceed.
 	err error
+
+	// digest is the checkout this answer is about, once the merchant has
+	// confirmed one. It goes on every event the handler emits from here on, so
+	// that the three-lane view can hang this merchant's verdict on the same
+	// spine as the agent's presentation and the processor's answer.
+	//
+	// Empty until a mandate naming a checkout has been verified, and that is the
+	// honest value rather than a gap: a refusal on the Checkout Mandate itself
+	// happens before anything claimed a checkout digest, so there is no checkout
+	// this merchant can say it refused a payment for.
+	digest string
 }
+
+// about attaches the checkout digest this answer concerns.
+func (a answered) about(digest string) answered { a.digest = digest; return a }
 
 // aboutCheckout and aboutPayment are the only ways to make an answered, which
 // is what pairs each kind with the mandate it can name. Both take either shape,
@@ -1184,6 +1211,12 @@ func (s *Service) decide(
 		return payment.refusing(err)
 	}
 
+	// From here every answer names a checkout. The digest is the mandate's own
+	// claim, and the binding check immediately below is what makes stating it
+	// safe — a value this merchant has confirmed is for the checkout it signed,
+	// rather than one it copied out of a payload and passed on.
+	checkout, payment = checkout.about(mandate.CheckoutHash), payment.about(mandate.CheckoutHash)
+
 	binding, err := ap2.BindingOf(paying, mandate.CheckoutHash)
 	if err != nil {
 		return payment.refusing(err)
@@ -1252,6 +1285,11 @@ func (s *Service) decideChain(
 	if err != nil {
 		return payment.refusing(err)
 	}
+
+	// As in decide: the answer names a checkout from here, and PaysFor below is
+	// what makes saying so more than a repetition of what the chain claimed.
+	checkout, payment = checkout.about(authorised.Closed.CheckoutHash),
+		payment.about(authorised.Closed.CheckoutHash)
 
 	// The binding, which AuthorisePaymentChain deliberately does not check —
 	// a closed Payment Mandate never carries the document it binds to, so only a

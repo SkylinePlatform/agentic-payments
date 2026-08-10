@@ -506,3 +506,59 @@ describe("connection state", () => {
     expect(sources).toHaveLength(2);
   });
 });
+
+describe("a source that cannot be constructed", () => {
+  // The case jsdom presents on every render: `new EventSource(...)` is a
+  // ReferenceError because the constructor does not exist. A browser can refuse
+  // to construct one too, for a URL it will not fetch.
+  //
+  // What makes this worth a test rather than a try/catch nobody reads: connect()
+  // is called from a React effect, so an exception here unmounts the tree React
+  // was committing. The screen goes blank because a stream could not open —
+  // which on a page whose whole subject is showing what happened is the worst
+  // available outcome, and it looks like a bug in the page rather than a
+  // collector that is not running.
+  const throwing: EventSourceFactory = () => {
+    throw new ReferenceError("EventSource is not defined");
+  };
+
+  it("does not throw out of connect", () => {
+    expect(() => connect({ create: throwing })).not.toThrow();
+  });
+
+  it("settles on failed, which is the state that offers a retry", () => {
+    const stream = connect({ create: throwing });
+    expect(
+      stream.state,
+      "`failed` already means 'the source has given up, offer a retry', so the " +
+        "answer to this was in the API before the case was handled",
+    ).toBe("failed");
+  });
+
+  it("can still be retried, and succeeds when the factory does", () => {
+    let attempts = 0;
+    const create: EventSourceFactory = (url) => {
+      attempts += 1;
+      if (attempts === 1) throw new ReferenceError("EventSource is not defined");
+      return new FakeSource(url);
+    };
+
+    const stream = connect({ create });
+    expect(stream.state, "the first attempt failed").toBe("failed");
+
+    stream.reconnect();
+    expect(
+      stream.state,
+      "a retry after a transient failure has to be able to work, or the button " +
+        "the failed state exists to justify does nothing",
+    ).toBe("connecting");
+  });
+
+  it("closes cleanly having never opened anything", () => {
+    const stream = connect({ create: throwing });
+    expect(() => {
+      stream.close();
+    }, "the effect cleanup runs whether or not the connection was made").not.toThrow();
+    expect(stream.state).toBe("closed");
+  });
+});

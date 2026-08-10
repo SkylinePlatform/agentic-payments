@@ -187,6 +187,14 @@ func (s *Service) fund(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Every event below names the checkout this mandate is for, which is what
+	// lets the three-lane view hang this role's verdict on the same spine as the
+	// merchant's. It is the digest this role verified a signature over rather
+	// than one it was told — see examined.checkoutHash, which is read only when
+	// the verdict is nil, so a refused presentation contributes no digest to a
+	// spine it never joined.
+	r = r.WithContext(obs.WithDigest(r.Context(), got.checkoutHash))
+
 	// The verdict is recorded before the receipt that carries it, in the order
 	// the two happened. ap2.CodeOf is the same mapping IssueReceipt uses, so the
 	// code in the log and the code in the signed answer cannot disagree — which
