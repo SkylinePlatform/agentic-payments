@@ -12,7 +12,7 @@
 // The schema list comes from contracts/codegen.mk so that make, the Go
 // generator and this script all work from one enumeration of the model.
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,6 +49,104 @@ const root = {
   ),
 };
 
+/**
+ * Keywords that make a subschema say something about the value's shape.
+ *
+ * A property carrying none of them constrains nothing, which in JSON Schema
+ * means **any JSON value**.
+ */
+const CONSTRAINING = [
+  "type",
+  "$ref",
+  "anyOf",
+  "oneOf",
+  "allOf",
+  "not",
+  "enum",
+  "const",
+  "properties",
+  "items",
+  "patternProperties",
+  "additionalProperties",
+];
+
+/**
+ * Marks every property that constrains nothing as `unknown`.
+ *
+ * # The bug this exists for
+ *
+ * `Constraint.value` carries a description and no type, because what a leaf
+ * compares against is decided by the operator and the field's declared type —
+ * a union JSON Schema cannot state without a oneOf over every field name, and
+ * `internal/core/authz/constraint` is what actually enforces it. Go reads that
+ * correctly and emits `interface{}`.
+ *
+ * json-schema-to-typescript does not. Given a typeless schema it emits
+ * `{ [k: string]: unknown }` — an object map, which **cannot hold `"BEG"` or
+ * `20000`**, both of which are values the schema plainly intends. Anything
+ * constructing a Constraint in TypeScript fights it, which is issue #152, found
+ * while writing the constraint renderer and due to bite the Inspector and the
+ * consent screen next.
+ *
+ * # Why this is here and not in the schema
+ *
+ * Expressing the union with `anyOf` was tried first and it works beautifully on
+ * this side: `string | number | Amount | (…)[] | { from, to }`, no duplicate
+ * Amount, exactly the type a caller wants. **It breaks Go.** go-jsonschema does
+ * not union — it picks a branch, so `Value interface{}` became `*string`, and
+ * the `#/$defs` form turned it into `[]ConstraintValue_0Elem`. Either way the Go
+ * side stops being able to hold a constraint value at all, which is a far worse
+ * defect than the one being fixed.
+ *
+ * The remaining options were a `tsType` in the schema or a `goJSONSchema` in the
+ * schema — a per-language annotation on the canonical model, which AGENTS.md
+ * rules out in as many words: the answer is a mapping in the layer that wants
+ * it, never a tag on the shared model. This script *is* the TypeScript layer, so
+ * the mapping lives here.
+ *
+ * # Why it is a rule rather than a special case for `value`
+ *
+ * Naming `Constraint.value` here would fix one field and leave the next typeless
+ * property to be discovered the same way. "A property that constrains nothing is
+ * `unknown`" is what JSON Schema already means, and it holds for every schema in
+ * `contracts/` including the ones nobody has written yet.
+ */
+function markUnconstrainedAsUnknown(node) {
+  if (Array.isArray(node)) {
+    for (const item of node) markUnconstrainedAsUnknown(item);
+    return node;
+  }
+  if (typeof node !== "object" || node === null) return node;
+
+  if (typeof node.properties === "object" && node.properties !== null) {
+    for (const property of Object.values(node.properties)) {
+      if (typeof property !== "object" || property === null) continue;
+      if (!CONSTRAINING.some((keyword) => keyword in property)) {
+        property.tsType = "unknown";
+      }
+    }
+  }
+
+  for (const child of Object.values(node)) markUnconstrainedAsUnknown(child);
+  return node;
+}
+
+/**
+ * Reads a schema file and applies the rule above.
+ *
+ * A resolver rather than a pass over the files up front, because the compiler
+ * follows `$ref`s itself and a schema reached only through one would otherwise
+ * be compiled unpatched.
+ */
+const patchingFileResolver = {
+  order: 1,
+  canRead: /^file:|^[^:]*$/,
+  async read(file) {
+    const path = file.url.startsWith("file:") ? fileURLToPath(file.url) : file.url;
+    return markUnconstrainedAsUnknown(JSON.parse(await readFile(path, "utf8")));
+  },
+};
+
 const banner = [
   "/* eslint-disable */",
   "/**",
@@ -64,7 +162,7 @@ const ts = await compile(root, "Contracts", {
   unreachableDefinitions: true,
   additionalProperties: false,
   strictIndexSignatures: true,
-  $refOptions: { resolve: { http: false } },
+  $refOptions: { resolve: { http: false, file: patchingFileResolver } },
 });
 
 // The synthetic root carries no information — it exists only to pull the
