@@ -23,7 +23,7 @@ import { render } from "./render";
  * The vectors, read from disk.
  *
  * `readFileSync` against a URL resolved from `import.meta.url`, for the reason
- * `node-fs.d.ts` gives: a bundler import would put a test fixture from outside
+ * `../test/node-fs.d.ts` gives: a bundler import would put a test fixture from outside
  * this package into the module graph, and the path has to be relative to this
  * file rather than to whatever directory the runner was started in.
  *
