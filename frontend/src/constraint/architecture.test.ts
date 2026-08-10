@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { codeOf } from "../test/source";
+
 /**
  * The rules that make the constraint renderer's boundaries structural.
  *
@@ -220,51 +222,18 @@ describe("the consent path renders nothing of its own", () => {
 // --- rule: the renderer formats its own money and its own dates ------------
 
 /**
- * A source with its comments blanked.
+ * The rules below need a source with its comments blanked, because they forbid
+ * identifiers the renderer's own documentation has to be able to name — the
+ * whole point of the comment on `renderMoney` is to say why `Intl` is wrong
+ * there.
  *
- * Needed because the rules below forbid identifiers that the renderer's own
- * documentation has to be able to name — the whole point of the comment on
- * `renderMoney` is to say why `Intl` is wrong there.
- *
- * The one construct this does not understand is a regular-expression literal
- * containing a quote, which would open a string that is not there and leave the
- * scan one quote out of phase. `src/constraint/` holds two regex literals and
- * neither contains a quote; `keepsItsCode` below is what notices if that stops
- * being true, by checking that code survived the strip and comment prose did
- * not.
+ * `codeOf` comes from `src/test/source.ts` rather than being written again here.
+ * That module's header carries the argument and the one blind spot — a
+ * regular-expression literal containing a quote leaves the walk one quote out of
+ * phase. `src/constraint/` holds two regex literals and neither contains a
+ * quote; `keepsItsCode` below is what notices if that stops being true, by
+ * checking that code survived the strip and comment prose did not.
  */
-function withoutComments(source: string): string {
-  let out = "";
-  let i = 0;
-  while (i < source.length) {
-    const c = source[i];
-    if (c === "/" && source[i + 1] === "/") {
-      while (i < source.length && source[i] !== "\n") i++;
-      continue;
-    }
-    if (c === "/" && source[i + 1] === "*") {
-      i += 2;
-      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++;
-      i += 2;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      out += c;
-      i++;
-      while (i < source.length && source[i] !== c) {
-        const step = source[i] === "\\" ? 2 : 1;
-        out += source.slice(i, i + step);
-        i += step;
-      }
-      out += source[i] ?? "";
-      i++;
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out;
-}
 
 /** The module's own sources, which are the only files these two rules govern. */
 const RENDERER_SOURCES = APP_SOURCES.filter(([path]) => path.startsWith(RENDERER));
@@ -309,7 +278,7 @@ const FORBIDDEN: readonly {
 ];
 
 function named(source: string): string[] {
-  const code = withoutComments(source);
+  const code = codeOf(source);
   return FORBIDDEN.filter(({ pattern }) => pattern.test(code)).map(
     ({ name, because }) => `${name} — ${because}`,
   );
@@ -317,7 +286,7 @@ function named(source: string): string[] {
 
 describe("the renderer formats money and dates itself", () => {
   it("has a comment stripper that keeps the code and drops the prose", () => {
-    const code = withoutComments(SOURCES.get("constraint/render.ts") ?? "");
+    const code = codeOf(SOURCES.get("constraint/render.ts") ?? "");
     expect(code, "the strip ate the module").toContain("export function render");
     expect(code, "the strip left the documentation behind, so the rules below scan prose").not.toContain(
       "Mandate Inspector",
@@ -350,7 +319,7 @@ describe("the renderer formats money and dates itself", () => {
     const IMPORT_OF_THE_BARREL = /import\s+(type\s+)?[^;]*?from\s*["']\.\.\/protocol["']/g;
 
     for (const [path, source] of RENDERER_SOURCES) {
-      const imports = [...withoutComments(source).matchAll(IMPORT_OF_THE_BARREL)];
+      const imports = [...codeOf(source).matchAll(IMPORT_OF_THE_BARREL)];
       for (const match of imports) {
         expect(
           match[1],
