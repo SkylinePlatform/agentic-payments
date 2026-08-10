@@ -119,6 +119,28 @@ referring schema a distinct object, and `json-schema-to-typescript` then emits a
 second copy of the referenced type as `Merchant1`. Per-field prose that would
 otherwise sit next to a `$ref` goes in the parent object's `$comment`.
 
+**A property may carry no `type` at all, and that is a decision rather than an
+omission.** `Constraint.value` is the one: what a leaf compares against is
+decided by the operator and by the field's declared type, a union JSON Schema
+cannot state without a `oneOf` over every field name, and
+`internal/core/authz/constraint` is what actually enforces it. Go reads a
+typeless property correctly and emits `interface{}`.
+
+`json-schema-to-typescript` does not — it emits `{ [k: string]: unknown }`, an
+object map that cannot hold `"BEG"` or `20000`. So
+`frontend/scripts/generate-protocol-types.mjs` carries one rule: **a property
+that constrains nothing becomes `unknown`**, which is what JSON Schema already
+means by it. That rule lives in the generator and not in the schema deliberately.
+Spelling the union out with `anyOf` was tried and produces a lovely TypeScript
+type — and turns Go's `Value interface{}` into `*string`, because go-jsonschema
+picks a branch rather than unioning. The alternative was a `tsType` or a
+`goJSONSchema` annotation in the schema, which is a per-language tag on the
+shared model, and the *Extensibility* section of AGENTS.md rules that out in as
+many words: the mapping belongs in the layer that wants it.
+`frontend/src/protocol/constraint.test.ts` is the backstop — it constructs a
+literal of every shape the schema intends, and `tsc` is what fails if the rule
+stops firing.
+
 `format` is used only where the generated Go type stays on the standard library:
 `date-time` maps to `time.Time`, but `date` maps to a type from the generator's
 own runtime package, which would drag a third-party dependency into `core/`.
