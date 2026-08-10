@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { BLOCK_OF, blockOf, colourDeclarations, STYLESHEET, THEMES, TOKENS } from "./test/palette";
+import { codeOf, scan, stringLiterals } from "./test/source";
 
 /**
  * The frontend's depguard.
@@ -50,82 +51,6 @@ const SOURCES = import.meta.glob(["./**/*.{ts,tsx}", "!./protocol/generated/**"]
 const APP_SOURCES = Object.entries(SOURCES).filter(
   ([path]) => !/\.test\.tsx?$/.test(path) && !path.startsWith("./test/"),
 );
-
-// --- reading source --------------------------------------------------------
-
-/** What one pass over a TypeScript source pulls out of it. */
-interface Scan {
-  /** The contents of every string literal, with comments skipped. */
-  readonly literals: readonly string[];
-  /** The source with every comment blanked out, and nothing else moved. */
-  readonly code: string;
-}
-
-/**
- * Reads a TypeScript source once, separating what it says from what it does.
- *
- * Hand-scanned rather than regexed because comments in this repository are
- * long and full of apostrophes, and a regex for string literals treats the one
- * in "Tailwind's" as an opening quote and swallows the paragraph after it. The
- * same walk answers both questions because the hard part — knowing whether a
- * `//` is a comment or the middle of `"https://…"` — is the same hard part, and
- * two scanners would be two chances to get it wrong differently.
- *
- * The one construct it does not understand is a regular-expression literal
- * containing a quote — `/['"]/` would open a string that is not there, and from
- * that point the scanner is one quote out of phase: it can both invent a
- * violation and swallow a real one. No file in `APP_SOURCES` contains a regex
- * literal at all today, which is why this is a note rather than a parser; if
- * this file ever reports something baffling, that is the first thing to grep
- * for.
- */
-function scan(source: string): Scan {
-  const literals: string[] = [];
-  let code = "";
-  let i = 0;
-
-  // Same length and same line breaks, so a failure reported by line still
-  // points at the right line.
-  const blanked = (text: string) => text.replace(/[^\n]/g, " ");
-
-  while (i < source.length) {
-    const c = source[i];
-    if (c === "/" && source[i + 1] === "/") {
-      const from = i;
-      while (i < source.length && source[i] !== "\n") i++;
-      code += blanked(source.slice(from, i));
-      continue;
-    }
-    if (c === "/" && source[i + 1] === "*") {
-      const from = i;
-      i += 2;
-      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++;
-      i += 2;
-      code += blanked(source.slice(from, Math.min(i, source.length)));
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      const from = i;
-      i++;
-      const start = i;
-      while (i < source.length && source[i] !== c) {
-        i += source[i] === "\\" ? 2 : 1;
-      }
-      literals.push(source.slice(start, i));
-      i++;
-      code += source.slice(from, Math.min(i, source.length));
-      continue;
-    }
-    code += c;
-    i++;
-  }
-
-  return { literals, code };
-}
-
-function stringLiterals(source: string): readonly string[] {
-  return scan(source).literals;
-}
 
 /**
  * The whitespace-separated words in a literal that could be utility classes.
@@ -330,6 +255,47 @@ const HAS_HEX = /#[0-9a-fA-F]{3,8}\b/;
 function withoutCssComments(css: string): string {
   // Newlines kept, so the line numbers a failure reports still point somewhere.
   return css.replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, " "));
+}
+
+// --- rule: only the stream client names EventSource ------------------------
+
+/**
+ * The one file allowed to name the browser's `EventSource`.
+ *
+ * jsdom has none — not a partial implementation and not one behind a flag, the
+ * constructor does not exist and `new EventSource(...)` under test is a
+ * `ReferenceError`. `src/test/setup.ts` records the decision that followed, in
+ * the file where the polyfill would otherwise have gone: the client takes a
+ * factory and defaults it to the global, so the app passes nothing and a test
+ * passes a fake it can drive.
+ *
+ * The rule is what keeps that decision from being undone one component at a
+ * time. A second file reaching for the global would be a second stream nothing
+ * can close, and — the part that does not announce itself — a piece of the app
+ * that has no seam and therefore cannot be tested at all in this environment.
+ *
+ * Adding a path here is a reviewed change, exactly as with MAY_NAME_A_THEME.
+ */
+const MAY_NAME_THE_EVENT_SOURCE: readonly string[] = ["./sse/stream.ts"];
+
+/**
+ * Every line of code that names the global, with its line number.
+ *
+ * Over `codeOf` — the same walk the palette and hex rules use, and deliberately
+ * not a second one. The rule here is about code and not prose: a comment
+ * elsewhere explaining why this seam exists is worth having, and flagging it
+ * would push the explanation out of the tree.
+ *
+ * The line number in each entry is why `src/test/source.ts` blanks a comment
+ * rather than deleting it: the stripped source keeps its line breaks, so what is
+ * reported here points at the line the code came from even when a block comment
+ * precedes it.
+ */
+function namesTheEventSource(source: string): string[] {
+  return codeOf(source)
+    .split("\n")
+    .map((line, n) => `${n + 1}: ${line.trim()}`)
+    .filter((line) => line.includes("EventSource"));
 }
 
 // --- the rules -------------------------------------------------------------
@@ -574,6 +540,40 @@ describe("the frontend's architecture", () => {
         hexes(`const url = "https://example.test/#abc123";`),
         "a scanner that mistook `//` in a URL for a comment would report nothing here",
       ).toEqual(["#abc123"]);
+    });
+  });
+
+  describe("only the stream client names EventSource", () => {
+    const governed = APP_SOURCES.filter(([path]) => !MAY_NAME_THE_EVENT_SOURCE.includes(path));
+
+    it.each(governed)("%s takes its stream from src/sse, not from the global", (_path, source) => {
+      expect(
+        namesTheEventSource(source),
+        "jsdom has no EventSource, so a file that constructs one directly is a " +
+          "file no test in this package can drive; `connect()` in src/sse is " +
+          "the seam, and it defaults to the global for everyone",
+      ).toEqual([]);
+    });
+
+    it("guards a file that exists, and catches what it claims to catch", () => {
+      expect(
+        APP_SOURCES.map(([path]) => path),
+        "an allow-list naming a file nobody wrote is a rule with nothing on " +
+          "the other side of it",
+      ).toEqual(expect.arrayContaining([...MAY_NAME_THE_EVENT_SOURCE]));
+
+      expect(namesTheEventSource(`const es = new EventSource("/events");`)).toEqual([
+        `1: const es = new EventSource("/events");`,
+      ]);
+      expect(
+        namesTheEventSource(`/* the client wraps EventSource */\nconst x = 1;`),
+        "prose is not a violation, which is why the scan runs over code alone",
+      ).toEqual([]);
+      expect(namesTheEventSource(`// EventSource is missing from jsdom\nconst x = 1;`)).toEqual([]);
+      expect(
+        namesTheEventSource(`const u = "http://x"; const s = new EventSource(u);`),
+        "the // inside a URL must not take the rest of the line out of the scan",
+      ).toHaveLength(1);
     });
   });
 });

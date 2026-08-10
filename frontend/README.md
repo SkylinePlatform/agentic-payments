@@ -20,6 +20,10 @@ layout, the design system and the generated protocol types, and fetches nothing
 and holds no data of its own — a shell with opinions about a transaction is one
 every surface has to work around.
 
+`src/sse` is the one thing here that can open a connection, and it is a library
+rather than an exception to that: it opens nothing until a surface calls it, and
+the shell never does.
+
 It does hold two things, and both are the document's rather than any surface's:
 the *theme*, which is an attribute on `<html>` set before React exists — see
 [The theme](#the-theme) — and opinions about *colour and type*, which are
@@ -86,6 +90,11 @@ would otherwise go: **the client takes an `EventSourceLike` factory and
 defaults it to the global one.** The app passes nothing; a test passes a fake it
 can open, feed and fail on demand. Polyfilling onto `globalThis` instead would
 leave the client with no seam and every test sharing one mutable global.
+
+That client is `src/sse` — see [The event stream](#the-event-stream) — and
+`src/sse/stream.ts` is now the only file in the package allowed to name
+`EventSource` at all. `src/architecture.test.ts` enforces it, so the seam cannot
+be undone one component at a time.
 
 There *are* two stubs on `globalThis` in that file — `ResizeObserver`, which
 Radix constructs the moment a tooltip opens, and `matchMedia`, which jsdom does
@@ -182,6 +191,38 @@ disagree is the flash wearing a different hat. **The resolved theme is not on
 the context at all** — `useTheme` hands back the *setting* and a way to change
 it, and the resolution goes to the root element where only CSS reads it. That is
 what makes "no component names a theme" structural rather than merely checked.
+## The event stream
+
+`src/sse` is a typed client over that stream: `connect()` opens it, hands back a
+subscription per kind, reports anything the stream skipped, and tracks where the
+connection stands. It is a library — no React, no provider — and wiring it into
+an effect belongs to the surface that needs it.
+
+Three things about it are decided by the wire rather than by taste, and all
+three are the sort of thing that fails quietly if got wrong.
+
+**The collector names its events**, so `EventSource.onmessage` never fires and
+`addEventListener` per kind is the only way to receive anything. All five kinds
+are registered whether or not anybody has subscribed, because sequence numbers
+are only continuous if every frame is seen.
+
+**A kind this package does not know about is invisible**, since there is no
+wildcard listener to catch it. `EVENT_KINDS` in `src/sse/events.ts` is the
+frontend's only copy of the list, and `TestTheFrontendKnowsEveryKind` in
+`backend/internal/platform/obs` holds it to `obs.Kinds()` — on the Go side on
+purpose, so the failure lands in `make check`, which is what somebody adding a
+kind is running.
+
+**Records go missing for real.** `collector.Hub` disconnects a subscriber that
+falls 64 records behind and replays only the 512 it still holds, so `onGap` is
+not a defensive nicety: a view that dropped a step silently would contradict the
+first thing [the three-lane design](../docs/specs/2026-08-06-three-lane-view-design.md)
+refuses to compromise on.
+
+Replay works two ways and the client uses both. The browser reconnects on its
+own and sends `Last-Event-ID` as a header; a manual `reconnect()` cannot set one,
+so the resume point goes on the URL as `?last_event_id=`, which
+`backend/internal/collector/sse.go` accepts for exactly this reason.
 
 ## The design system
 
@@ -211,7 +252,7 @@ equivalent of the backend's `depguard` rules:
 | | |
 |---|---|
 | `src/palette.test.ts` | every foreground/background pair the design uses clears WCAG 4.5:1 **in both themes**, and the pair table is exhaustive over the tokens |
-| `src/architecture.test.ts` | the palette is closed, shadcn's second palette is absent, no component names a theme, and generated types come through the barrel |
+| `src/architecture.test.ts` | the palette is closed, shadcn's second palette is absent, no component names a theme, generated types come through the barrel, and `src/sse/stream.ts` is the one file that may name `EventSource` |
 
 `src/test/palette.ts` builds the dark block's selector out of `THEME_ATTRIBUTE`
 rather than writing it out, and throws when the block is missing — so renaming
