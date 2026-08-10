@@ -345,7 +345,26 @@ export function connect(options: StreamOptions = {}): EventStream {
   }
 
   function attach(after: number): void {
-    const opened = create(streamURL(url, after));
+    // A factory that throws produces `failed`, not an exception.
+    //
+    // `connect()` is called from an effect, so an exception here unmounts the
+    // tree React was in the middle of committing — the screen goes blank because
+    // a stream could not be opened, which is the worst available outcome for a
+    // page whose whole subject is showing what happened.
+    //
+    // It is a real case rather than a defensive one. `new EventSource(...)`
+    // throws a `ReferenceError` under jsdom, where the constructor does not
+    // exist at all, and a browser can refuse to construct one for a URL it will
+    // not fetch. `failed` is exactly the state the API already defines for "the
+    // source has given up, offer a retry", so the answer was already here.
+    let opened: EventSourceLike;
+    try {
+      opened = create(streamURL(url, after));
+    } catch {
+      source = null;
+      setState("failed");
+      return;
+    }
     source = opened;
 
     opened.addEventListener("open", () => {
