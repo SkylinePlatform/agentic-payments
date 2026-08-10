@@ -110,6 +110,19 @@ const CONSTRAINING = [
  * property to be discovered the same way. "A property that constrains nothing is
  * `unknown`" is what JSON Schema already means, and it holds for every schema in
  * `contracts/` including the ones nobody has written yet.
+ *
+ * # The one shape it misreads, stated rather than left to be found
+ *
+ * The walk descends into every value rather than into the keywords that hold
+ * subschemas, because enumerating those is its own maintenance burden and
+ * *missing* one means the rule quietly stops firing there — the failure that is
+ * hard to notice. The cost is that a schema declaring a property literally named
+ * `properties` would have that property's own schema read as a property map.
+ *
+ * No schema in `contracts/` does, and one that did would be odd on its own
+ * terms. What makes this a note rather than a parser is the same thing that makes
+ * it survivable: this generator's output is diffed in review, and the rule
+ * changed exactly one line across thirteen schemas when it landed.
  */
 function markUnconstrainedAsUnknown(node) {
   if (Array.isArray(node)) {
