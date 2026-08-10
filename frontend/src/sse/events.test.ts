@@ -125,7 +125,7 @@ describe("parseRecord", () => {
       "the record is built field by field rather than cast, so a field added " +
         "to obs.Event arrives here as a deliberate change and not as a " +
         "property nothing declared",
-    ).toEqual(["at", "code", "correlation_id", "detail", "kind", "role"]);
+    ).toEqual(["at", "code", "correlation_id", "detail", "digest", "kind", "role"]);
   });
 
   it.each([
@@ -180,5 +180,61 @@ describe("parseRecord", () => {
         "system then propagates, and the failure would surface several " +
         "components away from the frame that caused it",
     ).toEqual({ ok: false, reason });
+  });
+});
+
+describe("the digest, which is the three-lane view's spine", () => {
+  // The field carries the claim that screen exists to make. A parser that
+  // dropped it would leave every artefact on the page attached to nothing, and
+  // the failure would look like a layout bug rather than a missing field.
+  it("is read through when the event names a checkout", () => {
+    const parsed = parseRecord(
+      JSON.stringify({
+        seq: 4,
+        event: {
+          kind: "mandate_verified",
+          role: "merchant",
+          at: "2026-08-04T12:00:00Z",
+          digest: "Eo_-w3Yl9o0q",
+        },
+      }),
+    );
+    expect(parsed.ok, "a well-formed record").toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.record.event.digest).toBe("Eo_-w3Yl9o0q");
+  });
+
+  it("is absent rather than empty on a step that has not attached yet", () => {
+    const parsed = parseRecord(
+      JSON.stringify({
+        seq: 1,
+        event: { kind: "mandate_constructed", role: "surface", at: "2026-08-04T12:00:00Z" },
+      }),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(
+      parsed.record.event.digest,
+      "Go writes the field with omitempty, so a reader can tell 'no checkout " +
+        "yet' from 'a checkout whose digest is the empty string' — and the " +
+        "design says a viewer should be able to see that difference",
+    ).toBeUndefined();
+  });
+
+  it("is refused when it is present and not a string", () => {
+    const parsed = parseRecord(
+      JSON.stringify({
+        seq: 2,
+        event: {
+          kind: "mandate_verified",
+          role: "mpp",
+          at: "2026-08-04T12:00:00Z",
+          digest: 12,
+        },
+      }),
+    );
+    expect(parsed.ok, "a digest that is not text is a frame this reader cannot use").toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.reason).toContain("digest");
   });
 });

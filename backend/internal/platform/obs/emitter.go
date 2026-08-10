@@ -167,20 +167,33 @@ func NewEmitter(clk authz.Clock, role string, opts ...EmitterOption) (*Emitter, 
 // The event's Role and At are filled in here rather than by the caller: the
 // role is fixed for the process, and the time has to come from the injected
 // clock, which the caller should not have to remember.
+// The digest comes from the context for the same reason the correlation ID
+// does: a call site that had to pass one would be a call site that can forget
+// to, and the two events either side of the one that forgot would then show a
+// spine with a hole in it. WithDigest is what a handler calls once, when it
+// learns which checkout it is looking at.
 func (e *Emitter) Emit(ctx context.Context, kind Kind, detail string) {
 	e.EmitEvent(Event{
 		Kind:          kind,
 		CorrelationID: CorrelationID(ctx),
+		Digest:        Digest(ctx),
 		Detail:        detail,
 	})
 }
 
 // EmitRejection records a refusal, carrying the canonical error code so the log
 // names the same reason the Problem Details response and the receipt do.
+//
+// It carries the digest too, and that is the case the three-lane view is built
+// around rather than an afterthought: the design says the spine "visibly breaks
+// at the party that noticed", which it can only do if the refusal names the
+// checkout it refused. A rejection emitted before the mandate parsed carries
+// none, which is the honest answer — nothing was refused *about* a checkout.
 func (e *Emitter) EmitRejection(ctx context.Context, code, detail string) {
 	e.EmitEvent(Event{
 		Kind:          KindMandateRejected,
 		CorrelationID: CorrelationID(ctx),
+		Digest:        Digest(ctx),
 		Detail:        detail,
 		Code:          code,
 	})

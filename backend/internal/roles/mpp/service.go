@@ -118,7 +118,12 @@ type examined struct {
 	// presented is what the receipt's reference is a digest of: the presented
 	// SD-JWT, or the chain's delegating hop.
 	presented ap2.Presented
-	verdict   error
+	// checkoutHash is the purchase the mandate names, read only once a
+	// signature has established it. A refused presentation leaves it empty,
+	// which is the honest value: this role has confirmed no checkout to put a
+	// verdict against.
+	checkoutHash string
+	verdict      error
 }
 
 type outcome struct {
@@ -170,6 +175,12 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 		// correct exactly where nothing was examined. See examine.
 		return
 	}
+
+	// Every event below names the checkout the mandate is for, so this role's
+	// answer lands on the same spine as the merchant's and the Credential
+	// Provider's — three parties, three signatures, one digest, which is the
+	// claim the three-lane view exists to make.
+	r = r.WithContext(obs.WithDigest(r.Context(), got.checkoutHash))
 
 	// Two questions were asked — is the mandate good, and is this credential
 	// scoped to it — and one verdict comes back, so one event says so. The code
@@ -245,8 +256,9 @@ func (s *Service) examineMandate(w http.ResponseWriter, req settlement) (examine
 		return examined{presented: presented, verdict: verdict}, true
 	}
 	return examined{
-		presented: presented,
-		verdict:   s.Rules.VerifyCredential(req.Credential, mandate.CheckoutHash),
+		presented:    presented,
+		checkoutHash: mandate.CheckoutHash,
+		verdict:      s.Rules.VerifyCredential(req.Credential, mandate.CheckoutHash),
 	}, true
 }
 
@@ -286,7 +298,8 @@ func (s *Service) examineChain(w http.ResponseWriter, req settlement) (examined,
 		return examined{presented: chain, verdict: verdict}, true
 	}
 	return examined{
-		presented: chain,
-		verdict:   s.Rules.VerifyCredential(req.Credential, authorised.Closed.CheckoutHash),
+		presented:    chain,
+		checkoutHash: authorised.Closed.CheckoutHash,
+		verdict:      s.Rules.VerifyCredential(req.Credential, authorised.Closed.CheckoutHash),
 	}, true
 }

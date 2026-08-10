@@ -106,6 +106,13 @@ type Event struct {
 	// on it.
 	Detail string `json:"detail,omitempty"`
 
+	// Digest is the checkout digest this event is about, when it is about one.
+	// It is what binds three parties' separate signatures to one purchase, and
+	// it is the axis the three-lane view is laid out on — see digest.go for why
+	// the correlation ID above cannot do that job. Empty for an event emitted
+	// before any mandate has been read.
+	Digest string `json:"digest,omitempty"`
+
 	// Code carries the canonical error code when Kind is KindMandateRejected,
 	// so a rejection in the log names the same reason the Problem Details
 	// response and the receipt do. It is a plain string rather than
