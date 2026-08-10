@@ -31,6 +31,7 @@ function mandate(
       value: null,
       reception: row.got,
     })),
+    claims: {},
     unnamed: rows.filter((row) => row.label === null).length,
     unmatched: [],
   };
@@ -131,5 +132,61 @@ describe("the heading over each table", () => {
   it("counts what the payment readers were shown against what the mandate carries", () => {
     render(<Inspector inspection={BUILT} />);
     expect(screen.queryByText(/3 readers, each shown the same 1 of 2/)).not.toBeNull();
+  });
+});
+
+describe("the two claims a reader of AP2 comes for", () => {
+  const bound: Inspection = {
+    mandates: [
+      {
+        ...mandate("checkout", ["air-serbia"], [{ label: AMOUNT, got: { "air-serbia": "disclosed" } }]),
+        binding: "Eo_-w3Yl9o0qXf3n",
+        confirmation: { jwk: { kty: "EC", crv: "P-256", kid: "agent-1" } },
+        claims: { vct: "mandate.checkout.open.1", constraints: ["…"] },
+      },
+      {
+        ...mandate("payment", ["air-serbia"], [{ label: AMOUNT, got: { "air-serbia": "disclosed" } }]),
+        binding: "Eo_-w3Yl9o0qXf3n",
+      },
+    ],
+  };
+
+  it("prints the same checkout digest under both mandates", () => {
+    render(<Inspector inspection={bound} />);
+    expect(
+      screen.getAllByText("Eo_-w3Yl9o0q"),
+      "one digest under each table. The Checkout Mandate says what may be bought " +
+        "and the Payment Mandate what may be paid for, and the same value twice " +
+        "is what proves they are about one purchase — a reader should see that " +
+        "rather than be told it",
+    ).toHaveLength(2);
+  });
+
+  it("shows the key the user endorsed for the agent", () => {
+    render(<Inspector inspection={bound} />);
+    expect(
+      screen.queryByText(/agent-1/),
+      "cnf is why the agent can close this mandate later without the user " +
+        "present, which is the AP2 point articles explain worst",
+    ).not.toBeNull();
+  });
+
+  it("says so when a mandate names no checkout", () => {
+    render(<Inspector inspection={BUILT} />);
+    expect(
+      screen.getAllByText("this mandate names no checkout"),
+      "a blank would read as a rendering bug; this reads as a fact about the document",
+    ).toHaveLength(2);
+  });
+
+  it("offers the resolved payload without opening it", () => {
+    render(<Inspector inspection={bound} />);
+    const raw = screen.getAllByText("The open mandate as this reader resolved it");
+    expect(raw.length, "one per mandate").toBe(2);
+    expect(
+      (raw[0].closest("details") as HTMLDetailsElement).open,
+      "closed by default: the tables are the argument, this is the evidence " +
+        "behind them",
+    ).toBe(false);
   });
 });

@@ -86,7 +86,7 @@ function MandateTable({ inspected }: { readonly inspected: Inspected }) {
   const title = MANDATE_TITLES[inspected.mandate] ?? inspected.mandate;
 
   return (
-    <section className="flex flex-col gap-3" aria-label={title}>
+    <section className="flex min-w-0 flex-col gap-3" aria-label={title}>
       <div className="flex flex-wrap items-baseline gap-3">
         <h3 className="font-display text-sm font-medium uppercase tracking-widest text-ink">
           {title}
@@ -114,11 +114,17 @@ function MandateTable({ inspected }: { readonly inspected: Inspected }) {
           <tbody>
             {inspected.rows.map((row) => (
               <tr key={row.digest} className="border-b border-graphite/20 align-baseline">
-                <td className="py-2 pr-4 font-sans text-sm text-ink">
+                {/*
+                  A header cell, not a data cell. This table's whole use is
+                  reading one row across three readers, and a screen reader that
+                  did not announce the sentence with each answer would give a
+                  listener a list of digests with nothing attached to them.
+                */}
+                <th scope="row" className="py-2 pr-4 text-left font-sans text-sm font-normal text-ink">
                   {row.label ?? (
                     <span className="text-graphite">a limit no reader here can name</span>
                   )}
-                </td>
+                </th>
                 {inspected.audiences.map((audience) => (
                   <td key={audience} className="py-2 pr-4">
                     <Cell how={row.reception[audience]} digest={row.digest} />
@@ -140,6 +146,8 @@ function MandateTable({ inspected }: { readonly inspected: Inspected }) {
         </p>
       )}
 
+      <Facts inspected={inspected} />
+
       {inspected.unmatched.length > 0 && (
         <p className="border border-broken px-3 py-2 font-sans text-xs text-broken">
           {inspected.unmatched.map(verifierTitle).join(", ")} presented a disclosure whose digest is
@@ -148,6 +156,91 @@ function MandateTable({ inspected }: { readonly inspected: Inspected }) {
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * The two claims a reader of AP2 comes to this screen for.
+ *
+ * **`checkout_hash` is the binding.** The Checkout Mandate says what may be
+ * bought and the Payment Mandate says what may be paid for, and one digest is
+ * what proves they are about the same purchase — printed under both tables so
+ * that "the same value twice" is something a reader sees rather than is told.
+ *
+ * **`cnf` is what makes the delegation legal.** It is the key the user endorsed
+ * for the agent when they signed the open mandate, and it is why the agent can
+ * close that mandate later without the user present. Read from the resolved
+ * claims, because `cnf` may itself be selectively disclosed.
+ */
+/**
+ * How a `cnf` reads on a line.
+ *
+ * **Not the whole JWK.** Printing it dumps the EC coordinates — two base64
+ * strings of forty-odd characters — which pushed the page into horizontal scroll
+ * and told a reader nothing: `x` and `y` are the key, but they are not how anyone
+ * identifies one. The `kid` and the algorithm are, so those go on the line and
+ * the full JWK goes in the raw view below it, which is where a reader who wants
+ * to check the coordinates would look anyway.
+ *
+ * Found by looking at the built screen. Nothing in a test notices that a page
+ * scrolls sideways.
+ */
+function keyLine(cnf: Record<string, unknown>): string {
+  const jwk = cnf["jwk"];
+  if (typeof jwk !== "object" || jwk === null) return "endorsed, in a form this screen cannot read";
+
+  const held = jwk as Record<string, unknown>;
+  const parts = ["alg", "crv", "kty", "kid"]
+    .map((name) => (typeof held[name] === "string" ? `${name} ${held[name] as string}` : null))
+    .filter((part): part is string => part !== null);
+  return parts.length === 0 ? "endorsed, and it names neither an algorithm nor an id" : parts.join(" · ");
+}
+
+function Facts({ inspected }: { readonly inspected: Inspected }) {
+  const cnf = inspected.confirmation;
+
+  return (
+    <dl className="flex min-w-0 flex-col gap-2">
+      <div className="flex flex-wrap items-baseline gap-3">
+        <dt className="font-sans text-xs uppercase tracking-widest text-graphite">
+          Bound to checkout
+        </dt>
+        <dd className="font-mono text-xs text-ink" title={inspected.binding ?? undefined}>
+          {inspected.binding === undefined ? (
+            <span className="text-graphite">this mandate names no checkout</span>
+          ) : (
+            shortDigest(inspected.binding)
+          )}
+        </dd>
+      </div>
+
+      <div className="flex flex-wrap items-baseline gap-3">
+        <dt className="font-sans text-xs uppercase tracking-widest text-graphite">
+          Key the user endorsed
+        </dt>
+        <dd className="min-w-0 font-mono text-xs break-all text-ink">
+          {cnf === undefined ? (
+            <span className="text-graphite">no key endorsed, or it was withheld</span>
+          ) : (
+            keyLine(cnf)
+          )}
+        </dd>
+      </div>
+
+      {/*
+        Closed by default. The tables above are the argument; this is the
+        evidence behind them, and a reader who wants to check that the sentence
+        in the left column really is what the mandate says can open it.
+      */}
+      <details className="mt-1">
+        <summary className="cursor-pointer font-sans text-xs text-graphite hover:text-ink">
+          The open mandate as this reader resolved it
+        </summary>
+        <pre className="mt-2 max-w-full overflow-x-auto border border-graphite/40 bg-wash p-3 font-mono text-xs text-ink">
+          {JSON.stringify(inspected.claims, null, 2)}
+        </pre>
+      </details>
+    </dl>
   );
 }
 
@@ -190,7 +283,7 @@ function OnlyTheMerchant({ inspection }: { readonly inspection: Inspection }) {
 
 export function Inspector({ inspection }: { readonly inspection: Inspection }) {
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex min-w-0 flex-col gap-8">
       <OnlyTheMerchant inspection={inspection} />
       {inspection.mandates.map((inspected) => (
         <MandateTable key={inspected.mandate} inspected={inspected} />

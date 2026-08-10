@@ -54,7 +54,7 @@
 
 import { render } from "../constraint/render";
 import type { Constraint } from "../protocol";
-import { parseChain, resolveChain } from "../sdjwt";
+import { confirmationKey, parseChain, resolveChain } from "../sdjwt";
 import type { Disclosure, ResolvedChain } from "../sdjwt";
 
 /** One chain and the verifier it was addressed to, as the console serves it. */
@@ -122,6 +122,43 @@ export interface Inspected {
    * prose.
    */
   readonly unnamed: number;
+  /**
+   * The `checkout_hash` the closed mandate is bound to, from the delegated
+   * payload of the first presentation.
+   *
+   * **The same value in both mandates is the binding AP2 turns on**: the
+   * Checkout Mandate says what may be bought and the Payment Mandate says what
+   * may be paid for, and one digest is what proves they are about the same
+   * purchase. A Payment Mandate bound to a different checkout has to be
+   * refused, so a screen that showed neither value would be hiding the check.
+   *
+   * Undefined when the delegated payload names none — which is a fact worth
+   * showing rather than a blank.
+   */
+  readonly binding?: string;
+
+  /**
+   * The `cnf` claim of the open mandate: the key the user endorsed for the
+   * agent.
+   *
+   * Read from the **resolved** claims rather than the signed ones, for the
+   * reason `confirmationKey`'s own comment gives: `cnf` may itself be
+   * selectively disclosed, and reading the signed payload would show "no key
+   * endorsed" for a mandate that endorses one and disclosed it.
+   */
+  readonly confirmation?: Record<string, unknown>;
+
+  /**
+   * The processed payload of the first presentation's open mandate, for the raw
+   * view.
+   *
+   * One presentation rather than all of them, because the raw view answers
+   * "what does this document actually say" and every presentation of one
+   * mandate says the same thing apart from what was withheld — which the table
+   * above is already the better answer to.
+   */
+  readonly claims: Record<string, unknown>;
+
   /**
    * Presentations carrying a disclosure whose digest is in no payload.
    *
@@ -237,9 +274,15 @@ async function inspectMandate(
     return a.label.localeCompare(b.label);
   });
 
+  const first = resolved[0]?.chain;
+  const bound = first === undefined ? undefined : first.delegated["checkout_hash"];
+
   return {
     mandate,
     audiences,
+    binding: typeof bound === "string" && bound !== "" ? bound : undefined,
+    confirmation: first === undefined ? undefined : confirmationKey(first.root.claims),
+    claims: first === undefined ? {} : first.root.claims,
     rows,
     unnamed: rows.filter((row) => row.label === null).length,
     unmatched: [...unmatched],

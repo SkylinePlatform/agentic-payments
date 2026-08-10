@@ -52,7 +52,11 @@ export function useConsole(): Console {
   const [watches, setWatches] = useState<readonly Watch[]>([]);
   const [selected, setSelected] = useState<{ watch: string; attempt: number } | null>(null);
   const [inspection, setInspection] = useState<Inspection | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Two error slots, not one. They were one, and a successful Reload of the
+  // watch list then cleared a decoding failure that was still true — the screen
+  // said nothing was wrong while showing nothing at all.
+  const [listError, setListError] = useState<string | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [round, setRound] = useState(0);
 
@@ -69,10 +73,10 @@ export function useConsole(): Console {
       .then((body) => {
         if (!live) return;
         setWatches(body.watches);
-        setError(null);
+        setListError(null);
       })
       .catch((cause: unknown) => {
-        if (live) setError(cause instanceof Error ? cause.message : String(cause));
+        if (live) setListError(cause instanceof Error ? cause.message : String(cause));
       });
     return () => {
       live = false;
@@ -84,6 +88,7 @@ export function useConsole(): Console {
   useEffect(() => {
     if (selected === null) {
       setInspection(null);
+      setReadError(null);
       return;
     }
     let live = true;
@@ -94,12 +99,12 @@ export function useConsole(): Console {
       .then((out) => {
         if (!live) return;
         setInspection(out);
-        setError(null);
+        setReadError(null);
       })
       .catch((cause: unknown) => {
         if (!live) return;
         setInspection(null);
-        setError(cause instanceof Error ? cause.message : String(cause));
+        setReadError(cause instanceof Error ? cause.message : String(cause));
       })
       .finally(() => {
         if (live) setLoading(false);
@@ -113,5 +118,11 @@ export function useConsole(): Console {
     setSelected({ watch, attempt });
   }, []);
 
-  return { watches, inspection, selected, error, loading, select, refresh };
+  // Both, oldest concern first: a console that cannot be listed explains a
+  // screen with no watches on it, and one that cannot be decoded explains a
+  // watch with no tables under it. Showing only one would leave the other
+  // failure looking like an empty result.
+  const error = [listError, readError].filter((e) => e !== null).join(" — ");
+
+  return { watches, inspection, selected, error: error === "" ? null : error, loading, select, refresh };
 }

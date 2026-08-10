@@ -135,6 +135,7 @@ describe("what the two mandates say about each other", () => {
       value: null,
       reception: r.got,
     })),
+    claims: {},
     unnamed: rows.filter((r) => r.label === null).length,
     unmatched: [],
   });
