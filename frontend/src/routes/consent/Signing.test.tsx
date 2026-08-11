@@ -231,4 +231,50 @@ describe("signing", () => {
     await waitFor(() => expect(navigations).toEqual([{ to: "/lanes?run=c2" }]));
     expect(calls.filter((c) => c.url === "/authorise")).toHaveLength(2);
   });
+
+  it("retries authorise itself under the same idempotency key, for the failure a body cannot tell apart from success", async () => {
+    // The genuinely ambiguous case: the surface may have already signed and
+    // only the *response* was lost — a dropped connection, a proxy timeout,
+    // a backgrounded tab. The browser sees a bare rejected `fetch`, never a
+    // `RequestFailed`, so there is no body and no code to read — nothing
+    // distinguishes it from a clean failure except the idempotency key. A
+    // fresh key on retry would ask the surface to sign a second, independent
+    // pair of open mandates for the one decision the user already made; the
+    // same key is what lets it answer with the pair it already produced.
+    const calls: { url: string; init?: RequestInit }[] = [];
+    let authoriseAttempts = 0;
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      if (url === "/authorise") {
+        authoriseAttempts += 1;
+        if (authoriseAttempts === 1) return Promise.reject(new TypeError("Failed to fetch"));
+        return Promise.resolve(new Response(JSON.stringify(anAuthorised()), { status: 200 }));
+      }
+      if (url === "/watches") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ id: "w", correlation_id: "c3" }), { status: 201 }),
+        );
+      }
+      return Promise.resolve(new Response("not stubbed: " + url, { status: 404 }));
+    });
+    renderSigning();
+
+    await userEvent.click(await screen.findByRole("button", { name: /try again/i }));
+
+    await waitFor(() => expect(navigations).toEqual([{ to: "/lanes?run=c3" }]));
+
+    const authoriseCalls = calls.filter((c) => c.url === "/authorise");
+    expect(authoriseCalls).toHaveLength(2);
+    const keys = authoriseCalls.map(
+      (c) => (c.init?.headers as Record<string, string>)["Idempotency-Key"],
+    );
+    expect(keys[0]).toBe(keys[1]);
+  });
+
+  // The opposite rule is already pinned above by "retries with the same
+  // authorisation under a fresh key": unlike `authorise`, `startWatch`'s
+  // retry deliberately mints a *different* key every time, because nothing
+  // about retrying it can produce a second signature. Keeping both
+  // assertions live — same key for `authorise`, different for `startWatch`
+  // — is what stops a later edit from quietly making the two rules agree.
 });

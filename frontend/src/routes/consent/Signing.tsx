@@ -82,6 +82,17 @@ export function Signing({
   const navigate = useNavigate();
   const [state, setState] = useState<State>({ kind: "signing" });
 
+  // One idempotency key for the whole decision to sign, minted once and
+  // reused by every attempt of `authorise` — including a retry from
+  // `failed`. `authorise`'s own doc comment in client.ts says why: if the
+  // surface already signed and only the response was lost — a dropped
+  // connection, a proxy timeout, a backgrounded tab — a fresh key on retry
+  // would ask it to sign a second, independent pair of open mandates for one
+  // decision, and the key is the only thing that lets it answer with the
+  // pair it already produced instead. Lazily initialised so `crypto.randomUUID`
+  // runs exactly once, on mount, rather than on every render.
+  const [signatureKey] = useState(() => crypto.randomUUID());
+
   /**
    * Runs `starting`: hands `authorised` to the agent, and resolves to
    * `navigate` on success or `stranded` on failure. Shared between `sign`
@@ -119,7 +130,7 @@ export function Signing({
     setState({ kind: "signing" });
     let authorised: Authorised;
     try {
-      authorised = await authorise(proposal, previewed.constraints_digest);
+      authorised = await authorise(proposal, previewed.constraints_digest, signatureKey);
     } catch (err) {
       if (isCancelled()) return;
       setState({

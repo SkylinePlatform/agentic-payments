@@ -28,9 +28,11 @@ import type { Authorised, Previewed, Proposal } from "./model";
  * Per user action rather than per screen: retrying the same button repeats the
  * key and replays the first answer, which is what it is for; editing the prompt
  * and asking again is a different decision and takes a new one. Since every
- * call here is one action, minting per call is the same thing.
+ * call here is one action, minting per call is the same thing — with one
+ * exception. `authorise`'s own doc comment says why a retry of *that* call is
+ * not a fresh action and has to keep the key it started with.
  */
-function key(): string {
+function freshKey(): string {
   return crypto.randomUUID();
 }
 
@@ -124,11 +126,18 @@ async function unwrap<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
-/** A POST carrying a fresh idempotency key — every unsafe call in this module. */
-async function post<T = unknown>(url: string, body: unknown): Promise<T> {
+/**
+ * A POST carrying an idempotency key — every unsafe call in this module.
+ *
+ * `key`, when given, is sent instead of a freshly minted one. Every caller
+ * but `authorise` omits it, because for them each call to `post` *is* the
+ * action Idempotency-Key exists to de-dupe. `authorise` is the one exception
+ * — see its own doc comment.
+ */
+async function post<T = unknown>(url: string, body: unknown, key: string = freshKey()): Promise<T> {
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": key() },
+    headers: { "Content-Type": "application/json", "Idempotency-Key": key },
     body: JSON.stringify(body),
   });
   return unwrap<T>(response);
@@ -184,14 +193,35 @@ export async function refuse(p: Proposal, digest: string): Promise<void> {
  * Collects the user's signature over `p` — `POST /authorise`. `digest` is what
  * `preview` returned for these constraints, so the surface can refuse a caller
  * about to sign a set other than the one it rendered.
+ *
+ * `idempotencyKey`, when given, is sent instead of a freshly minted one. This
+ * is the one call in this module that takes the override, because it is the
+ * one call whose retry is genuinely ambiguous: the surface may have already
+ * signed and only the *response* was lost — a dropped connection, a proxy
+ * timeout, a backgrounded tab — in which case the browser sees a bare
+ * rejected `fetch`, not an answer it can read a code from. `Signing` mints
+ * one key for the whole decision to sign and passes it to every attempt,
+ * because the same key is what lets the surface answer a retry with the
+ * mandates it already produced instead of signing a second, independent
+ * pair for one decision — the idempotency middleware's entire reason to
+ * exist, and it only engages when the key repeats.
+ *
+ * `startWatch` deliberately does not take this parameter: handing an
+ * already-signed pair to the agent is safe to attempt again under a fresh
+ * key regardless of why the previous attempt failed, because nothing about
+ * retrying it can produce a second signature.
  */
-export async function authorise(p: Proposal, digest: string): Promise<Authorised> {
-  return post<Authorised>("/authorise", {
-    prompt: p.prompt,
-    constraints: p.constraints,
-    agent_key: p.agent_key,
-    constraints_digest: digest,
-  });
+export async function authorise(p: Proposal, digest: string, idempotencyKey?: string): Promise<Authorised> {
+  return post<Authorised>(
+    "/authorise",
+    {
+      prompt: p.prompt,
+      constraints: p.constraints,
+      agent_key: p.agent_key,
+      constraints_digest: digest,
+    },
+    idempotencyKey,
+  );
 }
 
 /**
