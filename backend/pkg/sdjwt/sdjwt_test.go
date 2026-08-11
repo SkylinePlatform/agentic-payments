@@ -213,6 +213,52 @@ func TestKeyBindingCoversTheSelection(t *testing.T) {
 	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid, "Verify a spliced presentation: got %v, want %v", err, sdjwt.ErrKeyBindingInvalid)
 }
 
+// TestAKeyBindingProofCenturiesAheadIsRefusedNotAcceptedAsFresh demonstrates
+// the hole checkFreshness's own comment used to only note as
+// internal/platform/crypto's problem: time.Duration is an int64 of
+// nanoseconds, so Time.Sub does not overflow when two instants are more than
+// ~292 years apart, it saturates — and negating a saturated minimum is a
+// no-op under two's complement. Before the fix, that made the
+// "if skew < 0 { skew = -skew }" fold a no-op on exactly this input, leaving
+// skew negative and the window comparison false: a KB-JWT stamped centuries
+// in the future compared as fresher than one signed a second ago, and Verify
+// accepted it.
+func TestAKeyBindingProofCenturiesAheadIsRefusedNotAcceptedAsFresh(t *testing.T) {
+	t.Parallel()
+
+	issuerKey := newHMACKey("issuer-secret", "issuer-1")
+	holderKey := newHMACKey("holder-secret", "holder-1")
+
+	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+	require.NoError(t, err, "NewBlinder")
+	payload, disclosures := mustBlind(t, blinder, mandateClaims(), blindPaths...)
+	issued := mustIssue(t, issuerKey, payload, disclosures)
+
+	presented, err := issued.Present(named("merchant"))
+	require.NoError(t, err, "Present")
+
+	// 400 years comfortably clears time.Duration's ~292-year range in either
+	// direction, which is what the table in issue #112 measured against the
+	// sibling construct in internal/platform/crypto.
+	farFuture := time.Unix(1750000000, 0).AddDate(400, 0, 0)
+	bound, err := presented.AttachKeyBinding(t.Context(), holderKey, sdjwt.KeyBinding{
+		Nonce: "n-1", Audience: "https://verifier.example", IssuedAt: farFuture,
+	})
+	require.NoError(t, err, "AttachKeyBinding")
+
+	_, err = sdjwt.Verify(bound, sdjwt.Options{
+		Issuer:            issuerKey,
+		HolderKey:         func(json.RawMessage) (sdjwt.Verifier, error) { return holderKey, nil },
+		RequireKeyBinding: true,
+		Audience:          "https://verifier.example",
+		Nonce:             "n-1",
+		MaxKeyBindingAge:  5 * time.Minute,
+		Clock:             at(1750000000),
+	})
+	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid,
+		"a proof this Verifier's clock cannot measure the age of is not a fact it can honestly call fresh, and a freshness window is a security control that must fail closed on a value it cannot measure")
+}
+
 // TestPresentRejectsUnreachableDisclosure checks the Holder-side guard of
 // RFC 9901 §7.2 step 2. Keeping minor_units without the amount it is nested in
 // would produce a presentation the Verifier must reject, and it is better to
