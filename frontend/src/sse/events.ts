@@ -92,12 +92,14 @@ export type MandateType = (typeof MANDATE_TYPES)[number];
  *
  * **`tracker/model.ts` exports a different `MANDATE_STATES`, and the two must
  * not be confused.** That one is `authz.MandateState` — ready,
- * awaiting_receipt, spent — where a mandate stands in the rejection-receipt
- * rule, and it is the console's axis. This one is AP2's binding distinction and
- * is the lanes' axis. A mandate is `closed` here and `ready` there at the same
- * moment. Neither module imports the other, so a file wanting both has to alias
- * one and `tsc` is what says so; the trap is a reader's, and this is the
- * paragraph that closes it.
+ * awaiting_receipt, spent — where an *open* mandate stands in the
+ * rejection-receipt rule, and it is the console's axis. This one is AP2's
+ * binding distinction and is the lanes' axis. They are not about the same
+ * artefact: a closed mandate has no state on that axis at all, so a step
+ * reading `closed` here sits alongside an open mandate that is
+ * `awaiting_receipt` there. Neither module imports the other, so a file wanting
+ * both has to alias one and `tsc` is what says so; the trap is a reader's, and
+ * this is the paragraph that closes it.
  *
  * Beware one further overlap in that module: its pip vocabulary also has a
  * member called `open`, meaning *at its beginning*. It is a shape on a

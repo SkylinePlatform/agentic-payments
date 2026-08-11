@@ -143,8 +143,13 @@ func (t MandateType) Valid() bool { return slices.Contains(mandateTypes, t) }
 // authz.MandateState is ready, awaiting_receipt and spent — where one open
 // mandate stands in the rejection-receipt rule, which is bookkeeping this
 // package never sees. This one is open against closed: whether the artefact a
-// step was about is bound to a transaction. **A mandate that is `closed` here
-// is `ready` there**, and the two never move together.
+// step was about is bound to a transaction.
+//
+// **They are not even about the same artefact**, which is the part worth being
+// exact about. That type tracks an *open* mandate for its whole life; a closed
+// mandate has no state there at all. So an event here reading `closed` sits
+// alongside an open mandate that is `awaiting_receipt` over there — two
+// artefacts, two axes, no correspondence to look for.
 //
 // The name is kept because open/closed is AP2's own word for this and a
 // paraphrase would cost more than the collision does; the collision is
