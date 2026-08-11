@@ -351,13 +351,21 @@ func sdjwtCodeOf(err error) generated.ErrorCode {
 		return generated.ErrorCodeAlgorithmUnsupported
 	case is(err, sdjwt.ErrMalformedSDJWT), is(err, sdjwt.ErrMalformedDisclosure),
 		is(err, sdjwt.ErrReservedClaim), is(err, sdjwt.ErrMalformedChain):
-		// ErrMalformedChain reads as a broken token if it is left to fall through
-		// to the default arm below, and it is usually the opposite: a
-		// well-formed token of the wrong shape — an SD-JWT presented where a
-		// delegation was required, most often. See its own comment in
-		// pkg/sdjwt/errors.go. #147: this arm was missing, so a malformed chain
-		// answered verifier_unavailable — blaming this verifier for a shape only
-		// the presenter controlled.
+		// mandate_malformed, not request_malformed, and the arm above is what
+		// settles it read the other way round: ErrUnexpectedType earns
+		// request_malformed because it fires only after a successful parse, on a
+		// typ read out of a structurally sound token. Every ErrMalformedChain
+		// site, by contrast, is the parse itself refusing — which is exactly
+		// what error_code.json's "Securing format" block means by
+		// mandate_malformed: "not parseable as the securing format requires".
+		//
+		// The three production ParseChain callers already answer
+		// mandate_malformed by hand — merchant/service.go (twice),
+		// credprovider/service.go, mpp/service.go — so any other code here would
+		// put CodeOf in documented disagreement with the roles about the same
+		// error value. #147: this arm was missing, so a malformed chain fell
+		// through to the default instead and answered verifier_unavailable —
+		// blaming this verifier for a shape only the presenter controlled.
 		return generated.ErrorCodeMandateMalformed
 	default:
 		return ""
