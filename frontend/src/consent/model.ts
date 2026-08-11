@@ -21,6 +21,15 @@ export interface Offer {
   readonly image_url: string;
   readonly retailer: string;
   readonly price: Amount;
+  /**
+   * The price schedule position, and whether it has run out of moves —
+   * `agent.Offer.Step` / `.Final`. Optional because they are #109's own
+   * addition to the wire shape and this interface is shared with the consent
+   * screen, which never had to distinguish an object built from a wire
+   * response that predates them from one that carries them.
+   */
+  readonly step?: number;
+  readonly final?: boolean;
 }
 
 /**
@@ -34,6 +43,25 @@ export interface Proposal {
   readonly item: string;
   readonly offer: Offer;
   readonly watch_slots_free: number;
+  /**
+   * Every offer the agent's search found — `agent.Proposal.Offers` — #109's
+   * product table. Optional for the same reason `Offer.step`/`.final` are:
+   * `offer` alone is what every existing consumer of this interface reads.
+   */
+  readonly offers?: readonly Offer[];
+  /**
+   * How many of `offer` the click on the product table's row asked for.
+   *
+   * Absent on the object `POST /proposals` itself answers with — quantity is
+   * chosen after the proposal, on the table, never part of what the agent
+   * proposed — and present on the one `catalogue/quantity.ts`'s `withQuantity`
+   * builds from it, which is the shape `routes/consent/Signing.tsx` reads to
+   * replace the single purchase it hardcoded before #109 gave a person a count
+   * to choose. `startWatch`'s own quantity argument falls back to 1 when this
+   * is absent, which is what keeps every `Proposal` built before this field
+   * existed buying exactly what it always bought.
+   */
+  readonly quantity?: number;
 }
 
 /**
