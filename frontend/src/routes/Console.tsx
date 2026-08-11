@@ -34,12 +34,14 @@ interface RefusalState {
  * reads whatever this console has already started, so it is worth showing
  * regardless of whether a proposal is on screen.
  *
- * **The refusal is the state this screen shows most often, on purpose.**
- * `make demo` runs `-interpreter scripted` — hard rule 4 forbids a
- * demonstration that depends on a live model — so free text is admissible
- * only when it matches one of the agent's scripted sentences. The menu below
- * the box exists so that boundary is visible *before* anybody hits it, not
- * discovered by trial and error.
+ * **The refusal is the state this screen shows most often on the machine that
+ * has no key.** `make demo` runs `-interpreter auto`, which resolves to the
+ * scripted table unless `GEMINI_API_KEY` is exported, so free text is usually
+ * admissible only when it matches one of the agent's scripted sentences. The
+ * menu below the box exists so that boundary is visible *before* anybody hits
+ * it, not discovered by trial and error — and the paragraph above the menu
+ * says which of the two worlds this is, because with a key there is no
+ * boundary and a menu would be the wrong thing to draw.
  *
  * **A refusal that landed here says so.** `Consent`'s `onRefuse` never calls
  * `authorise` either way, so `recorded` only ever distinguishes whether the
@@ -56,7 +58,12 @@ export function Console() {
   // at that first render is the only one this screen will ever see.
   const refusal = useLocation().state as RefusalState | null;
   const [prompt, setPrompt] = useState(() => refusal?.prompt ?? "");
-  const [examples, setExamples] = useState<string[]>([]);
+  // `null` is not "no menu" — it is "this screen has not been told". The two
+  // were the same thing while `examples` only decided whether to draw a picker;
+  // they stopped being the same the moment the paragraph below started making a
+  // claim about what the agent understands, because a claim needs an answer to
+  // rest on and an empty array from a call that never happened is not one.
+  const [examples, setExamples] = useState<readonly string[] | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [full, setFull] = useState(false);
@@ -68,13 +75,17 @@ export function Console() {
     // Not cancelled on unmount: the index route mounts once, and a lost race
     // with navigation just sets state nobody reads again.
     //
-    // A failed fetch here costs the menu and nothing else — the box still
-    // takes free text — so it is swallowed rather than surfaced the way a
-    // failed /proposals is: there is nothing this screen would tell a reader
-    // that "no menu" does not already say.
+    // A failed fetch is still swallowed rather than surfaced the way a failed
+    // /proposals is — the box still takes text, and the reader learns what this
+    // agent actually does from the answer to their first *Interpret* — but it
+    // must not be swallowed *into an empty menu*. That is what this used to do,
+    // and it was harmless only while emptiness meant "draw no picker". It now
+    // also means "this agent reads free text", which is a claim about a process
+    // that, in exactly this branch, did not answer at all. So the failure
+    // leaves the state unknown and the screen promises nothing.
     fetchExamples()
       .then(setExamples)
-      .catch(() => setExamples([]));
+      .catch(() => setExamples(null));
   }, []);
 
   async function interpret() {
@@ -139,12 +150,30 @@ export function Console() {
           console.Agent.Examples. Gated on the same `examples` state the menu
           below renders from, so the two can never disagree about which world
           this is.
+
+          **Three states rather than two**, which is the whole of why this is
+          not `examples.length > 0` on its own. The sentence is a claim about
+          the agent that is running, and the only thing entitled to make it is
+          that agent's own answer — so until one arrives, or when none does,
+          this says nothing at all. A screen that guessed here would guess
+          "reads free text" in precisely the cases where the agent is
+          unreachable, which is the box lying again with better manners.
+
+          The remaining assumption is one this repository's own wiring holds
+          up: a *non-empty* menu is unambiguous, and an *empty* one means a
+          model because `cmd/agent` builds `interpret.Demo()` for every scripted
+          interpreter it can be asked for, and that table is never empty. An
+          interpreter that published `Prompts()` with nothing in it would read
+          as model-backed here, and would be a scripted agent that refuses
+          everything — worth knowing before adding one.
         */}
-        <p className="font-sans text-sm text-ink" data-testid="interpreter-mode">
-          {examples.length > 0
-            ? "This agent only understands the sentences below. Click one, or type it exactly."
-            : "This agent reads free text. Type anything you'd like it to buy."}
-        </p>
+        {examples !== null && (
+          <p className="font-sans text-sm text-ink" data-testid="interpreter-mode">
+            {examples.length > 0
+              ? "This agent only understands the sentences below. Click one, or type it exactly."
+              : "This agent reads free text. Type anything you'd like it to buy."}
+          </p>
+        )}
         <textarea
           id="console-prompt"
           className="min-h-28 border border-graphite/40 bg-wash px-3 py-2 font-sans text-sm text-ink"
@@ -162,7 +191,7 @@ export function Console() {
         </p>
       </div>
 
-      {examples.length > 0 && (
+      {examples !== null && examples.length > 0 && (
         <div data-testid="examples" className="flex flex-col gap-2">
           <span className="font-sans text-xs uppercase tracking-widest text-graphite">
             Sentences the agent can answer
