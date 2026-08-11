@@ -78,6 +78,42 @@ func TestThePreviewNeverReachesTheUsersKey(t *testing.T) {
 	})
 }
 
+// TestARefusalSignsNothing is the claim the route's name makes, proved where it
+// can be: against the signer itself.
+//
+// A response carrying no mandate is not the same claim as no mandate having
+// been made — the file header already says so about the preview, and it is the
+// reason this test lives here rather than beside the others.
+//
+// This package cannot reach roles_test's send and priceCap fixtures — this is
+// package surface_test, a different package from the one that declares them —
+// so the request is built the same way postJSON's is: a literal body, posted
+// directly. The digest sent does not have to match what vetted() would compute;
+// whether the route accepts or refuses it, no signature can happen either way,
+// which is the only thing this test is about.
+func TestARefusalSignsNothing(t *testing.T) {
+	t.Parallel()
+
+	srv, signatures := surfaceWithACountedSigner(t)
+
+	const body = `{
+		"prompt": "a ladder, under two hundred",
+		"constraints": [{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}],
+		"constraints_digest": "whatever this renders to"
+	}`
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/authorise/refused", strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", t.Name())
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err, "calling the refused route")
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Zero(t, signatures.Load(),
+		"the user said no; a key that moved here would be a signature nobody asked for")
+}
+
 // surfaceWithACountedSigner stands up a Trusted Surface whose Signer is the
 // generated double, and returns the server and the number of signatures made.
 //

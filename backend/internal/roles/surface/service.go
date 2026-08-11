@@ -278,6 +278,7 @@ func (s *Service) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /approve", s.approve)
 	mux.HandleFunc("POST /authorise", s.authorise)
 	mux.HandleFunc("POST /authorise/preview", s.preview)
+	mux.HandleFunc("POST /authorise/refused", s.refused)
 	return roles.Middleware(s.Clock, mux)
 }
 
@@ -495,6 +496,65 @@ func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 		PaymentInstrument:          instrument,
 		OpenMandateLifetimeSeconds: int(openMandateLifetime / time.Second),
 	})
+}
+
+// refused records that a person was shown a rendering and said no.
+//
+// # What this proves, and what it does not
+//
+// Nothing about a human. It is called by whatever holds the screen, that caller
+// may equally call nothing at all, and no part of a request can establish that
+// somebody read anything — the same limit authorisation.ConstraintsDigest
+// already documents about itself. So what is emitted below is **the caller's
+// claim that a refusal happened**, and it belongs where every claim of that kind
+// belongs: the collector, which ADR 0003 makes observability and never
+// evidence.
+//
+// Written here rather than left implicit because an event log line reading "the
+// user refused" is exactly the sort of thing a later reader cites as proof.
+//
+// # Why the digest is required here and optional on /authorise
+//
+// On this route the digest is the only content. /authorise has two mandates to
+// show for itself; this has one assertion about which rendering was refused, and
+// a refusal naming no rendering names nothing. Requiring it costs a caller with
+// a screen nothing — it previewed, so it has one — and there is no caller
+// without a screen, because an agent that decided not to authorise something
+// simply does not call this.
+//
+// The same decode, the same vetted() and the same digest check as authorise, so
+// a refusal cannot name a set this surface could not have produced. It signs
+// nothing; TestARefusalSignsNothing proves that against the Signer.
+func (s *Service) refused(w http.ResponseWriter, r *http.Request) {
+	var req authorisation
+	if !roles.DecodeJSON(w, r, &req) {
+		return
+	}
+	if req.ConstraintsDigest == "" {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			"a refusal has to name the rendering it refused; without the digest it names nothing")
+		return
+	}
+	_, _, digest, ok := vetted(w, req.Constraints)
+	if !ok {
+		return
+	}
+	if req.ConstraintsDigest != digest {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			"these constraints are not the ones that digest was issued for")
+		return
+	}
+
+	s.Events.Emit(r.Context(), obs.KindAuthorisationRefused,
+		fmt.Sprintf("the user refused the interpretation of %q, over %d limits", req.Prompt, len(req.Constraints)))
+
+	roles.OK(w, http.StatusOK, refusal{ConstraintsDigest: digest})
+}
+
+// refusal is what POST /authorise/refused answers with: the name of the set the
+// surface agreed was the one being refused.
+type refusal struct {
+	ConstraintsDigest string `json:"constraints_digest"`
 }
 
 // vetted parses a constraint set, says what each constraint means and names the

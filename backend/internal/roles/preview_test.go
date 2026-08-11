@@ -332,6 +332,97 @@ func TestThePreviewLifetimeIsTheOneAuthoriseUses(t *testing.T) {
 		"the card shown before signing has to be the card that was pinned")
 }
 
+// TestARefusalNeedsTheDigestItRefused is why the digest is required here and
+// optional on /authorise.
+//
+// On this route the digest is the only content. A refusal that names no
+// rendering names nothing at all — it is a client asserting that somebody said
+// no, about nothing in particular. Re-parsing and re-rendering means a refusal
+// cannot name a set this surface could not have produced.
+func TestARefusalNeedsTheDigestItRefused(t *testing.T) {
+	t.Parallel()
+
+	user := newParty(t, "user")
+	agent := newParty(t, "agent")
+	srv := theSurface(t, user)
+
+	agentKey, err := roles.PublicKey(t.Context(), agent.keys)
+	require.NoError(t, err)
+	limits := []generated.Constraint{priceCap(), ladders()}
+
+	var preview previewedBody
+	require.Equal(t, http.StatusOK, send(t, srv.URL+"/authorise/preview", map[string]any{
+		"prompt": "a ladder", "constraints": limits, "agent_key": agentKey,
+	}, &preview))
+
+	t.Run("the digest it was shown", func(t *testing.T) {
+		var out struct {
+			ConstraintsDigest string `json:"constraints_digest"`
+		}
+		require.Equal(t, http.StatusOK, send(t, srv.URL+"/authorise/refused", map[string]any{
+			"prompt": "a ladder", "constraints": limits,
+			"constraints_digest": preview.ConstraintsDigest,
+		}, &out))
+		assert.Equal(t, preview.ConstraintsDigest, out.ConstraintsDigest,
+			"the surface confirms which rendering was refused, which is the whole content of this route")
+	})
+
+	t.Run("no digest at all", func(t *testing.T) {
+		var out map[string]any
+		assert.Equal(t, http.StatusBadRequest, send(t, srv.URL+"/authorise/refused", map[string]any{
+			"prompt": "a ladder", "constraints": limits,
+		}, &out),
+			"a refusal that names no rendering is a claim about nothing, and this route has nothing else in it")
+	})
+
+	t.Run("a digest for other limits", func(t *testing.T) {
+		var out map[string]any
+		assert.Equal(t, http.StatusBadRequest, send(t, srv.URL+"/authorise/refused", map[string]any{
+			"prompt": "a ladder", "constraints": limits,
+			"constraints_digest": "not-the-one-it-was-shown",
+		}, &out),
+			"refusing a set while naming a different one is the same mismatch /authorise refuses before signing")
+	})
+}
+
+// TestARefusalIsCheckedAsStrictlyAsAnApproval is the property that makes the
+// route worth more than a logging endpoint.
+//
+// The same decode, the same vetted(), the same digest check. A constraint no
+// verifier could read is refused here for the same reason and under the same
+// code as it would be on the way to a signature.
+func TestARefusalIsCheckedAsStrictlyAsAnApproval(t *testing.T) {
+	t.Parallel()
+
+	user := newParty(t, "user")
+	agent := newParty(t, "agent")
+	srv := theSurface(t, user)
+
+	agentKey, err := roles.PublicKey(t.Context(), agent.keys)
+	require.NoError(t, err)
+
+	unreadable := []generated.Constraint{{Op: "lte", Field: ptr("price"), Value: 100}}
+
+	var onRefusal, onAuthorise map[string]any
+	refusalStatus := send(t, srv.URL+"/authorise/refused", map[string]any{
+		"prompt": "x", "constraints": unreadable, "constraints_digest": "anything",
+	}, &onRefusal)
+	authoriseStatus := send(t, srv.URL+"/authorise", map[string]any{
+		"prompt": "x", "constraints": unreadable, "agent_key": agentKey,
+	}, &onAuthorise)
+
+	assert.Equal(t, authoriseStatus, refusalStatus,
+		"a constraint this surface cannot read has to be refused the same way whichever door it arrived at")
+	assert.Equal(t, onAuthorise["code"], onRefusal["code"],
+		"one code for one defect; two would mean a screen could learn the field was unknown from one route and not the other")
+}
+
+// ptr is a one-line generic helper for an inline pointer literal, where field
+// and the other named fixtures do not fit — TestARefusalIsCheckedAsStrictlyAsAnApproval
+// builds a one-off constraint rather than reusing a fixture, because the point
+// of that test is the field itself being unreadable.
+func ptr[T any](v T) *T { return &v }
+
 // previewedBody is POST /authorise/preview's answer, declared here rather than
 // exported from the surface, on the same terms as authorisedBody: a test that
 // decoded into the server's own struct would pass whatever that struct's JSON
