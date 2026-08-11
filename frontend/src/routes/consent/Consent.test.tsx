@@ -97,6 +97,12 @@ function aProposal(): Proposal {
     },
     watch_slots_free: 8,
     quantity: 1,
+    // Conditional, against a prompt that reads like an instruction, so that
+    // the zone below is asserted to be drawn from this field rather than from
+    // the words in the sentence above it. The agent answers `immediate` for
+    // this prompt; a screen that guessed from the prompt would agree with the
+    // agent here and disagree the moment either changed.
+    trigger: "conditional",
   };
 }
 
@@ -184,6 +190,80 @@ describe("the consent screen", () => {
     // box, so the assertion has to name the browser's own line and not the
     // word.
     expect(within(screen.getByTestId("signed-box")).queryByText(/^Quantity\b/)).toBeNull();
+  });
+
+  it("says when the agent will buy, and never inside the signed box — issue #198", async () => {
+    // The trap this closes: "buy now, up to $160" and "buy when the price
+    // moves, up to $160" are different authorisations and they render
+    // **identically** from the constraints, because the words separating them
+    // are in the sentence and in no limit. A screen showing only the signed
+    // box collects a signature without saying which of the two it is for.
+    //
+    // Two rows, so the assertion is that the screen reads the field rather
+    // than that it prints one fixed sentence. The prompt is the same in both
+    // — "find and buy telescopic ladders, cheapest", which reads like an
+    // instruction — so a screen guessing from the words above would fail the
+    // conditional row.
+    for (const [trigger, expected] of [
+      ["conditional", /not at the price it is quoting now/i],
+      ["immediate", /^Now, at the price/i],
+    ] as const) {
+      stubFetch({ "/authorise/preview": { body: aPreview() } });
+      const { unmount } = renderConsent({ ...aProposal(), trigger });
+
+      const when = await screen.findByTestId("when");
+      expect(within(when).getByText(expected), trigger).toBeTruthy();
+      // The same argument as the basket size's, and the assertion with teeth:
+      // nothing signs this. The Trusted Surface signs constraints, and "when
+      // the person asked to buy" is not one — no verifier can refute it at
+      // the point of sale.
+      expect(screen.getByTestId("signed-box").contains(when)).toBe(false);
+      unmount();
+    }
+  });
+
+  it("refuses to sign a trigger it cannot read, and shows what the agent said", async () => {
+    // Reachable only from a console that grew a third trigger after this
+    // bundle was built — `interpret.Validate` refuses an interpretation
+    // naming one this set does not contain. What matters is the direction of
+    // the failure: the two available guesses are both wrong somewhere the
+    // person would never see it, so the screen says it cannot read the word
+    // and stops, rather than drawing one of the two.
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent({ ...aProposal(), trigger: "when the price is right" });
+
+    const when = await screen.findByTestId("when");
+    expect(within(when).getByText("when the price is right")).toBeTruthy();
+    const sign = await screen.findByRole("button", { name: /sign/i });
+    expect(
+      (sign as HTMLButtonElement).disabled,
+      "a signature collected here would be one the screen could not describe",
+    ).toBe(true);
+  });
+
+  it("refuses to sign a proposal from a console that never sent a trigger", async () => {
+    // The other unmatched build, and the only one this repository can actually
+    // produce: an agent console from before #198 sends no `trigger` key at all,
+    // and `propose` casts the response body, so the field arrives `undefined`
+    // where `Proposal` says `string`. The round trip through JSON is how the
+    // fixture reaches that shape, because the type will not let one be written.
+    //
+    // It has to stop the signature on the same terms a word nobody defines
+    // does. It did not: the screen drew *"does not recognise"* and left *Sign*
+    // enabled underneath it, which is the failure this whole zone exists to
+    // prevent wearing the sentence that describes it.
+    const older = JSON.parse(JSON.stringify({ ...aProposal(), trigger: undefined })) as Proposal;
+
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent(older);
+
+    const when = await screen.findByTestId("when");
+    expect(within(when).getByText(/does not recognise/i)).toBeTruthy();
+    const sign = await screen.findByRole("button", { name: /sign/i });
+    expect(
+      (sign as HTMLButtonElement).disabled,
+      "a person cannot consent to a behaviour the screen has just told them it cannot name",
+    ).toBe(true);
   });
 
   it("disables signing when a constraint did not render", async () => {

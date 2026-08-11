@@ -234,6 +234,30 @@ type Authorisation struct {
 	// frontend/src/routes/consent/Consent.tsx puts it outside the signed box
 	// on exactly that ground.
 	Quantity int `json:"quantity"`
+
+	// Trigger is when the sentence asked for the purchase, as the interpreter
+	// read it: an instruction to buy, or a purchase conditional on something
+	// changing. Watch.Run is what spends it, and it is the whole of the
+	// difference between one attempt now and a poll that waits for the
+	// merchant's commitment to move.
+	//
+	// **It sits here for Quantity's reason and carries Quantity's caveat.**
+	// Nothing signs it — the Trusted Surface signs constraints, and "when the
+	// person asked to buy" is not one: no verifier can refute it at the point
+	// of sale, which is the criterion the constraint registry is closed on. So
+	// this is the agent's stated intent, bounded by what was signed rather than
+	// part of it, and a screen showing it has to say which of the two it is.
+	//
+	// **An empty trigger means a watch**, and that is a decision rather than a
+	// gap. interpret.Validate refuses an interpretation that states none, so
+	// nothing this package produces arrives empty; what can is an Authorisation
+	// assembled field by field somewhere else — a browser that collected its own
+	// signature and has not been taught this field yet, or a test fixture. For
+	// those, watching is the reading that cannot buy something the sentence did
+	// not ask to buy now, which is the direction to be wrong in. A trigger that
+	// is neither empty nor one interpret defines is refused outright by
+	// Watch.valid rather than read as either.
+	Trigger interpret.Trigger `json:"trigger"`
 }
 
 // Authorise runs Propose and then collects the user's signature over the
@@ -323,6 +347,18 @@ type Proposal struct {
 	// wire, once, because a consent screen has to display the number that will
 	// actually be spent. Issue #133.
 	Quantity int
+
+	// Trigger is whether the sentence asked to buy now or to wait for
+	// something to change — see interpret.Trigger and Authorisation.Trigger.
+	//
+	// Unlike Quantity it is never empty here: Propose calls interpret.Validate,
+	// which refuses an interpretation that states no trigger, so there is
+	// nothing for a caller downstream to resolve and no precedence to write
+	// down. It is on a Proposal at all because a proposal is what a person is
+	// shown, and "buy now, up to $160" and "buy when the price moves, up to
+	// $160" are different authorisations that render identically from the
+	// constraints alone. Issue #198's first trap.
+	Trigger interpret.Trigger
 }
 
 // Propose runs the discovery half: interpret, search, narrow — everything
@@ -396,7 +432,7 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 	if err != nil {
 		return out, fmt.Errorf("interpreting %q: %w", in.Prompt, err)
 	}
-	if err := interpret.Validate(interpretation.Constraints); err != nil {
+	if err := interpret.Validate(interpretation); err != nil {
 		return out, fmt.Errorf("the interpretation of %q is not something a verifier could read: %w",
 			in.Prompt, err)
 	}
@@ -417,6 +453,9 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 		// every caller holding a number of its own loses it. See
 		// Proposal.Quantity.
 		Quantity: interpretation.Quantity,
+		// Validate above has already refused an interpretation that states no
+		// trigger, so this is one of the two and never an absence. Issue #198.
+		Trigger: interpretation.Trigger,
 	}, nil
 }
 
@@ -517,6 +556,10 @@ func (c *Client) sign(ctx context.Context, prompt string, proposal Proposal) (Au
 		// signature and posts the result to POST /watches — which is another
 		// way of saying that nothing here has been read by a person.
 		Quantity: proposal.Quantity,
+		// The proposal's own for the same reason, and it reaches the surface
+		// for none: a trigger is not a constraint, so there is nothing about it
+		// for a signature to cover. See Authorisation.Trigger.
+		Trigger: proposal.Trigger,
 	}, nil
 }
 

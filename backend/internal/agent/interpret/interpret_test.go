@@ -86,7 +86,13 @@ func TestValidateRefusesAnInterpretationTheVerifierCouldNotRead(t *testing.T) {
 			require.NoError(t, json.Unmarshal([]byte(tc.raw), &constraints),
 				"the test's own fixture is not valid JSON")
 
-			err := interpret.Validate(constraints)
+			// A good trigger throughout, so that every row below fails for the
+			// constraint it is about rather than for the dimension the row next
+			// door is about.
+			err := interpret.Validate(interpret.Interpretation{
+				Constraints: constraints,
+				Trigger:     interpret.TriggerConditional,
+			})
 			require.Error(t, err, "an interpretation no verifier could read was accepted")
 			assert.ErrorIs(t, err, tc.want,
 				"the wrong diagnosis reaches the caller, and this one is what a receipt would say")
@@ -107,10 +113,63 @@ func TestValidateRefusesAnInterpretationTheVerifierCouldNotRead(t *testing.T) {
 func TestValidateRefusesAnInterpretationWithNoLimits(t *testing.T) {
 	t.Parallel()
 
-	assert.ErrorIs(t, interpret.Validate(nil), interpret.ErrNoConstraints,
+	assert.ErrorIs(t,
+		interpret.Validate(interpret.Interpretation{Trigger: interpret.TriggerConditional}),
+		interpret.ErrNoConstraints,
 		"an unbounded mandate would have been put in front of the user")
-	assert.ErrorIs(t, interpret.Validate([]generated.Constraint{}), interpret.ErrNoConstraints,
+	assert.ErrorIs(t,
+		interpret.Validate(interpret.Interpretation{
+			Constraints: []generated.Constraint{},
+			Trigger:     interpret.TriggerConditional,
+		}),
+		interpret.ErrNoConstraints,
 		"an empty slice is the same nothing as a nil one")
+}
+
+// TestValidateRefusesAnInterpretationThatDoesNotSayWhenItWantedToBuy is issue
+// #198's half of the same check, and the reason it is a refusal rather than a
+// default.
+//
+// Quantity has an honest zero: the sentence named no count, and every caller
+// downstream holds a number of its own to fall back to. The trigger has none.
+// An interpreter with no opinion about *when* leaves the agent to invent one,
+// and both inventions are wrong somewhere a user would not see it — reading it
+// as immediate buys at a price a conditional sentence asked to wait past, and
+// reading it as conditional is the defect #198 is about, a sentence that said
+// buy sitting there watching. So neither is available and the interpretation
+// fails instead.
+func TestValidateRefusesAnInterpretationThatDoesNotSayWhenItWantedToBuy(t *testing.T) {
+	t.Parallel()
+
+	constraints := decodeConstraints(t, interpret.Scenarios()[0].Constraints)
+
+	for _, tc := range []struct {
+		name    string
+		trigger interpret.Trigger
+		why     string
+	}{
+		{
+			name: "no trigger at all", trigger: "",
+			why: "the interpreter did not answer the question, and there is nothing downstream " +
+				"that could ask it again",
+		},
+		{
+			name: "a mode the model invented", trigger: "when the price is right",
+			why: "a word nobody defines cannot be acted on, and acting on it as either of the two " +
+				"would pick a behaviour at random for a sentence that asked for something else",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := interpret.Validate(interpret.Interpretation{
+				Constraints: constraints,
+				Trigger:     tc.trigger,
+			})
+			require.Error(t, err, "the limits are perfectly readable, so this row only fails on the trigger")
+			assert.ErrorIs(t, err, interpret.ErrUnknownTrigger, tc.why)
+		})
+	}
 }
 
 // TestValidateAcceptsTheBuiltScenario is the other half: the check refuses what
@@ -121,6 +180,6 @@ func TestValidateAcceptsTheBuiltScenario(t *testing.T) {
 
 	interpretation, err := interpret.Demo().Interpret(t.Context(), builtScenarioPrompt)
 	require.NoError(t, err, "the built scenario is what every other test here builds on")
-	assert.NoError(t, interpret.Validate(interpretation.Constraints),
+	assert.NoError(t, interpret.Validate(interpretation),
 		"the interpreter's own output failed the check it is supposed to have applied")
 }

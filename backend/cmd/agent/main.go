@@ -445,15 +445,18 @@ func geminiInterpreter(apiKey, model string, clk authz.Clock) (interpret.IntentI
 // writing anything the reader has to see to out.
 //
 // A watch stopped by Ctrl-C is not a failure, and neither is one that bought
-// something. Every other way it can end is. The interesting ones are the two
-// sentinels that mean the watch is over and nothing further will be attempted:
+// something. Every other way it can end is. The interesting ones are the three
+// sentinels that mean the run is over and nothing further will be attempted:
 // agent.ErrScheduleExhausted, where the merchant committed to its last price and
-// an attempt against it did not buy, and agent.ErrAuthorisationExpired, where
-// the pair the user signed ran out its own clock first. **They are one case
-// here** — the difference between them is which bound ended the loop, which the
-// sentinel's own text already states, and nothing this function decides turns
-// on it. On the schedules the demonstration runs only the second occurs at all;
-// see agent.ErrScheduleExhausted for why.
+// an attempt against it did not buy; agent.ErrAuthorisationExpired, where the
+// pair the user signed ran out its own clock first; and
+// agent.ErrPurchaseRefused, where a sentence that named no condition made its
+// one attempt and a verifier turned it down. **They are one case here** — what
+// separates them is which bound ended the run, which each sentinel's own text
+// already states, and nothing this function decides turns on it. Of the first
+// two only the expiry occurs on the schedules the demonstration runs; see
+// agent.ErrScheduleExhausted for why. The third is the one a demonstration can
+// reach in seconds, which is the whole of issue #198.
 //
 // # Both are fatal under -once and neither otherwise
 //
@@ -494,7 +497,9 @@ func geminiInterpreter(apiKey, model string, clk authz.Clock) (interpret.IntentI
 // a demonstration stops producing anything. Which bound ended it is the first
 // of those lines, printed from the sentinel's own text.
 func afterWatch(out io.Writer, err error, once bool) error {
-	over := errors.Is(err, agent.ErrScheduleExhausted) || errors.Is(err, agent.ErrAuthorisationExpired)
+	over := errors.Is(err, agent.ErrScheduleExhausted) ||
+		errors.Is(err, agent.ErrAuthorisationExpired) ||
+		errors.Is(err, agent.ErrPurchaseRefused)
 	switch {
 	case err == nil, errors.Is(err, context.Canceled):
 		return nil
@@ -695,8 +700,19 @@ func watchOnce(
 	for _, sentence := range authorised.Rendered {
 		fmt.Printf("  signed     %s\n", sentence)
 	}
-	fmt.Printf("  watching   %s ×%d, until %s\n",
-		authorised.Item, quantity, authorised.ExpiresAt.Format(time.RFC3339))
+	// Two words rather than one, because the two runs below this line are not
+	// the same run: "buying" attempts the offer in force and stops, "watching"
+	// waits for the merchant's commitment to move. Printing `watching` over an
+	// instruction would be this command describing a wait that is not about to
+	// happen. See interpret.Trigger and agent.Watch.
+	doing := "watching"
+	if authorised.Trigger == interpret.TriggerImmediate {
+		doing = "buying"
+	}
+	// Padded to the width the two lines above use for their own labels, so the
+	// values still line up under a label that is two characters shorter.
+	fmt.Printf("  %-11s%s ×%d, until %s\n",
+		doing, authorised.Item, quantity, authorised.ExpiresAt.Format(time.RFC3339))
 
 	watch := &agent.Watch{
 		Client:         client,

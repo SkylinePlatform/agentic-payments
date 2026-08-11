@@ -19,6 +19,7 @@ function aProposal(): Proposal {
     },
     watch_slots_free: 8,
     quantity: 1,
+    trigger: "conditional",
   };
 }
 

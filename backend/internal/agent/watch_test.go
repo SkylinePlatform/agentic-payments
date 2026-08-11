@@ -478,34 +478,38 @@ func shippedSteps(t *testing.T) map[string]int {
 	return steps
 }
 
-// TestAWatchOnAnAlwaysAffordableOfferStillWaitsForAStepThenBuys is issue #192,
-// run end to end.
+// TestASentenceWithNoConditionBuysAtOnceRatherThanWaiting is issue #198, run
+// end to end.
 //
-// The concert and the ladders are affordable at the very first price a search
-// finds them at — Scenario.Found says FoundAlways for both — and that was also
-// the defect: Watch never attempts the baseline, on purpose (see Watch's own
-// doc on why), so a schedule that never stepped left both prompts polling for
-// the life of the process, only ever reaching a terminal state an hour later
-// when the user's open mandate pair expired — a state about the clock, not
-// about the purchase. The fix gives each offer a second price, still inside
-// the cap, so the merchant's own re-commitment to a (still affordable) number
-// is the step change Watch reacts to, and the purchase completes on the first
-// one: no refusal, because nothing here was ever outside the user's limit.
+// "Two tickets to the concert, up to $160 all in" and "find and buy telescopic
+// ladders, cheapest" carry no condition. A person reading either expects a
+// purchase; both were nevertheless turned into a watch, and #196 made them buy
+// only because the merchant re-commits to a second price — a step change that
+// carries no new information about whether the purchase was allowed, and which
+// left the concert reading as *saw $150.00, declined it, paid $158.00*.
+//
+// What separates the two families is in the sentence rather than in the price,
+// so it is the interpreter that answers it and Authorisation.Trigger that
+// carries the answer. Nothing here compares an amount to anything: the loop
+// reads a trigger decided once, before the user signed.
+//
+// # The tick is the assertion
+//
+// A watch parks on its ticker after the baseline poll. An instruction has
+// already bought by then, so nobody is receiving on that channel — which makes
+// the send below the thing that tells the two apart, and a regression to
+// watching fails here in milliseconds rather than arriving as this package's
+// ten-minute timeout and a goroutine dump.
 //
 // # Why it reads the catalogue file before it starts anything
 //
-// The defect this covers is a **data** state, and deploy/catalogue.json is a
-// file an editor changes without recompiling anything. Reverting either offer
-// to one price puts this test back in the state the issue describes — a step
-// that never comes — and the barriers below have no arm for it: they wait on
-// the watch attempting or on the watch ending, and a watch in that state does
-// neither. So the regression would arrive as this package's own ten-minute
-// timeout and a goroutine dump rather than as a sentence naming the file.
-// shippedSteps is what turns it back into a sentence, and it is read from the
-// same file the world below is built from rather than from merchant's
-// constants, because a constant edited in step with the file would not be the
-// regression worth catching.
-func TestAWatchOnAnAlwaysAffordableOfferStillWaitsForAStepThenBuys(t *testing.T) {
+// Not #196's reason, which was that a single-priced offer left the watch with
+// no step to act on: an instruction never waits for one, so that shape can no
+// longer hang. It is the opposite claim now. Both offers have somewhere to
+// move to, and the purchase happens at the opening price regardless — an
+// assertion worth nothing if the catalogue quietly stopped giving them a
+// second price for it to have declined to wait for.
+func TestASentenceWithNoConditionBuysAtOnceRatherThanWaiting(t *testing.T) {
 	t.Parallel()
 
 	steps := shippedSteps(t)
@@ -515,68 +519,160 @@ func TestAWatchOnAnAlwaysAffordableOfferStillWaitsForAStepThenBuys(t *testing.T)
 		prompt   string
 		item     string
 		quantity int
-		baseline int
-		bought   int
+		price    int
 	}{
 		{
 			name: "concert", prompt: concertPrompt, item: merchant.DemoConcertID, quantity: 2,
-			baseline: 2 * merchant.DemoConcertPrice,
-			bought:   2 * merchant.DemoConcertPriceRepriced,
+			price: 2 * merchant.DemoConcertPrice,
 		},
 		{
 			name: "ladders", prompt: ladderPrompt, item: merchant.DemoLadderID, quantity: 1,
-			baseline: merchant.DemoLadderPrice,
-			bought:   merchant.DemoLadderPriceRepriced,
+			price: merchant.DemoLadderPrice,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			require.Greater(t, steps[tc.item], 1,
-				"deploy/catalogue.json prices this offer once, so the watch below has no step to "+
-					"act on and would wait for one until the suite timed out — issue #192, back")
+				"deploy/catalogue.json gives this offer one price, so *not waiting* for a second "+
+					"one is no longer a claim about anything")
 
 			w := newWorld(t)
 			a := authoriseFor(t, w, tc.prompt)
 			require.Equal(t, tc.item, a.auth.Item,
-				"watching the wrong offer would prove nothing about this one")
+				"buying the wrong offer would prove nothing about this one")
+			require.Equal(t, interpret.TriggerImmediate, a.auth.Trigger,
+				"the interpreter read the sentence, and the signing step has to carry that reading "+
+					"through unchanged — the Trusted Surface signs constraints and never sees this")
 
 			watch := a.watch(t)
 			require.Equal(t, tc.quantity, watch.Quantity)
 
-			wait, _ := a.running(t, watch)
+			wait, stop := a.running(t, watch)
 
-			// The baseline poll: read, and — by Watch's own design — never
-			// attempted, however affordable it already is.
+			// The opening poll, which for an instruction is also the offer it
+			// buys.
 			a.quoted()
 
-			a.step() // the merchant's only other price
-			a.quoted()
-			a.attempted()
+			// A watch would be sitting on its ticker by now and would take
+			// this; an instruction has bought and gone. Taking it is the
+			// failure, and stopping afterwards is what keeps the failure a
+			// failed assertion rather than a hung test.
+			waited := false
+			select {
+			case <-a.finished:
+			case a.tick <- time.Time{}:
+				waited = true
+				stop()
+			}
 
 			watched, err := wait()
+			require.False(t, waited,
+				"the sentence named no condition, so there was nothing for the agent to wait for; "+
+					"waiting is how the concert came to read as declined $150.00 and paid $158.00")
 			require.NoError(t, err,
-				"an offer that was always inside the cap has nothing here to refuse it")
+				"the offer is inside the cap the user signed, so nothing here refuses it")
 
-			assert.Equal(t, tc.baseline, watched.Baseline.Price.Amount,
-				"the baseline is what the watch is quoted before anything is attempted")
+			assert.Equal(t, tc.price, watched.Baseline.Price.Amount,
+				"the opening price is what the merchant is quoting when the run begins")
 			assert.Zero(t, watched.Baseline.Step,
-				"the baseline is the offer in force when the watch began")
+				"and it is the merchant's first commitment, not one it has moved to")
 
 			require.Len(t, watched.Attempts, 1,
-				"one step, one attempt — a watch that attempted the baseline would have two")
+				"an instruction is one attempt: buy this, on these terms, now")
 			bought := watched.Attempts[0]
-			assert.Equal(t, tc.bought, bought.Quote.Price.Amount)
+			assert.Equal(t, tc.price, bought.Quote.Price.Amount,
+				"the price the agent was quoted is the price it paid — a second quote here would be "+
+					"the run buying at a number nobody had been shown")
 			assert.NoError(t, bought.Err,
-				"both prices sit inside the cap, so there is nothing here for a verifier to refuse")
+				"the opening price sits inside the cap, so there is nothing here for a verifier to refuse")
 			assert.Equal(t, authz.StateSpent, bought.Payment, "an accepted attempt spends the mandate")
 			assert.Equal(t, authz.StateSpent, bought.Checkout)
 
 			require.NotNil(t, watched.Bought,
-				"the purchase this offer was always affordable for has to complete, or #192 is not fixed")
+				"the sentence asked for a purchase, and one attempt inside the limits is what it takes")
 			assert.True(t, watched.Bought.Settled, "the money has to have moved")
 		})
 	}
+}
+
+// TestAnInstructionRefusedDoesNotBecomeAWatch is issue #198's second trap,
+// settled in the direction the sentence points.
+//
+// The rejection-receipt rule returns both open mandates to StateReady, so a
+// second attempt is licensed the moment the first is refused — which makes
+// "attempt once and stop" and "attempt once, then wait for the merchant to
+// change its mind" both expressible. They are different promises, and only one
+// of them is in a sentence that said buy this, up to that, with no condition
+// attached. So the licence is there and this loop declines to use it, which is
+// what the state assertion below is for: not that the pair was stuck, but that
+// it was free and the run ended anyway.
+//
+// # Why the trigger is set by hand
+//
+// No scripted instruction names an offer its own cap refuses — the concert and
+// the ladders are affordable from their first price, which is what made them
+// #198's subject in the first place. The built scenario's flight is the
+// refusal this repository has: $240.00 against a cap of $200.00. So the
+// sentence's own reading is overridden here, and what is under test is the
+// loop rather than the interpretation. TestEachScenarioSaysWhenItsSentenceWantedToBuy
+// is where the readings themselves are held.
+//
+// # The tick is the assertion here, and for a sharper reason than above
+//
+// The licence this test is about is what makes the failure silent. A run that
+// used it is a watch again — parked on its ticker, against a merchant whose
+// price is not final — and neither barrier below can notice: they wait for an
+// attempt or for the run to end, and a run in that state does neither. The
+// regression therefore arrived as this package's ten-minute timeout and a
+// goroutine dump rather than as a sentence, which is the criticism #196's
+// review made of that branch's guard. Racing the run's completion against a
+// tick nobody should be waiting for is what turns it back into one.
+func TestAnInstructionRefusedDoesNotBecomeAWatch(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	a := authorise(t, w)
+	a.auth.Trigger = interpret.TriggerImmediate
+
+	wait, stop := a.running(t, a.watch(t))
+
+	a.quoted()
+	a.attempted()
+
+	// Neither arm is ready at this moment — the loop has been answered and is
+	// on its way out, and it is not receiving on the ticker — so this blocks
+	// until one of them becomes true, and which one that is is the finding.
+	waited := false
+	select {
+	case <-a.finished:
+	case a.tick <- time.Time{}:
+		waited = true
+		stop()
+	}
+
+	watched, err := wait()
+	require.False(t, waited,
+		"the rejection-receipt rule handed the licence back and this run took it; a sentence "+
+			"that asked to buy on the terms it stated, and was told those terms are not met, "+
+			"has nothing left to wait for — waiting from there is the other sentence's promise")
+	require.ErrorIs(t, err, agent.ErrPurchaseRefused,
+		"the purchase this sentence asked for was refused, and it named nothing to wait for")
+	assert.NotErrorIs(t, err, agent.ErrScheduleExhausted,
+		"exhaustion is a claim about the merchant having no further price, which is a different "+
+			"thing to tell somebody than that their limit was not met")
+
+	require.Len(t, watched.Attempts, 1,
+		"one attempt: an instruction licenses one purchase, and a verifier answered it")
+	refused := watched.Attempts[0]
+	assert.Equal(t, merchant.DemoPriceWatched, refused.Quote.Price.Amount,
+		"the offer in force is what an instruction buys at, and here it is the one above the cap")
+	require.ErrorIs(t, refused.Err, agent.ErrRefused,
+		"a counterparty said no; anything else here would be the agent having declined for it")
+	assert.Equal(t, authz.StateReady, refused.Payment,
+		"the rule handed the licence back, and this run declining to spend it is the whole finding")
+	assert.Equal(t, authz.StateReady, refused.Checkout)
+	assert.Nil(t, watched.Bought, "nothing was bought, and a run that ended is not a run that bought")
 }
 
 // TestTheWatchBuysWhenTheMerchantsPriceComesIntoRange is the built scenario,
@@ -969,6 +1065,15 @@ func TestAWatchRefusesToStartWithoutWhatItNeedsToFinish(t *testing.T) {
 		}, "instrument"},
 		{"no merchant name", func(w *agent.Watch) { w.Merchant.Name = "" }, "name"},
 		{"no processor identifier", func(w *agent.Watch) { w.ProcessorID = "" }, "aud"},
+		// The one field here whose *absence* is legitimate — an authorisation
+		// assembled somewhere that has not been taught about it reads as a
+		// watch, which is the direction that cannot buy something the sentence
+		// did not ask to buy now. A word nobody defines is the opposite: acting
+		// on it as either of the two would pick a behaviour at random, and
+		// nothing on any screen would say which was picked.
+		{"a trigger nobody defines", func(w *agent.Watch) {
+			w.Authorisation.Trigger = "when I say so"
+		}, "when I say so"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

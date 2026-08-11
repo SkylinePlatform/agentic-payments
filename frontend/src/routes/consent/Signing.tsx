@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import { Button } from "../../components/ui/button";
 import { authorise, RequestFailed, startWatch } from "../../consent/client";
+import { whenItBuys } from "../../consent/model";
 import type { Authorised, Previewed, Proposal } from "../../consent/model";
 import { lifetime } from "./format";
 
@@ -252,13 +253,28 @@ export function Signing({
       </section>
 
       {/*
-        Carried over from Consent's zone 3, and outside the box for the reason
-        the heading above is computed rather than fixed: in `starting` and
-        `stranded` that heading reads "What you signed", and a basket size is
-        the one line here no signature covers. The surface never saw it. So it
-        stays beside the box, labelled, rather than acquiring a claim by
-        sitting inside one — the same defect as the heading, one row down.
+        Carried over from Consent's zones 3 and 4, and outside the box for the
+        reason the heading above is computed rather than fixed: in `starting`
+        and `stranded` that heading reads "What you signed", and neither of
+        these two lines is one any signature covers. The surface saw neither.
+        So they stay beside the box, labelled, rather than acquiring a claim by
+        sitting inside one — the same defect as the heading, two rows down.
+
+        Both are on this screen and not only on `Consent` because this is where
+        a person waits through two round trips: what the agent is about to do
+        with the authority they have just given it is the whole of what there
+        is to read while `POST /watches` is in flight.
       */}
+      <section className="flex flex-col gap-1" data-testid="when" aria-labelledby="when">
+        <h2 id="when" className="font-sans text-sm text-graphite">
+          When the agent will buy
+        </h2>
+        <p className="font-sans text-ink">{whenItBuys(proposal.trigger).sentence}</p>
+        <p className="font-sans text-sm text-graphite">
+          Not part of your signature. Whenever the agent buys, it is still held to the limits above.
+        </p>
+      </section>
+
       <section className="flex flex-col gap-1" data-testid="basket" aria-labelledby="basket">
         <h2 id="basket" className="font-sans text-sm text-graphite">
           How many the agent will buy

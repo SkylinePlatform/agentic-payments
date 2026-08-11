@@ -80,6 +80,19 @@ func TestAfterWatch(t *testing.T) {
 			why:     "the same caller and the same answer; which bound ended the watch does not change it",
 		},
 		{
+			name: "refused, long-running", err: agent.ErrPurchaseRefused, once: false,
+			wantErr: nil, wantSaid: "nothing further will be attempted",
+			why: "a sentence with no condition in it makes one attempt and stops, so the run is " +
+				"over on exactly the terms the other two are — and this is the sentinel a " +
+				"demonstration can actually reach in seconds rather than in an hour",
+		},
+		{
+			name: "refused under -once", err: agent.ErrPurchaseRefused, once: true,
+			wantErr: agent.ErrPurchaseRefused,
+			why: "the agent was asked to buy something and did not, and this caller gets a status " +
+				"back to say so",
+		},
+		{
 			name: "anything else", err: other, once: false, wantErr: other,
 			why: "a watch that could not run at all is a failure however the process was started",
 		},

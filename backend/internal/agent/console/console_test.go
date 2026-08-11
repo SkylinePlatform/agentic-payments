@@ -310,6 +310,7 @@ type proposedBody struct {
 	Offer          agent.Offer            `json:"offer"`
 	Offers         []agent.Offer          `json:"offers"`
 	Quantity       int                    `json:"quantity"`
+	Trigger        interpret.Trigger      `json:"trigger"`
 	WatchSlotsFree int                    `json:"watch_slots_free"`
 }
 
@@ -525,6 +526,58 @@ func TestASignedAuthorisationStartsAWatchWithoutCallingTheSurface(t *testing.T) 
 	c.watcher.AssertNumberOfCalls(t, "Authorise", 0)
 }
 
+// TestTheBrowsersTriggerReachesTheWatchItStarts is issue #198's last hop, and
+// the one with nothing else standing behind it.
+//
+// `make demo` drives this route rather than `cmd/agent -watch`, and on this
+// path the browser collected the signature itself — so the trigger the person
+// read on the consent screen arrives here or nowhere. Everything upstream of
+// it can be right while a purchase still waits: `agent.Watch` reads an absent
+// trigger as a watch, deliberately, so an assembly that dropped the field
+// turns *"two tickets, up to $160 all in"* back into a watch with every other
+// test in this repository still green.
+//
+// Asserted over the **wire**, as a map rather than as `agent.Authorisation`,
+// for `anAuthorisationBody`'s own reason: a Go value that happens to marshal
+// correctly is not the thing a browser sends.
+func TestTheBrowsersTriggerReachesTheWatchItStarts(t *testing.T) {
+	t.Parallel()
+
+	watcher := console.NewMockWatcher(t)
+	// Buffered and read on the test goroutine, on the standing hazard: Watch is
+	// called from a goroutine this test does not own, and testify fails from
+	// whichever goroutine touches it.
+	seen := make(chan agent.Authorisation, 1)
+	watcher.EXPECT().Watch(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(
+			_ context.Context, auth agent.Authorisation, _ int, _ agent.Progress,
+		) (agent.Watched, error) {
+			seen <- auth
+			return agent.Watched{}, nil
+		}).Maybe()
+
+	service := &console.Service{Watcher: watcher, Clock: clock.New()}
+	handler, err := service.Handler()
+	require.NoError(t, err)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	body := anAuthorisationBody()
+	body["trigger"] = "immediate"
+
+	var started startedBody
+	require.Equal(t, http.StatusCreated, post(t, server.URL+"/watches", map[string]any{
+		"prompt":        "two tickets to the Vlado Georgijev concert in November, up to $160 all in",
+		"quantity":      2,
+		"authorisation": body,
+	}, &started))
+
+	got := <-seen
+	assert.Equal(t, interpret.TriggerImmediate, got.Trigger,
+		"the sentence carried no condition and the person was shown so before signing; a watch "+
+			"started without that fact waits for a price to move that nobody asked it to wait for")
+}
+
 // TestAWatchStartedFromASignedAuthorisationCarriesTheUsersSentences is what the
 // row on screen is drawn from.
 func TestAWatchStartedFromASignedAuthorisationCarriesTheUsersSentences(t *testing.T) {
@@ -702,6 +755,50 @@ func TestTheProposalNamesTheBasketSizeOnTheWire(t *testing.T) {
 			require.Equal(t, http.StatusOK, post(t, server.URL+"/proposals",
 				map[string]any{"prompt": "two tickets to the concert"}, &body))
 			assert.Equal(t, tc.want, body.Quantity, tc.why)
+		})
+	}
+}
+
+// TestTheProposalNamesWhenItWillBuyOnTheWire is issue #198's first trap, and it
+// is the same class of miss #133 left behind: the field existed on
+// agent.Proposal and not on this response, so the one screen that could tell
+// somebody what they were agreeing to had nothing to read.
+//
+// "Buy now, up to $160" and "buy when the price moves, up to $160" are
+// different authorisations. They render identically from the constraints,
+// because the words that separate them are in the sentence and in no limit —
+// so a consent screen showing only the limits collects a signature without
+// saying which of the two it is for, which is the same shape of problem as a
+// constraint no verifier reads.
+//
+// Passed through rather than resolved, unlike the quantity above: there is no
+// absence to stand in for, because interpret.Validate refuses an interpretation
+// that names no trigger.
+func TestTheProposalNamesWhenItWillBuyOnTheWire(t *testing.T) {
+	t.Parallel()
+
+	for _, trigger := range []interpret.Trigger{interpret.TriggerImmediate, interpret.TriggerConditional} {
+		t.Run(string(trigger), func(t *testing.T) {
+			t.Parallel()
+
+			p := proposal()
+			p.Trigger = trigger
+
+			watcher := console.NewMockWatcher(t)
+			watcher.EXPECT().Propose(mock.Anything, mock.Anything, mock.Anything).Return(p, nil).Maybe()
+
+			service := &console.Service{Watcher: watcher, Clock: clock.New()}
+			handler, err := service.Handler()
+			require.NoError(t, err)
+			server := httptest.NewServer(handler)
+			t.Cleanup(server.Close)
+
+			var body proposedBody
+			require.Equal(t, http.StatusOK, post(t, server.URL+"/proposals",
+				map[string]any{"prompt": "two tickets to the concert"}, &body))
+			assert.Equal(t, trigger, body.Trigger,
+				"this response is the only place a consent screen can learn which of the two "+
+					"authorisations it is about to collect a signature for")
 		})
 	}
 }
@@ -935,6 +1032,44 @@ func TestAWatchWhoseAuthorisationExpiredIsDrawnAsExpiredNotAsWatching(t *testing
 		"exhaustion is an attempt refused against the merchant's last price, which never happened "+
 			"here — conflating the two would misreport which bound actually ended the loop")
 	assert.Contains(t, view["error"], agent.ErrAuthorisationExpired.Error(),
+		"the reason travels beside the state, on the same terms every other terminal state already reports one")
+}
+
+// TestAnInstructionRefusedIsDrawnRefusedNotExhaustedOrFailed is issue #198's
+// terminal state, and the two states it is deliberately not.
+//
+// A sentence with no condition in it makes one attempt and stops. When a
+// verifier refuses that attempt the run is over, and what a viewer is told
+// about it has to be true of what happened: `exhausted` is a claim about the
+// *merchant* — its last price is committed and there is nowhere further to move
+// — which would read as the shop having run out, and `failed` is a claim about
+// this agent, which minted, presented and was answered exactly as it should
+// have been. What actually happened is that a verifier, with a signed receipt,
+// said the limits the user set were not met.
+func TestAnInstructionRefusedIsDrawnRefusedNotExhaustedOrFailed(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(p agent.Progress) (agent.Watched, error) {
+		p.Baseline(agent.Quote{Checkout: "the-offer", Price: generated.Amount{Amount: 24000, Currency: "USD"}})
+		return agent.Watched{}, agent.ErrPurchaseRefused
+	})
+
+	run, err := c.service.Start(t.Context(), console.Watching{Prompt: "two tickets to the concert"})
+	require.NoError(t, err)
+	<-run.Done()
+
+	status, view := c.get(t, "/watches/"+run.ID())
+	require.Equal(t, http.StatusOK, status)
+
+	assert.Equal(t, "refused", view["state"],
+		"a purchase a verifier turned down is the system working, and it is the one terminal "+
+			"state on this axis carrying a verdict somebody else signed")
+	assert.NotEqual(t, "exhausted", view["state"],
+		"nothing was said here about the merchant having run out of prices to move to")
+	assert.NotEqual(t, "failed", view["state"],
+		"the agent did everything it was supposed to; drawing this as a failure would send "+
+			"somebody looking for a defect in the party that behaved correctly")
+	assert.Contains(t, view["error"], agent.ErrPurchaseRefused.Error(),
 		"the reason travels beside the state, on the same terms every other terminal state already reports one")
 }
 

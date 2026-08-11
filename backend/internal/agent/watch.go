@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
@@ -40,6 +41,12 @@ import (
 //     presently unreachable for the simpler reason that nothing here is single
 //     priced — not because the shape stopped existing. A future offer that
 //     shipped with one price would still hit it.
+//
+// Neither route is an instruction's, and that is not a third case: a run whose
+// Authorisation.Trigger is immediate reads no step and waits for nothing, so it
+// ends at ErrPurchaseRefused or at a purchase long before either paragraph
+// above applies. Since issue #198 the concert and the ladders are exactly such
+// runs, which is what makes their second price no longer load-bearing.
 //
 // Either way the watch polls for as long as the process runs, minting nothing
 // and reporting nothing, rather than reaching this. ErrAuthorisationExpired is
@@ -78,8 +85,47 @@ var ErrScheduleExhausted = errors.New("agent: the merchant has no further price 
 // is "does a wait that has not yet begun have anything left to wait for".
 var ErrAuthorisationExpired = errors.New("agent: the user's authorisation expired before any attempt bought")
 
+// ErrPurchaseRefused means the one attempt an instruction licensed was refused
+// by a verifier, and the sentence gave nothing to wait for.
+//
+// It is the terminal state of a run whose Authorisation.Trigger is
+// interpret.TriggerImmediate — "two tickets, up to $160 all in" — where the
+// purchase was assembled, presented and turned down. The rejection-receipt rule
+// returns both open mandates to StateReady, so a second attempt is licensed and
+// this loop declines to make one anyway: the sentence asked for a purchase on
+// the terms it stated, a verifier answered that those terms are not met, and
+// waiting for the merchant to change its mind is a promise that sentence never
+// made. #198's second trap is that both readings are expressible and only one
+// of them is what was asked for.
+//
+// **It is not ErrScheduleExhausted and the two must not be conflated.** That
+// one is a statement about the merchant — its last price is committed and there
+// is nowhere further to move — reached by a *watch* that ran out of things to
+// wait for. This is a statement about the sentence: there was never anything to
+// wait for. A console drawing both as "exhausted" would tell somebody the shop
+// had run out when what happened is that their limit was not met.
+var ErrPurchaseRefused = errors.New("agent: the purchase this sentence asked for was refused, and it named no condition to wait for")
+
 // Watch is the Human Not Present loop: hold a key, wait for the merchant's
 // commitment to move, and attempt a purchase when it does.
+//
+// # Two shapes of sentence reach it, and only one of them waits
+//
+// Everything below describes the conditional one — "buy a flight to Palma when
+// it drops below $200" — which is what this type is named for and what it does
+// unless told otherwise. A sentence carrying no condition asks for something
+// else: "two tickets to the concert, up to $160 all in" is an instruction, and
+// answering it with a wait is issue #198.
+//
+// Which of the two this run is comes from Authorisation.Trigger, decided once
+// by the interpreter before anything was signed — **never from a price**. The
+// alternative, "attempt if what the merchant is offering already satisfies the
+// constraints", is the agent evaluating the user's limit, which is exactly what
+// the section below exists to make impossible. See interpret.Trigger.
+//
+// An instruction attempts the offer in force as soon as it has been quoted, and
+// stops: bought, or ErrPurchaseRefused. It never reads the step index at all,
+// so nothing in that path compares anything either.
 //
 // # It triggers on a step change, never on a price
 //
@@ -100,6 +146,11 @@ var ErrAuthorisationExpired = errors.New("agent: the user's authorisation expire
 // merchant's commitment to *move* from the one that was in force when the
 // authorisation was signed. That is what makes beat 4 of the built scenario a
 // beat ("agent watches — $240, no model call") rather than a third refusal.
+//
+// It is the same quote either way, and an instruction is what makes it an
+// attempt: one poll, published as the baseline and then bought at, so that the
+// price a console showed is the price that was paid rather than a second one
+// taken a moment later.
 //
 // **The consequence is real and is not a rounding error.** An agent whose watch
 // begins when the price is already acceptable waits for the next step, and a
@@ -345,8 +396,12 @@ func (w *Watch) audiences() Audiences {
 
 // Watched is what one run of the watch did.
 type Watched struct {
-	// Baseline is the offer in force when the watch began. It is never attempted
-	// — see Watch.
+	// Baseline is the offer in force when the run began.
+	//
+	// A watch never attempts it — see Watch — and an instruction attempts
+	// nothing else: the same single quote, published here and then bought at,
+	// so the two runs differ in what was done about the baseline rather than in
+	// what it is.
 	Baseline Quote
 	// Attempts, in the order they were made, one row each.
 	Attempts []Attempted
@@ -372,6 +427,12 @@ type Watched struct {
 
 // Run watches until the purchase goes through, the mandate is spent, the
 // schedule runs out, the authorisation expires or the context ends.
+//
+// **Unless the sentence carried no condition**, in which case it does not watch
+// at all: it attempts the offer it was just quoted and ends there, bought or
+// ErrPurchaseRefused. Which of the two runs this is comes off
+// Authorisation.Trigger and from nothing that happens while it runs — see
+// Watch's own doc for why it cannot come from a price.
 //
 // The Tracker is a local rather than a field, and that is the containment
 // Tracker's own comment claims: Fund and Settle are methods on this type, so a
@@ -426,11 +487,30 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 	// one, which is what makes len(out.Attempts) a count of attempts.
 	recorded := make(map[string]int)
 
+	// instruction is the sentence that carried no condition, and opening is its
+	// first pass through the loop below — the one that neither waits for a tick
+	// nor asks the merchant a second time, because the baseline it already holds
+	// is the offer it was told to buy.
+	//
+	// Read once, off the authorisation, so that nothing inside the loop can make
+	// this depend on anything that happens while it runs.
+	instruction := w.instruction()
+	opening := instruction
+
 	for {
-		select {
-		case <-ctx.Done():
-			return out, ctx.Err()
-		case <-tick:
+		// Read into the iteration and cleared at the top of it rather than at
+		// the end, so that no way of leaving this pass early — a mint that
+		// failed, a delivery nobody answered — can leave the loop going round
+		// again without waiting for a tick.
+		baselineAttempt := opening
+		opening = false
+
+		if !baselineAttempt {
+			select {
+			case <-ctx.Done():
+				return out, ctx.Err()
+			case <-tick:
+			}
 		}
 
 		// The re-delivery carries its own quote rather than taking a new one:
@@ -447,15 +527,24 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 				return out, ErrAuthorisationExpired
 			}
 
-			q, err := w.Client.QuoteItem(ctx, w.Authorisation.Item, w.quantity())
-			if err != nil {
-				// A poll that did not answer says nothing about the price, so it
-				// is not a step change and not an attempt. The next tick asks
-				// again.
-				continue
-			}
-			if q.Step == last {
-				continue
+			q := baseline
+			if !baselineAttempt {
+				var err error
+				q, err = w.Client.QuoteItem(ctx, w.Authorisation.Item, w.quantity())
+				if err != nil {
+					// A poll that did not answer says nothing about the price,
+					// so it is not a step change and not an attempt. The next
+					// tick asks again.
+					continue
+				}
+				// An instruction never reads the step, which is what makes "it
+				// compares no money" true of that path as well: it is not
+				// waiting for anything, so there is nothing for a change to
+				// mean. It reaches here only when its opening mint failed, and
+				// what it wants then is to buy at whatever is in force now.
+				if !instruction && q.Step == last {
+					continue
+				}
 			}
 
 			minted, err := w.Delegate(ctx, q)
@@ -532,9 +621,18 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 		pending, pendingQuote = nil, Quote{}
 
 		// A verifier refused. The pair is back at StateReady, which is what
-		// licenses the next attempt — but the last price holds for ever, so
-		// against a final offer there is no next step to wait for and every tick
-		// from here would poll a price that cannot move.
+		// licenses the next attempt — and for an instruction that is exactly the
+		// licence this loop declines to use. The sentence asked for a purchase
+		// on the terms it stated and a verifier has answered that they are not
+		// met; a second attempt would be waiting for the merchant to change its
+		// mind, which is the other sentence. See ErrPurchaseRefused.
+		if instruction {
+			return out, ErrPurchaseRefused
+		}
+
+		// The last price holds for ever, so against a final offer there is no
+		// next step to wait for and every tick from here would poll a price that
+		// cannot move.
 		if quoted.Final {
 			return out, ErrScheduleExhausted
 		}
@@ -641,6 +739,24 @@ func (w *Watch) quantity() int {
 	return w.Quantity
 }
 
+// instruction reports whether the sentence behind this authorisation asked for
+// a purchase rather than for a wait.
+//
+// It is a comparison of two strings decided before anything was signed, and
+// that is the whole of it. **No amount is read here and none may be**: an
+// instruction is a property of what the user typed, and a version of this that
+// asked whether today's price is acceptable would be the agent evaluating the
+// constraint the user signed — the one thing Watch's own doc says this file
+// contains no code for.
+//
+// Anything other than interpret.TriggerImmediate is a wait, which covers the
+// empty trigger valid() lets through — see Authorisation.Trigger for why that
+// is the direction to be wrong in, and for why a trigger that is neither empty
+// nor one interpret defines never reaches here at all.
+func (w *Watch) instruction() bool {
+	return w.Authorisation.Trigger == interpret.TriggerImmediate
+}
+
 // expired reports whether the user's authorisation has run out its own clock,
 // as of now — see ErrAuthorisationExpired.
 //
@@ -698,6 +814,14 @@ func (w *Watch) valid() error {
 		return errors.New("agent: a watch needs both open mandates the user signed")
 	case w.Authorisation.Instrument.ID == "":
 		return errors.New("agent: a watch needs the instrument the surface pinned, or every closed Payment Mandate it signs names a different card")
+	case w.Authorisation.Trigger != "" && !w.Authorisation.Trigger.Known():
+		// Empty is a stated case and reads as a wait — see
+		// Authorisation.Trigger. A word nobody defines is not: reading it as
+		// either would pick one of the two behaviours at random for an
+		// authorisation that asked for something else, and the wrong pick is
+		// invisible on every screen there is.
+		return fmt.Errorf("agent: a watch cannot act on %q; interpret defines %q and %q, and an authorisation naming neither says nothing about when it wanted to buy",
+			w.Authorisation.Trigger, interpret.TriggerImmediate, interpret.TriggerConditional)
 	case w.Merchant.ID == "" || w.Merchant.Name == "":
 		return errors.New("agent: a watch needs the merchant's identifier and name; the schema requires both on a payee")
 	case w.CredProviderID == "" || w.ProcessorID == "":

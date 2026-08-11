@@ -27,18 +27,19 @@ type IntentInterpreter interface {
 }
 
 // Interpretation is what one call to Interpret answers with: the limits a
-// verifier will enforce, and the basket size the sentence asked for.
+// verifier will enforce, the basket size the sentence asked for, and whether it
+// asked for a purchase now or for one when something changes.
 //
-// The two are kept apart on purpose, and issue #133 is the failure that
-// happens when they are not. "Two tickets... up to $160 all in" places a bound
-// — quantity lte 2 — that a verifier evaluates, and that bound is satisfied by
-// a purchase of one ticket as readily as by two: it says at most, not exactly.
-// Reading a bound as an instruction would be this package deciding what the
-// user meant from a limit they set, which is the same move AGENTS.md forbids
-// the agent making when it evaluates a constraint. "How many to buy" is not a
-// fact about the purchase being offered — it cannot be refuted at the point of
-// sale the way a price or a date can — so it does not belong in Constraints,
-// which the registry closes on exactly that criterion.
+// The three are kept apart on purpose, and issue #133 is the failure that
+// happens when the first two are not. "Two tickets... up to $160 all in" places
+// a bound — quantity lte 2 — that a verifier evaluates, and that bound is
+// satisfied by a purchase of one ticket as readily as by two: it says at most,
+// not exactly. Reading a bound as an instruction would be this package deciding
+// what the user meant from a limit they set, which is the same move AGENTS.md
+// forbids the agent making when it evaluates a constraint. "How many to buy" is
+// not a fact about the purchase being offered — it cannot be refuted at the
+// point of sale the way a price or a date can — so it does not belong in
+// Constraints, which the registry closes on exactly that criterion.
 //
 // Quantity is that second fact, carried beside the constraints rather than
 // folded into one of them. Zero is the sentence naming no count at all, which
@@ -50,6 +51,13 @@ type IntentInterpreter interface {
 // sentence, and every caller holding a count of its own — cmd/agent's
 // -quantity, POST /watches's own field — would lose to a number nobody said.
 // agent.Proposal.Quantity carries the same distinction one hop further on.
+//
+// Trigger is the third, and issue #198 is its version of the same failure. It
+// is on the same criterion exactly: whether a sentence made its purchase
+// conditional is not a fact about the purchase being offered, no verifier can
+// refute it at the point of sale, and a merchant asked to judge it would be
+// judging the buyer's own account of what they meant. Unlike Quantity there is
+// no honest zero — see Trigger.
 type Interpretation struct {
 	// Constraints are the limits a verifier will enforce.
 	Constraints []generated.Constraint
@@ -57,7 +65,85 @@ type Interpretation struct {
 	// Quantity is how many of the item the sentence asked for, and zero is
 	// the ordinary case: nothing in the sentence named a count.
 	Quantity int
+
+	// Trigger is when the sentence asked for the purchase. Every
+	// interpretation states one; Validate refuses an interpretation that
+	// does not.
+	Trigger Trigger
 }
+
+// Trigger is what a sentence said about *when* to buy, which is a fact about
+// the sentence and never about a price.
+//
+// Two shapes of sentence reach an interpreter and they ask for different
+// things. "Buy a flight to Palma **when it drops below** $200" presupposes a
+// price now and asks for it not to be acted on at that price. "**Two tickets**
+// to the concert, **up to** $160 all in" carries no condition at all: a person
+// reading it expects a purchase, and the cap is what protects them if the
+// purchase turns out to cost more than they thought.
+//
+// # Why the interpreter answers this and the agent does not
+//
+// The alternative is one the agent cannot express. "Buy if what the merchant is
+// offering already satisfies the constraints" would have the agent compare an
+// amount to a limit, which is the verifier's job in this repository and nobody
+// else's — agent.Watch reads a step index and a final flag and compares no
+// money to anything, which is what makes that rule structural there rather than
+// disciplinary. And "attempt the opening price unconditionally" is coherent but
+// wrong for the first sentence above, which would spend its first act minting
+// four closed mandates to collect a refusal it had been told to expect.
+//
+// So the distinction has to come from the sentence, which means it is decided
+// once, before anything is signed, by the one component that reads sentences.
+//
+// # There is no honest zero, unlike Quantity
+//
+// A sentence that named no count leaves Quantity at zero and every caller
+// downstream holds a number of its own to fall back to. Nothing plays that role
+// here: an interpreter with no opinion about *when* would leave the agent to
+// invent one, and both inventions are wrong in a way a user would not see. So
+// Validate refuses the empty trigger, and an interpreter that cannot say which
+// kind of sentence it read fails rather than defaults.
+//
+// **What a wrong answer costs is bounded, and that is why a model may give
+// one.** Neither trigger widens what may be bought: the constraints are what
+// the user signed and what every verifier enforces, so an instruction read out
+// of a conditional sentence buys nothing that was not authorised — it collects
+// a refusal, visibly, at the price the merchant was asking. The cost is a run
+// that ends sooner than the person hoped. That is a cost a *reader* can catch,
+// which is why the answer travels to the consent screen beside the limits — see
+// console's proposed.Trigger — rather than being something only the agent
+// knows.
+type Trigger string
+
+const (
+	// TriggerImmediate is a sentence with no condition in it: an instruction
+	// to buy, on the terms the constraints state.
+	TriggerImmediate Trigger = "immediate"
+
+	// TriggerConditional is a sentence that asked for the purchase when
+	// something changes — "when it drops below $200".
+	TriggerConditional Trigger = "conditional"
+)
+
+// Known reports whether this is a trigger this package defines.
+//
+// The empty trigger is not one, and that is the point of asking: an unstated
+// trigger is an interpreter that did not answer the question, not a third kind
+// of sentence.
+func (t Trigger) Known() bool {
+	return t == TriggerImmediate || t == TriggerConditional
+}
+
+// ErrUnknownTrigger means the interpretation did not say when the sentence
+// asked for the purchase, or said something this package does not define.
+//
+// The failure direction matters more here than the message. A trigger nobody
+// recognises cannot be defaulted: reading it as immediate buys at a price a
+// conditional sentence asked the agent to wait past, and reading it as
+// conditional silently reproduces the defect #198 is about — a sentence that
+// said buy, waiting. Both would look like the agent working.
+var ErrUnknownTrigger = errors.New("interpret: the interpretation does not say when the sentence asked for the purchase")
 
 // ErrNoConstraints means the interpretation placed no limits at all.
 //
@@ -94,15 +180,35 @@ var ErrNoConstraints = errors.New("interpret: the interpretation placed no limit
 // on parsed expressions, and an operator added without a phrase panics at
 // initialisation rather than producing an approval screen with a gap in it.
 //
-// It takes Constraints alone rather than the whole Interpretation, because
-// Quantity is not a thing a verifier reads: no mandate carries it and no
-// receipt is refused over it, so there is nothing here for the verifier's
-// parser to have an opinion about. Every caller passes interp.Constraints.
-func Validate(constraints []generated.Constraint) error {
+// # It takes the whole Interpretation, and the two halves are checked by
+// # different authorities
+//
+// The constraints go to the verifier's own parser, because the verifier is who
+// has to read them. The trigger cannot: no verifier has an opinion about when a
+// sentence asked for a purchase, and there is nobody downstream of this package
+// who could refuse one they did not recognise — the agent would have to guess,
+// and Trigger records why both guesses are wrong. So it is checked here,
+// against the closed set this package defines, on the same reasoning that puts
+// the constraint check here: the interpreter is the one component allowed to be
+// non-deterministic, so a dimension it invented has to fail where somebody is
+// still looking.
+//
+// Quantity is checked by nobody and that is not an omission. Zero is a
+// meaningful answer there — the sentence named no count — and every caller
+// downstream holds a number of its own to fall back to, which is precisely what
+// the trigger has none of.
+//
+// It took Constraints alone until issue #198 added the second dimension. Every
+// caller passed interp.Constraints; they now pass interp.
+func Validate(interp Interpretation) error {
+	constraints := interp.Constraints
 	if len(constraints) == 0 {
 		return ErrNoConstraints
 	}
 
+	// The limits first, and the trigger after, so that an interpretation that
+	// is wrong in both dimensions is reported for the one that decides what may
+	// be bought rather than for the one that decides when.
 	for i, c := range constraints {
 		// Wrapped rather than replaced, so that errors.Is still reaches
 		// constraint.ErrUnknownField and constraint.CodeOf still maps this to
@@ -112,6 +218,11 @@ func Validate(constraints []generated.Constraint) error {
 		if _, err := constraint.Parse(c); err != nil {
 			return fmt.Errorf("interpret: constraint %d of %d: %w", i+1, len(constraints), err)
 		}
+	}
+
+	if !interp.Trigger.Known() {
+		return fmt.Errorf("%w: %q is neither %q nor %q",
+			ErrUnknownTrigger, interp.Trigger, TriggerImmediate, TriggerConditional)
 	}
 	return nil
 }

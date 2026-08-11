@@ -103,9 +103,10 @@ func DemoPrices() []generated.Amount {
 // TestTheCatalogueFileIsTheDocumentedScenario is what stops somebody adjusting a
 // price in deploy/catalogue.json and quietly making a prompt find nothing.
 //
-// Every offer moves at least once, and issue #192 is why.
+// Every offer moves at least once. Issue #192 is why that started, and issue
+// #198 is why only half of them still need it.
 //
-// A Human Not Present watch attempts only on a step change — see agent.Watch's
+// A Human Not Present *watch* attempts only on a step change — see agent.Watch's
 // own doc — so a schedule that never moved left a prompt with nothing to act
 // on. The concert and the ladders used to be exactly that: one flat price,
 // already inside the cap their own prompt names, so a browser starting either
@@ -113,15 +114,24 @@ func DemoPrices() []generated.Amount {
 // life of the process, only ever ending an hour later when the open mandate
 // pair itself expired — a state about the clock, not about the purchase.
 //
-// The four still split into two pairs, and what tells them apart now is *why*
-// each one moves rather than whether it does. The bicycle steps across the cap
-// its own prompt names, the same shape as the flight, one vertical over — "buy
-// me this bicycle when it drops below $400" has nothing to demonstrate if the
-// bicycle is already below $400 when the demonstration starts. The concert and
-// the ladders were never outside their cap, so their second price is the
-// merchant re-committing to a number that was already affordable rather than a
-// price crossing into range: nothing is ever refused on either of those two,
-// and the purchase completes on the first step there is one.
+// **#198 answered that one level up, and it is why the second price is no
+// longer what makes those two work.** Their sentences carry no condition —
+// "two tickets... up to $160 all in" and "find and buy telescopic ladders,
+// cheapest" are instructions — so the interpretation says so and the agent buys
+// at the opening price without waiting for anything. The prices below are kept
+// rather than removed: a browser that has not been taught to send the trigger
+// still starts a watch, and moving an opening figure moves what several tests
+// and every screenshot are written against. Deleting them is a decision on its
+// own terms rather than a tidy-up this leaves behind.
+//
+// The four still split into two pairs, and what tells them apart is now *what
+// the sentence asked for*. The bicycle steps across the cap its own prompt
+// names, the same shape as the flight, one vertical over — "buy me this bicycle
+// when it drops below $400" has nothing to demonstrate if the bicycle is
+// already below $400 when the demonstration starts. The concert and the ladders
+// were never outside their cap and never asked to wait: nothing is ever refused
+// on either of those two, and the purchase completes at the first price the
+// merchant quotes.
 const (
 	// The bicycle steps across the $400 its prompt names: $450.00, then
 	// $380.00. The same shape as the flight, one vertical over — "buy me this
@@ -133,17 +143,27 @@ const (
 
 	// One concert ticket at $75.00, then $79.00 — both inside the $160.00 all
 	// in the prompt approves for two. The quantity is what makes that prompt
-	// interesting; the price was never the obstacle. The second figure exists
-	// only so the watch has a step to act on, and it buys there rather than
-	// crossing into range, on the terms the block comment above states.
+	// interesting; the price was never the obstacle.
+	//
+	// The second figure existed only so a watch had a step to act on. Since
+	// issue #198 the prompt is an instruction and the purchase happens at
+	// $75.00 each — which is also what stopped the demonstration reading as
+	// *saw $150.00 for two, declined it, paid $158.00*. The figure stays for
+	// the reason the block comment above gives.
 	DemoConcertPrice         = 7500
 	DemoConcertPriceRepriced = 7900
 	DemoConcertCap           = 16000
 
 	// Telescopic ladders at $139.00, then $135.00 — both inside the $150.00
 	// bound "cheapest" became. A flat schedule made the point about the
-	// interpretation; it stopped making the point about the watch, which is
-	// what the second figure restores.
+	// interpretation and none about the watch, which is what the second figure
+	// was added to restore.
+	//
+	// Since issue #198 this prompt is an instruction and buys at $139.00, the
+	// dearer of the two — which is honest rather than awkward. "Cheapest" is
+	// an objective no verifier can check, so it became a bound and the agent
+	// ranks nothing; a watch that waited for the second price would have bought
+	// at $135.00 by accident, not by searching.
 	DemoLadderPrice         = 13900
 	DemoLadderPriceRepriced = 13500
 	DemoLadderCap           = 15000

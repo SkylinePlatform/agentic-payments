@@ -25,12 +25,25 @@ import (
 type implementation struct {
 	name string
 
-	// rig returns an interpreter that will answer raw, or the error its
+	// rig returns an interpreter that will answer this, or the error its
 	// constructor raised on being asked to.
 	//
 	// **Both outcomes satisfy the suite**, and that is the asymmetry rather than
 	// a hole in it — see the property's own comment.
-	rig func(t *testing.T, raw string) (interpret.IntentInterpreter, error)
+	rig func(t *testing.T, a answer) (interpret.IntentInterpreter, error)
+}
+
+// answer is one thing an implementation can be made to say: the constraints,
+// and the trigger beside them.
+//
+// Two fields rather than one raw string, because the property below is now
+// about both dimensions of an Interpretation and the two implementations spell
+// them differently — the scripted one in Go fields, the model-backed one in an
+// envelope off a network. A suite row says what was answered; each rig says how
+// its implementation would have come to answer it.
+type answer struct {
+	constraints string
+	trigger     interpret.Trigger
 }
 
 // conformancePrompt is what every arm below is asked. Its text does not matter
@@ -54,11 +67,12 @@ var implementations = []implementation{
 		// could not read, because NewScripted validates the same text it will
 		// later decode. So its rig hands back the constructor's refusal, and the
 		// property accepts that as satisfying it.
-		rig: func(t *testing.T, raw string) (interpret.IntentInterpreter, error) {
+		rig: func(t *testing.T, a answer) (interpret.IntentInterpreter, error) {
 			t.Helper()
 			return interpret.NewScripted(interpret.Script{
 				Prompt:      conformancePrompt,
-				Constraints: raw,
+				Constraints: a.constraints,
+				Trigger:     a.trigger,
 			})
 		},
 	},
@@ -74,19 +88,26 @@ var implementations = []implementation{
 		// other would do: the interpreter reads the clock only to tell the model
 		// what "today" means, and MockModel reads nothing it is told.
 		//
-		// raw is a bare constraint array, on the terms the suite's own rows are
-		// written — the scripted rig above takes the same text unwrapped, into
-		// Script.Constraints. This rig is where the difference between the two
-		// wire shapes is allowed to live: the model's answer is an envelope
-		// object, so raw is wrapped in one here rather than the suite's rows
-		// carrying two spellings of every case.
-		rig: func(t *testing.T, raw string) (interpret.IntentInterpreter, error) {
+		// The answer's constraints are a bare array, on the terms the suite's
+		// own rows are written — the scripted rig above takes the same text
+		// unwrapped, into Script.Constraints. This rig is where the difference
+		// between the two wire shapes is allowed to live: the model's answer is
+		// an envelope object, so it is assembled into one here rather than the
+		// suite's rows carrying two spellings of every case.
+		rig: func(t *testing.T, a answer) (interpret.IntentInterpreter, error) {
 			t.Helper()
+
+			envelope, err := json.Marshal(map[string]any{
+				"constraints": json.RawMessage(a.constraints),
+				"quantity":    1,
+				"trigger":     string(a.trigger),
+			})
+			require.NoError(t, err, "the rig has to be able to say what the model said")
 
 			model := interpret.NewMockModel(t)
 			model.EXPECT().
 				Complete(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-				Return([]byte(`{"constraints":`+raw+`,"quantity":1}`), nil).
+				Return(envelope, nil).
 				Maybe()
 
 			return interpret.NewModel(model, clock.NewFake(insideWindow))
@@ -119,8 +140,17 @@ var implementations = []implementation{
 // # The good arm is not decoration
 //
 // An implementation that refused everything would satisfy every bad row here.
-// The built scenario has to come back deep-equal, which is what makes the three
+// The built scenario has to come back deep-equal, which is what makes the
 // refusals mean "refuses this" rather than "refuses".
+//
+// # Both dimensions of an Interpretation are under it
+//
+// The rows were constraints alone until issue #198 added the trigger, and it
+// belongs here for exactly the reason the constraints do: it is a thing a model
+// answers, nothing downstream can refuse a value it does not recognise, and
+// every implementation of the interface has to handle it or the agent is left
+// inventing one. The good arm asserts it comes back, so an implementation that
+// validated a trigger and then dropped it on the way out fails here as well.
 //
 // # What this cannot do
 //
@@ -129,25 +159,35 @@ var implementations = []implementation{
 func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 	t.Parallel()
 
+	// The constraints every trigger row uses: the built scenario, so that a row
+	// about the trigger fails on the trigger and on nothing else.
+	readable := interpret.Scenarios()[0].Constraints
+
 	for _, tc := range []struct {
 		name string
 		raw  string
+		// trigger is what the implementation is rigged to answer beside the
+		// constraints. Every constraint row states a good one, for the reason
+		// the trigger rows state good constraints.
+		trigger interpret.Trigger
 		// want is the sentinel the refusal has to reach through errors.Is, or
 		// nil for the row that must be returned unchanged.
 		want error
 		why  string
 	}{
 		{
-			name: "a field named the way a person would say it",
-			raw:  `[{"op":"lte","field":"price","value":{"amount":20000,"currency":"USD"}}]`,
-			want: constraint.ErrUnknownField,
+			name:    "a field named the way a person would say it",
+			raw:     `[{"op":"lte","field":"price","value":{"amount":20000,"currency":"USD"}}]`,
+			trigger: interpret.TriggerConditional,
+			want:    constraint.ErrUnknownField,
 			why: "the registry says amount; a mandate saying price renders perfectly well," +
 				" gets signed, and is refused as constraint_type_unknown at the moment of purchase",
 		},
 		{
-			name: "an ordering applied to a label",
-			raw:  `[{"op":"lte","field":"item.category","value":"ladders"}]`,
-			want: constraint.ErrTypeMismatch,
+			name:    "an ordering applied to a label",
+			raw:     `[{"op":"lte","field":"item.category","value":"ladders"}]`,
+			trigger: interpret.TriggerConditional,
+			want:    constraint.ErrTypeMismatch,
 			why: "is one category less than another has no answer anybody meant to ask," +
 				" and a verifier reporting it as an unsatisfied limit would lie about what was approved",
 		},
@@ -155,22 +195,42 @@ func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 			name: "one good constraint and one nobody can read",
 			raw: `[{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}},
 			       {"op":"eq","field":"weather","value":"sunny"}]`,
-			want: constraint.ErrUnknownField,
+			trigger: interpret.TriggerConditional,
+			want:    constraint.ErrUnknownField,
 			why: "this is the row that makes dropping the offending constraint a failure rather" +
 				" than a tidy-up: what is left parses, so an implementation that dropped it would" +
 				" return a mandate with fewer limits than the sentence the user typed",
 		},
 		{
-			name: "no limits at all",
-			raw:  `[]`,
-			want: interpret.ErrNoConstraints,
+			name:    "no limits at all",
+			raw:     `[]`,
+			trigger: interpret.TriggerConditional,
+			want:    interpret.ErrNoConstraints,
 			why: "an unbounded mandate would reach the approval screen with a blank space" +
 				" where the limits belong, which is the one misreading the surface cannot catch",
 		},
 		{
-			name: "the built scenario",
-			raw:  interpret.Scenarios()[0].Constraints,
-			want: nil,
+			name:    "a mode the model invented",
+			raw:     readable,
+			trigger: "when the price is right",
+			want:    interpret.ErrUnknownTrigger,
+			why: "an agent handed a trigger nobody defines has to pick one of the two behaviours" +
+				" or refuse, and picking would answer a sentence about waiting with a purchase," +
+				" or the reverse, with nothing on any screen saying which",
+		},
+		{
+			name:    "no mode at all",
+			raw:     readable,
+			trigger: "",
+			want:    interpret.ErrUnknownTrigger,
+			why: "an omitted field is what a provider ignoring the schema produces, and unlike a" +
+				" missing quantity there is no caller downstream holding an answer of its own",
+		},
+		{
+			name:    "the built scenario",
+			raw:     interpret.Scenarios()[0].Constraints,
+			trigger: interpret.TriggerConditional,
+			want:    nil,
 			why: "an implementation that refused everything would pass every row above," +
 				" so one row has to come back unchanged",
 		},
@@ -179,7 +239,7 @@ func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 			t.Run(impl.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
 
-				interpreter, err := impl.rig(t, tc.raw)
+				interpreter, err := impl.rig(t, answer{constraints: tc.raw, trigger: tc.trigger})
 				if err != nil {
 					// Refused at construction. Legitimate for a bad row, and a
 					// defect for the good one — an implementation that cannot be
@@ -205,6 +265,9 @@ func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 
 				require.NoError(t, err, tc.why)
 				assert.Equal(t, decodeConstraints(t, tc.raw), got.Constraints, tc.why)
+				assert.Equal(t, tc.trigger, got.Trigger,
+					"the trigger is not the verifier's to check and nobody downstream can ask again,"+
+						" so an implementation that dropped it would leave the agent inventing one")
 			})
 		}
 	}

@@ -208,7 +208,7 @@ describe("the per-state table, pinned to the specification", () => {
     });
   });
 
-  it("draws the watch axis with a full pair, and only one of its endings is a verdict", () => {
+  it("draws the watch axis with a full pair, and two of its endings are verdicts", () => {
     expect(table(RUN_STATE_META)).toEqual({
       watching: ["half", null],
       bought: ["full", "check"],
@@ -216,6 +216,15 @@ describe("the per-state table, pinned to the specification", () => {
       expired: ["full", "bar"],
       stopped: ["full", "bar"],
       failed: ["full", "bar"],
+      // Issue #198's seventh state, and the second row on this axis a
+      // verifier decided: a sentence with no condition in it makes one
+      // attempt and stops, and this is that attempt refused — with a signed
+      // receipt, by the party whose job that is. `cross` is therefore
+      // mandatory rather than available: the spec's rule is that the cross is
+      // a verifier's verdict and nothing else, and `bar` here would say this
+      // run ended with no verifier in it, which is what `exhausted`,
+      // `expired`, `stopped` and `failed` say and this one does not.
+      refused: ["full", "cross"],
     });
     expect(
       words(RUN_STATE_META),
@@ -229,6 +238,11 @@ describe("the per-state table, pinned to the specification", () => {
       expired: "expired — never bought",
       stopped: "stopped",
       failed: "failed",
+      // No gloss, and the two above are why. `exhausted` and `expired` earn
+      // one because neither word says whether the buyer got what they asked
+      // for; `refused` says it on its own, and a tail here would be padding
+      // rather than the loosening the rule permits.
+      refused: "refused",
     });
   });
 

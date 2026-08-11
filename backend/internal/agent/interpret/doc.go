@@ -26,6 +26,23 @@
 // judged purchases would make every other guarantee in this repository
 // decorative.
 //
+// # It does say what kind of sentence it read, and that is not the same thing
+//
+// An Interpretation carries two facts beside the constraints, and both are here
+// for the same reason: they are in the sentence, no verifier can refute them at
+// the point of sale, and there is nowhere else they could honestly come from.
+// Quantity is how many the person asked for — issue #133. Trigger is whether
+// they asked to buy now or when something changes — issue #198.
+//
+// Neither widens what may be bought. The constraints are what the user signs
+// and what every verifier enforces, so the worst a wrong trigger can do is end
+// a run sooner than the person hoped, having collected a refusal at a price the
+// merchant was openly asking. What it must never be is *inferred from a price*:
+// "buy if today's price already satisfies the constraints" is the agent
+// evaluating the user's limit, which is the one thing this repository gives to
+// the verifier and to nobody else. Deciding it from the sentence, once, before
+// anything is signed, is what keeps that true — see Trigger.
+//
 // # Objectives are not constraints
 //
 // "Cheapest", "best", "fastest", "nearest" are not refutable at the point of

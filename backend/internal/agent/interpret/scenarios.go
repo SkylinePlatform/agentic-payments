@@ -34,8 +34,29 @@ func mustScript(scripts ...Script) *ScriptedInterpreter {
 	return s
 }
 
+// The five prompts, and the two shapes of sentence among them.
+//
+// **Three say when.** "When it drops below $200", "under $200" and "when it
+// drops below $400" all presuppose a price now and ask for it not to be acted
+// on at that price, which is TriggerConditional and is what agent.Watch was
+// built for. The alias is the interesting one of those three: "under $200"
+// names no moment at all, and it is conditional because it is declared as the
+// *same intent* as the sentence above it rather than because of the words in
+// it. A table is where that can be said; a matcher scanning for "when" could
+// not have known.
+//
+// **Two do not.** "Two tickets... up to $160 all in" and "find and buy
+// telescopic ladders, cheapest" carry a cap and an instruction, and a person
+// reading either expects a purchase. They were watches until issue #198, which
+// is why the concert demonstration read as *saw $150.00 for two, declined it,
+// paid $158.00* — inside the cap the whole way, and not what the sentence
+// asked for.
 var demoScenarios = []Script{
-	{Prompt: "buy a flight to Palma when it drops below $200, this summer", Constraints: flightToPalma},
+	{
+		Prompt:      "buy a flight to Palma when it drops below $200, this summer",
+		Constraints: flightToPalma,
+		Trigger:     TriggerConditional,
+	},
 
 	// The same sentence as the sequence diagram in the same document writes it.
 	//
@@ -43,11 +64,28 @@ var demoScenarios = []Script{
 	// spacing are normalised, so two wordings of one intent are two entries — and
 	// a reader of this table can see that they are two, which is the property a
 	// fuzzy matcher would take away.
-	{Prompt: "buy a flight to Palma under $200, this summer", Constraints: flightToPalma},
+	{
+		Prompt:      "buy a flight to Palma under $200, this summer",
+		Constraints: flightToPalma,
+		Trigger:     TriggerConditional,
+	},
 
-	{Prompt: "buy me this bicycle when it drops below $400", Constraints: thisBicycle},
-	{Prompt: "two tickets to the Vlado Georgijev concert in November, up to $160 all in", Constraints: concertTickets, Quantity: 2},
-	{Prompt: "find and buy telescopic ladders, cheapest", Constraints: telescopicLadders},
+	{
+		Prompt:      "buy me this bicycle when it drops below $400",
+		Constraints: thisBicycle,
+		Trigger:     TriggerConditional,
+	},
+	{
+		Prompt:      "two tickets to the Vlado Georgijev concert in November, up to $160 all in",
+		Constraints: concertTickets,
+		Quantity:    2,
+		Trigger:     TriggerImmediate,
+	},
+	{
+		Prompt:      "find and buy telescopic ladders, cheapest",
+		Constraints: telescopicLadders,
+		Trigger:     TriggerImmediate,
+	},
 }
 
 // flightToPalma is the built scenario: route BEG→PMI, a cap of USD 20000 in
@@ -103,6 +141,10 @@ var demoScenarios = []Script{
 // Waiting is the agent's behaviour; a mandate says only what may be done when
 // the agent finally acts. Beat 4 is that waiting happening with no model
 // involved at all.
+//
+// Those four words are not thrown away, though: they are what makes this entry
+// TriggerConditional, which is a fact about the sentence rather than a limit on
+// the purchase — see Trigger, and issue #198 for what it cost to drop them.
 const flightToPalma = `[
 	{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}},
 	{"op":"within","field":"at","value":{"from":"2026-06-01T00:00:00Z","to":"2026-08-31T23:59:59Z"}},
@@ -139,6 +181,12 @@ const thisBicycle = `[
 // Quantity is 2, interpret.Interpretation carries it, the Trusted Surface
 // renders it before anybody signs, and the watch spends exactly that many.
 // Issue #133.
+//
+// **Nor does the sentence make its purchase conditional on anything.** "Up to
+// $160 all in" is a cap, and a cap is not a condition to wait on — it is what
+// protects the person if the two tickets turn out to cost more than they
+// thought. So this entry is TriggerImmediate, and issue #198 is the second time
+// this one sentence has shown that a fact it carries is not a constraint.
 const concertTickets = `[
 	{"op":"eq","field":"item.id","value":"event:vlado-georgijev-2026-11-14"},
 	{"op":"lte","field":"quantity","value":2},
@@ -164,6 +212,14 @@ const concertTickets = `[
 //
 // The mandate names no merchant, so any merchant's verifier accepts it. The
 // bound is what protects the user, not the choice of shop.
+//
+// "Find and buy" is an instruction, so this entry is TriggerImmediate. The
+// objective is the reason it matters here rather than a complication: read as a
+// watch, "cheapest" bought whatever the merchant happened to move to next,
+// which on a cycling schedule is as likely to be the dearer of two prices as
+// the cheaper. Buying at once does not make the agent an optimiser — nothing
+// here compares prices, and the bound is still what protects the user — but it
+// does stop the sentence being answered by a wait it never asked for.
 const telescopicLadders = `[
 	{"op":"eq","field":"item.category","value":"ladders"},
 	{"op":"lte","field":"amount","value":{"amount":15000,"currency":"USD"}}

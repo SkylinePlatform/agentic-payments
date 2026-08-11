@@ -285,6 +285,16 @@ export async function authorise(p: Proposal, digest: string, idempotencyKey?: st
  * showed the person before they signed, so it is what travels, both at the
  * top level (for a console that has not adopted the nested field) and inside
  * `authorisation` (what `agent.Authorisation.Quantity` decodes).
+ *
+ * **`trigger` travels for the same reason and is issue #198's half of it.**
+ * `agent.Authorisation.Trigger` is what decides whether the agent buys the
+ * offer in force now or waits for the merchant's commitment to move, and this
+ * function is the only place it can arrive from: the browser collected the
+ * signature itself, so nothing on the agent's side of `POST /watches` has seen
+ * this proposal. An assembly that dropped it would leave the field empty,
+ * which `agent.Watch` reads as a watch — so *"two tickets, up to $160 all
+ * in"* would go back to waiting, and the console would show the one behaviour
+ * #198 exists to stop, with every backend test still green.
  */
 export async function startWatch(
   proposal: Proposal,
@@ -297,6 +307,7 @@ export async function startWatch(
       item: proposal.item,
       constraints: proposal.constraints,
       quantity: proposal.quantity,
+      trigger: proposal.trigger,
       open_checkout_mandate: authorised.open_checkout_mandate,
       open_payment_mandate: authorised.open_payment_mandate,
       rendered: authorised.rendered,

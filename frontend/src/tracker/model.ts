@@ -12,8 +12,8 @@
  *
  * # Two axes, and neither is invented here
  *
- * `RunState` — watching, bought, exhausted, expired, stopped, failed — is
- * `runState.String()`. `MandateState` — ready, awaiting_receipt, spent — is
+ * `RunState` — watching, bought, exhausted, expired, stopped, failed, refused
+ * — is `runState.String()`. `MandateState` — ready, awaiting_receipt, spent — is
  * `authz.MandateState.String()`, read off each attempt's `checkout_mandate`
  * and `payment_mandate`. Both are spelled exactly as the machine that owns
  * them spells them, because `internal/agent/console`'s own package doc is
@@ -31,8 +31,13 @@
  * value a `Run` or an attempt actually carries is a bare `string`, which
  * TypeScript cannot narrow, so `runStatus`/`mandateStatus` are the runtime
  * half: a value neither table recognises — this build shipped before the
- * agent grew a seventh run state, say — renders as a visible, named "unknown"
+ * agent grew an eighth run state, say — renders as a visible, named "unknown"
  * fact rather than as a blank cell. `model.test.ts` drives both halves.
+ *
+ * The seventh, `refused`, is what that sentence used to be written against and
+ * is the case worth knowing it covers: issue #198 added it to the agent, and a
+ * bundle built the day before draws it as an unrecognised status rather than
+ * as a blank row or as a refusal it invented.
  *
  * # The glyphs are gone
  *
@@ -52,15 +57,23 @@ import type { StatusMeta } from "../status/model";
 
 // --- the run's own axis: internal/agent/console's runState -----------------
 
-/** `runState.String()`'s six spellings, in `internal/agent/console/run.go`'s own order. */
-export const RUN_STATES = ["watching", "bought", "exhausted", "expired", "stopped", "failed"] as const;
+/** `runState.String()`'s seven spellings, in `internal/agent/console/run.go`'s own order. */
+export const RUN_STATES = [
+  "watching",
+  "bought",
+  "exhausted",
+  "expired",
+  "stopped",
+  "failed",
+  "refused",
+] as const;
 export type RunState = (typeof RUN_STATES)[number];
 
 /**
  * Is the agent still trying, and how did it stop?
  *
  * The axis with a full pair on every row, and the only one on this screen that
- * takes an ending: a run is the thing that finishes. Four of the six finish
+ * takes an ending: a run is the thing that finishes. Four of the seven finish
  * with a `bar` rather than a `cross`, and that is the rule rather than a
  * coincidence — **the cross is a verifier's verdict and nothing else**. A
  * schedule running out, an authorisation running out its own clock, a person
@@ -68,6 +81,16 @@ export type RunState = (typeof RUN_STATES)[number];
  * verifier anywhere in them, so none of them may wear the shape that means one
  * said no. `failed` in particular: the agent's own error sentence is what says
  * why, and no mark can hold a reason.
+ *
+ * `refused` is the seventh, issue #198's, and it is the second row here that
+ * earns a `cross`: a sentence with no condition in it makes one attempt and
+ * stops, and this is that attempt having been turned down — by a verifier,
+ * with a signed receipt. The three-lane design's *Indicators* section is where
+ * the vocabulary is settled, and its per-state table carries this row: `full`
+ * because nothing is outstanding and this is where it stopped, `cross` because
+ * a verifier said no, and the machine's own word with no gloss on it.
+ * `exhausted` and `expired` take `— never bought` because neither word says
+ * whether the buyer got what they asked for; `refused` says so on its own.
  */
 export const RUN_STATE_META: Record<RunState, StatusMeta> = {
   watching: { label: "watching", pip: "half", ending: null },
@@ -86,6 +109,7 @@ export const RUN_STATE_META: Record<RunState, StatusMeta> = {
   expired: { label: "expired — never bought", pip: "full", ending: "bar" },
   stopped: { label: "stopped", pip: "full", ending: "bar" },
   failed: { label: "failed", pip: "full", ending: "bar" },
+  refused: { label: "refused", pip: "full", ending: "cross" },
 };
 
 export function runStatus(raw: string): StatusMeta {

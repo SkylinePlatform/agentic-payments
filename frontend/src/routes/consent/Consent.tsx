@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { Button } from "../../components/ui/button";
 import { preview, refuse } from "../../consent/client";
-import { canSign } from "../../consent/model";
+import { canSign, whenItBuys } from "../../consent/model";
 import type { Previewed, Proposal } from "../../consent/model";
 import type { Amount, PaymentInstrument } from "../../protocol";
 import { lifetime } from "./format";
@@ -13,7 +13,7 @@ import { Signing } from "./Signing";
 /**
  * The Trusted Surface consent screen — #22's central decision made visible.
  *
- * Four zones, and only one of them is what the signature covers:
+ * Five zones, and only one of them is what the signature covers:
  *
  * 1. **What you asked for** — the user's own words. This is the one screen
  *    where that is literally true, because they were typed into the box on
@@ -25,20 +25,35 @@ import { Signing } from "./Signing";
  *    forbids anything under `routes/consent/` from reaching `../../constraint`,
  *    because the sentence a signature covers has to be the one this screen
  *    showed.
- * 3. **How many the agent will buy** — `proposal.quantity`, the basket size
+ * 3. **When the agent will buy** — `proposal.trigger`, issue #198. Two shapes
+ *    of sentence reach the interpreter, and they authorise different
+ *    behaviour: one asks for a purchase now, on the terms below it, and the
+ *    other asks for one only once the merchant's price moves. **They render
+ *    identically from the constraints**, because the words that separate them
+ *    are in the sentence and in no limit — so a screen showing only zone 2
+ *    collects a signature without saying which of the two it is for.
+ * 4. **How many the agent will buy** — `proposal.quantity`, the basket size
  *    the interpretation proposed. Outside the signed box, because nothing
  *    signs it: the surface never sees a count, no mandate carries one, and the
  *    only thing about a quantity a signature covers is a bound such as `the
  *    quantity is at most 2` — a limit, which appears in zone 2 where limits
  *    belong. For the concert prompt both are on this screen at once; they are
  *    different kinds of fact and so they are in different boxes.
- * 4. **What the identifier refers to** — the merchant's own words, outside the
+ * 5. **What the identifier refers to** — the merchant's own words, outside the
  *    signed box. `Render()` produces `the item is gtin:05014477390221`, which
  *    is the identifier the constraint carries and the merchant evaluates, so
  *    the sentence is right — and it is nothing a person can act on. That
  *    cannot be fixed by rendering the sentence differently, only by showing
  *    what the identifier names beside it, labelled as not part of what was
  *    signed.
+ *
+ * **Zones 3 and 4 are the same kind of fact and still have a heading each.**
+ * Both are the agent's reading of the sentence and neither is signed, so one
+ * box holding both would have been shorter. They are separate because the
+ * consent design records the basket size as belonging *"under a label of its
+ * own"*, and because they answer different questions: how many, and when. A
+ * shared heading would have to be vague enough to cover both, and vagueness
+ * is what this screen has least room for.
  *
  * **Zone 2 is the only one the signature covers, and keeping it that way is
  * this screen's whole standard.** `POST /authorise/preview` exists so that its
@@ -47,7 +62,8 @@ import { Signing } from "./Signing";
  * and reads like part of the decision — makes the box state something untrue
  * about itself, which is the same defect as a heading reading "What you
  * signed" over sentences nobody had signed yet. `Signing.tsx` had to fix that
- * one; zone 3 is the same rule applied to a row rather than to a title.
+ * one; zones 3 and 4 are the same rule applied to a row rather than to a
+ * title.
  *
  * The offer card's price does real teaching here: `240.00 USD today` next to
  * a constraint reading `at most 200.00 USD` lets a reader who has never heard
@@ -132,6 +148,14 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
     <h1 className="font-display text-3xl tracking-tight text-ink">Confirm what the agent may do</h1>
   );
 
+  // Read once, above the early returns, because both the zone below and the
+  // sign button's own guard have to be answering from the same value — a
+  // second `whenItBuys` call inside `canSign` is fine (it is a pure function of
+  // one string), but a screen that computed the sentence from one place and
+  // the enablement from another is two carriers that can disagree, which is
+  // the defect `Signing.tsx`'s `isSigned` exists to have already fixed once.
+  const buying = whenItBuys(proposal.trigger);
+
   if (previewError !== null) {
     return (
       <section className="flex flex-col gap-3">
@@ -176,6 +200,44 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
         <p className="font-sans text-ink">Pays {instrumentName(previewed.payment_instrument)}</p>
         <p className="font-sans text-ink">
           Valid {lifetime(previewed.open_mandate_lifetime_seconds)} from signing
+        </p>
+      </section>
+
+      {/*
+        Issue #198, and outside the box on the same terms as the basket size
+        below: nothing signs it. The Trusted Surface signs constraints, and
+        "when the person asked to buy" is not one — no verifier can refute it
+        at the point of sale, which is the criterion the constraint registry is
+        closed on.
+
+        It sits above the basket rather than below it because it pairs with the
+        offer card's price two zones down: `240.00 USD today` against a limit
+        reading `at most 200.00 USD` is what teaches that a conditional
+        purchase cannot happen yet, and the same two numbers under *Now* would
+        be a person watching their agent walk into a refusal. Either way the
+        pairing is only readable if the reader has already been told which of
+        the two this is.
+      */}
+      <section className="flex flex-col gap-1" data-testid="when" aria-labelledby="when">
+        <h2 id="when" className="font-sans text-sm text-graphite">
+          When the agent will buy
+        </h2>
+        <p className="font-sans text-ink">{buying.sentence}</p>
+        {buying.raw !== undefined && buying.raw !== "" && (
+          // The wire value, in mono, on #159's rule that monospace is for code
+          // — an uninterpreted value is exactly what somebody debugging this
+          // would paste into a terminal. `Sign` is disabled while this is
+          // showing; see canSign.
+          //
+          // The empty check is the older console, which sends no `trigger` key
+          // at all: there is no word to quote back, the sentence above already
+          // says the console could not read one, and an empty mono line would
+          // be a debugging aid with nothing in it.
+          <p className="font-mono text-sm text-broken">{buying.raw}</p>
+        )}
+        <p className="font-sans text-sm text-graphite">
+          The agent&rsquo;s reading of your sentence, and not part of what you sign. Whenever it
+          buys, it is still held to the limits above.
         </p>
       </section>
 
