@@ -213,50 +213,79 @@ func TestKeyBindingCoversTheSelection(t *testing.T) {
 	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid, "Verify a spliced presentation: got %v, want %v", err, sdjwt.ErrKeyBindingInvalid)
 }
 
-// TestAKeyBindingProofCenturiesAheadIsRefusedNotAcceptedAsFresh demonstrates
-// the hole checkFreshness's own comment used to only note as
+// TestAKeyBindingProofCenturiesFromThisClockIsRefusedNotAcceptedAsFresh
+// demonstrates the hole checkFreshness's own comment used to only note as
 // internal/platform/crypto's problem: time.Duration is an int64 of
 // nanoseconds, so Time.Sub does not overflow when two instants are more than
 // ~292 years apart, it saturates — and negating a saturated minimum is a
 // no-op under two's complement. Before the fix, that made the
-// "if skew < 0 { skew = -skew }" fold a no-op on exactly this input, leaving
+// "if skew < 0 { skew = -skew }" fold a no-op on exactly that input, leaving
 // skew negative and the window comparison false: a KB-JWT stamped centuries
 // in the future compared as fresher than one signed a second ago, and Verify
 // accepted it.
-func TestAKeyBindingProofCenturiesAheadIsRefusedNotAcceptedAsFresh(t *testing.T) {
+//
+// Both directions, because only the forward one is a fail-open and the guard
+// is written to cover the pair. Backwards, Sub saturates to maxDuration, which
+// survives the fold and which the window refuses anyway — so the forward case
+// alone leaves "|| skew == maxDuration" deletable with nothing turning red.
+//
+// This package has one sentinel for both refusals, which is why the message is
+// asserted as well as the sentinel: it is the only thing separating a proof the
+// window measured and rejected from one it could not measure at all, and a
+// change that clamped a saturated skew instead of refusing it would still
+// satisfy ErrorIs.
+func TestAKeyBindingProofCenturiesFromThisClockIsRefusedNotAcceptedAsFresh(t *testing.T) {
 	t.Parallel()
 
-	issuerKey := newHMACKey("issuer-secret", "issuer-1")
-	holderKey := newHMACKey("holder-secret", "holder-1")
-
-	blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
-	require.NoError(t, err, "NewBlinder")
-	payload, disclosures := mustBlind(t, blinder, mandateClaims(), blindPaths...)
-	issued := mustIssue(t, issuerKey, payload, disclosures)
-
-	presented, err := issued.Present(named("merchant"))
-	require.NoError(t, err, "Present")
+	// The Verifier's clock, and the instant the proof's iat is offset from.
+	const now = 1750000000
 
 	// 400 years comfortably clears time.Duration's ~292-year range in either
 	// direction, which is what the table in issue #112 measured against the
 	// sibling construct in internal/platform/crypto.
-	farFuture := time.Unix(1750000000, 0).AddDate(400, 0, 0)
-	bound, err := presented.AttachKeyBinding(t.Context(), holderKey, sdjwt.KeyBinding{
-		Nonce: "n-1", Audience: "https://verifier.example", IssuedAt: farFuture,
-	})
-	require.NoError(t, err, "AttachKeyBinding")
+	for _, tc := range []struct {
+		name  string
+		years int
+	}{
+		{name: "signed centuries ahead of the Verifier's clock", years: 400},
+		{name: "signed centuries behind it", years: -400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	_, err = sdjwt.Verify(bound, sdjwt.Options{
-		Issuer:            issuerKey,
-		HolderKey:         func(json.RawMessage) (sdjwt.Verifier, error) { return holderKey, nil },
-		RequireKeyBinding: true,
-		Audience:          "https://verifier.example",
-		Nonce:             "n-1",
-		MaxKeyBindingAge:  5 * time.Minute,
-		Clock:             at(1750000000),
-	})
-	assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid,
-		"a proof this Verifier's clock cannot measure the age of is not a fact it can honestly call fresh, and a freshness window is a security control that must fail closed on a value it cannot measure")
+			issuerKey := newHMACKey("issuer-secret", "issuer-1")
+			holderKey := newHMACKey("holder-secret", "holder-1")
+
+			blinder, err := sdjwt.NewBlinder(sdjwt.WithSaltSource(newSalts()))
+			require.NoError(t, err, "NewBlinder")
+			payload, disclosures := mustBlind(t, blinder, mandateClaims(), blindPaths...)
+			issued := mustIssue(t, issuerKey, payload, disclosures)
+
+			presented, err := issued.Present(named("merchant"))
+			require.NoError(t, err, "Present")
+
+			bound, err := presented.AttachKeyBinding(t.Context(), holderKey, sdjwt.KeyBinding{
+				Nonce:    "n-1",
+				Audience: "https://verifier.example",
+				IssuedAt: time.Unix(now, 0).AddDate(tc.years, 0, 0),
+			})
+			require.NoError(t, err, "AttachKeyBinding")
+
+			_, err = sdjwt.Verify(bound, sdjwt.Options{
+				Issuer:            issuerKey,
+				HolderKey:         func(json.RawMessage) (sdjwt.Verifier, error) { return holderKey, nil },
+				RequireKeyBinding: true,
+				Audience:          "https://verifier.example",
+				Nonce:             "n-1",
+				MaxKeyBindingAge:  5 * time.Minute,
+				Clock:             at(now),
+			})
+			assert.ErrorIs(t, err, sdjwt.ErrKeyBindingInvalid,
+				"a proof this Verifier's clock cannot measure the age of is not a fact it can honestly call fresh, and a freshness window is a security control that must fail closed on a value it cannot measure")
+			assert.ErrorContains(t, err, "cannot be dated against this clock",
+				"one sentinel covers both refusals here, so only the message says whether the window measured this proof and rejected it or could not measure it at all — and a clamp would pass the check above while losing that distinction")
+		})
+	}
 }
 
 // TestPresentRejectsUnreachableDisclosure checks the Holder-side guard of
