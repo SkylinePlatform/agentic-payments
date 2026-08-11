@@ -33,9 +33,11 @@ const DEFAULT_SURFACE = "http://127.0.0.1:8084";
  * that can disagree about what a `../protocol` import means.
  */
 export default defineConfig(({ mode }) => {
-  // "." rather than process.cwd(): this file is type-checked with the app, and
-  // reaching for process would pull Node's type definitions into a config that
-  // needs nothing else from them.
+  // "." rather than process.cwd(): tsconfig.node.json, which is what
+  // type-checks this file, does grant Node's globals deliberately (see #222),
+  // but reaching for process here would still be reaching for something this
+  // file does not otherwise need, for no benefit over the relative path Vite
+  // already resolves against its own working directory.
   //
   // Vitest resolves it the same way, against the working directory. `npm test`
   // and `make frontend-test` both run from frontend/, so it lands here, and
