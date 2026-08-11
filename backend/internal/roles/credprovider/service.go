@@ -73,17 +73,24 @@ type Service struct {
 	// Payment Mandate, and the receipt carrying it. Optional — a nil Emitter
 	// records nothing.
 	Events *obs.Emitter
-	// Entropy is where the token that stands in for money gets its randomness.
-	// Optional, and nil means crypto/rand — which is what any deployment must
-	// leave it as. A predictable source here is a guessable credential, so this
-	// field weakens the one value in this package worth stealing.
+	// entropy is where the token that stands in for money gets its randomness.
+	// Nil is crypto/rand, and nil is what every deployment gets: this field is
+	// unexported and the only thing that writes it is SetEntropy, declared in
+	// export_test.go and therefore compiled into this package's test binary and
+	// nowhere else.
 	//
 	// It exists because minting is the only step in fund that can fail after
 	// this role has signed its receipt, and a branch that hands out the thing
 	// standing in for money should not be the one branch no test can reach.
-	// sdjwt.WithSaltSource is the same trade made for the same reason and says
-	// the same thing about production.
-	Entropy io.Reader
+	// Unexported because the two seams of this shape already in the tree —
+	// sdjwt.WithSaltSource and transport.WithEntropy — both keep the field
+	// private and gate it behind a call a deployment has to make deliberately,
+	// and an exported field beside Signer and Keys is one a wiring change can
+	// set with nothing in the compiler, the linter or a test objecting. A
+	// predictable source here is a guessable credential, so the difference
+	// between "a deployment must leave this alone" and "a deployment cannot
+	// reach this" is worth the one file it costs.
+	entropy io.Reader
 }
 
 // request is what POST /credential takes, in either mode.
@@ -441,7 +448,7 @@ func (s *Service) mint(checkoutHash string) (generated.PaymentCredential, error)
 	// crypto/rand, not math/rand — this is the value that stands in for money,
 	// and math/rand is banned everywhere in this module for exactly this reason.
 	raw := make([]byte, 24)
-	if _, err := io.ReadFull(s.entropy(), raw); err != nil {
+	if _, err := io.ReadFull(s.randomness(), raw); err != nil {
 		return generated.PaymentCredential{}, fmt.Errorf("token entropy: %w", err)
 	}
 
@@ -453,13 +460,13 @@ func (s *Service) mint(checkoutHash string) (generated.PaymentCredential, error)
 	}, nil
 }
 
-// entropy is the source mint draws from: crypto/rand unless a caller replaced
-// it. See the Entropy field for why one ever would.
-func (s *Service) entropy() io.Reader {
-	if s.Entropy == nil {
+// randomness is the source mint draws from: crypto/rand unless this package's
+// own test binary replaced it. See the entropy field for why one ever would.
+func (s *Service) randomness() io.Reader {
+	if s.entropy == nil {
 		return rand.Reader
 	}
-	return s.Entropy
+	return s.entropy
 }
 
 func (s *Service) credentialLifetime() time.Duration {

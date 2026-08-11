@@ -49,9 +49,10 @@ import (
 // # The reachability this cost, stated rather than hidden
 //
 // mint fails only when its entropy source does, which crypto/rand practically
-// never does. That is why the Service takes an Entropy reader: an untestable
-// branch handing out the thing that stands in for money is worse than a field
-// whose doc says to leave it nil.
+// never does. An untestable branch handing out the thing that stands in for
+// money is worse than a seam, so there is one — and it costs nothing in the
+// deployed build, because it is Service.SetEntropy in export_test.go rather
+// than an exported field. That file carries the argument.
 
 // errNoEntropy is the failure that arrives after the receipt exists.
 var errNoEntropy = errors.New("the entropy source refused")
@@ -80,6 +81,11 @@ func TestAReceiptThePayerNeverGetsIsNeverAnnounced(t *testing.T) {
 			"the test is worthless unless the receipt had already been signed when the failure "+
 				"arrived — mint runs after IssueReceipt, so an entropy source that was never "+
 				"read means the handler stopped short of the moment this is about")
+		require.Equal(t, []obs.Kind{obs.KindMandateVerified}, log.kinds(),
+			"the second control, and the one the count below is worthless without: it says the "+
+				"log was live and said everything this presentation did reach. Without it the "+
+				"zero is satisfied by a provider emitting nothing at all — this arm passes with "+
+				"no Emitter attached — so it would measure the wiring rather than the ordering")
 		assert.Zero(t, log.issued(),
 			"the receipt was signed and then dropped, so nobody holds it; a line saying it was "+
 				"issued is the log naming an artefact that does not exist, and the retry a "+
@@ -139,7 +145,8 @@ type provider struct {
 // newProvider stands up a Human Present Credential Provider: the user signed
 // the closed Payment Mandate themselves, at the Trusted Surface.
 //
-// entropy may be nil, which is crypto/rand and what any deployment uses.
+// entropy may be nil, which is crypto/rand and what every deployment gets —
+// there being no way for one to get anything else. See export_test.go.
 func newProvider(t *testing.T, events *obs.Emitter, entropy io.Reader) provider {
 	t.Helper()
 
@@ -164,14 +171,17 @@ func newProvider(t *testing.T, events *obs.Emitter, entropy io.Reader) provider 
 	require.NoError(t, err, "building the blinder")
 
 	svc := &credprovider.Service{
-		ID:      "mock-credential-provider",
-		Rules:   ap2.CredentialProviderRules{Issuer: userVerifier, Clock: clk},
-		Signer:  providerSigner,
-		Keys:    providerKeys,
-		Clock:   clk,
-		Events:  events,
-		Entropy: entropy,
+		ID:     "mock-credential-provider",
+		Rules:  ap2.CredentialProviderRules{Issuer: userVerifier, Clock: clk},
+		Signer: providerSigner,
+		Keys:   providerKeys,
+		Clock:  clk,
+		Events: events,
 	}
+	// Not a field on the literal above, and deliberately: SetEntropy is declared
+	// in export_test.go, so the only build in which this line compiles is this
+	// package's own test binary. See that file.
+	svc.SetEntropy(entropy)
 
 	handler, err := svc.Handler()
 	require.NoError(t, err, "building the provider handler")
@@ -298,6 +308,23 @@ func (l *receiptLog) issued() int {
 		}
 	}
 	return n
+}
+
+// kinds is everything this log holds, in order.
+//
+// It exists so that a zero can be shown to be a zero for the right reason. A
+// count of one kind cannot tell an emitter that said nothing about this one
+// from an emitter that said nothing at all, and the two differ by a wiring
+// mistake rather than by the ordering these tests are about.
+func (l *receiptLog) kinds() []obs.Kind {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	kinds := make([]obs.Kind, 0, len(l.events))
+	for _, ev := range l.events {
+		kinds = append(kinds, ev.Kind)
+	}
+	return kinds
 }
 
 // theHourTheUserPaid is the instant every clock in this file reads.

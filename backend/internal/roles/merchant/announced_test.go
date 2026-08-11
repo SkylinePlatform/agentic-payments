@@ -82,6 +82,12 @@ func TestAReceiptTheBuyerNeverGetsIsNeverAnnounced(t *testing.T) {
 			"the test is worthless unless the receipt had already been signed when the failure "+
 				"arrived — initiate runs after IssueReceipt, so a processor that was never asked "+
 				"means the handler stopped short of the moment this is about")
+		require.Equal(t,
+			[]obs.Kind{obs.KindMandateVerified, obs.KindMandatePresented}, log.kinds(),
+			"the second control, and the one the count below is worthless without: it says the "+
+				"log was live and said everything this purchase did reach. Without it the zero "+
+				"is satisfied by a merchant emitting nothing at all — this arm passes with no "+
+				"Emitter attached — so it would measure the wiring rather than the ordering")
 		assert.Zero(t, log.issued(),
 			"the receipt was signed and then dropped on the floor, so nobody holds it; a line "+
 				"saying it was issued is the log naming an artefact that does not exist, and the "+
@@ -186,4 +192,21 @@ func (l *receiptLog) issued() int {
 		}
 	}
 	return n
+}
+
+// kinds is everything this log holds, in order.
+//
+// It exists so that a zero can be shown to be a zero for the right reason. A
+// count of one kind cannot tell an emitter that said nothing about this one
+// from an emitter that said nothing at all, and the two differ by a wiring
+// mistake rather than by the ordering these tests are about.
+func (l *receiptLog) kinds() []obs.Kind {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	kinds := make([]obs.Kind, 0, len(l.events))
+	for _, ev := range l.events {
+		kinds = append(kinds, ev.Kind)
+	}
+	return kinds
 }

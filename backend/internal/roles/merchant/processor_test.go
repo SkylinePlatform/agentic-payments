@@ -156,3 +156,63 @@ func TestTheProcessorIsSentTheMembersItReads(t *testing.T) {
 		})
 	}
 }
+
+// TestARetriedSettlementIsPresentedUnderTheKeyItWasPresentedUnder is the claim
+// issue #224 declined to detach initiate on, made checkable.
+//
+// The reasoning there was that the money leg needs no protection from a retry,
+// because a merchant answering 503 hands its idempotency key back and runs
+// settle again — and the second run reaches the processor with a key derived
+// from the URL and the body, so the processor replays its first answer rather
+// than settling a second time. That argument is load-bearing: it is why
+// merchant.deliver only reordered an event and left the network call on the
+// caller's context.
+//
+// Nothing held it. TestTheProcessorIsSentTheMembersItReads asserts the header
+// is NotEmpty, which a freshly minted UUID satisfies perfectly while settling
+// every retry twice. What the argument actually needs is that the key is a
+// function of the settlement and of nothing else — so a timestamp, a nonce of
+// this merchant's own, or a counter added to the payload would fail here, and
+// those are exactly the additions that look harmless.
+//
+// The second half matters as much. A constant key would make every retry a
+// replay and every *purchase* one too, which is the same defect pointing the
+// other way, so the pair is asserted together.
+func TestARetriedSettlementIsPresentedUnderTheKeyItWasPresentedUnder(t *testing.T) {
+	t.Parallel()
+
+	var keys []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Appended on the server's goroutine and read after the calls return.
+		// The calls below are synchronous and sequential, so each handler has
+		// finished before the next begins and before the test reads the slice.
+		keys = append(keys, r.Header.Get("Idempotency-Key"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"receipt":"r","settled":true}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	p := &merchant.HTTPProcessor{Base: srv.URL}
+	credential := generated.PaymentCredential{Token: "tok_1", CheckoutHash: "hash_1"}
+
+	// The same settlement twice, which is what a merchant retried by its buyer
+	// presents: settle re-reads the same request body, so req.Payment and
+	// req.Credential are the values the first attempt held.
+	_, _, err := p.InitiatePayment(t.Context(), "the-mandate", credential)
+	require.NoError(t, err)
+	_, _, err = p.InitiatePayment(t.Context(), "the-mandate", credential)
+	require.NoError(t, err)
+
+	// And a different one, under the same credential, differing only in the
+	// mandate presented.
+	_, _, err = p.InitiatePayment(t.Context(), "another-mandate", credential)
+	require.NoError(t, err)
+
+	require.Len(t, keys, 3, "three presentations reached the processor")
+	assert.Equal(t, keys[0], keys[1],
+		"a retry that is not recognisable as one is a second settlement, and this is the "+
+			"whole of why the receipt's ordering was the only thing #224 had to change")
+	assert.NotEqual(t, keys[0], keys[2],
+		"and a key that cannot tell two settlements apart would replay the first purchase's "+
+			"answer to the second, which is the same defect facing the other way")
+}
