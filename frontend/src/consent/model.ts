@@ -57,9 +57,11 @@ export interface Proposal {
    * proposed — and present on the one `catalogue/quantity.ts`'s `withQuantity`
    * builds from it, which is the shape `routes/consent/Signing.tsx` reads to
    * replace the single purchase it hardcoded before #109 gave a person a count
-   * to choose. `startWatch`'s own quantity argument falls back to 1 when this
-   * is absent, which is what keeps every `Proposal` built before this field
-   * existed buying exactly what it always bought.
+   * to choose. `startWatch` takes the count as a required argument and applies
+   * no default of its own; the fallback to 1 is `Signing.tsx`'s, at the one
+   * call site, which is what keeps every `Proposal` built before this field
+   * existed buying exactly what it always bought. Worth being exact about:
+   * read the other way round, the `?? 1` there looks redundant and deletable.
    */
   readonly quantity?: number;
 }
