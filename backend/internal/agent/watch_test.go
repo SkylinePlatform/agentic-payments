@@ -617,6 +617,17 @@ func TestASentenceWithNoConditionBuysAtOnceRatherThanWaiting(t *testing.T) {
 // sentence's own reading is overridden here, and what is under test is the
 // loop rather than the interpretation. TestEachScenarioSaysWhenItsSentenceWantedToBuy
 // is where the readings themselves are held.
+//
+// # The tick is the assertion here, and for a sharper reason than above
+//
+// The licence this test is about is what makes the failure silent. A run that
+// used it is a watch again — parked on its ticker, against a merchant whose
+// price is not final — and neither barrier below can notice: they wait for an
+// attempt or for the run to end, and a run in that state does neither. The
+// regression therefore arrived as this package's ten-minute timeout and a
+// goroutine dump rather than as a sentence, which is the criticism #196's
+// review made of that branch's guard. Racing the run's completion against a
+// tick nobody should be waiting for is what turns it back into one.
 func TestAnInstructionRefusedDoesNotBecomeAWatch(t *testing.T) {
 	t.Parallel()
 
@@ -624,12 +635,27 @@ func TestAnInstructionRefusedDoesNotBecomeAWatch(t *testing.T) {
 	a := authorise(t, w)
 	a.auth.Trigger = interpret.TriggerImmediate
 
-	wait, _ := a.running(t, a.watch(t))
+	wait, stop := a.running(t, a.watch(t))
 
 	a.quoted()
 	a.attempted()
 
+	// Neither arm is ready at this moment — the loop has been answered and is
+	// on its way out, and it is not receiving on the ticker — so this blocks
+	// until one of them becomes true, and which one that is is the finding.
+	waited := false
+	select {
+	case <-a.finished:
+	case a.tick <- time.Time{}:
+		waited = true
+		stop()
+	}
+
 	watched, err := wait()
+	require.False(t, waited,
+		"the rejection-receipt rule handed the licence back and this run took it; a sentence "+
+			"that asked to buy on the terms it stated, and was told those terms are not met, "+
+			"has nothing left to wait for — waiting from there is the other sentence's promise")
 	require.ErrorIs(t, err, agent.ErrPurchaseRefused,
 		"the purchase this sentence asked for was refused, and it named nothing to wait for")
 	assert.NotErrorIs(t, err, agent.ErrScheduleExhausted,
