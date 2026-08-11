@@ -21,10 +21,21 @@ import { lifetime } from "./format";
  *   un-collectable. See below.
  * - `unsigned` — `authorise` was refused *before* the surface signed
  *   anything, and the surface's own answer is what proves it. That answer is
- *   `request_malformed`: the browser sent a set other than the one that was
- *   rendered, so the surface stopped at the digest. This app's defect,
- *   **nothing was signed**, and sending the same request again would only be
- *   refused again — so there is nothing to click.
+ *   `request_malformed`. The case a person actually reaches is the digest: the
+ *   browser sent a set other than the one that was rendered, so the surface
+ *   stopped before signing. This app's defect, **nothing was signed**, and
+ *   sending the same request again would only be refused again — so there is
+ *   nothing to click.
+ *
+ *   **The property is about the code's sites, not about that one case**, and
+ *   the distinction is what a future reader has to be able to check.
+ *   `roles/surface`'s `authorise` emits `request_malformed` from four places
+ *   and `transport.Idempotency` from a fifth, and *every one of them precedes
+ *   the first call to `Issue…`* — the empty-constraint refusal, the body that
+ *   would not decode, the digest mismatch, and the middleware's own failed
+ *   read. That is what makes the code answerable, and it is the thing a change
+ *   to the surface could quietly break. A new site for it *after* a signature
+ *   would not fail a test here; it would make this state lie.
  * - `unresolved` — every other way `authorise` can fail, and its separation
  *   from the state above is the whole of #206. A 502, a dropped connection, a
  *   backgrounded tab: `authorise`'s own doc comment in `client.ts` is explicit
@@ -54,10 +65,32 @@ type State =
   | { readonly kind: "unresolved"; readonly message: string };
 
 /**
- * The one `authorise` answer that proves the surface signed nothing: it
- * refused at the digest, before signing. Retrying it would only repeat this
- * browser's own defect — which is why it is also the one failure with no
- * retry, though that is a consequence and not the reason it is named here.
+ * The one `authorise` answer that proves the surface signed nothing: every
+ * site that emits it does so before the first signature. Retrying it would
+ * only repeat this browser's own defect — which is why it is also the one
+ * failure with no retry, though that is a consequence and not the reason it is
+ * named here.
+ *
+ * **Two codes are provably pre-signature as well and are deliberately not
+ * here**, because the reason to widen has to beat the reason not to and does
+ * not. `request_too_large` and the constraint refusals — `constraint_type_unknown`
+ * and its neighbours — are both emitted by `vetted` or above it, so either
+ * would be a true `unsigned`. Neither is reachable by a browser that got this
+ * far: `/authorise/preview` runs the same `vetted` first, so a constraint the
+ * surface cannot parse was refused while the Sign button was still unrendered,
+ * and a handful of constraints is nowhere near the megabyte cap. So widening
+ * buys a sharper sentence on paths nobody walks, and costs a standing
+ * obligation that no future site may emit those codes after a signature.
+ *
+ * **`verifier_unavailable` is why that obligation is worth taking seriously**,
+ * and it is the code that settles the question by example: the surface already
+ * emits it from both sides of the signature — from the idempotency store at
+ * capacity, before the handler runs at all, and from `IssueOpenPayment`
+ * failing *after* `IssueOpenCheckout` has signed. One code, two truths, and
+ * only one of them safe. `mandate_malformed`, `idempotency_conflict` and
+ * `idempotency_in_flight` are all ambiguous in the same direction. A screen
+ * that guessed would be asserting the absence of a mandate carrying the user's
+ * key, which is the one error this state exists to make unavailable.
  */
 const REFUSED_BEFORE_SIGNING = "request_malformed";
 
@@ -105,9 +138,23 @@ const REFUSED_BEFORE_SIGNING = "request_malformed";
  * makes it safe is that the retry reuses the **same** idempotency key
  * `signatureKey` below mints once for the whole decision to sign: the
  * surface's own idempotency middleware is what turns a repeated key into
- * "answer with what I already signed" rather than "sign again", regardless
- * of what the first attempt actually did on the surface. See `signatureKey`'s
- * own comment, and `authorise`'s in `client.ts`, for the mechanism.
+ * "answer with what I already signed" rather than "sign again". See
+ * `signatureKey`'s own comment, and `authorise`'s in `client.ts`, for the
+ * mechanism.
+ *
+ * **It used to say "regardless of what the first attempt actually did on the
+ * surface", and #212 is where that stopped being claimed.** The middleware
+ * replays an answer it remembers, and it deliberately remembers no 5xx —
+ * `transport.Idempotency`'s own comment gives the reason, that an operation
+ * which failed for the verifier's own reasons has not happened once. That
+ * reasoning holds for a handler that is atomic and `authorise` is not: it
+ * signs the Checkout Mandate, then the Payment Mandate, and a failure between
+ * them answers 503 with one signature already made and nothing remembered to
+ * replay. So the key is what makes the retry safe in the case this state is
+ * usually reached by, and #212 is the case where it is not. Not a reason to
+ * withhold the button — a person with no way forward is worse off than one
+ * whose retry is imperfect — but every sentence on screen is written to the
+ * weaker guarantee rather than to this paragraph's old absolute.
  */
 export function Signing({
   proposal,
@@ -159,9 +206,10 @@ export function Signing({
    * proved no mandate exists** — a lost response means it cannot prove
    * that, and `unresolved` is now the state that says so — but because every
    * call here carries `signatureKey`, the one key minted for this whole
-   * decision, so the surface's idempotency middleware is what keeps a retry
-   * from ever becoming a second signature. See `signatureKey`'s own comment
-   * above.
+   * decision, so the surface's idempotency middleware is what stands between a
+   * retry and a second signature. See `signatureKey`'s own comment above, and
+   * this component's own doc for the case where that middleware has nothing
+   * remembered to answer with.
    *
    * `isCancelled` gates the request itself, not only the `setState` calls
    * that follow it — see the `await Promise.resolve()` below for why that
@@ -390,11 +438,25 @@ export function Signing({
                   resolve it, so the hour is the only fact that bounds it; here
                   the button below resolves it, and an expiry quoted for
                   mandates that may not exist would be the same overclaim in a
-                  quieter voice. */}
+                  quieter voice.
+
+                  **The second sentence says what the retry does, not what it
+                  guarantees**, and that is #212's correction rather than
+                  hedging for its own sake. It read *"trying again cannot
+                  produce a second signature"* — an absolute about the surface,
+                  asserted by the one screen that cannot see it. The key is
+                  what lets the surface answer with the pair it already made,
+                  and it does exactly that for the failure this state is
+                  usually reached by; what it is not is a guarantee this
+                  browser is in any position to give, and #212 records the
+                  reachable case where the surface signs and then has nothing
+                  to replay. Stating the mechanism is the most a client can
+                  honestly say, and it is still the whole of what a person
+                  needs in order to press the button. */}
               <p className="font-sans text-sm text-graphite">
                 The Trusted Surface may have signed already — this browser was not told either way.
-                Trying again cannot produce a second signature: it repeats the same request, and the
-                surface answers a repeat with what it did the first time.
+                Trying again sends the same request under the same key, which is what lets the
+                surface answer with the signature it already made rather than make a second one.
               </p>
               <div>
                 <Button type="button" onClick={onTryAgain}>

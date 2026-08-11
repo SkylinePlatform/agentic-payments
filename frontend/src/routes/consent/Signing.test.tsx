@@ -311,9 +311,17 @@ describe("signing", () => {
     expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
     // Announced all the same, even with nothing to click.
     expect(within(screen.getByRole("alert")).getByText(/request_malformed/)).toBeTruthy();
-    // `authorise` threw — nothing was signed — so the heading must not claim
-    // otherwise. A reader seeing "What you signed" above "the surface did
-    // not answer" would reasonably conclude a mandate exists; it does not.
+    // The surface answered before it signed, so nothing was signed and the
+    // heading must not claim otherwise. A reader seeing "What you signed"
+    // above a refusal would reasonably conclude a mandate exists; here it
+    // does not, and this is the one branch that may say so.
+    //
+    // The example this comment used to reach for was *"the surface did not
+    // answer"* — which is the other branch's sentence, and the one case where
+    // "it does not exist" is exactly what nobody can say. #206 split the state
+    // and left the illustration behind; #212 is where it was corrected rather
+    // than deleted, because a comment that teaches the false premise inside
+    // the test for the true half is worse than no comment.
     expect(within(screen.getByTestId("signed-box")).getByText("What you are signing")).toBeTruthy();
   });
 
@@ -382,6 +390,29 @@ describe("signing", () => {
       "bg-wash",
     );
     expect(within(box).getByText("What you are signing")).toBeTruthy();
+
+    // Both arms reach the button, and this is asserted rather than reasoned.
+    // The retry used to be keyed on a `retryable` flag and is now keyed on the
+    // kind, which is the same partition — but "the same partition" is an
+    // argument, and a dropped connection reaching the button was covered by no
+    // test at all before #212: the 502 arm below exercises the retry, and the
+    // network arm exercised only the sentence. A person stranded with no way
+    // forward is worse off than one reading an imprecise sentence.
+    expect(
+      screen.getByRole("button", { name: /try again/i }),
+      "every failure this screen cannot classify has to offer a way on",
+    ).toBeTruthy();
+
+    // And the paragraph says what the retry *does* rather than promising what
+    // the surface will do with it — #212. The key is the mechanism and naming
+    // it is the most a client can honestly say; an absolute here would be this
+    // screen asserting a property of a process it cannot see, which is the
+    // defect one branch over that #206 exists to have fixed.
+    expect(
+      within(alert).getByText(/same request under the same key/i),
+      "the reason pressing it is reasonable is the shared idempotency key, and a person " +
+        "deciding whether to press it is owed the mechanism rather than a guarantee",
+    ).toBeTruthy();
   });
 
   it("states that nothing was signed only where the surface's own answer proves it", async () => {
