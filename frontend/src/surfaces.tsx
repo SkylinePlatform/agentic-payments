@@ -1,9 +1,9 @@
 import type { ReactElement } from "react";
 
+import { Consent } from "./routes/consent/Consent";
 import { Console } from "./routes/Console";
 import { MandateInspector } from "./routes/MandateInspector";
 import { ThreeLanes } from "./routes/ThreeLanes";
-import { TrustedSurface } from "./routes/TrustedSurface";
 
 /**
  * What kind of surface this is, which is what the sidebar's headings say.
@@ -49,7 +49,7 @@ export interface Surface {
  */
 export const SURFACES: readonly Surface[] = [
   { path: "", group: "Buying", label: "Shopping console", element: <Console /> },
-  { path: "consent", group: "Buying", label: "Trusted Surface", element: <TrustedSurface /> },
+  { path: "consent", group: "Buying", label: "Trusted Surface", element: <Consent /> },
   { path: "lanes", group: "The protocol", label: "Three lanes", element: <ThreeLanes /> },
   {
     path: "inspector",
