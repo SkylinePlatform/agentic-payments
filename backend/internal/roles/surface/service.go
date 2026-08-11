@@ -34,6 +34,7 @@
 package surface
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -306,15 +307,24 @@ func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 	checkout := generated.CheckoutMandate{Checkout: &req.Checkout}
 	stamp(s.Clock, &checkout.IssuedAt, &checkout.ExpiresAt)
 
-	signedCheckout, err := ap2.IssueCheckout(r.Context(), s.Signer, checkout, s.Blinder)
+	payment := req.Payment
+	stamp(s.Clock, &payment.IssuedAt, &payment.ExpiresAt)
+
+	signedCheckout, signedPayment, doing, err := issueClosedPair(
+		r.Context(), s.Signer, s.Blinder, checkout, payment, req.Checkout)
 	if err != nil {
-		reject(w, "signing the Checkout Mandate", err)
+		reject(w, doing, err)
 		return
 	}
-	// Emitted per mandate and after its own signature, so the log says what
-	// exists rather than what was attempted. This is where a Human Present
-	// transaction's mandates come into being: the user is the signer, and the
-	// surface is the party holding the pen.
+
+	// Emitted per mandate and after *both* signatures, so the log says what
+	// exists rather than what was attempted. Per mandate because two mandates
+	// came into being; after both because until the second one is signed
+	// neither of them is going anywhere — issueClosedPair drops the pair rather
+	// than answering with half of it, and a line here announcing the first half
+	// would be the log naming a credential nobody holds. This is where a Human
+	// Present transaction's mandates come into being: the user is the signer,
+	// and the surface is the party holding the pen.
 	//
 	// req.Payment.PaymentAmount, not a value parsed out of the checkout this
 	// mandate wraps: the wire CheckoutMandate carries no structured amount at
@@ -330,15 +340,6 @@ func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 	s.Events.Emit(r.Context(), obs.KindMandateConstructed, "Checkout Mandate signed by the user",
 		obs.WithAmount(req.Payment.PaymentAmount),
 		obs.WithMandate(obs.MandateCheckout, obs.MandateClosed))
-
-	payment := req.Payment
-	stamp(s.Clock, &payment.IssuedAt, &payment.ExpiresAt)
-
-	signedPayment, err := ap2.IssuePayment(r.Context(), s.Signer, payment, req.Checkout, s.Blinder)
-	if err != nil {
-		reject(w, "signing the Payment Mandate", err)
-		return
-	}
 	s.Events.Emit(r.Context(), obs.KindMandateConstructed, "Payment Mandate signed by the user",
 		obs.WithAmount(payment.PaymentAmount),
 		obs.WithMandate(obs.MandatePayment, obs.MandateClosed))
@@ -371,6 +372,9 @@ func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 //     another is refused rather than answered with mandates.
 //   - The instrument comes from this surface's own configuration, so the agent
 //     cannot name the card.
+//   - Both mandates are signed as one unit of work, so a caller that never
+//     receives an answer has still had their key used at most once for this
+//     decision. issueOpenPair is where that is arranged and why.
 //
 // Where the asking happens is the caller's own arrangement. POST
 // /authorise/preview renders the same sentences without signing, so a consent
@@ -424,19 +428,6 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 		IssuedAt:    &now,
 		ExpiresAt:   &expiry,
 	}
-	signedCheckout, err := ap2.IssueOpenCheckout(r.Context(), s.Signer, checkout, s.Blinder)
-	if err != nil {
-		reject(w, "signing the open Checkout Mandate", err)
-		return
-	}
-	// Open: it carries constraints and endorses the agent's key, and it is not
-	// bound to any transaction — there is no purchase yet for it to be bound
-	// to. That is also why no amount goes with it, and why these two steps are
-	// the only ones in the whole flow that say open.
-	s.Events.Emit(r.Context(), obs.KindMandateConstructed,
-		fmt.Sprintf("open Checkout Mandate signed by the user, who typed %q", req.Prompt),
-		obs.WithMandate(obs.MandateCheckout, obs.MandateOpen))
-
 	// A copy rather than &s.Instrument, so nothing downstream holds a pointer
 	// into this Service's configuration.
 	instrument := s.Instrument
@@ -454,11 +445,25 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 		IssuedAt:  &now,
 		ExpiresAt: &expiry,
 	}
-	signedPayment, err := ap2.IssueOpenPayment(r.Context(), s.Signer, payment, s.Blinder)
+	signedCheckout, signedPayment, doing, err := issueOpenPair(
+		r.Context(), s.Signer, s.Blinder, checkout, payment)
 	if err != nil {
-		reject(w, "signing the open Payment Mandate", err)
+		reject(w, doing, err)
 		return
 	}
+
+	// Open: they carry constraints and endorse the agent's key, and neither is
+	// bound to any transaction — there is no purchase yet for them to be bound
+	// to. That is also why no amount goes with either, and why these two lines
+	// are the only ones in the whole flow that say open.
+	//
+	// Both after both signatures rather than each after its own, for the reason
+	// approve says at greater length: until the pair is complete nothing leaves
+	// this handler, so a line announcing the first half would name a credential
+	// nobody holds.
+	s.Events.Emit(r.Context(), obs.KindMandateConstructed,
+		fmt.Sprintf("open Checkout Mandate signed by the user, who typed %q", req.Prompt),
+		obs.WithMandate(obs.MandateCheckout, obs.MandateOpen))
 	s.Events.Emit(r.Context(), obs.KindMandateConstructed,
 		fmt.Sprintf("open Payment Mandate signed by the user, who typed %q", req.Prompt),
 		obs.WithMandate(obs.MandatePayment, obs.MandateOpen))
@@ -471,6 +476,129 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 		// The same copy that went into the mandate, so the two cannot disagree.
 		PaymentInstrument: instrument,
 	})
+}
+
+// issueOpenPair signs both open mandates, or leaves nothing behind.
+//
+// The phrase it returns alongside the error is what the caller was doing when
+// it stopped, so a refusal still names which mandate this surface was making —
+// the one thing a reader of the 503 needs, and the one thing that stops being
+// obvious once neither half survives.
+//
+// # The pair is one decision, so it is one unit of work
+//
+// authorise's own comment says why one call signs both: a user who authorised
+// an agent to assemble a purchase but not to pay for it has authorised nothing
+// usable. That sentence also decides what a failure between the two means.
+// Answering with the Checkout half alone is not a smaller authorisation, and
+// announcing a half nobody was given is worse than either — so this returns
+// both or returns neither, and the half it made on the way is dropped where no
+// caller, log or verifier can ever see it.
+//
+// A free function rather than a method, and that is not tidiness. It holds no
+// Service, so there is no Emitter here to announce the first mandate with and
+// no ResponseWriter to answer with: the two signatures have nothing between
+// them because there is nothing here that could go between them. An edit that
+// wanted to say something in the middle would have to move the signing back out
+// first, which is a change a reader notices.
+//
+// # Dropping a signature is a rollback, because a signature is not a ledger entry
+//
+// There is nothing to undo. internal/platform/crypto's signer takes a read
+// lock, re-checks the key's state and returns bytes — nothing is written down,
+// so the only trace a signature leaves is the one its caller makes. A mandate
+// authorises whoever holds it, and one that is never returned and never emitted
+// is held by nobody. That is the whole of what "atomic" can mean where the side
+// effect is a signature, and it is enough: the set of mandates a verifier can
+// be shown an hour later is exactly the set that left this process.
+//
+// # It does not take the caller's cancellation, and that is the fix
+//
+// A request context expresses the caller's continued interest in an answer. It
+// must not decide whether the user's decision gets recorded, and between two
+// signatures it is the one thing that reliably splits them: the signer opens
+// with ctx.Err(), so a browser closing its tab mid-request fails the second
+// mandate while the first is already made. Detaching it means the realistic
+// failure no longer lands in the gap — either the pair is signed or the first
+// signature fails for a reason the second would have failed for too.
+//
+// Finishing is also what lets a retry be answered rather than re-run.
+// transport.Idempotency deliberately does not remember a 5xx: an operation that
+// failed for the verifier's own reasons has not happened once, and remembering
+// it would turn a transient fault into a permanent one for the life of the
+// window. That rule is right — on this route, of all routes, a remembered 503
+// would leave a person unable ever to complete an authorisation they have
+// already decided on — and it has a precondition this handler was not meeting.
+// The key is released on a 5xx and the next attempt runs the handler again, so
+// a handler that fails must leave nothing behind. Both halves of this function
+// are that precondition: nothing is left behind when it fails, and the failure
+// that used to arrive between the signatures no longer arrives at all.
+//
+// What it does not promise is that the caller's key is never asked twice across
+// two attempts. It cannot: a failure early in the first attempt leaves nothing
+// behind, which is exactly the state in which signing afresh is correct.
+func issueOpenPair(
+	ctx context.Context,
+	signer authz.Signer,
+	blinder *sdjwt.Blinder,
+	checkout generated.OpenCheckoutMandate,
+	payment generated.OpenPaymentMandate,
+) (signedCheckout, signedPayment *sdjwt.SDJWT, doing string, err error) {
+	ctx = context.WithoutCancel(ctx)
+
+	signedCheckout, err = ap2.IssueOpenCheckout(ctx, signer, checkout, blinder)
+	if err != nil {
+		return nil, nil, "signing the open Checkout Mandate", err
+	}
+
+	signedPayment, err = ap2.IssueOpenPayment(ctx, signer, payment, blinder)
+	if err != nil {
+		// The Checkout Mandate above goes no further. Dropping it is the point
+		// rather than a consequence: the alternative is a credential carrying
+		// the user's key that nobody asked for, nobody holds and nothing can
+		// revoke.
+		return nil, nil, "signing the open Payment Mandate", err
+	}
+
+	return signedCheckout, signedPayment, "", nil
+}
+
+// issueClosedPair signs both closed mandates, or leaves nothing behind.
+//
+// The same rule one flow along, for the same reasons, and issueOpenPair carries
+// the argument in full: the pair is one decision, a dropped signature is the
+// only rollback a signature admits of, and the caller's cancellation is what
+// used to split the two. Human Present differs in what is signed and in nothing
+// this function is about — approve is called by an agent rather than by a
+// browser, which changes how often a caller disappears mid-request and not what
+// it costs when one does.
+//
+// offer is the checkout both mandates are made from: it is what the Checkout
+// Mandate wraps, and it is what the Payment Mandate's checkout_hash is
+// recomputed over. Passed rather than read back out of checkout.Checkout so
+// that the binding has one source in this signature, the way IssuePayment
+// already takes it.
+func issueClosedPair(
+	ctx context.Context,
+	signer authz.Signer,
+	blinder *sdjwt.Blinder,
+	checkout generated.CheckoutMandate,
+	payment generated.PaymentMandate,
+	offer string,
+) (signedCheckout, signedPayment *sdjwt.SDJWT, doing string, err error) {
+	ctx = context.WithoutCancel(ctx)
+
+	signedCheckout, err = ap2.IssueCheckout(ctx, signer, checkout, blinder)
+	if err != nil {
+		return nil, nil, "signing the Checkout Mandate", err
+	}
+
+	signedPayment, err = ap2.IssuePayment(ctx, signer, payment, offer, blinder)
+	if err != nil {
+		return nil, nil, "signing the Payment Mandate", err
+	}
+
+	return signedCheckout, signedPayment, "", nil
 }
 
 // preview renders a constraint set without signing it.
