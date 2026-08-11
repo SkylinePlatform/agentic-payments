@@ -84,7 +84,7 @@ func NewIdentity(role string) (Identity, error) {
 type Role struct {
 	Identity
 
-	// Events is where the five moments in ADR 0003 Decision 2 go. Never nil
+	// Events is where the six moments in ADR 0003 Decision 2 go. Never nil
 	// here — Main always builds one — but a Service field holding it may be,
 	// and a nil *obs.Emitter records nothing rather than panicking.
 	Events *obs.Emitter

@@ -62,7 +62,7 @@ export function isEventKind(value: unknown): value is EventKind {
  * wire form.
  */
 export interface ProtocolEvent {
-  /** Which of the five moments this is. */
+  /** Which of the six moments this is. */
   readonly kind: EventKind;
 
   /**
@@ -181,7 +181,7 @@ export function parseRecord(data: string): ParsedRecord {
 
   const event = raw.event;
   if (!isEventKind(event.kind)) {
-    return { ok: false, reason: `kind ${JSON.stringify(event.kind)} is not one of the five` };
+    return { ok: false, reason: `kind ${JSON.stringify(event.kind)} is not one of the six` };
   }
   if (!requiredText(event.role)) {
     return { ok: false, reason: "role is missing, and an event with no lane cannot be displayed" };

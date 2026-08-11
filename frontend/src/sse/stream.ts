@@ -100,9 +100,9 @@ export type ConnectionState = "connecting" | "open" | "reconnecting" | "failed" 
  * back. A view that omitted them silently would contradict the one thing the
  * three-lane design refuses to compromise on: every step is visible.
  *
- * A sixth kind on the backend that this package does not know about surfaces
- * here too, since its frames advance the collector's `id:` counter without
- * being delivered to anyone. See {@link EVENT_KINDS}.
+ * A seventh kind on the backend that this package does not know about
+ * surfaces here too, since its frames advance the collector's `id:` counter
+ * without being delivered to anyone. See {@link EVENT_KINDS}.
  */
 export interface Gap {
   /** The sequence number that should have come next. */

@@ -153,7 +153,7 @@ describe("parseRecord", () => {
         seq: 1,
         event: { kind: "mandate_settled", role: "mpp", at: "2026-08-09T10:11:12Z" },
       }),
-      'kind "mandate_settled" is not one of the five',
+      'kind "mandate_settled" is not one of the six',
     ],
     [
       "no role, so no lane",

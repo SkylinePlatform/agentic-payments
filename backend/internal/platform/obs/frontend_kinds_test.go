@@ -25,9 +25,9 @@ const (
 
 // TestTheFrontendKnowsEveryKind holds the frontend's kind list to this one.
 //
-// Kind's own comment says why: the three-lane view groups by kind, and a sixth
-// kind appearing without that view learning about it produces an event nobody
-// can see. This is that sentence enforced rather than hoped for.
+// Kind's own comment says why: the three-lane view groups by kind, and a
+// seventh kind appearing without that view learning about it produces an
+// event nobody can see. This is that sentence enforced rather than hoped for.
 //
 // It is deliberately on this side of the wire. The failure belongs to whoever
 // adds a kind, and what they run is `make check` — Go-only, and this test is in
@@ -52,7 +52,7 @@ const (
 func TestTheFrontendKnowsEveryKind(t *testing.T) {
 	source, err := os.ReadFile(frontendKinds)
 	require.NoError(t, err, "the frontend's kind list has moved; this test is the only thing "+
-		"stopping a sixth kind from being invisible in the three-lane view, so point it at the "+
+		"stopping a seventh kind from being invisible in the three-lane view, so point it at the "+
 		"new path rather than deleting it")
 
 	start := strings.Index(string(source), eventKindsOpen)

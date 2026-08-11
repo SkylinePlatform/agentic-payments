@@ -384,7 +384,7 @@ describe("gap detection", () => {
     stream.onGap((gap) => gaps.push(gap));
 
     source.emit("mandate_constructed", 1);
-    // A sixth kind, added to the backend and unknown here. No listener is
+    // A seventh kind, added to the backend and unknown here. No listener is
     // registered for it, so it reaches nobody — but the collector's id line
     // counted it, and that is what makes it visible one record later.
     source.emit("mandate_settled", 2);
