@@ -119,6 +119,18 @@ func TestEventValidate(t *testing.T) {
 			e.Amount = &amount
 			return e
 		}},
+		// generated.Amount's zero value is the third state the pointer exists to
+		// rule out: not a price, and not the absence of one either. It is what a
+		// role attaching an amount off a decode that never completed would
+		// produce, and the frontend answers it by refusing the whole record —
+		// so an event carrying one costs a step on the screen rather than a
+		// figure. Refused here instead, where Stats().Rejected counts it at the
+		// role that emitted it.
+		{"amount naming no currency", func(e obs.Event) obs.Event {
+			var amount generated.Amount
+			e.Amount = &amount
+			return e
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
