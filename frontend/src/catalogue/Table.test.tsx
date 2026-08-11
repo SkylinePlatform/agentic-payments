@@ -98,7 +98,11 @@ describe("the product table", () => {
     // different row without a fresh proposal would sign a mandate naming one
     // item while showing another.
     const settled = anOffer();
-    const other = anOffer({ id: "gtin:0002", title: "Not what this search narrowed to" });
+    // Titled so it cannot collide with the sentence the disabled row states —
+    // the offer's own name and the component's reason are two different
+    // strings, and a fixture that borrowed the wording made the query below
+    // match both.
+    const other = anOffer({ id: "gtin:0002", title: "A bicycle the search did not settle on" });
     const onBuy = vi.fn();
     render(<Table proposal={aProposal({ offers: [settled, other] })} onBuy={onBuy} />);
 
@@ -108,6 +112,19 @@ describe("the product table", () => {
 
     await userEvent.click(buyButtons[1]);
     expect(onBuy).not.toHaveBeenCalled();
+
+    // The reason is on the screen, not in a `title`: a disabled button is not
+    // focusable, so a tooltip on one is reachable by neither keyboard nor
+    // screen reader, and the guard would read as a bug.
+    const reason = screen.getByText(/not what this search narrowed to/i);
+    expect(
+      buyButtons[1].getAttribute("aria-describedby"),
+      "the disabled button names the sentence that explains it, so the reason is announced with the control rather than found by hunting",
+    ).toBe(reason.id);
+    expect(
+      buyButtons[0].hasAttribute("aria-describedby"),
+      "the buyable row carries no such reason, or every row would claim one",
+    ).toBe(false);
   });
 
   it("shows whether a price can still move, so a row not yet worth its cap still reads as one worth watching", () => {

@@ -89,6 +89,7 @@ function Row({
   // typed, and parsedQuantity is only asked what that means at Buy.
   const [raw, setRaw] = useState("1");
   const quantityId = useId();
+  const reasonId = useId();
 
   return (
     <tr className="border-b border-graphite/40 align-top">
@@ -127,12 +128,26 @@ function Row({
         <button
           type="button"
           disabled={!buyable}
-          title={buyable ? undefined : "not what this search narrowed to"}
+          aria-describedby={buyable ? undefined : reasonId}
           onClick={() => onBuy(parsedQuantity(raw))}
           className="border border-ink px-3 py-1.5 font-sans text-sm text-ink hover:bg-ink hover:text-paper disabled:cursor-not-allowed disabled:opacity-40"
         >
           Buy
         </button>
+        {/*
+          Visible text rather than a `title`, and that is the whole point of
+          drawing the disabled branch at all. A disabled button is not
+          focusable, so a tooltip on one cannot be reached by keyboard and is
+          announced by nothing — the reason would exist in the markup and
+          nowhere a reader is. When #160 widens the catalogue this row is the
+          first thing somebody meets, and "the button is greyed out" without a
+          reason reads as a bug rather than as the guard it is.
+        */}
+        {!buyable && (
+          <p id={reasonId} className="mt-1 font-sans text-xs text-graphite">
+            Not what this search narrowed to.
+          </p>
+        )}
       </td>
     </tr>
   );
