@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
+import { Table } from "../catalogue/Table";
 import { fetchExamples, propose } from "../consent/client";
 import type { Proposal } from "../consent/model";
+import { Tracker } from "../tracker/Tracker";
 
 /**
  * What `Consent`'s `onRefuse` hands back in router state — see that file's
@@ -18,10 +20,19 @@ interface RefusalState {
  * The shopping console, and the app's index route.
  *
  * It is the index because it is where a buyer starts: everything else in this
- * app either follows from something bought here or explains it. #109 is the
- * whole of it — the merchant's catalogue, a quantity per row and a tracker
- * showing where each mandate stands are still to come. This is its first
- * slice: free text in, the agent's interpretation out, nothing signed here.
+ * app either follows from something bought here or explains it.
+ *
+ * **Three pieces, and the seam between the first two is exactly where #22
+ * left it.** The prompt box, `POST /proposals` and the hand-off to the
+ * Trusted Surface are #22's first slice, unchanged. What #109 adds sits
+ * entirely between having a `Proposal` and reaching `/consent`: the product
+ * table (`../catalogue/Table`) replaces the immediate navigation with a row
+ * per offer the agent's search found, a quantity to type into it, and a *Buy*
+ * that appends `quantity lte n` and *then* navigates — the click signs an open
+ * mandate and the user leaves, never a live "watching" screen kept open here.
+ * The mandate tracker (`../tracker/Tracker`) is independent of the table: it
+ * reads whatever this console has already started, so it is worth showing
+ * regardless of whether a proposal is on screen.
  *
  * **The refusal is the state this screen shows most often, on purpose.**
  * `make demo` runs `-interpreter scripted` — hard rule 4 forbids a
@@ -49,6 +60,9 @@ export function Console() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [full, setFull] = useState(false);
+  // What #109 replaces the immediate navigation with: the proposal stays on
+  // screen, as a table, until a row is bought.
+  const [proposal, setProposal] = useState<Proposal | null>(null);
 
   useEffect(() => {
     // Not cancelled on unmount: the index route mounts once, and a lost race
@@ -67,13 +81,16 @@ export function Console() {
     setPending(true);
     setError(null);
     setFull(false);
+    setProposal(null);
     try {
-      const proposal: Proposal = await propose(prompt);
+      const found: Proposal = await propose(prompt);
       // A full agent has to stop here rather than after a signature: the
       // browser talks to the Trusted Surface next, and never back to the
-      // agent, until the signed mandate is handed over at /watches.
-      if (proposal.watch_slots_free > 0) {
-        navigate("/consent", { state: proposal });
+      // agent, until the signed mandate is handed over at /watches. Showing
+      // the table for a proposal nobody can act on would be worse than not
+      // showing one at all.
+      if (found.watch_slots_free > 0) {
+        setProposal(found);
       } else {
         setFull(true);
       }
@@ -170,6 +187,22 @@ export function Console() {
       )}
 
       {error !== null && <p className="font-sans text-sm text-broken">{error}</p>}
+
+      {proposal !== null && (
+        <div className="flex flex-col gap-2" data-testid="product-table-section">
+          <h2 className="font-display text-sm font-medium uppercase tracking-widest text-ink">
+            What the merchant sells
+          </h2>
+          <Table
+            proposal={proposal}
+            onBuy={(signed) => {
+              navigate("/consent", { state: signed });
+            }}
+          />
+        </div>
+      )}
+
+      <Tracker />
     </section>
   );
 }
