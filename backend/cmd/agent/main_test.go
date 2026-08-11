@@ -19,11 +19,18 @@ import (
 
 // TestAfterWatch is the decision in afterWatch's doc comment, as a table.
 //
-// The two rows that matter are the exhaustion pair. They are the whole of the
+// The rows that matter are the two -once pairs. They are the whole of the
 // argument: the same outcome is a failure to a caller that gets its shell back
 // and is not one to a process that only ever ends on a signal, and a change that
 // collapses them is a change to what `make demo` does when a demonstration runs
 // out of prices.
+//
+// There are two pairs rather than one because there are two ways a watch ends
+// having attempted everything it is ever going to — the schedule running out and
+// the authorisation expiring — and they are one case here. The expiry pair is
+// what fails if a future sentinel gets added to the switch above without the
+// second: a raw error and an exit 1 where its sibling stays up, which is the
+// asymmetry #181's review found the first version of this file had.
 func TestAfterWatch(t *testing.T) {
 	t.Parallel()
 
@@ -60,6 +67,17 @@ func TestAfterWatch(t *testing.T) {
 			name: "exhausted under -once", err: agent.ErrScheduleExhausted, once: true,
 			wantErr: agent.ErrScheduleExhausted,
 			why:     "this caller always gets a status back, so the status is the answer",
+		},
+		{
+			name: "expired, long-running", err: agent.ErrAuthorisationExpired, once: false,
+			wantErr: nil, wantSaid: "nothing further will be attempted",
+			why: "the watch is over on the same terms exhaustion is, and exiting would remove the " +
+				"process for the one bound the demonstration's own schedules can actually reach",
+		},
+		{
+			name: "expired under -once", err: agent.ErrAuthorisationExpired, once: true,
+			wantErr: agent.ErrAuthorisationExpired,
+			why:     "the same caller and the same answer; which bound ended the watch does not change it",
 		},
 		{
 			name: "anything else", err: other, once: false, wantErr: other,
@@ -315,16 +333,25 @@ func TestMakeDemoLiveNamesAFlagThisBuildAccepts(t *testing.T) {
 // than only the second.
 //
 // The sentinel's own text is the diagnosis — the merchant has no further price
-// to move to — and a message that reported only the consequence would leave
-// whoever is watching to guess between a schedule that ran out and a verifier
-// that refused for some other reason.
+// to move to, or the authorisation ran out first — and a message that reported
+// only the consequence would leave whoever is watching to guess between the two,
+// or between either and a verifier that refused for some other reason. Both
+// sentinels share the second line, which is exactly why the first one has to
+// come from the error rather than from a literal beside the switch.
 func TestAfterWatchSaysWhatEndedTheWatch(t *testing.T) {
 	t.Parallel()
 
-	var said strings.Builder
-	wrapped := fmt.Errorf("watching the price: %w", agent.ErrScheduleExhausted)
+	for _, sentinel := range []error{agent.ErrScheduleExhausted, agent.ErrAuthorisationExpired} {
+		t.Run(sentinel.Error(), func(t *testing.T) {
+			t.Parallel()
 
-	assert.NoError(t, afterWatch(&said, wrapped, false), "a wrapped sentinel is still the sentinel")
-	assert.Contains(t, said.String(), agent.ErrScheduleExhausted.Error(),
-		"the reason is what tells a reader whether the demonstration is over or broken")
+			var said strings.Builder
+			wrapped := fmt.Errorf("watching the price: %w", sentinel)
+
+			assert.NoError(t, afterWatch(&said, wrapped, false), "a wrapped sentinel is still the sentinel")
+			assert.Contains(t, said.String(), sentinel.Error(),
+				"the reason is what tells a reader whether the demonstration is over or broken, and "+
+					"which of the two bounds ended it")
+		})
+	}
 }

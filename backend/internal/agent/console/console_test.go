@@ -904,15 +904,15 @@ func TestAWatchThatHasAttemptedNothingSaysWhatItIsLookingAt(t *testing.T) {
 // TestAWatchWhoseAuthorisationExpiredIsDrawnAsExpiredNotAsWatching is the
 // tracker's own half of issue #181.
 //
-// merchant.NewCyclingJitteredSchedule never reports Final, so nothing about the
-// merchant's own state ends a watch whose cap it never meets — the open
-// mandate pair's own expiry does instead, agent.ErrAuthorisationExpired. A
-// viewer polling this endpoint has to be able to tell that terminal state
-// apart from a watch still genuinely waiting, which is the whole claim
-// `watching` makes; a row that stayed on `watching` forever after the loop had
-// already concluded there was nothing left to wait for would be exactly the
-// true-but-useless statement AGENTS.md's golden-vectors section says this
-// repository keeps removing.
+// Nothing about the merchant's own state ends a watch that will never buy on
+// the schedules the demonstration runs — agent.ErrScheduleExhausted's own doc
+// gives the two routes by which it does not — so the open mandate pair's own
+// expiry does instead, agent.ErrAuthorisationExpired. A viewer polling this
+// endpoint has to be able to tell that terminal state apart from a watch still
+// genuinely waiting, which is the whole claim `watching` makes; a row that
+// stayed on `watching` forever after the loop had already concluded there was
+// nothing left to wait for would be exactly the true-but-useless statement
+// AGENTS.md's golden-vectors section says this repository keeps removing.
 func TestAWatchWhoseAuthorisationExpiredIsDrawnAsExpiredNotAsWatching(t *testing.T) {
 	t.Parallel()
 
@@ -929,11 +929,11 @@ func TestAWatchWhoseAuthorisationExpiredIsDrawnAsExpiredNotAsWatching(t *testing
 	require.Equal(t, http.StatusOK, status)
 
 	assert.Equal(t, "expired", view["state"],
-		"a cap the merchant never meets under a cycling schedule has to end at a state visibly "+
-			"different from watching, or a viewer polling this row cannot tell the two apart")
+		"a watch the agent has concluded will never buy has to end at a state visibly different "+
+			"from watching, or a viewer polling this row cannot tell the two apart")
 	assert.NotEqual(t, "exhausted", view["state"],
-		"exhaustion is the merchant's schedule running out, which a cycling one never does — "+
-			"conflating the two would misreport which bound actually ended the loop")
+		"exhaustion is an attempt refused against the merchant's last price, which never happened "+
+			"here — conflating the two would misreport which bound actually ended the loop")
 	assert.Contains(t, view["error"], agent.ErrAuthorisationExpired.Error(),
 		"the reason travels beside the state, on the same terms every other terminal state already reports one")
 }

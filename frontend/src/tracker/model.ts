@@ -31,7 +31,7 @@
  * value a `Run` or an attempt actually carries is a bare `string`, which
  * TypeScript cannot narrow, so `runStatus`/`mandateStatus` are the runtime
  * half: a value neither table recognises — this build shipped before the
- * agent grew a sixth run state, say — renders as a visible, named "unknown"
+ * agent grew a seventh run state, say — renders as a visible, named "unknown"
  * fact rather than as a blank cell. `model.test.ts` drives both halves.
  */
 
@@ -79,13 +79,13 @@ export const RUN_STATE_META: Record<RunState, StatusMeta> = {
   watching: { label: "watching", icon: "◐", tone: "neutral" },
   bought: { label: "bought", icon: "✓", tone: "positive" },
   exhausted: { label: "exhausted — never bought", icon: "○", tone: "negative" },
-  // A cycling merchant schedule never reports exhausted — see
-  // internal/agent/watch.go's ErrAuthorisationExpired — so this is what a watch
-  // whose cap no price ever meets reaches instead: the open mandate pair ran
-  // out its own clock. Distinct from `exhausted` on purpose, and distinct from
-  // `watching` on the purpose the whole tracker exists for — a row parked here
-  // is a wait the agent has already concluded will never end, not one still in
-  // progress.
+  // Nothing about the merchant's schedules as the demonstration runs them ever
+  // produces `exhausted` — `internal/agent/watch.go`'s `ErrScheduleExhausted`
+  // gives the two routes by which it does not — so this is what a watch that
+  // will never buy reaches instead: the open mandate pair ran out its own
+  // clock. Distinct from `exhausted` on purpose, and distinct from `watching`
+  // on the purpose the whole tracker exists for — a row parked here is a wait
+  // the agent has already concluded will never end, not one still in progress.
   expired: { label: "expired — never bought", icon: "⏱", tone: "negative" },
   stopped: { label: "stopped", icon: "■", tone: "neutral" },
   failed: { label: "failed", icon: "✕", tone: "negative" },

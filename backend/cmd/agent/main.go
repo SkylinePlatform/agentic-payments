@@ -80,7 +80,8 @@
 // smoke-testing the stack by hand who wants the receipts printed and the shell
 // back.
 //
-// That applies to a watch that ran out of schedule as much as to one that
+// That applies to a watch that ended without buying — whether it ran out of
+// schedule or ran out its authorisation's own clock — as much as to one that
 // bought something, and afterWatch is where the argument for it lives.
 //
 // # Why -buy is one purchase and not a loop
@@ -444,41 +445,60 @@ func geminiInterpreter(apiKey, model string, clk authz.Clock) (interpret.IntentI
 // writing anything the reader has to see to out.
 //
 // A watch stopped by Ctrl-C is not a failure, and neither is one that bought
-// something. Every other way it can end is. The interesting one is
-// agent.ErrScheduleExhausted: the merchant has committed to its last price, an
-// attempt was made against it, and it did not buy.
+// something. Every other way it can end is. The interesting ones are the two
+// sentinels that mean the watch is over and nothing further will be attempted:
+// agent.ErrScheduleExhausted, where the merchant committed to its last price and
+// an attempt against it did not buy, and agent.ErrAuthorisationExpired, where
+// the pair the user signed ran out its own clock first. **They are one case
+// here** — the difference between them is which bound ended the loop, which the
+// sentinel's own text already states, and nothing this function decides turns
+// on it. On the schedules the demonstration runs only the second occurs at all;
+// see agent.ErrScheduleExhausted for why.
 //
-// # Exhaustion is fatal under -once and not otherwise
+// # Both are fatal under -once and neither otherwise
 //
-// The case for exiting 1 on it is a good one — the agent was asked to buy
+// The case for exiting 1 on either is a good one — the agent was asked to buy
 // something and did not, and a non-zero status is how a program says its job
 // failed. What it does not survive is what this process is without -once.
 //
 // There is no exit path there at all. A completed purchase falls through to the
 // wait at the end of run, and the process ends only on a signal. A status that
-// appeared for exhaustion and never for success is one nothing can read: no
-// caller can wait on it to learn the purchase went through, because that case
-// never returns. What it would do instead is take the agent out of a stack
-// somebody is watching — demo.Runner settles each process's state during startup
-// and demo.Banner prints it once, and neither is revised afterwards, so an agent
-// that exits minutes later is still listed as up while the next press of
-// POST /demo/advance is answered by nobody.
+// appeared for a watch that ended and never for success is one nothing can
+// read: no caller can wait on it to learn the purchase went through, because
+// that case never returns. What it would do instead is take the agent out of a
+// stack somebody is watching — demo.Runner settles each process's state during
+// startup and demo.Banner prints it once, and neither is revised afterwards, so
+// an agent that exits minutes later is still listed as up while the next press
+// of POST /demo/advance is answered by nobody.
 //
 // Under -once the process always terminates, the status is the answer somebody
-// asked for, and exhaustion stays fatal.
+// asked for, and both stay fatal.
+//
+// # Why the expiry case is here rather than left to the default arm
+//
+// It is not reached by `make demo` — deploy/demo.json gives agent-watch -addr,
+// which routes through serveConsole, where console.Run records the terminal
+// state instead. It is reached by `bin/agent -watch` with no -addr, which the
+// package doc above documents as a supported way to run this binary. Every word
+// of the argument above applies to it unchanged, so leaving it on the default
+// arm would exit 1 and remove the process for precisely the situation this
+// function exists to keep a process alive through — with the asymmetry visible
+// only to whoever ran the flag combination the demonstration does not.
 //
 // # Staying up is not staying quiet
 //
 // report has already printed every attempt and the receipt each verifier
 // answered with. What it cannot say is that there will be no more of them: a
-// watch that was refused on the last step looks exactly like one still waiting
-// for a price to move. The two lines below are that difference, on stderr,
-// because it is the reason a demonstration stops producing anything.
+// watch that ended looks exactly like one still waiting for a price to move.
+// The two lines below are that difference, on stderr, because it is the reason
+// a demonstration stops producing anything. Which bound ended it is the first
+// of those lines, printed from the sentinel's own text.
 func afterWatch(out io.Writer, err error, once bool) error {
+	over := errors.Is(err, agent.ErrScheduleExhausted) || errors.Is(err, agent.ErrAuthorisationExpired)
 	switch {
 	case err == nil, errors.Is(err, context.Canceled):
 		return nil
-	case errors.Is(err, agent.ErrScheduleExhausted) && !once:
+	case over && !once:
 		_, _ = fmt.Fprintf(out, "agent: %v\n", err)
 		_, _ = fmt.Fprintln(out, "agent: the watch is over and nothing further will be attempted"+
 			" against this authorisation; the process stays up so the rest of the stack keeps its shape.")

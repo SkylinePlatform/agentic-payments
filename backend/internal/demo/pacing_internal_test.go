@@ -78,14 +78,20 @@ func startupFloor(m *Manifest, after, before int) time.Duration {
 // can be lost, and the one no test in internal/roles/merchant can see.
 //
 // The known way is a poll longer than a step, which deploy/demo.json documents
-// and merchant's TestJitteredScheduleObservesEveryPriceInOrder excludes. This
-// is the other one. The merchant's schedule starts when the *merchant* starts —
-// NewDemoService reads start from the clock at construction — but agent-watch
-// is six entries further down the manifest, and its baseline quote is whatever
-// price is in force by the time it gets there. agent.Watch takes that baseline
-// as `last` and attempts only on a step it has not already seen, so a baseline
-// that is already the $210 means the refusal never happens: one attempt, bought
-// at $189, no error anywhere.
+// and merchant's own suite excludes — by
+// TestACyclingScheduleShortensNoHoldAtTheWrap and
+// TestACyclingScheduleObservesEveryPriceInOrderRepeatedly for the cycling
+// constructor this manifest has wired since #177, and by
+// TestJitteredScheduleObservesEveryPriceInOrder for the one-shot one it no
+// longer does.
+//
+// This is the other one. The merchant's schedule starts when the *merchant*
+// starts — NewDemoService reads start from the clock at construction — but
+// agent-watch is six entries further down the manifest, and its baseline quote
+// is whatever price is in force by the time it gets there. agent.Watch takes
+// that baseline as `last` and attempts only on a step it has not already seen,
+// so a baseline that is already the $210 means the refusal never happens: one
+// attempt, bought at $189, no error anywhere.
 //
 // Under the fixed 30s step this had 27 seconds of slack and nobody had to think
 // about it. Issue #158's 3s floor left roughly half a second — 2.45 to 2.49

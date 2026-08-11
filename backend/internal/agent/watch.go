@@ -20,12 +20,25 @@ import (
 // wait for. A watch that returned nil here would look like a completed purchase
 // to every caller that only checks the error.
 //
-// **Unreachable against a cycling schedule.** merchant.NewCyclingJitteredSchedule
-// never reports Final — there is always a next boundary, the wrap included — so
-// a watch whose cap no price the merchant ever quotes can satisfy would poll for
-// as long as the process runs, minting nothing and reporting nothing, rather
-// than reaching this. ErrAuthorisationExpired is the bound that still ends that
-// watch.
+// **Unreachable on the demo path, and by two routes rather than one.** The
+// tempting single sentence — "a cycling schedule never reports Final" — is not
+// true as stated, so it is worth having both:
+//
+//   - An offer with more than one price under
+//     merchant.NewCyclingJitteredSchedule never reports Final: there is always a
+//     next boundary, the wrap included. The branch below is never taken.
+//   - An offer with a *single* price reports Final from its baseline on, cycling
+//     or not — there is nothing to wrap to, so that constructor draws no width
+//     and builds the same held-still schedule a one-shot one would;
+//     merchant's TestCyclingJitteredScheduleRejectsNonsense pins exactly that.
+//     But its step never changes, so no attempt is ever minted and the branch
+//     below is never *reached*. deploy/catalogue.json ships two such offers —
+//     the concert and the ladders — and two of the five prompts
+//     interpret.Scenarios() serves name them.
+//
+// Either way the watch polls for as long as the process runs, minting nothing
+// and reporting nothing, rather than reaching this. ErrAuthorisationExpired is
+// the bound that still ends it.
 var ErrScheduleExhausted = errors.New("agent: the merchant has no further price to move to, and the last one did not buy")
 
 // ErrAuthorisationExpired means the pair the user signed ran out its own clock
@@ -33,13 +46,16 @@ var ErrScheduleExhausted = errors.New("agent: the merchant has no further price 
 //
 // # Why this exists beside ErrScheduleExhausted rather than instead of it
 //
-// A one-shot schedule ends the loop on its own: the last price holds forever,
-// so a cap nothing ever meets is eventually attempted against Final and
-// refused into ErrScheduleExhausted. merchant.NewCyclingJitteredSchedule has no
-// such moment — there is always a next boundary, the wrap included — so a watch
-// begun against a price the user's cap will never accept would otherwise poll
-// until the process stops, its row on a console never moving and never saying
-// why. This is that watch's own bound instead of a second, invented one: the
+// A one-shot schedule of several prices ends the loop on its own: the last
+// price holds forever, so a cap nothing ever meets is eventually attempted
+// against Final and refused into ErrScheduleExhausted. Neither shape the
+// demonstration actually runs has that moment — see ErrScheduleExhausted for
+// the two routes by which it does not — so a watch begun against prices the
+// user's cap will never accept, or against an offer whose single price never
+// moves at all, would otherwise poll until the process stops, its row on a
+// console never moving and never saying why.
+//
+// This is that watch's own bound instead of a second, invented one: the
 // open mandate pair already carries an expiry — Authorisation.ExpiresAt, read
 // off the open mandate's own ExpiresAt by the Trusted Surface that signed it —
 // and a verifier would refuse any closed mandate minted from it after that
@@ -87,8 +103,10 @@ var ErrAuthorisationExpired = errors.New("agent: the user's authorisation expire
 // opening price from an unacceptable one, because telling them apart is
 // evaluating the user's constraint, which is the verifier's job. A watch begun
 // against an already-final offer therefore polls until its context ends or its
-// authorisation expires — see ErrAuthorisationExpired, the bound that still
-// applies even where Final itself does not, on merchant.NewCyclingJitteredSchedule.
+// authorisation expires — see ErrAuthorisationExpired. It is specifically not
+// ErrScheduleExhausted that ends it: that sentinel is returned only after an
+// attempt was refused against a final quote, and this watch never attempts
+// anything, so the branch reading Final is never reached at all.
 //
 // # It does not poll the search endpoint
 //
@@ -620,6 +638,26 @@ func (w *Watch) quantity() int {
 
 // expired reports whether the user's authorisation has run out its own clock,
 // as of now — see ErrAuthorisationExpired.
+//
+// The comparison is authz.Endorsement.CanAuthorise's, character for character:
+// exclusive at the far end, so `ExpiresAt` names the first instant the
+// authority is gone. That is deliberate rather than coincidental — the point of
+// reading a bound the verifiers already enforce is that this loop reaches the
+// same verdict they do, and a `now.After` here would leave one instant on which
+// the agent still minted and every verifier refused.
+//
+// # Where the two can still disagree, and which way
+//
+// Not on the value: `Authorisation.ExpiresAt` and the `exp` claim inside both
+// open mandates are one `time.Time` computed once in surface.authorise. On the
+// *clock*, though, this is a different process from the three verifiers, so
+// skew is possible in principle. Two things bound what it costs. AP2 carries
+// `exp` as epoch seconds, so a verifier's instant is this one truncated down —
+// it refuses fractionally before this returns true, never after. And the axis
+// that would matter, this agent's clock running ahead of a verifier's, costs
+// the skew out of a one-hour window and ends the watch honestly as expired
+// rather than buying something nobody authorised. Neither direction is new:
+// every mandate here already expires against whichever clock reads it.
 //
 // A zero ExpiresAt is treated as no bound at all rather than as the earliest
 // possible instant, on the same reading Endorsement's own *time.Time gives an

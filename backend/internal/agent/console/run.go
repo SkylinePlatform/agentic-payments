@@ -74,21 +74,29 @@ const (
 	// stateExhausted is agent.ErrScheduleExhausted: the merchant has committed
 	// to its last price, an attempt was made against it, and it did not buy.
 	//
-	// Unreachable against a cycling schedule — merchant.NewCyclingJitteredSchedule
-	// never reports Final, so a watch that runs against one never reaches this
-	// state. See stateExpired for the bound that still ends a watch like that.
+	// **Unreachable on the demo path**, and the reason is worth reading in
+	// agent.ErrScheduleExhausted rather than compressed here, because the short
+	// version — "a cycling schedule never reports Final" — is false for an offer
+	// with a single price, of which deploy/catalogue.json ships two. Kept
+	// regardless: nothing about this console decides which schedule a merchant
+	// runs, and an agent watching a one-shot multi-price offer still reaches it.
+	// See stateExpired for what ends a watch that cannot.
 	stateExhausted
 	// stateExpired is agent.ErrAuthorisationExpired: the open mandate pair the
 	// user signed ran out its own clock before any attempt bought.
 	//
-	// This is what a watch whose cap no price ever meets reaches instead of
-	// stateExhausted once its schedule cycles rather than stopping: nothing
-	// about a cyclic schedule ever tells the loop "there is no next price", so
+	// This is what a watch that will never buy reaches instead of
+	// stateExhausted on the schedules the demonstration actually runs: nothing
+	// about them ever tells the loop "there is no next price it can act on", so
 	// the pair's own expiry is the fact that still lets it conclude and report
 	// "this will never happen" rather than sitting at stateWatching for as long
-	// as the process runs. Reachable on a one-shot schedule too — an
-	// authorisation can run out before its last price does — it is simply rarer
-	// there, since stateExhausted usually gets there first.
+	// as the process runs. Two of the five prompts interpret.Scenarios() serves
+	// name a single-price offer and so can never attempt anything at all, which
+	// makes this the state a browser starting one from GET /examples ends on.
+	//
+	// Reachable on a one-shot multi-price schedule too — an authorisation can
+	// run out before its last price does — it is simply rarer there, since
+	// stateExhausted usually gets there first.
 	stateExpired
 	// stateStopped is the watch's context ending — somebody stopping the agent.
 	stateStopped
