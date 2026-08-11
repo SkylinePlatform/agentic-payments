@@ -338,6 +338,18 @@ type FieldSpec struct {
 // package whose job is exactly this: being the agent's window onto the
 // vocabulary without being a copy of it.
 //
+// **What crosses that edge is Narrowing, not this**, and issue #203 is why the
+// paragraph above describes the route rather than the traffic on it. A constraint
+// is not always a leaf: a group carries op and of and never a field, so the
+// leaf-level answer had nothing to say about one and internal/agent dropped every
+// group from its search in silence. Narrowing is the same question asked of a
+// node, and it is what interpret forwards now — built out of this for a leaf and,
+// through whollySelective, for the whole of a not. This stays exported because it
+// is the primitive that answer is assembled from and the thing the vocabulary's
+// own tests state field by field; nothing outside this package calls it at run
+// time, and a caller that wants to know what to search on should be asking about
+// the node it holds rather than about a name inside it.
+//
 // # Both halves, and an unknown name
 //
 // It answers for the closed registry and for item.attr.<name> alike, because it

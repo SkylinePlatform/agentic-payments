@@ -64,11 +64,19 @@
 //
 // # One other thing crosses this boundary, and the limit on it is the point
 //
-// Selective says whether a constraint field describes what to go looking for or
-// states a term the purchase has to meet. The fact belongs to the registry and
-// this package only forwards it, unaltered: internal/agent needs it to build a
-// merchant search and may not import the registry to ask, so it carried two
-// string prefixes instead until issue #132.
+// Narrowing says what a constraint narrows a merchant's catalogue search to:
+// nothing, itself, or the part of itself a catalogue can answer. The fact
+// belongs to the registry and this package only forwards it, unaltered:
+// internal/agent needs it to build a merchant search and may not import the
+// registry to ask, so it carried two string prefixes instead until issue #132.
+//
+// It is **one** forwarded fact and not two, which is issue #203. Selective
+// answered the same question for a field name and was what crossed here first;
+// forwarding both would leave the shape of that defect available to the next
+// caller, because a node is not always a leaf and the leaf-level answer has
+// nothing to say about a group. Asking at the level the caller has to decide
+// something at is what makes "the verifier's own answer" the whole answer
+// rather than the easy half of one.
 //
 // It is here for Validate's reason rather than merely beside it. Both are the
 // verifier's own answer about the constraint vocabulary, reached through the one
@@ -77,7 +85,7 @@
 // Neither infers anything from a sentence, and no model is on the path.
 //
 // **What may follow it is only more of the same.** This package is not the
-// window through which the agent reaches core, and reading Selective as a
+// window through which the agent reaches core, and reading Narrowing as a
 // precedent for routing some other fact through here would be the wrong
 // reading. Every package that can reach an interpreter is one hard rule 2 has to
 // argue about — reach_test.go's mayReach list is where that argument is written

@@ -257,15 +257,18 @@ func excerpt(answer []byte) string {
 // The narrowing is enforced by the schema rather than by the prose: op is an
 // enum of the leaf operators, so a group node is refused at the boundary.
 //
-// **What it buys is that #132's silent drop stays unreachable.**
-// internal/agent's identifying() reads leaves only when it builds the merchant
-// search — a group can mix a bound on the price with a fact about the object and
-// there is no honest way to send half of one — so an interpretation containing a
-// group would have part of itself dropped from discovery with nothing failing.
-// All five scripted interpretations are flat lists, and so is everything this
-// interpreter can produce, so the case remains one no interpreter here reaches.
-// Lifting it is #132's, and it needs the drop closed before the producer is
-// widened, not after.
+// **It used to buy something else as well, and that reason has been spent.**
+// internal/agent's identifying() read leaves only when it built the merchant
+// search, so an interpretation containing a group would have had part of itself
+// dropped from discovery with nothing failing. Keeping this schema flat is what
+// made that unreachable rather than merely unexercised. Issue #203 closed the
+// drop — a group is asked what it narrows now, and constraint.Narrowing answers
+// per node kind — which is the order that was required: the consumer first, the
+// producer after.
+//
+// So the two reasons above are the whole of why the narrowing stands today, and
+// widening it is a decision about what a model should be trusted to compose
+// rather than something the agent's discovery half is still waiting on.
 func vocabulary() string {
 	var b strings.Builder
 
