@@ -416,6 +416,26 @@ func (d Dispute) Verify(b evidence.Bundle, at time.Time) evidence.Report {
 // means once the closed mandate carries no signature of its own — it is a Key
 // Binding JWT the agent signed, so "genuine" here folds in that the purchase
 // it names actually falls inside what the open mandate's constraints allow.
+//
+// **subject.At is not the caller's to choose, and this replaces it with at.**
+// The two are one fact arriving by two routes: at is when the transaction
+// happened, and constraint.Subject.At is when the authority was exercised,
+// which for a transaction being judged after the fact is the same moment. The
+// live path they are meant to reproduce cannot tell them apart —
+// merchant.Service builds its subject from s.Clock.Now() and hands the same
+// clock to the rule set, so expiry and the user's booking window are decided
+// as of one instant, which is the property AuthorisePaymentChain's own comment
+// spells out for the payment side. Left to a caller they can differ, silently,
+// and a `within` constraint would then be answered as of a moment nothing else
+// in the report was judged as of: an arbiter could report constraint_violated
+// for a booking window the transaction sat comfortably inside, and the report
+// would name the agent for it.
+//
+// Replaced outright rather than compared against, on fixedClock's exact
+// reasoning — a mismatch has no reading in which the caller's value is the
+// right one, so refusing the pair would only turn an unrepresentable state
+// into a reachable error. Every other field of subject stays the caller's, and
+// ChainDisputeOptions.Subject is where what that costs is written out.
 func (d Dispute) VerifyCheckoutMandateChain(
 	at time.Time,
 	c *sdjwt.Chain,
@@ -426,6 +446,7 @@ func (d Dispute) VerifyCheckoutMandateChain(
 		return CheckoutAuthorisation{}, fmt.Errorf(
 			"%w: no rules to judge the Checkout Mandate chain under", ErrMisconfigured)
 	}
+	subject.At = at
 	return d.CheckoutChains.AuthoriseCheckoutChainAsOf(at, c, subject, checkoutJWT, nonce)
 }
 
@@ -470,12 +491,55 @@ type ChainDisputeOptions struct {
 	// the tokens: a Subject taken from an artefact belonging to a party to
 	// the dispute would let that party choose what its own purchase is
 	// judged against.
+	//
+	// # What that costs, stated as plainly as the instant is
+	//
+	// **Whoever supplies this controls every constraint verdict in the
+	// report.** The design spec writes the same sentence about at — *"whoever
+	// supplies at controls every expiry verdict"* — and this one reaches
+	// further rather than as far. at moves the expiry verdicts alone; this
+	// decides the whole of what StepCheckoutAuthorised additionally
+	// establishes under Human Not Present, and it is the only input to that
+	// link which is not recomputable from a signed artefact. A Subject naming
+	// a cheaper purchase than the one that happened verifies as authorised. A
+	// Subject naming a route nobody flew refuses as constraint_violated
+	// against an agent that did nothing wrong.
+	//
+	// Nothing in this package can close it, for the reason nothing can close
+	// at: telling a true description from a false one would take a second
+	// source, the only candidates are the artefacts, and those belong to the
+	// parties being judged — which is why the description does not come from
+	// them in the first place.
+	//
+	// **One thing narrows it, and it is worth knowing which.** The payment
+	// side takes no Subject at all: AuthorisePaymentChain derives one from the
+	// verified closed Payment Mandate, so a lie about a fact that mandate also
+	// carries — the amount, the payee — survives link 1 and is caught at
+	// StepPaymentAuthorised, by a subject nobody supplied. A lie about a fact
+	// only the merchant ever knew, the item or the route or the quantity, is
+	// caught nowhere. TestTheSubjectAnArbiterBringsDecidesTheConstraintVerdict
+	// holds both halves.
+	//
+	// At is the one field that is **not** read from here.
+	// VerifyCheckoutMandateChain replaces it with the arbiter's instant, so
+	// that a dispute cannot judge expiry as of one moment and the user's
+	// booking window as of another; see there for why.
 	Subject constraint.Subject
 
 	// CheckoutNonce and PaymentNonce are the challenges the merchant and the
 	// payment verifier issued for this exchange and must have remembered —
 	// see MerchantRules.AuthoriseCheckoutChain's identical parameter for why
-	// this is not minted here. Both required.
+	// this is not minted here. Both required, and both checked by chainUsable
+	// before any link runs rather than left to fail inside one.
+	//
+	// Where they are checked is the whole of it. An empty nonce is refused by
+	// the rule set too, as ErrMisconfigured — but it is refused *from inside
+	// link 1*, so a report built that way names checkout_authorised as the
+	// broken link, which per Report.Broke is a finding against whoever
+	// presented the mandate. An arbiter that did not bring the merchant's
+	// remembered nonce has not been shown a bad artefact; it has failed for
+	// its own reasons, which is StepNone's entire job and the same argument
+	// usable makes for a missing key.
 	//
 	// PaymentNonce answers for whichever payment chain the bundle carries,
 	// which Dispute's own doc comment says is the one addressed to the
@@ -494,7 +558,10 @@ type ChainDisputeOptions struct {
 // at is required on Verify's exact terms: a zero one is refused as
 // ErrMisconfigured at StepNone, never defaulted, because a real dispute is
 // heard long after every mandate in the bundle expired and judging as of now
-// would answer "expired" against a counterparty who did nothing.
+// would answer "expired" against a counterparty who did nothing. It is also
+// the instant the constraints are evaluated at — VerifyCheckoutMandateChain
+// puts it into opts.Subject.At rather than letting a caller supply a second
+// one, so one dispute is judged as of one moment throughout.
 //
 // The five links run in order and stop at the first failure, for the same
 // cascading-reference reason Verify's own comment gives. There is still no
@@ -502,10 +569,20 @@ type ChainDisputeOptions struct {
 // holding chain still asserts nothing about where Bundle.Checkout came from —
 // neither of those changes when the closed mandates are chains instead of
 // presentations.
+//
+// **And one thing that does change, which a reader of a holding chain has to
+// know.** Under Human Present every link is recomputable from the five
+// artefacts and the keys. Here the first link is not: what
+// StepCheckoutAuthorised additionally establishes — that the purchase fell
+// inside the user's constraints — is decided against a description of the
+// purchase the *arbiter* supplied, because no artefact in the bundle carries
+// one. A report that holds says the constraints held for the purchase as the
+// arbiter described it. ChainDisputeOptions.Subject is where that is written
+// out in full.
 func (d Dispute) VerifyChain(b evidence.Bundle, at time.Time, opts ChainDisputeOptions) evidence.Report {
 	var rep evidence.Report
 
-	if err := d.chainUsable(at); err != nil {
+	if err := d.chainUsable(at, opts); err != nil {
 		return broken(rep, evidence.StepNone, err)
 	}
 	if err := b.Validate(); err != nil {
@@ -563,40 +640,43 @@ func (d Dispute) VerifyChain(b evidence.Bundle, at time.Time, opts ChainDisputeO
 // chainUsable is usable's counterpart for VerifyChain: every collaborator
 // this arbiter was not given to judge a Human Not Present bundle with, in one
 // error. See usable for why all of them are reported at once.
-func (d Dispute) chainUsable(at time.Time) error {
-	var missing []string
-	for _, collaborator := range []struct {
-		name    string
-		present bool
-	}{
+//
+// It carries two rows usable has no equivalent of, and they are here rather
+// than left to the rule sets for the reason StepNone exists. Both rule sets do
+// refuse an empty nonce themselves, under this package's own ErrMisconfigured
+// — but they refuse it from inside a link, so the report would name
+// checkout_authorised or payment_authorised as broken and put a finding
+// against whoever presented that mandate. Nobody presented anything wrong: the
+// arbiter turned up without the challenge the verifier is supposed to have
+// remembered, which is exactly the "has not been shown a bad artefact" case,
+// and it belongs beside the missing keys.
+//
+// **ChainDisputeOptions.Subject has no row**, and its absence is a decision
+// rather than an omission. A constraint.Subject has no unset state a verifier
+// can recognise: a purchase with no item and no currency is a strange
+// description, not a detectably missing one, and a rule invented here — insist
+// on a currency, insist on a quantity — would be a second, weaker copy of what
+// the constraint evaluator already knows, drifting from it in the direction
+// that accepts less. So a Subject nobody filled in reaches the evaluator and
+// fails closed there, as constraint_violated at link 1, which is a finding
+// against an agent for the arbiter's own gap. That is the residual the field's
+// own doc comment states, and closing it is a change to what
+// constraint.Subject can say about itself rather than one this file can make.
+func (d Dispute) chainUsable(at time.Time, opts ChainDisputeOptions) error {
+	return missingCollaborators([]collaborator{
 		{"rules for the Checkout Mandate chain", d.CheckoutChains != nil},
 		{"rules for the Payment Mandate chain", d.PaymentChains != nil},
 		{"the merchant's key", d.CheckoutReceipts != nil},
 		{"the key of whoever answered the Payment Mandate", d.PaymentReceipts != nil},
+		{"the merchant's remembered nonce", opts.CheckoutNonce != ""},
+		{"the remembered nonce of whoever answered the Payment Mandate", opts.PaymentNonce != ""},
 		{"the instant the transaction is judged as of", !at.IsZero()},
-	} {
-		if !collaborator.present {
-			missing = append(missing, collaborator.name)
-		}
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	return fmt.Errorf("%w: an arbiter brings its own keys and rules, and this one has no %s",
-		ErrMisconfigured, strings.Join(missing, ", no "))
+	})
 }
 
 // usable reports every collaborator this arbiter was not given, in one error.
-//
-// All of them at once for the reason Bundle.Validate lists every gap at once:
-// the reader is wiring an arbiter up, and one name per attempt is one attempt
-// per name.
 func (d Dispute) usable(at time.Time) error {
-	var missing []string
-	for _, collaborator := range []struct {
-		name    string
-		present bool
-	}{
+	return missingCollaborators([]collaborator{
 		{"rules for the Checkout Mandate", d.CheckoutMandates != nil},
 		{"rules for the Payment Mandate", d.PaymentMandates != nil},
 		{"the merchant's key", d.CheckoutReceipts != nil},
@@ -605,9 +685,33 @@ func (d Dispute) usable(at time.Time) error {
 		// it is something the arbiter brings, exactly as the keys are, and a
 		// dispute heard without one has not been shown a bad artefact either.
 		{"the instant the transaction is judged as of", !at.IsZero()},
-	} {
-		if !collaborator.present {
-			missing = append(missing, collaborator.name)
+	})
+}
+
+// collaborator is one thing an arbiter has to have been given, and whether it
+// was.
+type collaborator struct {
+	name    string
+	present bool
+}
+
+// missingCollaborators names every absent one in a single error, and is the
+// shared body of usable and chainUsable.
+//
+// All of them at once for the reason Bundle.Validate lists every gap at once:
+// the reader is wiring an arbiter up, and one name per attempt is one attempt
+// per name.
+//
+// One body rather than two, on VerifyCheckoutAsOf's own argument for reaching
+// VerifyCheckout through a pinned copy instead of restating it: the two lists
+// differ and the sentence they are joined into must not, or the same
+// misconfiguration reads as two different failures depending on which entry
+// point the arbiter was pointed at.
+func missingCollaborators(collaborators []collaborator) error {
+	var missing []string
+	for _, c := range collaborators {
+		if !c.present {
+			missing = append(missing, c.name)
 		}
 	}
 	if len(missing) == 0 {

@@ -284,16 +284,121 @@ func TestARefusedChainStillHasAnIntactChain(t *testing.T) {
 		"the reason the money did not move is the finding, and it has to survive into the report")
 }
 
+// TestOneDisputeIsJudgedAsOfOneInstant is the property VerifyCheckoutMandateChain
+// pinning Subject.At exists for, and it has no Human Present counterpart
+// because a presented bundle has no subject to disagree with the arbiter's
+// instant.
+//
+// Two instants reach the constraint evaluation under Human Not Present: the
+// one an arbiter supplies to VerifyChain, which decides expiry, and
+// constraint.Subject.At, which decides a `within` constraint — the built
+// scenario's booking window. They are the same fact, and the live path they
+// reproduce cannot tell them apart, because merchant.Service builds its
+// subject from the clock it hands the rule set. Left to a caller they can
+// differ, and the answer is a report naming the agent for a booking window the
+// transaction sat comfortably inside.
+func TestOneDisputeIsJudgedAsOfOneInstant(t *testing.T) {
+	t.Parallel()
+
+	fx := newDisputeChainFixture(t, 18900)
+	b := fx.bundle(t)
+
+	// Six weeks past the end of the mandate's booking window, in a subject
+	// whose every other fact is faithful. This is not contrived: purchaseAt
+	// carries a fixed instant of its own, so a caller filling the subject in
+	// from anywhere other than the argument beside it lands here by accident.
+	wandering := fx.options()
+	wandering.Subject.At = time.Date(2026, time.September, 15, 12, 0, 0, 0, time.UTC)
+
+	rep := fx.arbiter().VerifyChain(b, fx.at, wandering)
+	require.True(t, rep.Holds(),
+		"expiry and the user's booking window are one question asked of one moment, and the moment is the arbiter's: %v", rep.Err)
+	assert.Equal(t, fx.arbiter().VerifyChain(b, fx.at, fx.options()).Held, rep.Held,
+		"what a caller wrote into the subject's own clock cannot change what a report established")
+
+	// The rest of the subject is still the caller's, which is what makes the
+	// override narrow rather than the constraint evaluation being switched off.
+	wrongRoute := fx.options()
+	wrongRoute.Subject.Item.Attributes = map[string]string{"route.origin": "BEG", "route.destination": "CDG"}
+
+	refused := fx.arbiter().VerifyChain(b, fx.at, wrongRoute)
+	require.False(t, refused.Holds())
+	assert.Equal(t, generated.ErrorCodeConstraintViolated, refused.Code,
+		"only At is taken over; every other fact is still judged against what the arbiter said the purchase was")
+}
+
+// TestTheSubjectAnArbiterBringsDecidesTheConstraintVerdict states the residual
+// of taking the purchase's description from the arbiter, as a test rather than
+// as a paragraph — the same job TestAHoldingChainSaysNothingAboutWhoIssuedTheOffer
+// does for provenance, and for the same reason: the reading it forbids is the
+// tempting one.
+//
+// Under Human Present every link is recomputable from the five artefacts and
+// the keys. Under Human Not Present the first link is not, because what it
+// additionally establishes is judged against a description no artefact
+// carries. Both halves below are worth having: one shows what does catch a
+// false description, and the other shows how far that reaches.
+func TestTheSubjectAnArbiterBringsDecidesTheConstraintVerdict(t *testing.T) {
+	t.Parallel()
+
+	// A purchase the live merchant would have refused: 210.00 USD against a
+	// mandate capped at 200.00. The arbiter describes it as a cheaper one.
+	fx := newDisputeChainFixture(t, 21000)
+	understated := fx.options()
+	understated.Subject = purchaseAt(18900)
+
+	rep := fx.arbiter().VerifyChain(fx.bundle(t), fx.at, understated)
+
+	assert.Contains(t, rep.Held, evidence.StepCheckoutAuthorised,
+		"link 1 held over a purchase outside the user's own cap, because the only account of what that purchase cost came from the arbiter")
+
+	// And what stops it there, which is not link 1 doing its job. The payment
+	// side takes no description at all: AuthorisePaymentChain derives one from
+	// the closed Payment Mandate, which carries the amount — so the same
+	// understatement is refused by a subject nobody was able to supply.
+	require.False(t, rep.Holds())
+	assert.Equal(t, evidence.StepPaymentAuthorised, rep.Broke,
+		"a lie about a fact the Payment Mandate also carries is caught, and it is caught one link later than it was told")
+	assert.Equal(t, generated.ErrorCodeConstraintViolated, rep.Code)
+
+	// The half nothing catches. No artefact in the bundle records what was
+	// bought — the Checkout JWT is opaque bytes and the closed mandate carries
+	// only a digest of it — so two arbiters describing two different purchases
+	// both get a chain that holds over one and the same five artefacts.
+	honest := newDisputeChainFixture(t, 18900)
+	b := honest.bundle(t)
+
+	invented := honest.options()
+	elsewhere := purchaseAt(9900)
+	elsewhere.Quantity = 4
+	elsewhere.Item.ID = "iata:JU999"
+	invented.Subject = elsewhere
+
+	require.True(t, honest.arbiter().VerifyChain(b, honest.at, honest.options()).Holds(),
+		"the faithful description has to hold, or the comparison below is between two refusals")
+	assert.True(t, honest.arbiter().VerifyChain(b, honest.at, invented).Holds(),
+		"four seats on another flight at another price, over the same four artefacts, and nothing in the chain can tell")
+}
+
 // chainTamperCase is one broken Human Not Present bundle and the link that
 // has to name it, tamperCase's counterpart over chains — see that type's own
 // comment for the shape.
 type chainTamperCase struct {
 	name   string
 	vector string
-	tamper func(t *testing.T, fx *disputeChainFx, b *evidence.Bundle)
-	broke  evidence.Step
-	is     error
-	code   generated.ErrorCode
+	// counterpart is the vector name of the tamperCases row this one is the
+	// chain-shaped version of. It is a field rather than a sentence in a
+	// comment because "the same tamper breaks at the same link with the same
+	// code" is the issue's second done-when box, and two tables that happen to
+	// agree do not establish it —
+	// TestAChainBreaksWhereItsPresentedCounterpartDoes reads this and compares
+	// them, so a change to either side's expectation fails rather than
+	// silently making the two modes disagree.
+	counterpart string
+	tamper      func(t *testing.T, fx *disputeChainFx, b *evidence.Bundle)
+	broke       evidence.Step
+	is          error
+	code        generated.ErrorCode
 }
 
 // chainTamperCases is the matrix, shared by the behaviour test and the
@@ -310,8 +415,9 @@ func chainTamperCases() []chainTamperCase {
 			// chain: fx.arbiter's resolver ignores cnf and always answers
 			// fx.agentVerifier, so a delegating hop actually signed by a
 			// different key fails the signature check it is compared against.
-			name:   "the Checkout Mandate chain was delegated by an unendorsed key",
-			vector: "checkout_chain_delegated_by_an_unendorsed_key",
+			name:        "the Checkout Mandate chain was delegated by an unendorsed key",
+			vector:      "checkout_chain_delegated_by_an_unendorsed_key",
+			counterpart: "checkout_mandate_signed_by_an_impostor",
 			tamper: func(t *testing.T, fx *disputeChainFx, b *evidence.Bundle) {
 				impostorSigner, _ := agentKeys(t, fx.user.clock)
 				impostor := fx.delegateCheckout(t, fx.checkout, disputeCheckoutNonce, impostorSigner)
@@ -326,8 +432,9 @@ func chainTamperCases() []chainTamperCase {
 			// tamperCases's "the bundle carries a different genuine offer"
 			// row: the checkout chain is bound to merchantCheckout, and the
 			// bundle is made to carry a different, equally genuine, document.
-			name:   "the bundle carries a different genuine offer",
-			vector: "chain_bundle_carries_another_genuine_offer",
+			name:        "the bundle carries a different genuine offer",
+			vector:      "chain_bundle_carries_another_genuine_offer",
+			counterpart: "another_genuine_offer_in_the_bundle",
 			tamper: func(_ *testing.T, _ *disputeChainFx, b *evidence.Bundle) {
 				b.Checkout = otherCheckout
 			},
@@ -338,8 +445,9 @@ func chainTamperCases() []chainTamperCase {
 		{
 			// tamperCases's "signed by another party" row for the Checkout
 			// Receipt: genuine, correctly signed, by the wrong key.
-			name:   "the Checkout Receipt was not signed by the merchant",
-			vector: "chain_checkout_receipt_signed_by_another_party",
+			name:        "the Checkout Receipt was not signed by the merchant",
+			vector:      "chain_checkout_receipt_signed_by_another_party",
+			counterpart: "checkout_receipt_signed_by_another_party",
 			tamper: func(t *testing.T, fx *disputeChainFx, b *evidence.Bundle) {
 				b.CheckoutReceipt = receiptOver(t, fx.processor, merchantID, fx.checkoutChain, checkoutKind, nil)
 			},
@@ -355,8 +463,9 @@ func chainTamperCases() []chainTamperCase {
 			// checkValidity(delegated, opts.Clock.Now()) in chain.go — so
 			// this is caught at the same low level a presentation's expiry
 			// is, not by anything this package adds.
-			name:   "the Payment Mandate chain had already expired when it was presented",
-			vector: "chain_payment_mandate_expired_before_presentation",
+			name:        "the Payment Mandate chain had already expired when it was presented",
+			vector:      "chain_payment_mandate_expired_before_presentation",
+			counterpart: "payment_mandate_expired_before_presentation",
 			tamper: func(t *testing.T, fx *disputeChainFx, b *evidence.Bundle) {
 				signed := fx.at.Add(-2 * time.Hour)
 				lapsed := fx.at.Add(-time.Hour)
@@ -383,8 +492,9 @@ func chainTamperCases() []chainTamperCase {
 			// tamperCases's "pays for a different purchase" row: a genuine
 			// Payment Mandate chain, bound to a checkout other than the one
 			// in the bundle.
-			name:   "the Payment Mandate chain pays for a different purchase",
-			vector: "chain_payment_mandate_bound_elsewhere",
+			name:        "the Payment Mandate chain pays for a different purchase",
+			vector:      "chain_payment_mandate_bound_elsewhere",
+			counterpart: "payment_mandate_bound_elsewhere",
 			tamper: func(t *testing.T, fx *disputeChainFx, b *evidence.Bundle) {
 				elsewhere := fx.delegatePayment(t, 18900, otherCheckout, disputePaymentNonce, fx.agentSigner)
 				b.PaymentMandate = elsewhere.String()
@@ -397,8 +507,9 @@ func chainTamperCases() []chainTamperCase {
 		{
 			// tamperCases's mirror row for the Payment Receipt: signed by the
 			// merchant, who has no standing to answer for the payment.
-			name:   "the Payment Receipt was signed by the merchant",
-			vector: "chain_payment_receipt_signed_by_the_merchant",
+			name:        "the Payment Receipt was signed by the merchant",
+			vector:      "chain_payment_receipt_signed_by_the_merchant",
+			counterpart: "payment_receipt_signed_by_the_merchant",
 			tamper: func(t *testing.T, fx *disputeChainFx, b *evidence.Bundle) {
 				b.PaymentReceipt = receiptOver(t, fx.merchant, processorID, fx.paymentChain, paymentKind, nil)
 			},
@@ -446,6 +557,41 @@ func TestChainTamperingIsCaughtAtTheSameLinkAPresentationWould(t *testing.T) {
 	}
 }
 
+// TestAChainBreaksWhereItsPresentedCounterpartDoes is issue #110's second
+// done-when box asked as a comparison rather than left to two tables that
+// happen to agree.
+//
+// TestChainTamperingIsCaughtAtTheSameLinkAPresentationWould holds each chain
+// row to the link and code it declares, and TestTamperingAtAnyLinkIsCaughtAtThatLink
+// does the same for the presented rows. Neither says the two declarations are
+// the same declaration — so without this, tightening one mode's expectation
+// would leave the other passing, and the same tamper would name two different
+// links depending on whether the user was there.
+func TestAChainBreaksWhereItsPresentedCounterpartDoes(t *testing.T) {
+	t.Parallel()
+
+	presented := make(map[string]tamperCase)
+	for _, tc := range tamperCases() {
+		presented[tc.vector] = tc
+	}
+
+	for _, tc := range chainTamperCases() {
+		t.Run(tc.vector, func(t *testing.T) {
+			t.Parallel()
+
+			want, ok := presented[tc.counterpart]
+			require.True(t, ok,
+				"every chain row names the presented row it is the counterpart of, and %q is not one of them", tc.counterpart)
+			assert.Equal(t, want.broke, tc.broke,
+				"the same tamper has to break at the same link in both modes, or one dispute has two answers")
+			assert.Equal(t, want.code, tc.code,
+				"and carry the same code, which is the vocabulary the counterparty reads")
+			assert.Equal(t, want.is, tc.is,
+				"and the same sentinel, which is what this package's own callers branch on")
+		})
+	}
+}
+
 // TestAnArbiterWithoutChainRulesRefusesWithoutJudging is
 // TestAnArbiterWithoutItsKeysRefusesWithoutJudging's counterpart for the
 // chain-shaped fields.
@@ -456,22 +602,34 @@ func TestAnArbiterWithoutChainRulesRefusesWithoutJudging(t *testing.T) {
 	b := fx.bundle(t)
 
 	for _, tc := range []struct {
-		name  string
-		strip func(*ap2.Dispute)
+		name string
+		// strip takes the options as well as the arbiter, because two of the
+		// things a Human Not Present arbiter has to bring live there rather
+		// than on the Dispute — see ChainDisputeOptions.
+		strip func(*ap2.Dispute, *ap2.ChainDisputeOptions)
 		says  string
 	}{
-		{"no rules for the Checkout Mandate chain", func(d *ap2.Dispute) { d.CheckoutChains = nil }, "rules for the Checkout Mandate chain"},
-		{"no rules for the Payment Mandate chain", func(d *ap2.Dispute) { d.PaymentChains = nil }, "rules for the Payment Mandate chain"},
-		{"no merchant key", func(d *ap2.Dispute) { d.CheckoutReceipts = nil }, "the merchant's key"},
-		{"no key for the payment answer", func(d *ap2.Dispute) { d.PaymentReceipts = nil }, "answered the Payment Mandate"},
+		{"no rules for the Checkout Mandate chain", func(d *ap2.Dispute, _ *ap2.ChainDisputeOptions) { d.CheckoutChains = nil }, "rules for the Checkout Mandate chain"},
+		{"no rules for the Payment Mandate chain", func(d *ap2.Dispute, _ *ap2.ChainDisputeOptions) { d.PaymentChains = nil }, "rules for the Payment Mandate chain"},
+		{"no merchant key", func(d *ap2.Dispute, _ *ap2.ChainDisputeOptions) { d.CheckoutReceipts = nil }, "the merchant's key"},
+		{"no key for the payment answer", func(d *ap2.Dispute, _ *ap2.ChainDisputeOptions) { d.PaymentReceipts = nil }, "answered the Payment Mandate"},
+		// The two rows the Human Present arbiter has no equivalent of. Both
+		// rule sets refuse an empty nonce on their own, so without chainUsable
+		// these would be answered *from inside a link* — checkout_authorised
+		// and payment_authorised — and a report naming a broken link names the
+		// counterparty who presented that mandate. Nobody presented anything
+		// wrong here.
+		{"no remembered nonce for the checkout", func(_ *ap2.Dispute, o *ap2.ChainDisputeOptions) { o.CheckoutNonce = "" }, "the merchant's remembered nonce"},
+		{"no remembered nonce for the payment", func(_ *ap2.Dispute, o *ap2.ChainDisputeOptions) { o.PaymentNonce = "" }, "the remembered nonce of whoever answered"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			d := fx.arbiter()
-			tc.strip(&d)
+			opts := fx.options()
+			tc.strip(&d, &opts)
 
-			rep := d.VerifyChain(b, fx.at, fx.options())
+			rep := d.VerifyChain(b, fx.at, opts)
 			require.False(t, rep.Holds())
 			assert.Equal(t, evidence.StepNone, rep.Broke,
 				"a verifier that could not reach a conclusion has not found against anybody")
