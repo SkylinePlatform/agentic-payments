@@ -4,7 +4,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { cn } from "../../lib/utils";
 
 /**
- * The shadcn/ui dialog over Radix, re-skinned onto the six tokens.
+ * The shadcn/ui dialog over Radix, re-skinned onto the seven tokens.
  *
  * What is being adopted is dismissal and focus management — Escape, the focus
  * trap, returning focus to the trigger, `aria-modal` and the labelling — none

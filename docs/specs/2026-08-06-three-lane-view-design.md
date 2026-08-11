@@ -149,10 +149,17 @@ So the token comes with the discipline that makes the claim above true:
 **`signal` marks a value where that value is the subject, not every time one
 appears.** The digest on the spine is the subject and takes it. The same digest
 repeated down a log of steps is a column of identifiers the mono face and the
-alignment already distinguish, and it does not. That is a `className` decision
-and belongs to the type half of #159; it is written here because the guard
-cannot see it — `palette.test.ts` checks that `signal` on `paper` and on `wash`
-are legible, and legibility is not the question a colour used too often fails.
+alignment already distinguish, and it does not. That was a `className` decision
+and it landed with the type half of #159: `SpineHead` in
+`frontend/src/lanes/Lanes.tsx` is the one element that wears `signal`, and the
+step cards, the event log and the Inspector keep `graphite`. It is written here
+because the guard cannot see it — `palette.test.ts` checks that `signal` on
+`paper` and on `wash` are legible, and legibility is not the question a colour
+used too often fails. What *is* now checked is the opposite failure, the one
+this token actually hit: `declares no token that nothing wears`, in
+`frontend/src/architecture.test.ts`, fails when the stylesheet declares a colour
+no className names — which `signal` was for the two pull requests between its
+approval here and its arrival on the spine.
 **Checked against the guards `palette.test.ts` enforces, not merely asserted:**
 every pair the design uses clears the 4.5:1 text floor in both themes — the
 worst is `broken` on `wash` at 4.56:1 in light and `graphite` on `wash` at
@@ -180,10 +187,14 @@ deliberately rather than quietly: monospace as the protagonist made every
 number on the page read as a field dump, including the ones that are money.
 The sans is support again, mono is a utility voice again, and Space Grotesk
 takes the display role that was already built for it. Which `className` a
-component reaches for to realise this is the second half of #159 and lands on
-its own branch, separately from this document; what is fixed here is which
-content each face is *for*, so that work has a spec to build against rather
-than a colour sense to guess at.
+component reaches for to realise this was the second half of #159, and it
+landed separately from this document; what is fixed here is which content each
+face is *for*, so that work had a spec to build against rather than a colour
+sense to guess at. `frontend/src/architecture.test.ts` is where three of these
+sentences became mechanical — a heading, an element rendering an amount, and
+the sentence a person signs may none of them carry `font-mono` — and the rest
+is a judgement recorded beside each call site, `src/lanes/EventLog.tsx`'s row
+being the worked example of one that keeps mono deliberately.
 
 **Layout.** Three columns, fixed order — the user on the left, the merchant on
 the right, the agent between them because that is where it sits in the protocol

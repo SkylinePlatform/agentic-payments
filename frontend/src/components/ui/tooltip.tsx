@@ -4,7 +4,7 @@ import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { cn } from "../../lib/utils";
 
 /**
- * The shadcn/ui tooltip over Radix, re-skinned onto the six tokens.
+ * The shadcn/ui tooltip over Radix, re-skinned onto the seven tokens.
  *
  * **Radix's `Tooltip.Root` requires a `Tooltip.Provider` above it**, and that is
  * the trap this component exists to close. In this version forgetting one

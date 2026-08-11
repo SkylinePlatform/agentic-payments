@@ -83,7 +83,7 @@ function AttemptRow({ attempt }: { readonly attempt: Attempt }) {
   return (
     <li className="flex flex-col gap-1 border-t border-graphite/40 py-2 first:border-t-0">
       <div className="flex flex-wrap items-baseline gap-3">
-        <span className="font-mono text-sm text-ink">attempt {attempt.n}</span>
+        <span className="font-sans text-sm text-ink">attempt {attempt.n}</span>
         <span className="font-sans text-sm text-graphite">{formatAmount(attempt.price)}</span>
         {attempt.settled && (
           <span className="font-sans text-sm text-seal">settled</span>

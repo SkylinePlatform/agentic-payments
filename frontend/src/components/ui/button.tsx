@@ -5,7 +5,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "../../lib/utils";
 
 /**
- * The shadcn/ui button, re-skinned onto the six tokens.
+ * The shadcn/ui button, re-skinned onto the seven tokens.
  *
  * Admitted as behaviour rather than appearance: what is worth taking from
  * shadcn here is `asChild`, the disabled semantics and a focus ring that
