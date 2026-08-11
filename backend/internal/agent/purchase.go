@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/evidence"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
@@ -206,8 +207,16 @@ func (c *Client) Fund(ctx context.Context, p *Purchase) error {
 	// indistinguishable; where they differ is a hop that never lands, and a log
 	// showing a presentation with no verdict under it is the true shape of that
 	// failure. Emitting afterwards would show nothing at all.
-	c.Events.Emit(ctx, obs.KindMandatePresented,
-		"Payment Mandate presented to the Credential Provider")
+	//
+	// p.PaymentMandate is a bare closed SD-JWT, not a chain — the Trusted
+	// Surface signed it for the user under Human Present, rather than the agent
+	// delegating it under Human Not Present — so the digest comes off it via
+	// PaymentDigestOfMandate rather than internal/agent/chain.go's
+	// PaymentDigestOf. See PaymentDigestOfMandate's doc comment for why reading
+	// it unverified is still sound: nothing here trusts the value for anything
+	// but this event.
+	c.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.PaymentDigestOfMandate(p.PaymentMandate))),
+		obs.KindMandatePresented, "Payment Mandate presented to the Credential Provider")
 
 	body := map[string]any{"mandate": p.PaymentMandate}
 	err := c.call(ctx, http.MethodPost,
@@ -253,7 +262,12 @@ func (c *Client) Settle(ctx context.Context, p *Purchase) error {
 	// every verdict in this flow is emitted by whoever reached it. The merchant
 	// emits its own presentation again when it passes the mandate to the
 	// processor, which is the hop the agent has no part in.
-	c.Events.Emit(ctx, obs.KindMandatePresented, "Checkout Mandate presented to the merchant")
+	//
+	// CheckoutDigestOfMandate, not chain.go's CheckoutDigestOf, for the reason
+	// Fund's own comment gives: p.CheckoutMandate is a bare mandate the surface
+	// signed, not a chain the agent signed.
+	c.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.CheckoutDigestOfMandate(p.CheckoutMandate))),
+		obs.KindMandatePresented, "Checkout Mandate presented to the merchant")
 
 	body := map[string]any{
 		"mandate":    p.CheckoutMandate,
