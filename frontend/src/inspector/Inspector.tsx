@@ -26,10 +26,24 @@
  * Each table can be narrowed to what one named verifier was withheld, or to what
  * it could read — #21's own "difference between what the merchant sees and what
  * the CP sees is visible", turned from a careful read into a glance. The control
- * is deliberately **verifier-scoped and nothing else**: "withheld" only appears
- * once a reader has picked which reader it means, because withheld-from-nobody-
- * in-particular is not a state this axis has, and offering it would flatten the
- * per-verifier distinction {@link differs} exists to keep.
+ * is deliberately **verifier-scoped**: a reception is a fact about one reader, so
+ * "withheld" is not offered until a reader is named, and clearing the reader
+ * clears it again.
+ *
+ * **"Withheld from everybody" is a real state**, and the reason it is not a pill
+ * is narrower than "the axis does not have one". Unqualified, the word would have
+ * to mean one of two things. *Withheld from at least one reader* is what the
+ * unfiltered table already shows — the cells sit side by side and a row that
+ * differs is legible without anything being hidden. *Withheld from every reader*
+ * is the more interesting one, and this screen answers it twice already, as a
+ * fact rather than as a view: within one mandate a claim no presentation
+ * disclosed is exactly a row with no sentence, because the sentence comes from
+ * whichever presentation disclosed it — {@link Inspected.unnamed} counts them and
+ * the paragraph under the table says what they are — and across the two mandates
+ * it is {@link withheldFromEveryPayment}, the sharpest sentence on the page. A
+ * third answer to a question two better answers already have, wearing a word with
+ * no reader attached to it, is the per-verifier distinction {@link differs} exists
+ * to keep, flattened.
  *
  * **There is no sort control, and that is a finding rather than an omission.**
  * `model.ts`'s `rows.sort` already orders named rows alphabetically ahead of the
@@ -43,18 +57,28 @@
  * preserves each audience's own array position, not a position shared across
  * audiences whose presentations disclosed different subsets — picking any one
  * audience's order to drive the whole table would silently prefer that reader's
- * view of the claim order over every other reader's. The raw view below each
+ * view of the claim order over every other reader's.
+ *
+ * **Narrowing to a single reader first does not rescue it**, which is the obvious
+ * next move and therefore the one worth writing down. Once the table is scoped to
+ * one verifier there is a single disclosure order — and it exists for only half
+ * the rows. RFC 9901 §7.1 step 3.d *removes* an undisclosed array element rather
+ * than leaving a hole, so a withheld claim has no position in the processed
+ * payload at all: `resolve.ts`'s `Withheld` carries the container path and
+ * deliberately no position, and says why. A sort by disclosure order would order
+ * the disclosed rows and pile the withheld ones at whichever end it chose, on the
+ * screen whose entire subject is the withheld ones. The raw view below each
  * table — `inspected.claims`, one presentation's processed payload — is where
  * the true wire-level order already lives for a reader checking against a golden
  * vector, unfiltered and unsorted by this screen.
  */
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 import { shortDigest } from "../digest";
 
 import { differs, withheldFromEveryPayment } from "./model";
-import type { Inspected, Inspection, Reception } from "./model";
+import type { ClaimRow, Inspected, Inspection, Reception } from "./model";
 
 /** How a verifier is written on screen. The audiences are the agent's own names. */
 const VERIFIER_TITLES: Readonly<Record<string, string>> = {
@@ -153,26 +177,59 @@ function pill(active: boolean): string {
   );
 }
 
+/** How one reader received the rows of one mandate. */
+interface Tally {
+  readonly withheld: number;
+  readonly disclosed: number;
+  /** Rows this reader's presentation did not carry at all — the em dash. */
+  readonly absent: number;
+}
+
+function tallyFor(rows: readonly ClaimRow[], scope: string): Tally {
+  const withheld = rows.filter((row) => row.reception[scope] === "withheld").length;
+  const disclosed = rows.filter((row) => row.reception[scope] === "disclosed").length;
+  return { withheld, disclosed, absent: rows.length - withheld - disclosed };
+}
+
 /**
  * States what a filter is hiding, not only what it kept.
  *
  * Both counts, every time: a reader who sees only "3 of 8" learns that
- * something was removed and not what. Naming the reader and the state on both
- * halves is also what keeps this per-verifier — there is no wording here for
- * "withheld", unqualified, because that is not a state this axis has.
+ * something was removed and not what. Naming the reader on both halves is also
+ * what keeps this per-verifier — there is no wording here for "withheld",
+ * unqualified, because no pill offers it.
+ *
+ * **Every number is counted and none is a subtraction**, which is not
+ * fastidiousness. `total - shown` is the rows the filter removed, and the
+ * sentence names them as the ones this reader can read — two different things
+ * the moment a row is neither: a claim its presentation never carried is
+ * absent rather than withheld, which is the em dash, and which the design spec
+ * is explicit that this screen may not flatten into the other two. Today no
+ * mandate here nests a disclosure inside a disclosure, so the subtraction is
+ * right by luck; the day one does, the caption would state a count the table
+ * beside it contradicts, and nothing would fail.
  */
-function filterSummary(scope: string, reception: ReceptionFilter, shown: number, total: number): string {
+function filterSummary(
+  scope: string,
+  reception: ReceptionFilter,
+  rows: readonly ClaimRow[],
+): string {
   const who = verifierTitle(scope);
-  const hidden = total - shown;
+  const counts = tallyFor(rows, scope);
+  const uncarried =
+    counts.absent === 0
+      ? ""
+      : `, and the ${String(counts.absent)} ${who}'s presentation did not carry`;
+
   if (reception === "withheld") {
     return (
-      `${String(shown)} of ${String(total)} withheld from ${who}. The filter hides the ` +
-      `${String(hidden)} ${who} can read.`
+      `${String(counts.withheld)} of ${String(rows.length)} withheld from ${who}. ` +
+      `The filter hides the ${String(counts.disclosed)} ${who} can read${uncarried}.`
     );
   }
   return (
-    `${String(shown)} of ${String(total)} that ${who} can read. The filter hides the ` +
-    `${String(hidden)} withheld from ${who}.`
+    `${String(counts.disclosed)} of ${String(rows.length)} that ${who} can read. ` +
+    `The filter hides the ${String(counts.withheld)} withheld from ${who}${uncarried}.`
   );
 }
 
@@ -203,6 +260,15 @@ function Filters({
   readonly onReception: (reception: ReceptionFilter) => void;
 }) {
   const multipleReaders = inspected.audiences.length > 1;
+
+  // The disclosure group's accessible name has to carry the reader's name.
+  // "Withheld", announced on its own, does not say withheld from whom, and on
+  // this screen that is the whole fact — a listener who cannot see which reader
+  // pill is pressed would be told a claim was withheld, full stop, which is the
+  // flattening the pills exist to avoid. The name is taken from the sentence
+  // already on screen rather than repeated into an `aria-label`, because a
+  // second copy of it is a second thing to drift.
+  const disclosureLabel = useId();
 
   return (
     <div className="flex flex-col gap-2">
@@ -236,9 +302,23 @@ function Filters({
       )}
 
       {scope !== null && (
-        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Disclosure">
-          <span className="font-sans text-xs uppercase tracking-widest text-graphite">
-            Show only what {verifierTitle(scope)}
+        <div
+          className="flex flex-wrap items-center gap-2"
+          role="group"
+          aria-labelledby={disclosureLabel}
+        >
+          {/*
+            "Disclosure to X" rather than "Show only what X", which composed
+            into "…what Credential Provider withheld" and put the withholding
+            the wrong way round: the agent withheld the claim *from* that
+            reader, and a screen about who was shown what cannot afford to
+            reverse who did it.
+          */}
+          <span
+            id={disclosureLabel}
+            className="font-sans text-xs uppercase tracking-widest text-graphite"
+          >
+            Disclosure to {verifierTitle(scope)}
           </span>
           {RECEPTION_OPTIONS.map((option) => (
             <button
@@ -304,11 +384,25 @@ function MandateTable({ inspected }: { readonly inspected: Inspected }) {
         onReception={setReception}
       />
 
-      {reception !== "all" && scope !== null && (
-        <p className="font-sans text-xs text-graphite">
-          {filterSummary(scope, reception, rows.length, inspected.rows.length)}
-        </p>
-      )}
+      {/*
+        Always mounted, empty until a filter is on. A live region announces a
+        change to its own contents, and one inserted at the moment it has
+        something to say is not reliably announced at all — so a reader using a
+        screen reader would be left with a table that had silently lost rows.
+        This sentence is what makes the filter honest, which makes it exactly
+        the thing that has to be spoken.
+
+        `empty:hidden` rather than a conditional render, and the difference is
+        the whole point: the element stays in the DOM and stays a live region
+        either way, and only its box goes, so the unfiltered table keeps the
+        spacing it had. Turning this back into `{cond && <p>…}` would look
+        identical on screen and stop announcing.
+      */}
+      <p role="status" className="font-sans text-xs text-graphite empty:hidden">
+        {reception === "all" || scope === null
+          ? ""
+          : filterSummary(scope, reception, inspected.rows)}
+      </p>
 
       <div className="overflow-x-auto">
         <table className="w-full min-w-2xl border-collapse">

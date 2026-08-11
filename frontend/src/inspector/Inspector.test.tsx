@@ -215,6 +215,35 @@ const MIXED: Inspection = {
   ],
 };
 
+const WHEN = "the time of purchase falls within 1 June 2026 and 31 August 2026";
+
+/**
+ * The third state, which is neither of the two the pills name.
+ *
+ * A claim one reader's presentation did not carry at all is drawn as an em dash
+ * and is *not* withheld from that reader — the design spec says in as many words
+ * that #186 must not flatten those three into two. It cannot arise from
+ * `Minimise` today, because no mandate here nests a disclosure inside a
+ * disclosure; it is a shape `Cell` draws, `Reception | undefined` permits and the
+ * spec enumerates, and the caption's arithmetic is what has to survive it.
+ */
+const ABSENT: Inspection = {
+  mandates: [
+    mandate("checkout", ["air-serbia"], [{ label: AMOUNT, got: { "air-serbia": "disclosed" } }]),
+    mandate("payment", ["mock-credential-provider", "mock-payment-processor"], [
+      {
+        label: AMOUNT,
+        got: { "mock-credential-provider": "disclosed", "mock-payment-processor": "withheld" },
+      },
+      {
+        label: ITEM,
+        got: { "mock-credential-provider": "withheld", "mock-payment-processor": "disclosed" },
+      },
+      { label: WHEN, got: { "mock-payment-processor": "withheld" } },
+    ]),
+  ],
+};
+
 describe("filtering by reader and by what that reader was shown", () => {
   it("narrows to what a named verifier was withheld, and leaves the other reader's own column visible on the row that stayed", () => {
     render(<Inspector inspection={MIXED} />);
@@ -233,6 +262,31 @@ describe("filtering by reader and by what that reader was shown", () => {
       within(row as HTMLElement).getByText("read"),
       "the point of the feature: the Payment Processor's own column, on the same " +
         "row, still says it could read this — the set difference a reader compares by eye",
+    ).not.toBeNull();
+  });
+
+  it("narrows to the reader that was picked, and not to the first one in the row", () => {
+    // The mirror of the test above, and it is not symmetry for its own sake.
+    // Every other assertion in this block picks the Credential Provider, which
+    // is `audiences[0]`, so a filter that read `row.reception[audiences[0]]`
+    // and ignored the picked reader entirely passes all of them — the same
+    // shape of gap as the one MIXED exists to close, one argument along.
+    render(<Inspector inspection={MIXED} />);
+    const payment = screen.getByRole("region", { name: "Payment Mandate" });
+
+    fireEvent.click(within(payment).getByRole("button", { name: "Payment Processor" }));
+    fireEvent.click(within(payment).getByRole("button", { name: "Withheld" }));
+
+    expect(
+      within(payment).queryByText(AMOUNT),
+      "the row withheld from the Payment Processor is the one the Credential " +
+        "Provider could read, so a filter still scoped to the Credential " +
+        "Provider would drop it",
+    ).not.toBeNull();
+    expect(within(payment).queryByText(ITEM), "the Payment Processor could read this one").toBeNull();
+    expect(
+      within(payment).queryByText(/withheld from Payment Processor/),
+      "and the caption follows the reader rather than naming whoever came first",
     ).not.toBeNull();
   });
 
@@ -263,6 +317,68 @@ describe("filtering by reader and by what that reader was shown", () => {
     ).not.toBeNull();
   });
 
+  it("counts what it hides rather than subtracting, so a row nobody carried is not called readable", () => {
+    render(<Inspector inspection={ABSENT} />);
+    const payment = screen.getByRole("region", { name: "Payment Mandate" });
+    fireEvent.click(within(payment).getByRole("button", { name: "Credential Provider" }));
+    fireEvent.click(within(payment).getByRole("button", { name: "Withheld" }));
+
+    expect(
+      within(payment).queryByText(/hides the 1 Credential Provider can read/),
+      "the Credential Provider can read one of these three; the third is not in " +
+        "its presentation at all, which is a different fact and the em dash is " +
+        "there to keep it one",
+    ).not.toBeNull();
+    expect(
+      within(payment).queryByText(/hides the 2 Credential Provider can read/),
+      "total minus shown is the rows the filter removed, which is not the same " +
+        "set as the rows this reader can read — a caption that subtracted would " +
+        "say the screen's own third state out of existence",
+    ).toBeNull();
+    expect(
+      within(payment).queryByText(/presentation did not carry/),
+      "and the row it did not carry is accounted for rather than dropped from " +
+        "the sentence, or the two halves stop adding up to the whole",
+    ).not.toBeNull();
+  });
+
+  it("says the readers were shown different things when they were", () => {
+    // The other half of `subtitleOf`, which BUILT cannot reach: its three
+    // audiences agree about every row, so only the "each shown the same"
+    // branch was ever drawn by a test of this component.
+    render(<Inspector inspection={MIXED} />);
+    expect(
+      within(screen.getByRole("region", { name: "Payment Mandate" })).queryByText(
+        /2 readers, shown different things/,
+      ),
+      "a mandate whose readers received different subsets is the case the whole " +
+        "screen is for, and the heading has to say so before a filter is touched",
+    ).not.toBeNull();
+  });
+
+  it("announces what it is hiding, and names the reader in the control itself", () => {
+    render(<Inspector inspection={MIXED} />);
+    const payment = screen.getByRole("region", { name: "Payment Mandate" });
+    fireEvent.click(within(payment).getByRole("button", { name: "Credential Provider" }));
+
+    expect(
+      within(payment).queryByRole("group", { name: /Credential Provider/ }),
+      "'Withheld', announced on its own, does not say withheld from whom — and " +
+        "a listener cannot see which reader pill is pressed. The group has to " +
+        "carry the reader's name or the pills flatten exactly what they exist " +
+        "to keep apart",
+    ).not.toBeNull();
+
+    fireEvent.click(within(payment).getByRole("button", { name: "Withheld" }));
+    expect(
+      within(payment).getByRole("status").textContent,
+      "rows vanish silently for a reader who cannot see them go; this sentence " +
+        "is the only account of what was hidden, so it lives in a live region " +
+        "that was already mounted rather than one inserted at the moment it " +
+        "has something to say",
+    ).toMatch(/withheld from Credential Provider/);
+  });
+
   it("clears the reception filter when the reader is set back to every reader", () => {
     render(<Inspector inspection={MIXED} />);
     const payment = screen.getByRole("region", { name: "Payment Mandate" });
@@ -274,14 +390,16 @@ describe("filtering by reader and by what that reader was shown", () => {
 
     expect(
       within(payment).queryByText(AMOUNT),
-      "withheld from nobody in particular is not a state this axis has — clearing " +
-        "the reader has to clear the reception filter with it, or the distinction " +
-        "would quietly become absolute instead of staying per-verifier",
+      "clearing the reader has to clear the reception filter with it, or the " +
+        "table stays narrowed to a verifier no longer named anywhere on screen " +
+        "and the distinction quietly becomes absolute instead of per-verifier",
     ).not.toBeNull();
     expect(
       within(payment).queryByRole("button", { name: "Withheld" }),
-      "with no reader chosen there is no verifier for 'withheld' to be withheld " +
-        "from, so the control is not offered rather than offered and ignored",
+      "unqualified, 'withheld' would have to mean from-at-least-one — which is " +
+        "what the unfiltered table already shows — or from-everybody, which is " +
+        "the sentence under the table and the block above it. The pill is not " +
+        "offered rather than offered with a third meaning nobody stated",
     ).toBeNull();
   });
 
@@ -314,7 +432,11 @@ describe("filtering by reader and by what that reader was shown", () => {
 describe("reading is not verifying, on the cells the filters do not change (#191)", () => {
   it("does not colour the read cell as a verdict", () => {
     render(<Inspector inspection={BUILT} />);
-    const cell = screen.getAllByText("read")[0];
+    // Scoped to the table it is about. An unscoped query is how an assertion
+    // survives its subject moving out of the box it was meant to be in, and
+    // "read" is a word this page could plausibly print somewhere else.
+    const payment = screen.getByRole("region", { name: "Payment Mandate" });
+    const cell = within(payment).getAllByText("read")[0];
     expect(
       cell.className,
       "text-seal claims a verifier accepted; this screen never checks a " +
