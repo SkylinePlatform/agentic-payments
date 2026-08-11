@@ -142,6 +142,41 @@ export function mandateLabel(mandate: MandateRef): string {
 }
 
 /**
+ * A price, in the register a constraint's own sentence uses — `"210.00 USD"`,
+ * not `formatAmount`'s `"$210.00"`.
+ *
+ * **Not `formatAmount`, and the reason is the same one {@link timeOf} in
+ * `EventLog.tsx` gives about `Date`.** That function goes through
+ * `Intl.NumberFormat` with the reader's own locale, so two people watching one
+ * demonstration would read different strings against the same event — grouping
+ * separators, symbol position, and in some locales a different decimal mark. On
+ * a price tag that is correct behaviour; in a column somebody is comparing
+ * against a limit a mandate carries it is a second spelling of one number.
+ *
+ * The register matters as much: this screen sits a figure next to a
+ * constraint's own limit — `240.00 USD today` beside `at most 200.00 USD` — and
+ * the two only read as the same kind of number when neither borrows a currency
+ * symbol the other lacks.
+ *
+ * No sign handling: `contracts/instrument/amount.json` requires `amount >= 0`,
+ * and `optionalAmount` in `sse/events.ts` refuses a negative one off the wire,
+ * so there is nothing here to be wrong about.
+ *
+ * **`Lanes.tsx` holds an identical private copy**, which is where this
+ * algorithm came from. #184 could not touch that file, so lifting it here — the
+ * module in this directory that holds what the screen knows with no React in
+ * it — is what let a second component use it without a third copy. Deleting the
+ * private one is an import line in whichever branch next opens `Lanes.tsx`.
+ */
+export function renderPrice(amount: Amount): string {
+  const MINOR_DIGITS = 2;
+  const digits = String(amount.amount).padStart(MINOR_DIGITS + 1, "0");
+  const whole = digits.slice(0, digits.length - MINOR_DIGITS);
+  const fraction = digits.slice(digits.length - MINOR_DIGITS);
+  return `${whole}.${fraction} ${amount.currency}`;
+}
+
+/**
  * The step axis: what happened at this moment, and what the card says about it.
  *
  * **No pip anywhere in this table, and that is the axis's defining property.**
