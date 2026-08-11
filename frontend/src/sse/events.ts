@@ -14,7 +14,7 @@
  */
 
 /**
- * The five protocol-significant moments, and **the frontend's only copy of
+ * The six protocol-significant moments, and **the frontend's only copy of
  * them**.
  *
  * Every other list in this package is derived from this one — the listener
@@ -41,12 +41,13 @@ export const EVENT_KINDS = [
   "mandate_verified",
   "mandate_rejected",
   "receipt_issued",
+  "authorisation_refused",
 ] as const;
 
-/** One of the five. */
+/** One of the six. */
 export type EventKind = (typeof EVENT_KINDS)[number];
 
-/** Whether a value is one of the five kinds. */
+/** Whether a value is one of the six kinds. */
 export function isEventKind(value: unknown): value is EventKind {
   return typeof value === "string" && (EVENT_KINDS as readonly string[]).includes(value);
 }

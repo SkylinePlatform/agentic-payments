@@ -5,7 +5,7 @@
 //   - The correlation ID — minted, validated, and carried on a context. One
 //     transaction, one identifier, unchanged across every hop, which is what
 //     lets the frontend group events by transaction and filter by party.
-//   - The event vocabulary — five kinds, closed at exactly the moments ADR
+//   - The event vocabulary — six kinds, closed at exactly the moments ADR
 //     0003 Decision 2 names, and one Event type.
 //   - The Emitter — which records events and hands them to a Sink without the
 //     caller ever waiting for either.

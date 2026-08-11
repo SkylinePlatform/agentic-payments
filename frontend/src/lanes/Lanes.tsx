@@ -21,6 +21,11 @@ const KIND_WORDS: Readonly<Record<Step["kind"], string>> = {
   mandate_verified: "verified",
   mandate_rejected: "refused",
   receipt_issued: "receipt",
+  // Distinct from "refused" above on purpose: that word is a verifier's
+  // verdict on a mandate that exists. This one is a person declining to
+  // authorise anything, so no mandate was ever made — see
+  // obs.KindAuthorisationRefused.
+  authorisation_refused: "declined",
 };
 
 /**

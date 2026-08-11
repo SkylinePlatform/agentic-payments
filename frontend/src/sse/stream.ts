@@ -230,7 +230,7 @@ const browserEventSource: EventSourceFactory = (url) => new EventSource(url);
  * API, so the only way to receive anything at all is `addEventListener` per
  * kind, which is why the loop below is the shape of this whole function.
  *
- * It registers all five whether or not anybody has subscribed to them, and that
+ * It registers all six whether or not anybody has subscribed to them, and that
  * is not laziness. Sequence numbers are how a missing record is detected, and
  * they are only continuous if every frame is seen — registering on demand would
  * make an unsubscribed kind indistinguishable from a dropped one, and turn the

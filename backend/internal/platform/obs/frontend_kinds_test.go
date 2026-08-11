@@ -11,7 +11,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 )
 
-// frontendKinds is the frontend's copy of the five kinds, relative to this
+// frontendKinds is the frontend's copy of the six kinds, relative to this
 // package. Four levels up is the repository root.
 const frontendKinds = "../../../../frontend/src/sse/events.ts"
 

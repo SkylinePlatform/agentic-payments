@@ -16,7 +16,7 @@ const OPEN = 1;
 const CLOSED = 2;
 
 /**
- * The five kinds, written out.
+ * The six kinds, written out.
  *
  * `events.test.ts` explains why this is a literal rather than EVENT_KINDS: a
  * registration test derived from the same constant the registration loop reads
@@ -28,6 +28,7 @@ const KINDS = [
   "mandate_verified",
   "mandate_rejected",
   "receipt_issued",
+  "authorisation_refused",
 ];
 
 /**
@@ -140,7 +141,7 @@ describe("connect", () => {
     expect(
       only(sources).subscribedKinds,
       "the collector writes a named event line, so onmessage never fires and " +
-        "a kind with no addEventListener is invisible; and all five are " +
+        "a kind with no addEventListener is invisible; and all six are " +
         "registered even with no subscriber, because an unregistered kind " +
         "would leave a hole in the sequence that reads as a dropped record",
     ).toEqual(KINDS);
