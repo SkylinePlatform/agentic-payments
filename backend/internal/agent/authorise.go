@@ -228,6 +228,19 @@ type Authorisation struct {
 	// authz.checkPinned refuses the purchase, and the surface is the only party
 	// that can honestly say what it pinned — see the field on surface.authorised.
 	Instrument generated.PaymentInstrument `json:"payment_instrument"`
+
+	// Quantity is the basket size the interpretation proposed: how many of
+	// Item the watch is to buy. Zero means one, on Interpretation.Quantity's
+	// own convention.
+	//
+	// This is issue #133's field, and the reason it exists here rather than
+	// being read off Constraints is Interpretation's own: "how many to buy" is
+	// not a fact a verifier evaluates, so it is not a constraint, and reading
+	// a quantity bound as an instruction would be this package deciding what
+	// the user meant from a limit they set. The Trusted Surface renders it
+	// before anybody signs — see Propose and console/agent.go's Watch — so
+	// what the watch spends is the number the user actually read.
+	Quantity int `json:"quantity"`
 }
 
 // Authorise runs Propose and then collects the user's signature over the
@@ -268,7 +281,8 @@ type Offer struct {
 }
 
 // Proposal is what the agent puts in front of a person: the limits it read out
-// of their sentence, the offer it narrowed to, and the key it wants endorsed.
+// of their sentence, the offer it narrowed to, the key it wants endorsed, and
+// the basket size the sentence asked for.
 //
 // Nothing in it is signed and nothing about it is remembered. It is the input to
 // a decision, and if the decision is no there is nothing to clean up.
@@ -296,6 +310,14 @@ type Proposal struct {
 	Offers      []Offer
 	Constraints []generated.Constraint
 	AgentKey    generated.PublicKey
+
+	// Quantity is how many of Item the interpretation proposes to buy, always
+	// one or more — see Propose for where the "zero means one" normalisation
+	// happens. A consent screen renders it beside the constraints so a person
+	// approves the basket size along with the limits, on issue #133's own
+	// argument: a quantity the user did not see is a quantity they did not
+	// approve.
+	Quantity int
 }
 
 // Propose runs the discovery half: interpret, search, narrow — everything
@@ -365,26 +387,36 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 		return out, errors.New("agent: no interpreter to read the prompt with")
 	}
 
-	constraints, err := in.Interpreter.Interpret(ctx, in.Prompt)
+	interpretation, err := in.Interpreter.Interpret(ctx, in.Prompt)
 	if err != nil {
 		return out, fmt.Errorf("interpreting %q: %w", in.Prompt, err)
 	}
-	if err := interpret.Validate(constraints); err != nil {
+	if err := interpret.Validate(interpretation.Constraints); err != nil {
 		return out, fmt.Errorf("the interpretation of %q is not something a verifier could read: %w",
 			in.Prompt, err)
 	}
 
-	item, offer, offers, err := c.settle(ctx, constraints, in.Item)
+	item, offer, offers, err := c.settle(ctx, interpretation.Constraints, in.Item)
 	if err != nil {
 		return out, err
+	}
+
+	// Zero means one, on Interpretation.Quantity's convention — normalised
+	// here rather than left for every caller downstream to remember, so the
+	// wire and the watch see a concrete number rather than an absence that
+	// happens to render as 1.
+	quantity := interpretation.Quantity
+	if quantity < 1 {
+		quantity = 1
 	}
 
 	return Proposal{
 		Item:        item,
 		Offer:       offer,
 		Offers:      offers,
-		Constraints: narrow(constraints, item),
+		Constraints: narrow(interpretation.Constraints, item),
 		AgentKey:    in.AgentKey,
+		Quantity:    quantity,
 	}, nil
 }
 
@@ -476,6 +508,14 @@ func (c *Client) sign(ctx context.Context, prompt string, proposal Proposal) (Au
 		Rendered:            answer.Rendered,
 		ExpiresAt:           answer.ExpiresAt,
 		Instrument:          answer.PaymentInstrument,
+		// The proposal's own, not asked of the surface: the Trusted Surface
+		// signs constraints, and a basket size is deliberately not one — see
+		// Authorisation.Quantity. What the user approved on a consent screen
+		// is proposal.Quantity, rendered from the same Proposal this function
+		// was handed, so this is that number surviving the signing step
+		// unchanged rather than being re-derived from anything the surface
+		// said.
+		Quantity: proposal.Quantity,
 	}, nil
 }
 

@@ -162,7 +162,18 @@ type Watching struct {
 	// Item, when set, is the offer the caller already picked; see
 	// agent.Intent.Item for why naming one skips the search and nothing else.
 	Item string
-	// Quantity is how many to buy. Zero means one.
+
+	// Quantity is a fallback, used only when Authorisation carries none. Zero
+	// means one.
+	//
+	// It is not the number this watch buys when there is an authorisation to
+	// read one off — see Start. A signed Authorisation's own Quantity is the
+	// basket size a person actually read on a consent screen, or the one
+	// interpret.Interpretation proposed for a caller that asked this console
+	// to authorise on its own; either is what was actually approved, and this
+	// field is an operator's unaudited number by comparison. What it still
+	// covers honestly is a caller on an older wire shape whose Authorisation
+	// carries no Quantity of its own.
 	Quantity int
 
 	// Authorisation, when set, is what the user already signed, and Start uses
@@ -266,11 +277,6 @@ func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 		return nil, errors.New("console: a watch needs the sentence the user typed")
 	}
 
-	quantity := in.Quantity
-	if quantity < 1 {
-		quantity = 1
-	}
-
 	if err := s.reserve(); err != nil {
 		return nil, err
 	}
@@ -288,6 +294,19 @@ func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 			return nil, err
 		}
 		auth = &signed
+	}
+
+	// auth.Quantity first, and only then in.Quantity — see Watching.Quantity
+	// for why the order matters: the authorisation's own number is what a
+	// person actually read and approved, or what the interpretation proposed
+	// on a caller's behalf, and in.Quantity is an operator's unaudited number
+	// by comparison. Issue #133 is what happens when the second one wins.
+	quantity := auth.Quantity
+	if quantity < 1 {
+		quantity = in.Quantity
+	}
+	if quantity < 1 {
+		quantity = 1
 	}
 
 	id, err := newID()

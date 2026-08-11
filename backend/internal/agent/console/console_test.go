@@ -449,6 +449,57 @@ func TestTheResponseCarriesWhatTheUserSigned(t *testing.T) {
 		"what the user signed is the interpretation, and it comes back in the order it was signed in")
 }
 
+// TestTheAuthorisationsQuantityWinsOverTheRequests is issue #133 at this
+// layer.
+//
+// Start reads two numbers: the request's own quantity, an operator's
+// unaudited field, and the one on the Authorisation the Trusted Surface (or,
+// for a caller with no signature of its own, the interpretation) actually
+// produced. The two disagree here on purpose — 2 against 9 — so that a
+// version reading the wrong one is caught by the value rather than by
+// coincidence: TestTheResponseCarriesWhatTheUserSigned already covers the
+// case where an authorisation carries no quantity of its own and the request's
+// is all there is, so this is the row that mattered before #133 and did not
+// exist.
+func TestTheAuthorisationsQuantityWinsOverTheRequests(t *testing.T) {
+	t.Parallel()
+
+	watcher := console.NewMockWatcher(t)
+	watcher.EXPECT().Authorise(mock.Anything, mock.Anything, mock.Anything).
+		Return(agent.Authorisation{
+			Item: item, Rendered: signed, ExpiresAt: expiry,
+			OpenCheckoutMandate: "open-checkout-mandate", OpenPaymentMandate: "open-payment-mandate",
+			Quantity: 2,
+		}, nil).Maybe()
+	// A channel rather than a plain variable: Watch is called from the watch
+	// goroutine Service.Start leaves behind, not the test goroutine, so a
+	// bare write here and a bare read below would be the data race this
+	// file's own header comment warns every test in it about. Buffered by
+	// one so the goroutine's send cannot block on a receiver that already
+	// has its answer.
+	gotQuantity := make(chan int, 1)
+	watcher.EXPECT().Watch(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ agent.Authorisation, quantity int, _ agent.Progress) (agent.Watched, error) {
+			gotQuantity <- quantity
+			return agent.Watched{}, nil
+		}).Maybe()
+
+	service := &console.Service{Watcher: watcher, Clock: clock.New()}
+	handler, err := service.Handler()
+	require.NoError(t, err)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	c := &scripted{service: service, watcher: watcher, url: server.URL}
+	status, body, _ := c.post(t, t.Name(), map[string]any{"prompt": "buy a flight to Palma", "quantity": 9})
+	require.Equal(t, http.StatusCreated, status)
+
+	assert.Equal(t, float64(2), body["quantity"],
+		"what the user actually read and signed for has to be what the response and the row both name")
+	assert.Equal(t, 2, <-gotQuantity,
+		"the watch this console starts has to spend the basket size that was authorised, not an operator's own number")
+}
+
 // TestASignedAuthorisationStartsAWatchWithoutCallingTheSurface is the browser's
 // path.
 //
