@@ -125,18 +125,38 @@ describe("the palette", () => {
     // docs/specs/2026-08-06-three-lane-view-design.md, "Tokens". Pinned here so
     // that adjusting a colour is a decision somebody has to overwrite an
     // approved value to make, rather than a nudge in a stylesheet.
+    //
+    // **Both themes, and that is #159's doing.** While the dark values were
+    // *derived* — hue held, lightness raised in OKLCH until the floor cleared —
+    // the derivation was itself the anchor, and pinning light alone pinned both:
+    // there was one degree of freedom and this table held it. #159 chose the two
+    // grounds as a pair instead, navy against cream, which is the better design
+    // and costs exactly that anchor. Pinning light alone now leaves seven dark
+    // hexes held up by nothing but the floors below, and a floor admits every
+    // colour that clears it rather than the one the review approved.
     expect(
-      themes.light,
-      "these seven hexes are what the design review approved; changing one is " +
-        "a design decision and belongs in the spec before it belongs here",
+      themes,
+      "these fourteen hexes are what the design review approved; changing one " +
+        "is a design decision and belongs in the spec before it belongs here",
     ).toEqual({
-      paper: "#f7f2e8",
-      wash: "#e8dfcc",
-      ink: "#10243a",
-      graphite: "#546375",
-      signal: "#1f5fbf",
-      seal: "#1f6b4a",
-      broken: "#a14917",
+      light: {
+        paper: "#f7f2e8",
+        wash: "#e8dfcc",
+        ink: "#10243a",
+        graphite: "#546375",
+        signal: "#1f5fbf",
+        seal: "#1f6b4a",
+        broken: "#a14917",
+      },
+      dark: {
+        paper: "#0d1b2a",
+        wash: "#17293d",
+        ink: "#eef3f8",
+        graphite: "#93a7bf",
+        signal: "#6fa8ff",
+        seal: "#4ed89b",
+        broken: "#ff9a5c",
+      },
     });
   });
 
