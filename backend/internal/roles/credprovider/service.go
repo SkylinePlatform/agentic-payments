@@ -156,7 +156,16 @@ type examined struct {
 	// checkoutHash is read only when verdict is nil; a refused presentation
 	// scopes no credential.
 	checkoutHash string
-	verdict      error
+	// amount is the payment amount the verified mandate declared, set only
+	// alongside checkoutHash — when verdict is nil and the decode this role's
+	// own VerifyPayment/AuthorisePaymentChain performed is complete enough to
+	// trust. A rejection here is a signature, a vct or an expiry failing, never
+	// an amount check — this role runs no ap2.AmountMatches — so there is
+	// nothing this role reliably holds to report on that branch, and it stays
+	// nil rather than risk a zero-value Amount off a mandate that never fully
+	// decoded reading as a genuine zero.
+	amount  *generated.Amount
+	verdict error
 }
 
 // fund verifies a Payment Mandate and mints a credential scoped to its checkout.
@@ -172,6 +181,17 @@ type examined struct {
 // delegation and it arrives inside a chain whose root is the open mandate the
 // user signed. What the credential is scoped to is the same claim either way,
 // which is why the mode is settled in examine and forgotten immediately after.
+// amountOpt turns a possibly-nil amount into the EventOpt slice Emit and
+// EmitRejection take, so a call site with nothing reliable to report — see
+// examined's own comment on amount — attaches nothing rather than a zero-value
+// generated.Amount that would read as a genuine zero on the log.
+func amountOpt(amount *generated.Amount) []obs.EventOpt {
+	if amount == nil {
+		return nil
+	}
+	return []obs.EventOpt{obs.WithAmount(*amount)}
+}
+
 func (s *Service) fund(w http.ResponseWriter, r *http.Request) {
 	var req request
 	if !roles.DecodeJSON(w, r, &req) {
@@ -200,11 +220,17 @@ func (s *Service) fund(w http.ResponseWriter, r *http.Request) {
 	// code in the log and the code in the signed answer cannot disagree — which
 	// matters because a reader comparing them would have no way to tell which
 	// one was wrong.
+	// got.amount is nil on a rejection — this role's own verdict is never about
+	// the amount, so a refusal here has nothing reliable to report; see
+	// examined's own comment. Emit takes the zero value of an *unset* option
+	// gracefully because WithAmount is only ever applied when got.amount is
+	// non-nil, below.
+	opts := amountOpt(got.amount)
 	if got.verdict != nil {
 		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(got.verdict)),
-			"Payment Mandate refused: "+got.verdict.Error())
+			"Payment Mandate refused: "+got.verdict.Error(), opts...)
 	} else {
-		s.Events.Emit(r.Context(), obs.KindMandateVerified, "Payment Mandate verified")
+		s.Events.Emit(r.Context(), obs.KindMandateVerified, "Payment Mandate verified", opts...)
 	}
 
 	receipt, err := ap2.IssueReceipt(r.Context(), got.presented, got.verdict, ap2.ReceiptOptions{
@@ -275,7 +301,12 @@ func (s *Service) examineMandate(w http.ResponseWriter, req request) (examined, 
 	}
 
 	mandate, verdict := s.Rules.VerifyPayment(presented)
-	return examined{presented: presented, checkoutHash: mandate.CheckoutHash, verdict: verdict}, true
+	result := examined{presented: presented, checkoutHash: mandate.CheckoutHash, verdict: verdict}
+	if verdict == nil {
+		amount := mandate.PaymentAmount
+		result.amount = &amount
+	}
+	return result, true
 }
 
 // examineChain is the Human Not Present path: a delegation chain, authorised
@@ -331,11 +362,16 @@ func (s *Service) examineChain(w http.ResponseWriter, req request) (examined, bo
 	}
 
 	authorised, verdict := s.Chains.AuthorisePaymentChain(chain, req.Nonce)
-	return examined{
+	result := examined{
 		presented:    chain,
 		checkoutHash: authorised.Closed.CheckoutHash,
 		verdict:      verdict,
-	}, true
+	}
+	if verdict == nil {
+		amount := authorised.Closed.PaymentAmount
+		result.amount = &amount
+	}
+	return result, true
 }
 
 // mint produces a credential good for one checkout and nothing else.

@@ -123,7 +123,16 @@ type examined struct {
 	// which is the honest value: this role has confirmed no checkout to put a
 	// verdict against.
 	checkoutHash string
-	verdict      error
+	// amount is the payment amount the verified mandate declared, set on the
+	// same terms checkoutHash is: once the mandate's own signature has
+	// established it, even if the credential-scope check that runs afterwards
+	// then refuses. Neither of this role's two questions is about the amount —
+	// it runs no ap2.AmountMatches — so a rejection of the mandate itself,
+	// rather than of the credential over it, leaves this nil rather than risk a
+	// zero-value Amount off a mandate that never fully decoded reading as a
+	// genuine zero.
+	amount  *generated.Amount
+	verdict error
 }
 
 type outcome struct {
@@ -148,6 +157,22 @@ func (s *Service) Handler() (http.Handler, error) {
 		mux.Handle("GET "+roles.NoncePath, roles.Nonce(s.Challenge))
 	}
 	return roles.Middleware(s.Clock, mux)
+}
+
+// amountOpt turns a possibly-nil amount into the EventOpt slice Emit and
+// EmitRejection take, so a call site with nothing reliable to report — see
+// examined's own comment on amount — attaches nothing rather than a zero-value
+// generated.Amount that would read as a genuine zero on the log.
+//
+// Duplicated from credprovider's identical helper rather than shared: the two
+// packages already duplicate the whole examined/examine shape on the "no
+// internal/common" rule, and a third protocol is what is meant to reveal
+// whether this particular seam is real.
+func amountOpt(amount *generated.Amount) []obs.EventOpt {
+	if amount == nil {
+		return nil
+	}
+	return []obs.EventOpt{obs.WithAmount(*amount)}
 }
 
 // settle checks that the money being spent is the money scoped to this purchase.
@@ -185,12 +210,17 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	// Two questions were asked — is the mandate good, and is this credential
 	// scoped to it — and one verdict comes back, so one event says so. The code
 	// is what distinguishes them, and it is the same code the receipt carries.
+	//
+	// got.amount is nil whenever the mandate itself never verified — see
+	// examined's own comment — and amountOpt turns that absence into no option
+	// at all rather than a zero-value Amount that would read as a genuine one.
+	opts := amountOpt(got.amount)
 	if got.verdict != nil {
 		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(got.verdict)),
-			"payment refused: "+got.verdict.Error())
+			"payment refused: "+got.verdict.Error(), opts...)
 	} else {
 		s.Events.Emit(r.Context(), obs.KindMandateVerified,
-			"Payment Mandate verified and the credential is scoped to it")
+			"Payment Mandate verified and the credential is scoped to it", opts...)
 	}
 
 	receipt, err := ap2.IssueReceipt(r.Context(), got.presented, got.verdict, ap2.ReceiptOptions{
@@ -255,9 +285,11 @@ func (s *Service) examineMandate(w http.ResponseWriter, req settlement) (examine
 	if verdict != nil {
 		return examined{presented: presented, verdict: verdict}, true
 	}
+	amount := mandate.PaymentAmount
 	return examined{
 		presented:    presented,
 		checkoutHash: mandate.CheckoutHash,
+		amount:       &amount,
 		verdict:      s.Rules.VerifyCredential(req.Credential, mandate.CheckoutHash),
 	}, true
 }
@@ -297,9 +329,11 @@ func (s *Service) examineChain(w http.ResponseWriter, req settlement) (examined,
 	if verdict != nil {
 		return examined{presented: chain, verdict: verdict}, true
 	}
+	amount := authorised.Closed.PaymentAmount
 	return examined{
 		presented:    chain,
 		checkoutHash: authorised.Closed.CheckoutHash,
+		amount:       &amount,
 		verdict:      s.Rules.VerifyCredential(req.Credential, authorised.Closed.CheckoutHash),
 	}, true
 }
