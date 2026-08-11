@@ -48,12 +48,10 @@
 // # Two implementations, and the suite that holds both to the same promise
 //
 // ScriptedInterpreter maps fixed prompts to fixed constraint sets. It is what
-// every test uses and what the demo runs on a machine with no key — cmd/agent
-// builds interpret.Demo() unless it is given -interpreter gemini, or
-// -interpreter auto where GEMINI_API_KEY is exported — because no test may
-// depend on a live model or on an external network call, and because a
-// non-deterministic demo would take every golden number in this repository with
-// it.
+// every test uses and what the demo runs — cmd/agent builds interpret.Demo()
+// unless it is given -interpreter gemini — because no test may depend on a live
+// model or on an external network call, and because a non-deterministic demo
+// would take every golden number in this repository with it.
 //
 // ModelInterpreter is the other one. It calls a Model, the narrower port inside
 // this package over which nothing about a provider crosses, decodes the answer

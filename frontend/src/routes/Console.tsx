@@ -34,14 +34,16 @@ interface RefusalState {
  * reads whatever this console has already started, so it is worth showing
  * regardless of whether a proposal is on screen.
  *
- * **The refusal is the state this screen shows most often on the machine that
- * has no key.** `make demo` runs `-interpreter auto`, which resolves to the
- * scripted table unless `GEMINI_API_KEY` is exported, so free text is usually
- * admissible only when it matches one of the agent's scripted sentences. The
- * menu below the box exists so that boundary is visible *before* anybody hits
- * it, not discovered by trial and error — and the paragraph above the menu
- * says which of the two worlds this is, because with a key there is no
- * boundary and a menu would be the wrong thing to draw.
+ * **The refusal is the state this screen shows most often, on purpose.**
+ * `make demo` runs `-interpreter scripted` — hard rule 4 forbids a
+ * demonstration that depends on a live model — so free text is admissible
+ * only when it matches one of the agent's scripted sentences. The menu below
+ * the box exists so that boundary is visible *before* anybody hits it, not
+ * discovered by trial and error, and the paragraph above the menu says which
+ * of the two worlds this is — the other one is reachable with a key exported
+ * and `-interpreter auto` given by hand, or through `make demo-live` —
+ * because with a model there is no boundary and a menu would be the wrong
+ * thing to draw.
  *
  * **A refusal that landed here says so.** `Consent`'s `onRefuse` never calls
  * `authorise` either way, so `recorded` only ever distinguishes whether the

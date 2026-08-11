@@ -146,10 +146,9 @@ var ErrMerchantAnsweredDifferently = errors.New(
 type Intent struct {
 	// Prompt is what the user typed.
 	Prompt string
-	// Interpreter turns it into constraints. cmd/agent -interpreter scripted
-	// wires interpret.Demo(), a scripted table, and -interpreter gemini wires a
-	// model behind this same interface; the demo asks for -interpreter auto,
-	// which is the first of those unless GEMINI_API_KEY is exported.
+	// Interpreter turns it into constraints. The demo wires interpret.Demo(),
+	// a scripted table; cmd/agent -interpreter gemini wires a model behind this
+	// same interface.
 	Interpreter interpret.IntentInterpreter
 	// AgentKey is the public half of the key this agent signs delegations with,
 	// as roles.PublicKey reads it out of the agent's own key set. It ends up in

@@ -16,14 +16,9 @@
 // if GEMINI_API_KEY is set, the scripted table if it is not — and prints which
 // one it picked, so a screenshot stays attributable either way.
 //
-// **`make demo` has to come up without a key and without reaching anything,
-// and that is now a property of `auto` rather than of the manifest leaving this
-// flag alone.** deploy/demo.json gives agent-watch `-interpreter auto`, so on a
-// machine with no GEMINI_API_KEY the interpreter it builds is interpret.Demo()
-// and the golden numbers every screenshot in this repository shows are still
-// the scripted five. What it costs on a machine that does export one — a demo
-// that is no longer the scripted five — is argued in deploy/demo.json beside
-// the flag, and it is why the console states its mode before anybody types.
+// **The default is what deploy/demo.json runs and must stay so.** `make demo`
+// has to come up without a key and without reaching anything, and the golden
+// numbers every screenshot in this repository shows are the scripted five.
 //
 // **There is no fallback.** `-interpreter gemini` with no key refuses to start,
 // because an agent asked for a model and quietly handed a fixed table produces a
@@ -37,27 +32,30 @@
 // one taken under `gemini` is: the banner names the implementation that
 // actually read the prompt, not just the flag that was passed.
 //
-// **`auto` is not the default, and that is deliberate rather than an
-// oversight.** With no key set the two select the same interpreter — `auto`
-// degrades to exactly `interpret.Demo()`, the same value the scripted case
-// returns — so defaulting to it would change nothing a demonstration prints
-// except this binary's own banner line, which says `auto` rather than
-// `scripted` and is the attribution being bought. What it would cost is the
-// guarantee: whether `make demo` reads deterministically from the scripted five
-// would then depend on whether the operator's shell happens to export
-// GEMINI_API_KEY for some unrelated reason, rather than on anything written in
-// this repository. That is a worse property than the one this comment already
-// promises, so the default stays `scripted`, and `auto` is something a caller
-// opts into by naming it — never something ambient shell state opts a caller
-// into on its behalf.
+// **`auto` is not the default, and deploy/demo.json does not name it either —
+// both were tried and neither survived.** Putting `auto` into this flag's
+// default was the first shape considered: with no key set the two select the
+// same interpreter, so a machine with none would see nothing change. What it
+// would cost is the guarantee itself — whether `make demo` reads
+// deterministically from the scripted five would then depend on whether the
+// operator's shell happens to export GEMINI_API_KEY for some unrelated reason,
+// rather than on anything written in this repository. Writing `-interpreter
+// auto` into deploy/demo.json instead looked like the fix and was tried next,
+// but it repeats the same defect one level down: naming `auto` in a reviewed,
+// committed manifest makes the *opt-in* visible, not the *outcome*
+// deterministic. `make demo` would still show two different things on two
+// machines, and nothing in the repository would say which, because the thing
+// actually deciding is still whichever shell started it.
 //
-// **deploy/demo.json is a caller that names it, and that is the distinction
-// rather than a hole in it.** A flag written into a reviewed, committed file is
-// a choice every reader of that file can see, and it applies to one process
-// this repository ships. A default reading the environment would apply to every
-// caller of this binary, on a fact nothing here writes down. So the manifest
-// naming `auto` and the flag defaulting to `scripted` are the same argument,
-// not two.
+// So the default stays `scripted`, deploy/demo.json stays exactly as it is,
+// and `auto` is reachable only where a person types it: on the command line,
+// or through `make demo-live`, which is the same stack with this one flag
+// added at the runner rather than at either of the two places that were tried
+// and rejected — see that target's own comment in the Makefile, and
+// deploy/demo.json's $comment for why the manifest itself was the wrong place
+// for it. A command typed is attributable in the way neither a default nor a
+// manifest entry is on its own, because typing it is the one thing that cannot
+// happen by accident.
 //
 // It confirms every counterparty is reachable and publishing a readable key,
 // and then runs whichever flow it was asked for:
