@@ -411,8 +411,9 @@ func (f *CatalogueFile) Catalogue(
 }
 
 // jitteredCatalogue is Catalogue with each offer's own transitions holding a
-// random width from [min, max] instead of a fixed step — see
-// NewJitteredSchedule.
+// random width from [min, max] instead of a fixed step, and with the sequence
+// cycling rather than stopping on its last price — see jitteredSchedule for
+// which constructor that is and why this one rather than NewJitteredSchedule.
 //
 // Unexported: NewDemoService is this package's only caller, under
 // DemoOptions.StepMax. Nothing outside asks a file for a jittered catalogue on
@@ -477,9 +478,10 @@ func (f *CatalogueFile) catalogue(
 // being true.
 //
 // **That argument only holds for a fixed step.** Two calls to schedule for the
-// same entry agree today because the arithmetic is deterministic; under
-// NewJitteredSchedule they would not, since each call draws its own random
-// widths. That is why NewDemoService does not call this method for the flight
+// same entry agree today because the arithmetic is deterministic; under a
+// drawn width — jitteredSchedule's, and so NewCyclingJitteredSchedule's — they
+// would not, since each call draws its own. That is why NewDemoService does
+// not call this method for the flight
 // when DemoOptions.StepMax is set — it builds the catalogue first and reads
 // the flight's own Schedule back out of it, so there is exactly one draw
 // rather than two that might disagree. This method is unaffected and stays
@@ -518,14 +520,24 @@ func (f *CatalogueFile) schedule(e CatalogueEntry, start time.Time, step time.Du
 }
 
 // jitteredSchedule is schedule with each transition's width drawn once from
-// [min, max] instead of held fixed — see NewJitteredSchedule.
+// [min, max] instead of held fixed, and wrapping back to the first price once
+// the last one's own hold ends rather than holding it forever — see
+// NewCyclingJitteredSchedule.
+//
+// Cyclic rather than one-shot because this is the only constructor
+// jitteredCatalogue calls, and jitteredCatalogue is what NewDemoService uses
+// under DemoOptions.StepMax — the composition `make demo` runs. Issue #177 is
+// what a one-shot schedule cost there: a watch beginning after the schedule
+// had already run its course, which #163 made a matter of seconds rather than
+// minutes, saw a price that could never move again and never attempted
+// anything.
 func (f *CatalogueFile) jitteredSchedule(e CatalogueEntry, start time.Time, min, max time.Duration) (*Schedule, error) {
 	prices := make([]generated.Amount, 0, len(e.Prices))
 	for _, p := range e.Prices {
 		prices = append(prices, generated.Amount{Amount: p, Currency: f.Currency})
 	}
 
-	s, err := NewJitteredSchedule(start, min, max, prices...)
+	s, err := NewCyclingJitteredSchedule(start, min, max, prices...)
 	if err != nil {
 		return nil, fmt.Errorf("merchant: offer %q: %w", e.ID, err)
 	}

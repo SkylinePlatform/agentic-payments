@@ -594,6 +594,17 @@ func TestARangeThatNamesNothingIsRefused(t *testing.T) {
 // the catalogue first and reading the flight's own Schedule back out of it
 // rather than drawing a second time — see the comment on that composition —
 // and this is what exercises it rather than trusting the comment.
+//
+// # Why this no longer waits for Final
+//
+// Issue #177 made the schedule this fixture builds cyclic — see
+// CatalogueFile.jitteredSchedule — specifically so a late reader keeps seeing
+// the price move rather than freezing on the last one. Final therefore never
+// becomes true here any more, which this test now pins as its own property
+// instead of the stopping condition it used to be: the loop runs a fixed
+// number of ticks and requires at least one wrap (the step index going back
+// down) to have happened inside it, which is what proves the two doors keep
+// agreeing across a lap boundary and not only within one.
 func TestAJitteredScheduleKeepsTheCatalogueAndInventoryAgreeing(t *testing.T) {
 	t.Parallel()
 
@@ -615,8 +626,14 @@ func TestAJitteredScheduleKeepsTheCatalogueAndInventoryAgreeing(t *testing.T) {
 
 	svc, under, _ := demoServiceWithStep(t, false, min, max)
 
-	sawFinal := false
-	for range int(2 * max / tick) {
+	// Comfortably past two full laps at the widest possible width: three
+	// transitions a lap (the wrap included) at max each.
+	const laps = 2
+	iterations := int(laps*3*max/tick) + int(max/tick)
+
+	sawWrap := false
+	lastStep := -1
+	for range iterations {
 		routeQuote, err := svc.Inventory.Quote(merchant.DemoRoute)
 		require.NoError(t, err, "Quote")
 		itemQuote, err := svc.Catalogue.Price(merchant.DemoFlightID)
@@ -629,12 +646,88 @@ func TestAJitteredScheduleKeepsTheCatalogueAndInventoryAgreeing(t *testing.T) {
 		assert.Equal(t, routeQuote.Final, itemQuote.Final,
 			"one door saying the price may still move while the other says it will not is the same "+
 				"disagreement wearing a different field")
+		assert.False(t, routeQuote.Final,
+			"the flight's schedule cycles under StepMax — issue #177 — so final must never become reachable here")
 
-		if routeQuote.Final {
-			sawFinal = true
-			break
+		if lastStep > routeQuote.Step {
+			sawWrap = true
 		}
+		lastStep = routeQuote.Step
 		under.Advance(tick)
 	}
-	assert.True(t, sawFinal, "the run has to reach the final price at least once, or the loop above checked nothing new")
+	assert.True(t, sawWrap,
+		"the run has to complete at least one full lap — the step index returning to a lower value — or the "+
+			"loop above never checked agreement across the wrap")
+}
+
+// TestABrowserSignedWatchStillSeesThePriceMove reproduces issue #177: a watch
+// that begins after the merchant's schedule has already run its course used to
+// see a price that could never move again, and stayed at zero attempts for
+// ever.
+//
+// The merchant's schedule starts at boot (NewDemoService reads the clock at
+// construction) and, after #163, spends its whole one-shot sequence in a few
+// seconds. `agent-watch`'s own scripted run wins that race — it takes its
+// baseline within half a second of the merchant starting, see
+// deploy/demo.json's `$comment` — but a watch a person starts from the browser
+// a minute later does not: every later poll sees the same frozen last price,
+// `q.Step == last` never gets to be false, and internal/agent's Watch.Run
+// never attempts anything (see that file's baseline logic, roughly
+// `last := baseline.Step` and the skip on no change).
+//
+// This test cannot import internal/agent — it is off limits for this fix — so
+// it drives the same baseline-then-poll shape directly against the merchant's
+// own Inventory, which is the side of that logic this package owns and the
+// side the fix changes.
+func TestABrowserSignedWatchStillSeesThePriceMove(t *testing.T) {
+	t.Parallel()
+
+	// The shipped pacing, not the millisecond-scale one above: this is what
+	// has to hold for deploy/demo.json's own -step 3s -step-max 6s, unscaled.
+	const (
+		min = 3 * time.Second
+		max = 6 * time.Second
+	)
+	svc, under, _ := demoServiceWithStep(t, false, min, max)
+
+	// Comfortably past where the pre-#177 one-shot schedule would already have
+	// reached its last price and stopped moving: two transitions at up to max
+	// each, plus a margin — this is the browser tab opened a while after
+	// `make demo` printed its banner.
+	under.Advance(2*max + time.Second)
+
+	baseline, err := svc.Inventory.Quote(merchant.DemoRoute)
+	require.NoError(t, err, "Quote")
+	last := baseline.Step
+
+	// Every price the schedule moved *to*, in the order it moved. Order and not
+	// a pair of flags, because the beat is "refused at $210, then bought at
+	// $189" — a run that reached both in the other order, or with the opening
+	// $240 between them, would satisfy two flags and would not be beats 5 and
+	// 6. Two full laps fit in this window whatever was drawn, so an adjacent
+	// pair is guaranteed rather than hoped for.
+	var seen []int
+	sawRefusalThenPurchase := false
+	for range int(6 * max / time.Millisecond) {
+		under.Advance(time.Millisecond)
+		q, err := svc.Inventory.Quote(merchant.DemoRoute)
+		require.NoError(t, err, "Quote")
+		if q.Step == last {
+			continue
+		}
+		last = q.Step
+		seen = append(seen, q.Price.Amount)
+		if n := len(seen); n >= 2 &&
+			seen[n-2] == merchant.DemoPriceRejected && seen[n-1] == merchant.DemoPriceAccepted {
+			sawRefusalThenPurchase = true
+			break
+		}
+	}
+
+	assert.NotEmpty(t, seen,
+		"a watch beginning after the old schedule was already spent must still see the step change — "+
+			"this is issue #177: attempts stayed at zero for ever")
+	assert.True(t, sawRefusalThenPurchase,
+		"the refusal at $210 is the one beat this whole screen exists for, and the purchase at $189 has "+
+			"to come straight after it — a late baseline must still reach both, in that order")
 }

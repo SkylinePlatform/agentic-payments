@@ -556,3 +556,266 @@ func TestJitteredScheduleRejectsNonsense(t *testing.T) {
 	_, err = merchant.NewJitteredSchedule(base, time.Second, time.Minute, ok)
 	assert.NoError(t, err, "a single price never transitions, so there is nothing to draw and nothing to refuse")
 }
+
+// TestACyclingScheduleNeverHoldsItsLastPrice is issue #177's own property,
+// stated the way TestTheLastPriceHolds states NewSchedule's opposite one: a
+// cycling schedule wraps back to the opening price once the last one's own
+// hold ends, so a reader arriving long after the schedule "would" have
+// finished still sees it move — which is what lets a watch that begins after
+// the merchant has spent its whole one-shot schedule attempt a purchase at
+// all. See NewCyclingJitteredSchedule.
+func TestACyclingScheduleNeverHoldsItsLastPrice(t *testing.T) {
+	t.Parallel()
+
+	// min == max, so this schedule's timing is as deterministic as
+	// NewSchedule's: three one-second holds — watched, rejected, accepted —
+	// then a wrap back to watched.
+	s, err := merchant.NewCyclingJitteredSchedule(base, time.Second, time.Second, merchant.DemoPrices()...)
+	require.NoError(t, err, "NewCyclingJitteredSchedule")
+	c := clock.NewFake(base)
+	inv, err := merchant.New(c, map[merchant.Route]*merchant.Schedule{merchant.DemoRoute: s})
+	require.NoError(t, err, "New")
+
+	// Twenty seconds is well past two full laps (three seconds each), which is
+	// what "long after the schedule would have finished" means for a one-shot
+	// schedule built the same way.
+	seenAccepted := false
+	for range 20 {
+		q := quote(t, inv)
+		assert.False(t, q.Final, "a cycling schedule always has a next price to move to, the wrap included")
+		if q.Price.Amount == merchant.DemoPriceAccepted {
+			seenAccepted = true
+		}
+		c.Advance(time.Second)
+	}
+	assert.True(t, seenAccepted,
+		"twenty seconds at a one-second hold has to cross the accepted price more than once, or this test "+
+			"proved nothing about the wrap")
+
+	// Four seconds in is one second into the schedule's second lap — the
+	// rejected price again, at step 1 rather than a step index that only ever
+	// grows.
+	c2 := clock.NewFake(base)
+	s2, err := merchant.NewCyclingJitteredSchedule(base, time.Second, time.Second, merchant.DemoPrices()...)
+	require.NoError(t, err, "NewCyclingJitteredSchedule")
+	inv2, err := merchant.New(c2, map[merchant.Route]*merchant.Schedule{merchant.DemoRoute: s2})
+	require.NoError(t, err, "New")
+
+	c2.Advance(4 * time.Second)
+	q := quote(t, inv2)
+	assert.Equal(t, merchant.DemoPriceRejected, q.Price.Amount,
+		"four seconds in is one second into the second lap, which is the rejected price again")
+	assert.Equal(t, 1, q.Step, "the step index has wrapped rather than kept counting up past the last price")
+}
+
+// TestACyclingScheduleObservesEveryPriceInOrderRepeatedly is
+// TestJitteredScheduleObservesEveryPriceInOrder's statement for issue #177's
+// constructor: polling at the agent's own interval must show the sequence
+// repeat, refusal included, on every draw — not usually, not on average, and
+// not only once.
+//
+// The assertion is a prefix rather than an exact match, deliberately: unlike
+// the one-shot schedule, extra margin on runFor is not safe here — a fast draw
+// keeps cycling for as long as the run keeps going, so a caller cannot bound
+// how many laps a generous runFor might catch. What can be bounded is the
+// slowest a lap can possibly be (three transitions at demoJitterMax each), so
+// runFor is set to guarantee at least two laps happened even in that worst
+// case, and the test checks only that many entries — whatever comes after
+// them, on a faster draw, is more of the same pattern by construction.
+func TestACyclingScheduleObservesEveryPriceInOrderRepeatedly(t *testing.T) {
+	t.Parallel()
+
+	require.LessOrEqual(t, demoPoll, demoJitterMin,
+		"the guarantee TestJitteredScheduleObservesEveryPriceInOrder already states: a hold at least one "+
+			"poll long always contains a poll, so no draw can hide a price from a watcher")
+
+	one := []int{merchant.DemoPriceWatched, merchant.DemoPriceRejected, merchant.DemoPriceAccepted}
+	want := append(append([]int{}, one...), one...)
+
+	const laps = 2
+	// Comfortably past the slowest two laps possible: three transitions a lap
+	// (the wrap included) at demoJitterMax each.
+	runFor := laps*3*demoJitterMax + demoJitterMax
+
+	const draws = 500
+	for i := range draws {
+		s, err := merchant.NewCyclingJitteredSchedule(base, demoJitterMin, demoJitterMax, merchant.DemoPrices()...)
+		require.NoError(t, err, "NewCyclingJitteredSchedule")
+
+		got := observedSequence(t, s, demoPoll, runFor)
+		require.GreaterOrEqual(t, len(got), len(want),
+			"draw %d: two full laps have to be observable inside a window sized for the slowest possible one", i)
+		require.Equal(t, want, got[:len(want)],
+			"draw %d: a cycling schedule has to repeat the same three prices in the same order, refusal "+
+				"included, on every lap", i)
+	}
+}
+
+// stepAt reads which entry of the schedule is in force at one exact instant,
+// by moving the fake clock to it. Set rather than Advance, because finding a
+// boundary exactly means reading instants out of order.
+func stepAt(t *testing.T, inv *merchant.Inventory, c *clock.Fake, at time.Time) int {
+	t.Helper()
+	c.Set(at)
+	return quote(t, inv).Step
+}
+
+// transitions returns the exact instants, to the nanosecond, at which s changes
+// price over [base, base+within].
+//
+// Exact rather than sampled, and that is its whole reason for existing beside
+// observedSequence. The property #163 rests on is about the *width* of every
+// hold, and a poll-shaped test can only ever bound a width to within its own
+// tick — which is precisely the resolution at which a wrap that shortened a
+// hold would hide. So this scans forward in strides of stride, which the caller
+// must keep at or below the shortest hold so that at most one change can fall
+// inside any one stride, and bisects whichever stride contains a change down to
+// a single nanosecond.
+func transitions(t *testing.T, s *merchant.Schedule, stride, within time.Duration) []time.Time {
+	t.Helper()
+
+	c := clock.NewFake(base)
+	inv, err := merchant.New(c, map[merchant.Route]*merchant.Schedule{merchant.DemoRoute: s})
+	require.NoError(t, err, "New")
+
+	end := base.Add(within)
+	var found []time.Time
+	for lo := base; lo.Before(end); {
+		hi := lo.Add(stride)
+		if hi.After(end) {
+			hi = end
+		}
+		was := stepAt(t, inv, c, lo)
+		if stepAt(t, inv, c, hi) == was {
+			lo = hi
+			continue
+		}
+		// Exactly one change sits in (lo, hi]: two would need two holds inside
+		// one stride, and every hold is at least one stride wide. So the
+		// predicate "still the step lo was at" is monotone here, and bisection
+		// finds the first instant it stops holding.
+		for hi.Sub(lo) > time.Nanosecond {
+			mid := lo.Add(hi.Sub(lo) / 2)
+			if stepAt(t, inv, c, mid) == was {
+				lo = mid
+			} else {
+				hi = mid
+			}
+		}
+		found = append(found, hi)
+		lo = hi
+	}
+	return found
+}
+
+// TestACyclingScheduleShortensNoHoldAtTheWrap is the property #163's guarantee
+// actually needs, measured rather than sampled.
+//
+// #163 excluded a skipped price by construction: a price is skipped only if its
+// whole hold falls strictly between two polls, which a poll no longer than the
+// *shortest* hold makes impossible. That argument is about hold widths, so
+// cycling keeps it only if the wrap produces no hold narrower than the widths
+// crypto/rand drew. Two ways it could have failed, and neither is visible to a
+// test that polls: the wrap could land inside a hold and cut it short, or laps
+// could drift so that a later one is not the first one repeated.
+//
+// So this measures every boundary to the nanosecond over three laps and states
+// both halves directly — every hold, prices[0]'s after a wrap and prices[n-1]'s
+// included, lies in [min, max]; and boundary j sits exactly one lap after
+// boundary j-n, for every j. TestACyclingScheduleObservesEveryPriceInOrderRepeatedly
+// polls the same schedules and is worth its runtime for what no arithmetic
+// covers — that at really walks these boundaries in the order they were built —
+// but it is this test that says the refusal at $210 is guaranteed rather than
+// likely.
+func TestACyclingScheduleShortensNoHoldAtTheWrap(t *testing.T) {
+	t.Parallel()
+
+	require.LessOrEqual(t, demoPoll, demoJitterMin,
+		"the bound this test measures against is the one the agent's poll has to clear, and a poll "+
+			"above the floor would make every width below irrelevant")
+
+	prices := merchant.DemoPrices()
+	perLap := len(prices)
+	const laps = 3
+
+	const draws = 20
+	for i := range draws {
+		s, err := merchant.NewCyclingJitteredSchedule(base, demoJitterMin, demoJitterMax, prices...)
+		require.NoError(t, err, "NewCyclingJitteredSchedule")
+
+		// The slowest possible three laps, so the window holds them whatever
+		// was drawn. A faster draw simply yields more boundaries, all checked.
+		got := transitions(t, s, demoJitterMin, laps*time.Duration(perLap)*demoJitterMax)
+		require.GreaterOrEqualf(t, len(got), laps*perLap,
+			"draw %d: a window sized for the slowest possible laps has to contain that many transitions, "+
+				"or the schedule stopped moving somewhere inside it", i)
+
+		prev := base
+		for j, b := range got {
+			width := b.Sub(prev)
+			assert.GreaterOrEqualf(t, width, demoJitterMin,
+				"draw %d hold %d: a hold under the floor is a price the agent's poll can step over, which "+
+					"is the $210 refusal disappearing at random in front of an audience", i, j)
+			assert.LessOrEqualf(t, width, demoJitterMax,
+				"draw %d hold %d: a hold over the ceiling is time the demonstration spends on a price "+
+					"nobody is waiting for", i, j)
+			prev = b
+		}
+
+		lap := got[perLap-1].Sub(base)
+		for j := perLap; j < len(got); j++ {
+			assert.Equalf(t, lap, got[j].Sub(got[j-perLap]),
+				"draw %d boundary %d: laps have to be exact repeats, or the sequence drifts and a hold "+
+					"eventually lands somewhere the widths above never say it can", i, j)
+		}
+	}
+}
+
+// TestCyclingJitteredScheduleRejectsNonsense covers the constructor, on the
+// same terms TestJitteredScheduleRejectsNonsense covers NewJitteredSchedule.
+func TestCyclingJitteredScheduleRejectsNonsense(t *testing.T) {
+	t.Parallel()
+	ok := generated.Amount{Amount: 100, Currency: "USD"}
+
+	_, err := merchant.NewCyclingJitteredSchedule(base, 0, time.Minute, ok)
+	assert.Error(t, err,
+		"a zero minimum lets a price hold for no time at all, which is a price no watcher can observe")
+
+	_, err = merchant.NewCyclingJitteredSchedule(base, -time.Second, time.Minute, ok)
+	assert.Error(t, err, "a negative minimum would put a boundary before the schedule's own start")
+
+	_, err = merchant.NewCyclingJitteredSchedule(base, time.Minute, 30*time.Second, ok, ok)
+	assert.Error(t, err, "a maximum below the minimum leaves no range for a width to be drawn from")
+
+	_, err = merchant.NewCyclingJitteredSchedule(base, time.Second, time.Minute)
+	assert.ErrorIs(t, err, merchant.ErrEmptySchedule,
+		"a schedule with no prices has no answer to give, and a zero amount would read as a free flight")
+
+	_, err = merchant.NewCyclingJitteredSchedule(base, time.Second, time.Minute,
+		generated.Amount{Amount: -1, Currency: "USD"})
+	assert.Error(t, err, "a negative price is money owed to the buyer, which every cap on amount waves through")
+
+	_, err = merchant.NewCyclingJitteredSchedule(base, time.Second, time.Minute,
+		generated.Amount{Amount: 100, Currency: "DOLLAR"})
+	assert.Error(t, err,
+		"contracts/instrument/amount.json requires an ISO 4217 code, and a cap in USD is refused against "+
+			"anything else rather than converted")
+
+	_, err = merchant.NewCyclingJitteredSchedule(base, time.Minute, time.Minute, ok, ok)
+	assert.NoError(t, err, "min == max is the deterministic case a caller is entitled to ask for")
+
+	// A single price still needs no transition at all, cycling or not — there
+	// is nothing for it to wrap to, so min and max are validated but never
+	// drawn from, and the schedule that comes back holds still and reports
+	// itself final exactly as a one-shot single-price schedule would.
+	single, err := merchant.NewCyclingJitteredSchedule(base, time.Second, time.Minute, ok)
+	assert.NoError(t, err, "a single price never transitions, so there is nothing to draw and nothing to refuse")
+	c := clock.NewFake(base)
+	inv, err := merchant.New(c, map[merchant.Route]*merchant.Schedule{merchant.DemoRoute: single})
+	require.NoError(t, err, "New")
+	c.Advance(time.Hour)
+	q := quote(t, inv)
+	assert.True(t, q.Final,
+		"a single price has nothing to cycle to, so it holds still and reports final exactly like a one-shot "+
+			"schedule of one price")
+}

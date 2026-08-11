@@ -209,8 +209,26 @@ type DemoOptions struct {
 	// extra randomness at all: every price holds exactly Step, precisely as
 	// when this field did not exist. A positive value has to be at least Step,
 	// and each transition then draws its own width once from [Step, StepMax]
-	// via NewJitteredSchedule — see there for why crypto/rand. A negative value
-	// is refused rather than read as zero, on the reasoning Step states.
+	// via NewCyclingJitteredSchedule — see there for why crypto/rand. A
+	// negative value is refused rather than read as zero, on the reasoning
+	// Step states.
+	//
+	// # It turns two knobs, not one, and the second is the one to know about
+	//
+	// Setting this also makes every offer's schedule **cycle**: the sequence
+	// wraps back to its opening price once the last one's own hold ends,
+	// rather than holding that last price for ever. That is issue #177 — a
+	// watch begun after a one-shot schedule had run its course took a baseline
+	// that could never move again and never attempted anything, which is what
+	// a browser tab opened a minute after `make demo` printed its banner does.
+	// Two consequences a caller has to know: Quote.Final never reports true for
+	// an offer with more than one price, so agent.ErrScheduleExhausted is
+	// unreachable under this option; and the refusal the demonstration exists
+	// to show happens on every lap rather than once.
+	//
+	// The two are one field because there is one caller — the composition
+	// `make demo` runs — and it wants both. A merchant wanting jitter without
+	// cycling calls NewJitteredSchedule and builds its own catalogue.
 	//
 	// # It is not the only number Step has to be read against
 	//
