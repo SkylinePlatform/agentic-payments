@@ -50,6 +50,29 @@ const (
 	// own constraint evaluation reached. A purchase outside what the user
 	// approved breaks here, named constraint_violated, exactly as it would have
 	// been refused live.
+	//
+	// **That addition is not recomputed from the bundle, and a reader of a
+	// report must not take it for one that is.** The constraints are signed
+	// and travel in the chain; the description of the purchase they are
+	// evaluated against — what it cost, what it was, who sold it — is in none
+	// of the five artefacts, because the Checkout JWT is opaque bytes to the
+	// arbiter and the closed mandate carries only a digest of it. The arbiter
+	// supplies that description, exactly as it supplies the keys and the
+	// instant. So this link says the purchase **as the arbiter described it**
+	// fell inside the user's limits, and whoever wrote the description decided
+	// the verdict: one naming a cheaper purchase than the one that happened
+	// verifies as authorised, one naming a purchase nobody made refuses
+	// against an agent that did nothing. The adapter's own
+	// ChainDisputeOptions.Subject is where that residual is written out in
+	// full, alongside the one thing that narrows it — the payment side takes
+	// no description and derives its own from the closed mandate, so a lie
+	// about a fact that mandate also carries is caught at
+	// StepPaymentAuthorised.
+	//
+	// None of this exists under Human Present, where there is no open mandate,
+	// no constraint to evaluate and nothing for an arbiter to describe. The
+	// two modes reach this link with the same name and not with the same
+	// weight behind it.
 	StepCheckoutAuthorised
 
 	// StepCheckoutAnswered: the Checkout Receipt is signed by the key the
@@ -87,7 +110,8 @@ const (
 
 	// StepPaymentAnswered: the Payment Receipt is signed by the key the arbiter
 	// brought for whoever answered, is labelled as answering a Payment Mandate,
-	// and answers *this* presentation.
+	// and answers *this* presentation — or, under Human Not Present, this
+	// delegation chain, on StepCheckoutAnswered's identical terms.
 	StepPaymentAnswered
 )
 

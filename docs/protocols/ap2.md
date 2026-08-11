@@ -759,6 +759,19 @@ artefact and recomputes a digest against it. Nothing else is evidence;
 `../architecture/adr/0003-correlation-and-event-log.md` states why the event
 log in particular is not.
 
+**Under Human Not Present one of the five rests on something that is not an
+artefact**, and it is worth naming here rather than only in the design spec.
+The closed mandates are delegation chains, so the first step additionally
+re-runs the open mandate's constraints — and the description of the purchase
+they are evaluated against is in none of the four artefacts, because the
+Checkout JWT is opaque bytes to a verifier and the closed mandate carries only
+a digest of it. The arbiter supplies it, as it supplies the keys and the
+instant. A holding chain therefore says the constraints held *for the purchase
+as the arbiter described it*. `../specs/2026-08-07-dispute-evidence-design.md`
+argues that residual in full, including the one thing that narrows it: the
+payment step derives its own description from the closed Payment Mandate and so
+cannot be told a different amount or a different payee.
+
 ## Traps, collected
 
 Every one of these is stated in full above. The list is here because it is the

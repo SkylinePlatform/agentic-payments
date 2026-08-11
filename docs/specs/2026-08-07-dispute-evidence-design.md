@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-07
 **Status:** approved
-**Issue:** #18
+**Issues:** #18, and #110 for the Human Not Present half
 
 ## Why this exists
 
@@ -33,7 +33,10 @@ nothing here reads the event log — that is [ADR
 
 ## What an arbiter has to supply, and why the bundle cannot
 
-Two things, and neither of them is in the bundle.
+Two things for a Human Present bundle, and neither of them is in it. A Human
+Not Present bundle needs two more, on the same reasoning and with a residual
+that is worse; *It covers Human Not Present bundles too* below is where those
+are argued.
 
 **The keys.** A receipt carries `iss`, and resolving a key from it would let the
 party being judged pick the key it is judged against.
@@ -196,6 +199,24 @@ flowchart TD
 | `StepOnePurchase` | both mandates name one purchase, and that purchase is the document in the bundle | `BindingOf`, `Binding.Same`, `Binding.Covers` |
 | `StepPaymentAnswered` | the Payment Receipt is the answerer's, is labelled as a Payment Receipt, and answers *this presentation* | `VerifyReceipt` + `AnswersMandate` |
 
+Under Human Not Present the same five links run over two `sdjwt.Chain`s, through
+`Dispute.VerifyChain`. Three of the five change what they reuse and two do not:
+
+| Link | What changes | Reuses |
+|---|---|---|
+| `StepCheckoutAuthorised` | **additionally** establishes that the constraints held — see *The semantic widening* below for what that rests on | `CheckoutChainVerifierAsOf.AuthoriseCheckoutChainAsOf` — `MerchantRules` |
+| `StepCheckoutAnswered` | nothing; a receipt's `reference` is the digest of whichever shape it answers | `VerifyReceipt` + `AnswersMandate`, over `Presented` |
+| `StepPaymentAuthorised` | the same addition, and it is the one that cannot be lied to | `PaymentChainVerifierAsOf.AuthorisePaymentChainAsOf` — `CredentialProviderRules` |
+| `StepOnePurchase` | fed by `CheckoutAuthorisation.Binding` and `PaymentAuthorisation.Binding` rather than by `BindingOf`, because a chain is not an `*sdjwt.SDJWT` and the `_sd_alg` that governs is the delegating hop's | `Binding.Same`, `Binding.Covers` |
+| `StepPaymentAnswered` | nothing | `VerifyReceipt` + `AnswersMandate`, over `Presented` |
+
+`VerifyCheckoutReceipt` and `VerifyPaymentReceipt` take `ap2.Presented` rather
+than `*sdjwt.SDJWT` so that both shapes reach them, which is the interface
+`IssueReceipt` and `AnswersMandate` already took. Nothing on the Human Present
+path changed: `*sdjwt.SDJWT` satisfies it unchanged, `nothingToAnswer` already
+refused both a nil interface and a nil pointer inside one, and the conversion
+simply happens one call earlier than it did.
+
 ## Reconciling the issue's five steps with the code
 
 The issue's list is not wrong, but two of its steps do not survive contact with
@@ -336,35 +357,124 @@ does imply the offer was its own. The arbiter cannot see that, and a delegate
 need not have done it — which is why the property belongs in this section as a
 limit rather than in the chain as a link.
 
-### It covers Human Present bundles only
+### It covers Human Not Present bundles too, through a second entry point
 
 Under Human Not Present a closed mandate is a Key Binding JWT inside a
 `~~`-joined `sdjwt.Chain`, verified through `MerchantRules.AuthoriseCheckoutChain`
 and `CredentialProviderRules.AuthorisePaymentChain` rather than through
-`VerifyCheckout` and `VerifyPayment`. Those two entry points landed with #12 and
-work; this chain does not call them.
+`VerifyCheckout` and `VerifyPayment`. `Dispute.VerifyChain` is what runs the
+five links over that shape — #110 — and `Dispute.Verify` is unchanged.
 
-The reason is concrete rather than a matter of scope-drawing: **no Human Not
-Present purchase exists to assemble a bundle from.** `internal/agent/purchase.go`
-is the Human Present flow, and the autonomous loop that would produce an HNP
-bundle is **#15**'s.
+`Bundle` did not have to grow a field, which is what the paragraph this section
+replaces predicted: its fields are `string`, a chain and a presentation are both
+compact serialisations, and which one a bundle carries is therefore something
+`Verify` discriminates on the token it was handed rather than something the type
+declares. What could not be discriminated away is what a chain needs and a
+bundle cannot hold, so `VerifyChain` takes a third argument,
+`ChainDisputeOptions`, and neither `evidence.Bundle` nor `evidence.Verifier`'s
+two-argument port moved.
 
-`Bundle`'s fields are `string` precisely so that this arrives as an addition. A
-chain and a presentation are both compact serialisations, so the HNP variant is a
-discrimination inside `Dispute.Verify` when there is a caller for it — not a
-change to the type and not a second bundle. A chain path written now would be
-speculative, and #90's `Chain.Root()` was deleted for exactly that.
+#### Two more things the arbiter brings
 
-**One thing that is worth writing down now, while `Dispute` is the only
-implementor of the port and the signature is still cheap to shape.** The instant
-extends to Human Not Present cleanly — `fixedClock` drops into
-`ChainOptions.Clock` exactly as it does into `CheckoutOptions.Clock` — but the
-instant is not what will need adding. `AuthoriseCheckoutChain` also requires a
-`constraint.Subject` and the merchant's remembered nonce, and neither is in
-`Bundle` nor derivable from it. So `Verify(b, at)` will need a third shape, and
-an options struct or a second method is the form that takes it as an addition
-rather than as a second signature change on the same port. Not built, and not
-designed further than this sentence.
+**The purchase's description.** `AuthoriseCheckoutChain` evaluates the open
+mandate's constraints against a `constraint.Subject`, and `Bundle.Checkout` is
+opaque bytes to this package — hashed, never parsed, the same treatment that
+leaves the chain with no link over the offer's provenance — so there is nothing
+in a bundle for one to be a pure function of. It is the merchant's own reading
+of the offer it made.
+
+**The two remembered nonces.** A delegation is a key binding, and a key binding
+is checked against a challenge the verifier issued for one exchange and must
+have kept. Neither is in the bundle for the same reason a key is not: it belongs
+to the verifier, not to the token.
+
+Both are refused up front by `chainUsable` rather than left to fail inside a
+link — for the nonces, because both rule sets already refuse an empty one *from
+inside link 1 or link 3*, and a report naming a broken link names the
+counterparty who presented that mandate. An arbiter that turned up without the
+challenge has not been shown a bad artefact. That is `StepNone`'s whole job.
+
+**`Subject` has no such guard, and that is a decision.** A `constraint.Subject`
+has no unset state a verifier can recognise — a purchase with no item and no
+currency is a strange description, not a detectably missing one — and a rule
+invented in the adapter would be a second, weaker copy of what the constraint
+evaluator already knows, drifting from it in the direction that accepts less.
+So a `Subject` nobody filled in reaches the evaluator and fails closed there, as
+`constraint_violated` at link 1, which is a finding against an agent for the
+arbiter's own gap. Closing that is a change to what `constraint.Subject` can say
+about itself, and it is not made here.
+
+#### One instant, not two
+
+`Subject.At` and the `at` argument are the same fact arriving by two routes: `at`
+is when the transaction happened, `Subject.At` is when the authority was
+exercised. The live path cannot tell them apart — `merchant.Service` builds its
+subject from `s.Clock.Now()` and hands the same clock to the rule set, so expiry
+and the user's booking window are decided as of one moment, which is the
+property `AuthorisePaymentChain`'s own comment already spells out for the payment
+side.
+
+Left to a caller they can differ silently, and the answer is a report naming the
+agent for a booking window the transaction sat comfortably inside. So
+`VerifyCheckoutMandateChain` **replaces** `Subject.At` with `at`, on
+`fixedClock`'s exact reasoning: there is no reading in which the caller's value
+is the right one, so refusing the pair would turn an unrepresentable state into
+a reachable error for nothing.
+`TestOneDisputeIsJudgedAsOfOneInstant` is that property.
+
+#### The semantic widening, and what it rests on
+
+For a chain, `checkout_authorised` **additionally** means the constraints were
+evaluated and held. There is no equivalent under Human Present, because there is
+no open mandate to evaluate against — the user signed the closed mandate
+themselves, and there is nothing left to compare to a limit.
+
+It reuses the real production verification path rather than a narrower
+reimplementation, and that is the right call for the reason `VerifyCheckoutAsOf`
+reaches `VerifyCheckout` through a pinned copy: a dispute should reproduce what
+the live merchant decided, not form a second judgment that drifts from it. A
+rule tightened on the role path reaches disputes for free.
+
+**What it rests on has to be said with the candour `at` is said with.** Under
+Human Present every link is recomputable from the five artefacts and the keys.
+Here the first link is not. The constraints are signed and travel in the chain;
+the description they are evaluated against is in none of the artefacts, and the
+arbiter supplies it — so **whoever supplies `Subject` controls every constraint
+verdict in the report**, exactly as *"whoever supplies `at` controls every expiry
+verdict"*, and further: `at` moves the expiry verdicts alone. A `Subject` naming
+a cheaper purchase than the one that happened verifies as authorised; one naming
+a route nobody flew refuses as `constraint_violated` against an agent that did
+nothing.
+
+**One thing narrows it, and it is worth knowing which.** The payment side takes
+no `Subject`: `AuthorisePaymentChain` derives one from the verified closed
+Payment Mandate, so a lie about a fact that mandate also carries — the amount,
+the payee — survives link 1 and is caught at `payment_authorised`, by a subject
+nobody supplied. A lie about a fact only the merchant ever knew is caught
+nowhere. `TestTheSubjectAnArbiterBringsDecidesTheConstraintVerdict` holds both
+halves, and `evidence.Step`'s own `StepCheckoutAuthorised` comment says so where
+a reader of a report will meet it rather than only here.
+
+#### A chain-shaped bundle handed to `Verify` is diagnosed, never guessed
+
+A chain always fails `sdjwt.Parse` — `Chain.String` writes an empty component
+between the hops and `Parse` refuses an empty Disclosure — so the two shapes
+cannot be confused in either direction. `Verify` therefore reports
+`mandate_malformed` with a message naming `VerifyChain`, rather than the bare
+"malformed SD-JWT" that names neither what is wrong nor what to do. It is a
+diagnosis and not a redirect: `Verify`'s two arguments have nowhere to take a
+subject or a nonce from, so guessing would have been worse than refusing. A
+token that is neither returns `sdjwt.Parse`'s own error unchanged.
+
+#### What is still not built
+
+Nothing assembles a Human Not Present bundle. `internal/agent`'s watch loop
+produces four chains per attempt rather than two mandates, `Purchase.Evidence`
+is the Human Present assembly, and choosing which of the payment chains a bundle
+carries is a decision nobody has needed to make — the arbiter's `PaymentChains`
+audience and `PaymentNonce` are the processor's on the reasoning
+`Purchase.Evidence` gives for the Payment Receipt, and nothing yet builds one.
+`Verify` is not wired to a caller either, and never was.
 
 ## The decisions worth arguing with
 
@@ -431,7 +541,8 @@ well as by spelling, alongside a table of tampered bundle → (link, code).
 ### `StepNone` is not a sixth link
 
 Two answers leave `Broke` at `StepNone`: a bundle missing artefacts, and an
-arbiter missing keys or rules. Neither makes a statement about any artefact —
+arbiter missing what it judges with — its keys, its rules, the instant, or,
+under Human Not Present, a remembered nonce. Neither makes a statement about any artefact —
 nobody has been shown to have done anything wrong — and a reader that took
 `StepNone` for "the first link failed" would record a finding against a
 counterparty nobody looked at. `Held` is empty in both cases.
@@ -486,7 +597,8 @@ a gap in what it was handed.
 
 `TestGoldenABrokenChainNamesTheSameLink` reads
 `backend/internal/adapters/ap2/testdata/dispute.json` and drives the published
-tampers through `Verify`.
+tampers through `Verify`; `TestGoldenABrokenDelegationChainNamesTheSameLink`
+does the same for the `broken_chain` section through `VerifyChain`.
 
 Two implementations shown the same broken bundle have to name the same link and
 the same reason, or one dispute reaches two verdicts depending on whose code
@@ -516,14 +628,37 @@ selects by test *name* — `-run 'TestGolden'` over `internal/adapters/...` and
 `pkg/...` — so a golden test is in the suite wherever it sits, as long as it is
 named like one.
 
+### The Human Not Present table, and what makes it the same picture
+
+`dispute.json` gains a second section, `broken_chain`, driven by
+`TestGoldenABrokenDelegationChainNamesTheSameLink`. It is purely additive: the
+thirteen rows of `broken` are byte for byte what they were, so no published
+claim about a Human Present bundle moved. Every chain row is reproducible from
+the bundle alone, so `chainTamperCases` needs no `delegated` flag and there is
+no publishable filter to apply.
+
+Six rows, one per link with `checkout_authorised` carrying two, and each is the
+chain-shaped version of a named row in `tamperCases`. **That correspondence is
+the point of the table and it is asserted rather than arranged.**
+`chainTamperCase.counterpart` names the presented row, and
+`TestAChainBreaksWhereItsPresentedCounterpartDoes` compares the link, the code
+and the sentinel across the two matrices — because the two behaviour tests each
+hold a row to what it declares, and neither would notice one mode's expectation
+being tightened without the other's. Two tables that happen to agree do not
+establish that the same tamper answers the same way whether or not the user was
+there; a comparison does.
+
 ## What is not wired up
 
 Nothing under `backend/cmd/` stands an arbiter up, and no role handler exposes a
-dispute endpoint. The chain is a library, exercised by
-`internal/adapters/ap2/dispute_test.go` and by three tests in
+dispute endpoint — for `Verify` or for `VerifyChain`. The chain is a library,
+exercised by `internal/adapters/ap2/dispute_test.go`,
+`internal/adapters/ap2/dispute_chain_test.go` and by three tests in
 `internal/agent/purchase_test.go` that assemble a bundle from a real purchase —
 two of them completed and refused, which the chain then verifies, and one
-abandoned partway, which `Bundle.Validate` reports as incomplete.
+abandoned partway, which `Bundle.Validate` reports as incomplete. Nothing
+assembles a Human Not Present bundle at all; see the section above for why that
+is a decision nobody has needed to take yet.
 
 That is worth saying rather than leaving a reader to discover it. An endpoint
 would be a state-changing operation only if it stored the dispute — verification
