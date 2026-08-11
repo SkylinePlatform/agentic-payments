@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-08-03.
+Accepted, 2026-08-03. Amended 2026-08-11 (#22) — see Amendments below.
 
 ## Context
 
@@ -101,11 +101,13 @@ a log entry that turns out to prove nothing.
 ## Consequences
 
 - Every HTTP-facing role gains an event-emission call at each of the five
-  moments in Decision 2, through a shared helper in `platform/obs` rather
-  than each `cmd/` inventing its own event shape — the same reasoning ADR
-  0001 gave for the error-rendering helper and ADR 0002 for the
-  idempotency helper: one implementation, not seven independently drifting
-  copies.
+  mandate moments in Decision 2. The sixth, added by the amendment below, is
+  not one of them: `authorisation_refused` is emitted by the Trusted Surface
+  alone, the only role a consent screen ever calls to say no to. All six go
+  through a shared helper in `platform/obs` rather than each `cmd/` inventing
+  its own event shape — the same reasoning ADR 0001 gave for the
+  error-rendering helper and ADR 0002 for the idempotency helper: one
+  implementation, not seven independently drifting copies.
 - Event emission has to be best-effort and non-blocking. Because the log is
   never evidence, a `cmd/collector` outage, a dropped event, or a slow SSE
   consumer must never delay or fail a mandate construction, presentation,
