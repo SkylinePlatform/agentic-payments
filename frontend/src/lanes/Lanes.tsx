@@ -22,12 +22,21 @@
  * `open`, `half`, `full` — drawn beside the spine and never across it, because
  * where the two compete the agreement wins. What went is the sentence each step
  * card used to carry beneath its own word: `ProtocolEvent.detail` is free text
- * an emitter writes for a person, and on this card it restated the mark, the
- * word and the party that are already there. It has not left the page — the
+ * an emitter writes for a person, and on this card it mostly restated the mark,
+ * the word and the party that are already there. It has not left the page — the
  * event log below prints every one of them verbatim, which is the log's job.
  * The four categories `docs/specs/2026-08-06-three-lane-view-design.md` protects
  * are untouched: {@link Thesis} is category 2 and says *why* a verdict was
  * reached, which no mark in the vocabulary can.
+ *
+ * **"Mostly" is #201, and it is the one thing that deletion cost.** Fifteen of
+ * the sixteen sentences on the Human Not Present path also named *which of
+ * AP2's two mandates* the step was about, and that is not a restatement of
+ * anything else on the card — the open pair and the closed pair then drew as
+ * four cards separable only by a sequence number. It came back as
+ * {@link Step.mandate}, a typed field rendered beside the party by
+ * {@link mandateLabel}: a label, never a lane and never a mark. Prose was still
+ * the wrong carrier for it, which is why the fix is a field and not a revert.
  */
 
 import { Status } from "../status/Status";

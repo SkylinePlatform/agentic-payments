@@ -94,7 +94,15 @@ export function runStatus(raw: string): StatusMeta {
 
 // --- the mandate's own axis: authz.MandateState -----------------------------
 
-/** `authz.MandateState.String()`'s three spellings. */
+/**
+ * `authz.MandateState.String()`'s three spellings.
+ *
+ * **`sse/events.ts` exports a different `MANDATE_STATES`** — AP2's own open
+ * against closed, which is whether an artefact is bound to a transaction. This
+ * one is where a mandate stands in the rejection-receipt rule. A mandate is
+ * `ready` here and `closed` there at the same moment; they are two axes and
+ * never move together.
+ */
 export const MANDATE_STATES = ["ready", "awaiting_receipt", "spent"] as const;
 export type MandateState = (typeof MANDATE_STATES)[number];
 

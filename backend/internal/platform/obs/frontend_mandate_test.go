@@ -2,6 +2,8 @@ package obs_test
 
 import (
 	"os"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -19,7 +21,18 @@ const (
 	mandateTypesOpen  = "MANDATE_TYPES = ["
 	mandateStatesOpen = "MANDATE_STATES = ["
 	arrayClose        = "]"
+
+	// mandateRefOpen delimits the frontend's copy of Mandate's own two member
+	// names, which is an interface body rather than an array literal — so it
+	// closes on a brace rather than on a bracket.
+	mandateRefOpen  = "interface MandateRef {"
+	mandateRefClose = "}"
 )
+
+// mandateRefMember matches one `readonly name:` line of that interface. The
+// member names are what the wire carries; their TypeScript types are held to
+// the Go side by TestTheFrontendKnowsEveryMandateValue instead.
+var mandateRefMember = regexp.MustCompile(`(?m)^\s*readonly\s+(\w+)\??\s*:`)
 
 // declaredStrings pulls the double-quoted members out of the array literal
 // opening at marker in the frontend's event module.
@@ -98,6 +111,64 @@ func TestTheFrontendKnowsEveryMandateValue(t *testing.T) {
 		"and both states. open against closed is the distinction AP2 uses instead of a third "+
 			"mandate type, so a screen that could not draw it would be teaching the model this "+
 			"repository exists to correct")
+}
+
+// TestTheFrontendKnowsEveryMandateField is the fourth pin, and it closes the
+// one hole the other three leave open: **the member names inside Mandate**.
+//
+// The three above cover kinds, the *top-level* field list, and the two
+// vocabularies. None of them reaches a nested struct's own json tags.
+// TestTheFrontendKnowsEveryField reflects over obs.Event, so it sees `mandate`
+// and stops there — renaming `json:"type"` to `json:"mandate_type"` leaves the
+// entire backend suite green.
+//
+// **The precedent this field was built on is exactly where the analogy runs
+// out.** Event.Mandate is modelled on Event.Amount — a pointer to a two-member
+// struct — but generated.Amount's members are generated into *both* languages
+// from contracts/instrument/amount.json, so `amount` and `currency` cannot
+// drift by construction. Mandate is hand-written on each side, which is right
+// per ADR 0003 (the event schema is deliberately not canonical model) and is
+// precisely why the pin has to be a test instead.
+//
+// The failure it prevents is worse than the one its siblings prevent, which is
+// what earns it a fourth test. A field the frontend does not know is *dropped*
+// by parseRecord and costs one fact. A member name the two sides disagree about
+// makes optionalMandate refuse the record **whole**, so every mandate-bearing
+// step — eighteen of the twenty-one emit sites — vanishes from the three-lane
+// view and surfaces as a hole in the sequence, roles away from its cause.
+func TestTheFrontendKnowsEveryMandateField(t *testing.T) {
+	raw, err := os.ReadFile(frontendKinds)
+	require.NoError(t, err, "the frontend's event module has moved; see TestTheFrontendKnowsEveryKind")
+	source := string(raw)
+
+	start := strings.Index(source, mandateRefOpen)
+	require.GreaterOrEqual(t, start, 0,
+		"MandateRef is no longer declared as an interface in frontend/src/sse/events.ts, and this "+
+			"test can no longer read it — point it at the new shape rather than deleting it")
+
+	rest := source[start+len(mandateRefOpen):]
+	end := strings.Index(rest, mandateRefClose)
+	require.GreaterOrEqual(t, end, 0, "the MandateRef interface body is unclosed")
+
+	declared := make([]string, 0, 2)
+	for _, match := range mandateRefMember.FindAllStringSubmatch(rest[:end], -1) {
+		declared = append(declared, match[1])
+	}
+	require.NotEmpty(t, declared,
+		"the scan found no members at all, which means MandateRef changed shape rather than "+
+			"contents — a version of this test that reported success here would be worse than no test")
+
+	mandate := reflect.TypeOf(obs.Mandate{})
+	want := make([]string, 0, mandate.NumField())
+	for i := range mandate.NumField() {
+		name, _, _ := strings.Cut(mandate.Field(i).Tag.Get("json"), ",")
+		want = append(want, name)
+	}
+
+	assert.Equal(t, want, declared,
+		"MandateRef must name every member obs.Mandate puts on the wire, in Go's struct order. "+
+			"A name the two sides disagree about is not a missing label — optionalMandate refuses "+
+			"the whole record, so the step disappears rather than the mandate")
 }
 
 // TestTheEventLogSpellsAMandateTheWayAReceiptDoes holds obs.MandateType to

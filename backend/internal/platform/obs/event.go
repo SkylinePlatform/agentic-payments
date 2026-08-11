@@ -137,6 +137,22 @@ func (t MandateType) Valid() bool { return slices.Contains(mandateTypes, t) }
 // the exact misreading that document exists to prevent. They travel together in
 // one Mandate below instead — one field, two members, neither derivable from
 // the other.
+//
+// # It shares a name with authz.MandateState and is a different axis
+//
+// authz.MandateState is ready, awaiting_receipt and spent — where one open
+// mandate stands in the rejection-receipt rule, which is bookkeeping this
+// package never sees. This one is open against closed: whether the artefact a
+// step was about is bound to a transaction. **A mandate that is `closed` here
+// is `ready` there**, and the two never move together.
+//
+// The name is kept because open/closed is AP2's own word for this and a
+// paraphrase would cost more than the collision does; the collision is
+// contained because the two types live in packages that do not import each
+// other, so no call site can be handed the wrong one. What was left to a reader
+// is this paragraph. internal/agent/console/run.go sets the precedent from the
+// other side — it names a third axis and says it is "a different axis from
+// authz.MandateState and deliberately not the same words".
 type MandateState string
 
 // The two states a mandate can be in.

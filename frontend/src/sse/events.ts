@@ -89,6 +89,19 @@ export type MandateType = (typeof MANDATE_TYPES)[number];
  * the agent's key; a **closed** one is bound to one transaction. Verifiers
  * always receive closed mandates in both modes, which is why every verifier's
  * step on this screen says closed and only the Trusted Surface ever says open.
+ *
+ * **`tracker/model.ts` exports a different `MANDATE_STATES`, and the two must
+ * not be confused.** That one is `authz.MandateState` — ready,
+ * awaiting_receipt, spent — where a mandate stands in the rejection-receipt
+ * rule, and it is the console's axis. This one is AP2's binding distinction and
+ * is the lanes' axis. A mandate is `closed` here and `ready` there at the same
+ * moment. Neither module imports the other, so a file wanting both has to alias
+ * one and `tsc` is what says so; the trap is a reader's, and this is the
+ * paragraph that closes it.
+ *
+ * Beware one further overlap in that module: its pip vocabulary also has a
+ * member called `open`, meaning *at its beginning*. It is a shape on a
+ * progression axis and has nothing to do with an unbound mandate.
  */
 export const MANDATE_STATES = ["open", "closed"] as const;
 
