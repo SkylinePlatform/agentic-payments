@@ -52,7 +52,10 @@ type Found string
 const (
 	// FoundAlways is in range at every price the offer steps through — the
 	// concert tickets and the ladders, whose prices still move (see issue #192)
-	// but never leave the cap their own prompt names.
+	// but never leave the cap their own prompt names. Both prompts are
+	// instructions since issue #198, so the agent buys at the first of those
+	// prices rather than at the second; what this constant says is unchanged
+	// either way, because it is about the offer and not about the run.
 	FoundAlways Found = "always"
 
 	// FoundAtTheLastPrice is above the cap at the opening price and inside it
@@ -135,11 +138,20 @@ type CatalogueEntry struct {
 
 	// Prices is what this costs over time, in the file's currency and its minor
 	// unit, one entry per step. A single price is a schedule that holds still —
-	// legitimate on its own terms, but a Human Not Present watch attempts only
+	// legitimate on its own terms, but a Human Not Present *watch* attempts only
 	// on a step change (see agent.Watch), so an offer with nothing else to say
 	// is also an offer no watch can ever act on. Issue #192 is what that cost
-	// the concert and the ladders, and every offer this file ships now has at
-	// least two entries because of it.
+	// the concert and the ladders, and every offer this file ships has at least
+	// two entries because of it.
+	//
+	// **A run started from a sentence with no condition in it is not a watch**,
+	// and since issue #198 those two prompts are exactly that: the agent buys at
+	// the first price it is quoted, so a flat schedule would no longer strand
+	// them. The second entries stay because a browser that has not been taught
+	// to send the trigger still starts a watch, and because moving a price moves
+	// what four tests and every screenshot assert. The rule above therefore
+	// still holds for every *conditional* prompt, which is what it was always
+	// about.
 	Prices []int `json:"prices"`
 
 	// Scenario is what this offer is for. See the type.
