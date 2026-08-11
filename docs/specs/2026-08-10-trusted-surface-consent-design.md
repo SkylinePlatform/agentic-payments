@@ -379,8 +379,10 @@ pre-empt either: `palette.test.ts` pins the hexes and says in as many words that
 the spec leads and the stylesheet follows. #159 owns both. Its palette half has
 since landed — seven tokens, navy in dark and cream in light — and repainted
 these two screens without touching them, because they name tokens rather than
-hexes. Its type half has not: monospace is still the protagonist at every call
-site, and demoting it is a `className` change on its own branch.
+hexes. Its type half has since landed too, and it did touch them: the sentences
+these screens render out of `previewed.rendered` are what #159 names as the
+worst of the inversion — an amount inside prose, set in mono on the one screen
+whose job is to be read — and they are set in the sans.
 
 ### `/` — the shopping console, first slice
 

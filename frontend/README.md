@@ -348,11 +348,15 @@ sentence — `the amount is at most 210.00 USD` — and used to be set in mono,
 which is `#159`'s own flagship example of the failure (`200.00 USD` reads as
 money in the sans and as a field dump in mono). That decision is recorded in
 [the spec](../docs/specs/2026-08-06-three-lane-view-design.md)'s *Tokens*
-section; `src/architecture.test.ts` holds two cases of it mechanically — no
-heading and no rendered amount may carry `font-mono` — and the rest is a
-call-site-by-call-site judgement recorded beside each one, the same way the
-event log's own row stays in mono deliberately, as a genuine log line rather
-than a narrative card. The faces and weights above are unaffected either way —
+section; `src/architecture.test.ts` holds three cases of it mechanically — no
+heading, no element rendering an amount and no signed sentence may carry
+`font-mono` — and the rest is a call-site-by-call-site judgement recorded
+beside each one, the same way the event log's own row stays in mono
+deliberately, as a genuine log line rather than a narrative card. All three are
+negative assertions, so a fourth test asserts each one still has call sites to
+look at: extracting the two signed-sentence boxes into one shared component
+would otherwise leave the sharpest of the three scanning nothing and reporting
+success. The faces and weights above are unaffected either way —
 nothing new is subset and nothing is dropped.
 
 The mono's `@font-face` carries `font-display: block` and the 400 is preloaded

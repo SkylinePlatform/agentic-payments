@@ -180,10 +180,14 @@ deliberately rather than quietly: monospace as the protagonist made every
 number on the page read as a field dump, including the ones that are money.
 The sans is support again, mono is a utility voice again, and Space Grotesk
 takes the display role that was already built for it. Which `className` a
-component reaches for to realise this is the second half of #159 and lands on
-its own branch, separately from this document; what is fixed here is which
-content each face is *for*, so that work has a spec to build against rather
-than a colour sense to guess at.
+component reaches for to realise this was the second half of #159, and it
+landed separately from this document; what is fixed here is which content each
+face is *for*, so that work had a spec to build against rather than a colour
+sense to guess at. `frontend/src/architecture.test.ts` is where three of these
+sentences became mechanical — a heading, an element rendering an amount, and
+the sentence a person signs may none of them carry `font-mono` — and the rest
+is a judgement recorded beside each call site, `src/lanes/EventLog.tsx`'s row
+being the worked example of one that keeps mono deliberately.
 
 **Layout.** Three columns, fixed order — the user on the left, the merchant on
 the right, the agent between them because that is where it sits in the protocol

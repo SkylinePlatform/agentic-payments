@@ -260,43 +260,139 @@ function withoutCssComments(css: string): string {
 // --- rule: monospace is for code, not for money or headings ----------------
 
 /**
- * #159's demotion, and the two claims about it a source scan can check
+ * #159's demotion, and the three claims about it a source scan can check
  * honestly.
  *
  * "Which content is code-like" is mostly a judgement made once, at each call
  * site, and recorded in a comment there. `src/lanes/EventLog.tsx`'s own
  * comment is the shape of it: its row keeps the sequence number in mono that
- * `src/lanes/Lanes.tsx`'s `StepCard` lost, because the same fact — a
- * sequence number — is a column of a genuine log line in one component and a
- * badge beside a sentence in the other, and nothing in the *source* tells
- * the two apart short of knowing which one draws a line and which one draws
- * a card. A rule that grepped for `.seq` would either miss the badge or
- * break the log, and a false rule is worse than an honest gap, so that
- * boundary — and "status label" generally — stays a reviewed one rather than
- * a mechanical one, the same way `MAY_NAME_A_THEME` below is a reviewed list
- * rather than a derived one.
+ * `src/lanes/Lanes.tsx`'s `StepCard` lost, because one is a padded, aligned
+ * column and the other is a loose badge. That distinction is legible in the
+ * source — `padStart` and `tabular-nums` are right there — and it is still
+ * not a rule, because it holds over one call site each and a rule inferred
+ * from two examples generalises whichever way its author guessed. A rule that
+ * grepped for `.seq` would either miss the badge or break the log, and a
+ * false rule is worse than an honest gap, so that boundary — and "status
+ * label" generally — stays a reviewed one rather than a mechanical one, the
+ * same way `MAY_NAME_A_THEME` below is a reviewed list rather than a derived
+ * one.
  *
  * What a scan *can* decide without knowing which component drew the line is
- * two narrower, sharper claims the issue makes by name:
+ * three narrower, sharper claims the issue makes by name:
  *
  * - **A heading is never mono.** `<h1>`…`<h6>` is unambiguous in the source,
  *   whatever is inside it.
  * - **A rendered amount is never mono.** `renderPrice` and `formatAmount` are
  *   this app's only two functions that turn an `Amount` into the string a
- *   reader sees, so a call to either inside an element is unambiguously "an
- *   amount is here" — and `Previewed.rendered`, the sentence a person
- *   actually signs, is the sharpest version of the same claim: prose that
- *   can *contain* one, which is #159's own worked example (`200.00 USD`
- *   reads as money in the sans and as a field dump in mono).
+ *   reader sees, so a call to either directly inside an element is
+ *   unambiguously "an amount is here".
+ * - **A signed sentence is never mono**, which is the sharpest version of the
+ *   second: `Previewed.rendered` is prose that *contains* an amount, and it is
+ *   #159's own worked example (`the amount is at most 210.00 USD` reads as
+ *   money in the sans and as a field dump in mono).
+ *
+ * **All three are negative assertions, so each needs its subject to still
+ * exist**, and `describes call sites that exist` below is what says so. That
+ * is not a formality for the third: `previewed.rendered` is mapped in
+ * `Consent.tsx` and `Signing.tsx`, which render the same box, and the obvious
+ * tidy-up — one shared component — would delete `.rendered.map(` from both and
+ * disarm the flagship rule without a single test going red. When that
+ * assertion fails, the rule wants re-pointing at wherever the sentences are
+ * rendered now. It does not want deleting.
  */
-const HEADING_TAG = /<h[1-6]\b([^>]*)>/g;
+
+/** One JSX opening tag, as the walker below found it. */
+interface OpeningTag {
+  /** `h2`, `span`, `PriceBadge`. */
+  readonly name: string;
+  /** Everything between the tag name and the `>` that closes the tag. */
+  readonly attributes: string;
+  /** The whole `<name …>`, for a failure that names what it found. */
+  readonly text: string;
+  /** The index just past the closing `>`, so a rule can read what follows. */
+  readonly end: number;
+}
+
+/** Where a quoted string ends, so a `>` inside one cannot end a tag. */
+function endOfString(code: string, at: number): number {
+  const quote = code[at];
+  let i = at + 1;
+  while (i < code.length) {
+    if (code[i] === "\\") {
+      i += 2;
+      continue;
+    }
+    if (code[i] === quote) return i + 1;
+    i++;
+  }
+  return code.length;
+}
+
+/**
+ * Where an opening tag's `>` is, counting braces rather than stopping at the
+ * first one.
+ *
+ * **This is the whole reason these rules do not use `[^>]*`.** An attribute
+ * list is full of `>` that do not close the tag — `onClick={() => …}` is the
+ * common one, and a comparison in a `className` ternary is the other — and a
+ * scan that stopped at the first of them read no `className` at all, reported
+ * nothing, and passed. That failure is silent in both directions a reviewer
+ * would check: the suite stays green and the offending file is still listed as
+ * governed.
+ *
+ * A `<` at depth zero means the tag never closed and what was found was not a
+ * tag — `a < b` in an expression, most likely — so the walk gives up rather
+ * than running to the end of the file looking for a `>`.
+ */
+function endOfOpeningTag(code: string, from: number): number | undefined {
+  let depth = 0;
+  let i = from;
+  while (i < code.length) {
+    const c = code[i];
+    if (c === '"' || c === "'" || c === "`") {
+      i = endOfString(code, i);
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}") depth--;
+    else if (depth === 0 && c === ">") return i;
+    else if (depth === 0 && c === "<") return undefined;
+    i++;
+  }
+  return undefined;
+}
+
+const TAG_NAME = /^<([A-Za-z][\w.:-]*)/;
+
+/** Every JSX opening tag in a stretch of code, with its attributes intact. */
+function openingTags(code: string): OpeningTag[] {
+  const tags: OpeningTag[] = [];
+  for (let i = 0; i < code.length; i++) {
+    if (code[i] !== "<") continue;
+    const name = TAG_NAME.exec(code.slice(i, i + 64));
+    if (name === null) continue;
+    const close = endOfOpeningTag(code, i + name[0].length);
+    if (close === undefined) continue;
+    tags.push({
+      name: name[1],
+      attributes: code.slice(i + name[0].length, close),
+      text: code.slice(i, close + 1),
+      end: close + 1,
+    });
+  }
+  return tags;
+}
+
+function inMono(tags: readonly OpeningTag[]): string[] {
+  return tags.filter((tag) => /font-mono/.test(tag.attributes)).map((tag) => tag.text);
+}
+
+function headingTags(source: string): OpeningTag[] {
+  return openingTags(codeOf(source)).filter((tag) => /^h[1-6]$/.test(tag.name));
+}
 
 function headingsSetInMono(source: string): string[] {
-  const offenders: string[] = [];
-  for (const match of codeOf(source).matchAll(HEADING_TAG)) {
-    if (/font-mono/.test(match[1])) offenders.push(match[0]);
-  }
-  return offenders;
+  return inMono(headingTags(source));
 }
 
 /**
@@ -304,38 +400,65 @@ function headingsSetInMono(source: string): string[] {
  * `{` between its `>` and the call — because that is the shape every real
  * call site uses. Widening it would start guessing which of several
  * ancestors "the" wrapper is, which is exactly the kind of inference this
- * rule exists not to need.
+ * rule exists not to need. The gap that leaves is an amount put in a variable
+ * first, and it is a gap rather than a hole: `describes call sites that
+ * exist` fails if the last direct call site goes away.
  */
-const AMOUNT_CALL = /<([A-Za-z][\w.]*)\b([^>]*)>\s*\{?\s*(?:renderPrice|formatAmount)\(/g;
+const AMOUNT_CALL = /^\s*\{?\s*(?:renderPrice|formatAmount)\(/;
+
+function amountTags(source: string): OpeningTag[] {
+  const code = codeOf(source);
+  return openingTags(code).filter((tag) => AMOUNT_CALL.test(code.slice(tag.end, tag.end + 80)));
+}
 
 function amountsSetInMono(source: string): string[] {
-  const offenders: string[] = [];
-  for (const match of codeOf(source).matchAll(AMOUNT_CALL)) {
-    if (/font-mono/.test(match[2])) offenders.push(match[0].trim());
+  return inMono(amountTags(source));
+}
+
+/** Where a parenthesised group ends, for finding the end of a `map` callback. */
+function endOfGroup(code: string, at: number): number {
+  let depth = 0;
+  let i = at;
+  while (i < code.length) {
+    const c = code[i];
+    if (c === '"' || c === "'" || c === "`") {
+      i = endOfString(code, i);
+      continue;
+    }
+    if (c === "(") depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+    i++;
   }
-  return offenders;
+  return code.length;
 }
 
 /**
- * `Previewed.rendered` is read in exactly one place in the app — the box
- * captioned "What you are signing" — and mapped straight into one JSX
- * element with no other element between the call and it. A fixed window
- * after `.rendered.map(` is therefore enough to see that element's own
- * className without having to balance the callback's parentheses to find
- * where it ends.
+ * Every element the signed sentences are rendered into.
+ *
+ * The callback's own parentheses are balanced rather than a fixed window taken
+ * after `.rendered.map(`, and the difference runs both ways: a window long
+ * enough to see a wrapped element would also see the next section of the page,
+ * so a legitimate `<code className="font-mono">` below the box would fail this
+ * rule, and a window short enough not to would miss the element it is for.
+ * Balancing costs one small walk and is exact.
  */
 const RENDERED_SENTENCE = /\.rendered\.map\(/g;
-const RENDERED_SENTENCE_WINDOW = 400;
+
+function signedSentenceTags(source: string): OpeningTag[] {
+  const code = codeOf(source);
+  const tags: OpeningTag[] = [];
+  for (const match of code.matchAll(RENDERED_SENTENCE)) {
+    const open = (match.index ?? 0) + match[0].length - 1;
+    tags.push(...openingTags(code.slice(open, endOfGroup(code, open))));
+  }
+  return tags;
+}
 
 function renderedSentenceSetInMono(source: string): string[] {
-  const code = codeOf(source);
-  const offenders: string[] = [];
-  for (const match of code.matchAll(RENDERED_SENTENCE)) {
-    const start = match.index ?? 0;
-    const window = code.slice(start, start + RENDERED_SENTENCE_WINDOW);
-    if (/font-mono/.test(window)) offenders.push(`.rendered.map( at index ${String(start)}`);
-  }
-  return offenders;
+  return inMono(signedSentenceTags(source));
 }
 
 // --- rule: only the stream client names EventSource ------------------------
@@ -649,6 +772,40 @@ describe("the frontend's architecture", () => {
       ).toEqual([]);
     });
 
+    it("describes call sites that exist", () => {
+      // Three negative assertions, so three subjects that have to still be
+      // there. The third is the one this is really for: `.rendered.map(`
+      // appears twice, in two files that render the same box, and folding that
+      // duplication into a shared component would leave the flagship rule
+      // scanning nothing while reporting success. Re-point the rule; do not
+      // delete it.
+      const drawnIn = (find: (source: string) => readonly OpeningTag[]) =>
+        APP_SOURCES.filter(([, source]) => find(source).length > 0).map(([path]) => path);
+
+      expect(
+        drawnIn(headingTags),
+        "the files whose headings the first rule is asserted over",
+      ).toEqual(expect.arrayContaining(["./routes/consent/Consent.tsx", "./lanes/EventLog.tsx"]));
+      expect(
+        drawnIn(amountTags),
+        "an amount rendered directly inside an element — if this is empty the " +
+          "second rule has nothing left to check, most likely because a call " +
+          "site moved the call into a variable",
+      ).toEqual(
+        expect.arrayContaining([
+          "./lanes/Lanes.tsx",
+          "./tracker/Tracker.tsx",
+          "./catalogue/Table.tsx",
+        ]),
+      );
+      expect(
+        drawnIn(signedSentenceTags),
+        "the sentences a person signs, which is what #159's flagship case is about",
+      ).toEqual(
+        expect.arrayContaining(["./routes/consent/Consent.tsx", "./routes/consent/Signing.tsx"]),
+      );
+    });
+
     it("catches the violations it claims to catch", () => {
       expect(
         headingsSetInMono(`<h2 className="font-mono text-sm">Log</h2>`),
@@ -685,6 +842,35 @@ describe("the frontend's architecture", () => {
         "the exact shape Consent.tsx and Signing.tsx carried before #159's type half",
       ).toHaveLength(1);
       expect(renderedSentenceSetInMono(signedInSans), "the fixed shape").toEqual([]);
+
+      // The same three violations, wearing the disguise that defeated the
+      // first version of these rules: a `>` in the attribute list, before the
+      // className. Every one of them passed while the offending className sat
+      // in plain sight, and an inline handler is not an exotic thing to put on
+      // an element.
+      expect(
+        headingsSetInMono(`<h2 onClick={() => undefined} className="font-mono text-sm">Log</h2>`),
+        "the arrow's `>` does not close the tag",
+      ).toHaveLength(1);
+      expect(
+        amountsSetInMono(
+          `<span onClick={() => undefined} className="font-mono">{renderPrice(step.amount)}</span>`,
+        ),
+        "nor here",
+      ).toHaveLength(1);
+      expect(
+        amountsSetInMono(`<span className={count > 1 ? "font-mono" : ""}>{renderPrice(a)}</span>`),
+        "a comparison in a className ternary is the other `>` that is not a tag's",
+      ).toHaveLength(1);
+
+      // And the callback's own parentheses are what bound the third rule, so a
+      // `font-mono` further down the same page is not its business.
+      expect(
+        renderedSentenceSetInMono(
+          `${signedInSans}\n<code className="font-mono text-xs">{checkoutHash}</code>`,
+        ),
+        "a digest below the box is still code and still mono",
+      ).toEqual([]);
 
       // …and does not flag what #159 leaves in mono: a digest, a key or raw
       // JSON are still code, and a <code> tag is not a heading.

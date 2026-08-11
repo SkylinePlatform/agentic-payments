@@ -12,8 +12,9 @@
  * This file is where the colours become something a machine can check: every
  * colour the app is allowed to use is declared once, in one block, and
  * `src/architecture.test.ts` reads that block back out — the same file also
- * holds the two sharpest cases of the type change: a heading and a rendered
- * amount may never carry `font-mono`.
+ * holds the three sharpest cases of the type change: a heading, an element
+ * rendering an amount and the sentence a person signs may none of them carry
+ * `font-mono`.
  *
  * Tailwind v4, configured here rather than in a `tailwind.config.js` — v4 has
  * no such file, and every v3 tutorial that says otherwise will send you looking
@@ -42,8 +43,8 @@
  * appearing in a fallback for 80ms costs nothing.
  *
  * This argument is the one part of the type hierarchy #159 does not disturb. It
- * rests on the digest being the content and being set in mono, and both stay
- * true when amounts leave mono for the sans.
+ * rests on the digest being the content and being set in mono, and both stayed
+ * true when the amounts left mono for the sans.
  */
 
 @font-face {

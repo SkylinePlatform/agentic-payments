@@ -88,17 +88,25 @@ export function EventLog({ records }: { readonly records: readonly EventRecord[]
               className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-graphite/20 px-3 py-1.5 last:border-b-0"
             >
               {/*
-                This row's own fields stay in mono, unlike the counterpart
-                badges #159 moved off it in StepCard — `#{step.seq}` there
-                names a position in a narrative card, sitting beside a
-                sentence, and reads as a field dump next to prose exactly the
-                way the issue describes. This is not that: it is the log
-                itself, "one line per step" in this file's own doc comment
-                and in the layout section of the three-lane design, and #159
-                keeps "log lines" in mono by name. Sequence and time are
-                columns of this line, not commentary on it, so they read the
-                same way `kind`, the correlation id and the digest already
-                did.
+                Sequence and time stay in mono here, though #159 moved the
+                counterpart badge off `StepCard` in `Lanes.tsx`. The two look
+                like the same fact and are not, and the difference is on the
+                next line rather than in anybody's taste: `padStart(4, "0")`
+                and `tabular-nums` make this a fixed-width column, one of
+                several, that a reader's eye runs *down* — and a column of
+                digits that has to line up is the one job monospace has never
+                stopped having. `#{step.seq}` on a card is unpadded, alone,
+                and has nothing above or below it to line up with; it is a
+                label, and it went to the sans with the other labels.
+
+                The category argument agrees but is the weaker one, so it is
+                second: this file is "one line per step" in its own doc
+                comment and in the layout section of the three-lane design,
+                and #159 keeps "log lines" in mono by name.
+
+                So the split to preserve is not log-versus-card. It is
+                aligned-column versus loose badge, and a `padStart` that went
+                away would take the argument with it.
               */}
               <span className="font-mono text-xs tabular-nums text-graphite">
                 {String(record.seq).padStart(4, "0")}
