@@ -20,6 +20,12 @@ const DEFAULT_COLLECTOR = "http://127.0.0.1:8085";
 const DEFAULT_AGENT = "http://127.0.0.1:8086";
 
 /**
+ * The Trusted Surface, matching `-addr` on the `surface` entry in
+ * deploy/demo.json. Overridable with VITE_SURFACE_URL.
+ */
+const DEFAULT_SURFACE = "http://127.0.0.1:8084";
+
+/**
  * defineConfig comes from vitest/config rather than vite so that the `test`
  * block below type-checks; loadEnv still comes from vite, which is the only
  * one of the two that exports it. Vitest reads this file, so the tests run
@@ -40,6 +46,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, ".", "VITE_");
   const collector = env.VITE_COLLECTOR_URL ?? DEFAULT_COLLECTOR;
   const agent = env.VITE_AGENT_URL ?? DEFAULT_AGENT;
+  const surface = env.VITE_SURFACE_URL ?? DEFAULT_SURFACE;
 
   return {
     plugins: [react(), tailwindcss()],
@@ -91,6 +98,27 @@ export default defineConfig(({ mode }) => {
           target: agent,
           changeOrigin: true,
         },
+
+        // The Trusted Surface's authorisation routes. Same-origin for the
+        // reason /watches is: `Idempotency-Key` is not a simple request, so the
+        // browser preflights, and `transport.Idempotency` treats OPTIONS as
+        // safe and hands it to a mux with no handler for it, which answers 405.
+        // CORS would therefore not be a header on one route but a change to
+        // middleware every role runs — including a process holding the user's
+        // signing key — to serve one browser in one dev setup.
+        //
+        // The prefix covers /authorise, /authorise/preview and
+        // /authorise/refused. No rewrite: the path the browser asks for is the
+        // path the surface serves.
+        "/authorise": {
+          target: surface,
+          changeOrigin: true,
+        },
+
+        // The agent's proposal and menu routes, alongside /watches above and
+        // for the same reason.
+        "/proposals": { target: agent, changeOrigin: true },
+        "/examples": { target: agent, changeOrigin: true },
       },
     },
 
