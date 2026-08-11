@@ -18,7 +18,14 @@
  * test injecting a fake imports them from there.
  */
 
-export { EVENT_KINDS, MANDATE_STATES, MANDATE_TYPES, isEventKind, parseRecord } from "./events";
+export {
+  EVENT_KINDS,
+  MANDATE_STATES,
+  MANDATE_TYPES,
+  PROTOCOL_EVENT_FIELDS,
+  isEventKind,
+  parseRecord,
+} from "./events";
 export type {
   EventKind,
   EventRecord,
@@ -27,6 +34,7 @@ export type {
   MandateType,
   ParsedRecord,
   ProtocolEvent,
+  ProtocolEventField,
 } from "./events";
 
 export { connect } from "./stream";

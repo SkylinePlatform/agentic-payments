@@ -62,7 +62,32 @@ export function Shell() {
         </div>
       </aside>
 
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+      {/*
+        `min-w-0` is load-bearing rather than tidy, and it is here rather than
+        in the surface that needed it because the box that has to yield is this
+        one. `main` is a row-flex item on `md` and up, so its default
+        `min-width: auto` resolves to the min-content width of whatever route
+        is inside it — and a surface wide enough to exceed the column takes the
+        *document* sideways instead of scrolling inside its own container.
+
+        Found by measuring #184's event-log table at a 1024px viewport: this
+        element became 946px inside 768px of room, `document.scrollWidth` went
+        to 1202 against a 1024 viewport, and the table's own `overflow-x-auto`
+        wrapper measured `clientWidth` and `scrollWidth` both 896 — it never
+        overflowed, so it never scrolled. The surface already carried `min-w-0`
+        on its own section, which is necessary and stops one element short: the
+        chain is two flex items long and both ends of it have to yield.
+
+        With the class the same measurement reads 1024/1024, and the table
+        scrolls inside its border where it was always meant to. It can only
+        ever let this column be narrower than its contents demand, which is the
+        whole point, so it is right for every surface rather than for that one.
+
+        jsdom has no layout, so no test in this package can see any of this —
+        the same disclosure `EventLog.tsx` makes about the two fixes that came
+        from building the page and looking at it.
+      */}
+      <main className="mx-auto w-full min-w-0 max-w-5xl flex-1 px-6 py-8">
         <Outlet />
       </main>
     </div>

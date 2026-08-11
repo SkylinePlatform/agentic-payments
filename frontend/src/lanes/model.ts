@@ -142,6 +142,53 @@ export function mandateLabel(mandate: MandateRef): string {
 }
 
 /**
+ * A price, in the register a constraint's own sentence uses — `"210.00 USD"`,
+ * not `formatAmount`'s `"$210.00"`.
+ *
+ * **Not `formatAmount`, and the reason is the same one {@link timeOf} in
+ * `EventLog.tsx` gives about `Date`.** That function goes through
+ * `Intl.NumberFormat` with the reader's own locale, so two people watching one
+ * demonstration would read different strings against the same event — grouping
+ * separators, symbol position, and in some locales a different decimal mark. On
+ * a price tag that is correct behaviour; in a column somebody is comparing
+ * against a limit a mandate carries it is a second spelling of one number.
+ *
+ * The register matters as much: this screen sits a figure next to a
+ * constraint's own limit — `240.00 USD today` beside `at most 200.00 USD` — and
+ * the two only read as the same kind of number when neither borrows a currency
+ * symbol the other lacks.
+ *
+ * No sign handling: `contracts/instrument/amount.json` requires `amount >= 0`,
+ * and `optionalAmount` in `sse/events.ts` refuses a negative one off the wire,
+ * so there is nothing here to be wrong about.
+ *
+ * **`Lanes.tsx` is where this algorithm came from**, and it now imports it from
+ * here rather than holding a second copy. #184 lifted it into this module — the
+ * one in this directory that holds what the screen knows with no React in it —
+ * so that `EventLog.tsx` could use it, and left the private original in place
+ * on the grounds that `Lanes.tsx` was outside its scope; the review of that
+ * change deleted it, because the reason had expired (#208 had merged and #207
+ * does not touch the file) and two byte-identical renderers of one string with
+ * nothing comparing them is the drift `contracts/testdata/render_vectors.json`
+ * exists one module across to prevent. There is no vector for this one, so the
+ * single definition is the whole of what keeps the lane card and the log
+ * spelling a price the same way.
+ *
+ * `renderMoney` in `constraint/render.ts` makes the same choice for the same
+ * reason and is still not imported: it is unexported, and that module's own doc
+ * scopes it to two screens with no signature nearby, neither of which these
+ * are. Five lines of string surgery cost less than widening a boundary a
+ * different file's tests hold.
+ */
+export function renderPrice(amount: Amount): string {
+  const MINOR_DIGITS = 2;
+  const digits = String(amount.amount).padStart(MINOR_DIGITS + 1, "0");
+  const whole = digits.slice(0, digits.length - MINOR_DIGITS);
+  const fraction = digits.slice(digits.length - MINOR_DIGITS);
+  return `${whole}.${fraction} ${amount.currency}`;
+}
+
+/**
  * The step axis: what happened at this moment, and what the card says about it.
  *
  * **No pip anywhere in this table, and that is the axis's defining property.**
