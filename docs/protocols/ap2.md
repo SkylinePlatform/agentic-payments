@@ -60,10 +60,25 @@ authorised. Splitting them is what lets each audience be handed the mandate it
 verifies and not the other one — which is the whole precondition for the
 selective disclosure section below.
 
-The Network appears in the Payment Mandate's verification audience in both
-`AGENTS.md` and issue #6, and it is not one of the five roles the specification
-names. Reading it as a party the Merchant Payment Processor reaches, rather
-than as a sixth role, is an inference and is flagged here as one.
+**The Network is not one of the five roles, and it is still a verifier the
+specification names in its own words.** Both halves matter, and an earlier
+version of this paragraph conceded the first and then guessed at the second.
+The Payment Mandate is *"provided by the Shopping Agent and verified by the
+Credential Provider, Network, and Merchant Payment Processor"*, and the
+verification chapter gives the Network a heading it shares with the Credential
+Provider, under one rule set: *"The Credential Provider and, if applicable, the
+Network MUST receive an appropriate Payment Mandate from the Shopping Agent
+before returning a payment credential."*
+
+So the Network is reached on the **Credential Provider's** leg, from the
+Shopping Agent, and holds exactly what a Credential Provider holds. Reading it
+instead as a party the Merchant Payment Processor reaches was this file's own
+inference, it is contradicted by the sentence above, and it is corrected here
+rather than left standing because
+`internal/adapters/ap2`'s `ForPayment` row is a claim about what all of these
+verifiers may see. What remains genuinely unstated is only whether a Network is
+a sixth role or a deployment detail of the payment rails; nothing in this
+implementation turns on the answer, since no binary here plays one.
 
 There is no third mandate. The dimension that a third one would have carried —
 what the user meant, before any specific purchase existed — is carried by the

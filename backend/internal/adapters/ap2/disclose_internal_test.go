@@ -35,9 +35,19 @@ const subjectPayee = "merchant_1"
 
 var subjectAt = time.Date(2026, time.August, 3, 12, 0, 0, 0, time.UTC)
 
-// TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState is the
+// TestTheSubjectEveryPaymentSideVerifierEvaluatesIsExactlyWhatItCanState is the
 // check evaluations[ForPayment].states never had, and the tie #120 exists to
 // make.
+//
+// The name says "every payment-side verifier" rather than "a Credential
+// Provider" on purpose, and "every" rather than a count on a second purpose.
+// The row it reads is one list credited to every verifier of a closed Payment
+// Mandate — see ForPayment's own doc comment for why that is a decision and not
+// an approximation, and for the four readers this tree actually has against the
+// three AP2 names. A test that claimed to speak for one of them would be the
+// same gap the row's own comment used to describe; one that named three would
+// go stale the next time a role was wired through AuthorisePaymentChain, which
+// is how the count got wrong in the first place.
 //
 // The row says which facts a payment-side verifier can supply. PaymentSubject
 // is that row as code. Nothing connected the two until now: a test helper in
@@ -77,7 +87,7 @@ var subjectAt = time.Date(2026, time.August, 3, 12, 0, 0, 0, time.UTC)
 // the reach table itself. That is orthogonal to the tie above: one catches core
 // growing a fact, the other catches this package's two statements about the
 // same fact disagreeing.
-func TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState(t *testing.T) {
+func TestTheSubjectEveryPaymentSideVerifierEvaluatesIsExactlyWhatItCanState(t *testing.T) {
 	t.Parallel()
 
 	// stated is the only test-owned half: how to ask a Subject whether it

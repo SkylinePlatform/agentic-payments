@@ -673,8 +673,8 @@ func TestTheFloorCoversBothChainEntryPoints(t *testing.T) {
 		_, err := ap2.AuthorisePaymentChain(fx.chain, fx.opts)
 		require.ErrorIs(t, err, ap2.ErrDisclosureInsufficient,
 			"narrowing correctly for a Credential Provider can still empty a mandate, and an empty one must not read as a mandate with no limits")
-		assert.Contains(t, err.Error(), "Credential Provider",
-			"and it names this verifier rather than the Merchant, which is the whole reason the reach table carries a `who` at all")
+		assert.Contains(t, err.Error(), "Payment Mandate",
+			"and it names this audience rather than the checkout one, which is the whole reason the reach table carries a `who` at all")
 	})
 }
 
