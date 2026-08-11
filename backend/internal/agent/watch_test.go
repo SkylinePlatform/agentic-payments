@@ -454,6 +454,30 @@ func TestTheConcertPromptBuysTheBasketSizeItAsked(t *testing.T) {
 		"what was paid for has to be the two tickets the user asked for, not one")
 }
 
+// shippedSteps is how many prices deploy/catalogue.json gives each offer, by
+// identifier.
+//
+// The same file newWorld builds its merchant from, read for a different
+// question: not what an offer costs, but whether it has anywhere to move to. A
+// watch attempts only on a step change, so an offer with one entry here is one
+// no watch can act on — and that is a property of the data rather than of any
+// code a compiler would check.
+//
+// It calls require, so it belongs on the test goroutine. Its caller runs it
+// before anything has started one.
+func shippedSteps(t *testing.T) map[string]int {
+	t.Helper()
+
+	listing, err := merchant.LoadCatalogue("../../../deploy/catalogue.json")
+	require.NoError(t, err, "the shipped catalogue does not load, so the merchant sells nothing")
+
+	steps := make(map[string]int, len(listing.Offers))
+	for _, o := range listing.Offers {
+		steps[o.ID] = len(o.Prices)
+	}
+	return steps
+}
+
 // TestAWatchOnAnAlwaysAffordableOfferStillWaitsForAStepThenBuys is issue #192,
 // run end to end.
 //
@@ -467,8 +491,24 @@ func TestTheConcertPromptBuysTheBasketSizeItAsked(t *testing.T) {
 // the cap, so the merchant's own re-commitment to a (still affordable) number
 // is the step change Watch reacts to, and the purchase completes on the first
 // one: no refusal, because nothing here was ever outside the user's limit.
+//
+// # Why it reads the catalogue file before it starts anything
+//
+// The defect this covers is a **data** state, and deploy/catalogue.json is a
+// file an editor changes without recompiling anything. Reverting either offer
+// to one price puts this test back in the state the issue describes — a step
+// that never comes — and the barriers below have no arm for it: they wait on
+// the watch attempting or on the watch ending, and a watch in that state does
+// neither. So the regression would arrive as this package's own ten-minute
+// timeout and a goroutine dump rather than as a sentence naming the file.
+// shippedSteps is what turns it back into a sentence, and it is read from the
+// same file the world below is built from rather than from merchant's
+// constants, because a constant edited in step with the file would not be the
+// regression worth catching.
 func TestAWatchOnAnAlwaysAffordableOfferStillWaitsForAStepThenBuys(t *testing.T) {
 	t.Parallel()
+
+	steps := shippedSteps(t)
 
 	for _, tc := range []struct {
 		name     string
@@ -491,6 +531,10 @@ func TestAWatchOnAnAlwaysAffordableOfferStillWaitsForAStepThenBuys(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+
+			require.Greater(t, steps[tc.item], 1,
+				"deploy/catalogue.json prices this offer once, so the watch below has no step to "+
+					"act on and would wait for one until the suite timed out — issue #192, back")
 
 			w := newWorld(t)
 			a := authoriseFor(t, w, tc.prompt)
