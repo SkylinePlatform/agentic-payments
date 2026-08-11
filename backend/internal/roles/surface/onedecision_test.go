@@ -602,9 +602,16 @@ func asMuchAsThisSurfaceWillSign(t *testing.T, handler http.Handler) []string {
 		return out
 	}
 	accepts := func(n int) bool {
-		return answered(handler, asking(t.Context(), "/authorise/preview",
+		answer := answered(handler, asking(t.Context(), "/authorise/preview",
 			fmt.Sprintf("may I sign %d bytes of padding", n),
-			authorisationOf(strings.Join(padded(n), ",")))).Code == http.StatusOK
+			authorisationOf(strings.Join(padded(n), ","))))
+		// Only these two answers mean anything to a search. Anything else — a
+		// 5xx, an idempotency refusal — would be read as "too big" and would
+		// converge on a set that is not at the boundary, leaving every assertion
+		// in the caller passing on an input nobody chose.
+		require.Contains(t, []int{http.StatusOK, http.StatusBadRequest}, answer.Code,
+			"the oracle this set is grown against has to be answering the question it was asked")
+		return answer.Code == http.StatusOK
 	}
 
 	// Bisect on the largest padding the surface still takes. The upper end is
