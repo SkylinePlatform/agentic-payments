@@ -242,11 +242,11 @@ type Progress interface {
 
 // DefaultPoll is how often a watch re-quotes when Interval is unset.
 //
-// Five seconds, and chosen against the demonstration rather than measured: the
-// mock merchant's schedule steps every thirty seconds, so a poll an order of
-// magnitude below that means the agent notices a move almost as soon as it
-// happens, and a viewer watching the event log sees the attempt land in the same
-// breath as the price change.
+// Five seconds, and the demonstration does not use it: deploy/demo.json passes
+// -poll 1s against a -step floor of 3s, because a poll that is not comfortably
+// under the shortest a price can hold steps over the $210 candidate and loses
+// beat 5 in silence. This is what a watch gets when nobody says, so a caller
+// pointing one at a schedule that moves faster than this has to say.
 const DefaultPoll = 5 * time.Second
 
 // Attempted is one purchase attempt and what the rejection-receipt rule made of
