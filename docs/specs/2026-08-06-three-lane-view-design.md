@@ -425,8 +425,8 @@ ever signed on that screen, so the box is an outline throughout. It is
 looks identical either side of `POST /authorise`. So that clause is a
 specification rather than a description, and *What this changes about what is on
 screen today* is where it is recorded as one. #183, #184 and #186 are the lanes,
-the log and the Inspector; none of them touches that screen, so it needs an
-issue of its own. Nothing on it is dishonest in the meantime: `Signing.tsx`
+the log and the Inspector; none of them touches that screen, so it has an issue
+of its own, #193. Nothing on it is dishonest in the meantime: `Signing.tsx`
 computes the heading from the state rather than fixing it, with a comment saying
 why, so the fact is already carried by the one device that cannot be misread.
 
@@ -582,7 +582,7 @@ the last row, that nothing queued is going to.
 | `inspector/Inspector.tsx` | the `read` cell is `seal` | `ink` | reading is not verifying, and #186's own constraint is that nothing in that table may imply verification |
 | `inspector/Inspector.tsx` | the withheld digest is `graphite` | `signal` | on that screen the digest *is* the subject, which is the spec's own test for the token |
 | `tracker/model.ts` | an unrecognised status is `?` in `broken` | no mark, the raw value in mono, `graphite`, with a sentence | nothing refused anything; a build that is out of date is not a verifier saying no, and drawing it as one puts a refusal on screen for a purchase that may have succeeded |
-| `routes/consent/Signing.tsx` | the signed box is `border-graphite/40` with no fill, identical either side of `POST /authorise` | filled `wash` with an `ink` border once it has answered; `Consent.tsx`'s outline is already right and does not move | the decision axis has no pip and no `check`, so enclosure is the only carrier it has; **and no queued issue owns this row** — see *The axes, and why they do not merge* |
+| `routes/consent/Signing.tsx` | the signed box is `border-graphite/40` with no fill, identical either side of `POST /authorise` | filled `wash` with an `ink` border once it has answered; `Consent.tsx`'s outline is already right and does not move | the decision axis has no pip and no `check`, so enclosure is the only carrier it has; **no queued issue owned this row**, which is what #193 is for |
 
 Every one of these is a colour or a shape moving. **No sentence in the table
 above is deleted by it**, and the four categories in *What prose is still for*
@@ -686,8 +686,8 @@ vacuously.**
   the record of it did not reach the surface"*, the sentence this section spends
   a whole note defending as the only honest carrier of that state.
   `Console.test.tsx` asserts the *recorded* wording and the acknowledgement's
-  absence, and never the sentence that matters most. An implementing issue
-  should close that gap rather than inherit it.
+  absence, and never the sentence that matters most. #193 is where that gap is
+  closed rather than inherited.
 
   **Categories 2 and 4 do not transfer, and no rule should be written for
   them.** #159's rules work because they key on mechanically identifiable
