@@ -157,6 +157,33 @@ func (d *Delegated) Receipt(from string) string {
 	return latest
 }
 
+// checkoutDigest and paymentDigest read the checkout digest a chain this
+// agent has just signed carries — ap2.CheckoutDigestOf and
+// ap2.PaymentDigestOf, called on the compact chain a caller already holds —
+// so the events below can attach to the same spine the merchant, the
+// Credential Provider and the Payment Processor already attach theirs to
+// (issue #156).
+//
+// Neither can fail its caller. ADR 0003's Decision 4 and its own Consequences
+// are explicit that a dropped event, or anything about the side channel that
+// carries it, must never delay or fail a mandate construction or
+// presentation — and a label attached to one of those events is squarely
+// inside that boundary. An error here can only mean the accessor's
+// assumption about the chain this package just produced does not hold, which
+// is a bug in this package rather than a runtime condition a purchase should
+// answer for, so the event still goes out — with no digest, the same honest
+// "not yet on the spine" state a step before any mandate exists already
+// shows, rather than the purchase failing over a screenshot label.
+func checkoutDigest(chain string) string {
+	digest, _ := ap2.CheckoutDigestOf(chain)
+	return digest
+}
+
+func paymentDigest(chain string) string {
+	digest, _ := ap2.PaymentDigestOf(chain)
+	return digest
+}
+
 // Delegate mints the four closed mandates one attempt needs.
 //
 // It presents nothing. Nothing here is an attempt in the rejection-receipt
@@ -234,7 +261,7 @@ func (w *Watch) Delegate(ctx context.Context, q Quote) (*Delegated, error) {
 	if err != nil {
 		return nil, fmt.Errorf("signing the closed Checkout Mandate for the merchant: %w", err)
 	}
-	w.Client.Events.Emit(ctx, obs.KindMandateConstructed,
+	w.Client.Events.Emit(obs.WithDigest(ctx, checkoutDigest(checkoutChain.String())), obs.KindMandateConstructed,
 		"closed Checkout Mandate signed by the agent, under the open mandate the user signed")
 
 	// One per verifier. The audience and the nonce are the only things that
@@ -254,7 +281,11 @@ func (w *Watch) Delegate(ctx context.Context, q Quote) (*Delegated, error) {
 	if err != nil {
 		return nil, err
 	}
-	w.Client.Events.Emit(ctx, obs.KindMandateConstructed,
+	// Any one of the three carries the same digest — the same q.Checkout, the
+	// same payment claims, the audience and the nonce are the only things that
+	// differ between them — so the first one minted is as representative of
+	// this attempt's Payment Mandate as the other two.
+	w.Client.Events.Emit(obs.WithDigest(ctx, paymentDigest(credentialChain)), obs.KindMandateConstructed,
 		"closed Payment Mandate signed by the agent, once for each of the three verifiers that reads it")
 
 	d := &Delegated{
@@ -364,7 +395,7 @@ func (w *Watch) Fund(ctx context.Context, d *Delegated) error {
 	// Before the call rather than after it, on Client.Fund's reasoning: a log
 	// showing a presentation with no verdict under it is the true shape of a hop
 	// that never landed, and emitting afterwards would show nothing at all.
-	w.Client.Events.Emit(ctx, obs.KindMandatePresented,
+	w.Client.Events.Emit(obs.WithDigest(ctx, paymentDigest(d.CredentialChain)), obs.KindMandatePresented,
 		"delegated Payment Mandate presented to the Credential Provider")
 
 	body := map[string]any{"chain": d.CredentialChain, "nonce": d.CredProviderNonce}
@@ -414,7 +445,7 @@ func (w *Watch) Settle(ctx context.Context, d *Delegated) error {
 	// payment side too, and emits its own presentation when it passes the third
 	// chain to the processor — every verdict in this flow is emitted by whoever
 	// reached it, and the agent emits only what it presented.
-	w.Client.Events.Emit(ctx, obs.KindMandatePresented,
+	w.Client.Events.Emit(obs.WithDigest(ctx, checkoutDigest(d.CheckoutChain)), obs.KindMandatePresented,
 		"delegated Checkout Mandate presented to the merchant")
 
 	body := map[string]any{

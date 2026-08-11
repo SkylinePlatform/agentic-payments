@@ -3,6 +3,8 @@ package ap2
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
@@ -234,4 +236,113 @@ func delegate(
 		return nil, err
 	}
 	return narrowed.Delegate(ctx, JOSESigner(signer), blinder, kb, payload, disclosures)
+}
+
+// CheckoutDigestOf and PaymentDigestOf read the checkout digest back off a
+// chain DelegateCheckout or DelegatePayment has just signed: checkout_hash on
+// a closed Checkout Mandate, transaction_id on a closed Payment Mandate — two
+// wire names for the one fact claims.go's own comment records.
+//
+// # Why these exist instead of a hash helper
+//
+// Issue #156 weighed and rejected an exported ap2.CheckoutDigest(checkoutJWT,
+// alg) that recomputes the digest a second, independent way. That puts two
+// entry points into one computation — the one inside checkoutClaims and
+// paymentClaims, reached through bindClosed — and two computations of the same
+// fact drift the day either changes alone. These two compute nothing: they
+// decode the value already written into the chain that was returned, straight
+// out of its own compact serialisation, so there remains exactly one place
+// checkout_hash is ever computed.
+//
+// # Why unverified is sound here
+//
+// Neither checks a signature, and that is the same trust boundary
+// SDJWT.SignedClaims and Chain.SDHash already stand on: the party asking is the
+// one that minted this chain a moment ago, in its own process, before
+// presenting it to anyone — the holder inspecting its own output, not a
+// verifier trusting a stranger's claim. A verifier that later receives this
+// chain still runs AuthoriseCheckoutChain or AuthorisePaymentChain in full;
+// nothing here is a substitute for that, and nothing here is reachable from a
+// verification path.
+//
+// # Why checkout_hash is readable with no other disclosure resolved
+//
+// AP2 marks checkout_hash mandatory on a Checkout Mandate — never
+// withholdable — and transaction_id is not declared withholdable on a Payment
+// Mandate either (checkoutClaims and paymentClaims's own blindable paths are
+// checkout_jwt and risk_data respectively, and neither is this claim). Both
+// therefore travel as a plain string inside the delegating hop's disclosed
+// content, never behind a digest of their own, so reading either needs no
+// resolution beyond the one array element that wraps the whole closed
+// mandate's claims.
+//
+// # The one assumption that makes this safe, and where it holds
+//
+// Both read the delegating hop's *first* Disclosure. That Disclosure is the
+// closed mandate's content only because sdjwt.SDJWT.Delegate puts it there
+// first, ahead of any of the delegated payload's own withheld disclosures —
+// see this file's own delegate, and Delegate's "all := append([]Disclosure{
+// wrapper}, disclosures...)". That holds for every chain DelegateCheckout and
+// DelegatePayment produce, which is the whole of who calls these two. A chain
+// obtained any other way — in particular one read off the wire with
+// sdjwt.ParseChain, where the wire order is the sender's to choose — is not
+// something either function should be trusted for.
+//
+// # Why this reads the wire form rather than asking pkg/sdjwt for a hop
+//
+// sdjwt.Chain exposes no accessor for either hop, on purpose — chain.go's own
+// comment explains at length why, and stands on the same reasoning
+// AuthorisePaymentChain's doc comment repeats: widening Chain to hand out a hop
+// undoes the encapsulation the type exists to preserve. delegate_test.go's own
+// withRootDisclosures already reaches for the compact serialisation for the
+// identical reason — "the only place a chain's two hops are separable from
+// outside pkg/sdjwt" — so operating on chain.String() here follows an
+// established seam rather than opening a new one.
+func CheckoutDigestOf(chain string) (string, error) {
+	return delegatedClaim(chain, claimCheckoutHash)
+}
+
+// PaymentDigestOf is CheckoutDigestOf's counterpart for a delegated Payment
+// Mandate chain. See CheckoutDigestOf's doc comment; it applies here unchanged
+// except for the claim name.
+func PaymentDigestOf(chain string) (string, error) {
+	return delegatedClaim(chain, claimTransactionID)
+}
+
+// delegatedClaim finds the delegating hop's first Disclosure and reads one
+// string claim out of the object it wraps.
+//
+// The boundary between the two hops is the same one sdjwt.ParseChain looks
+// for: the first empty component after the root's own Issuer-signed JWT. "~"
+// is written out rather than imported because pkg/sdjwt does not export its
+// separator; that is sound to duplicate, unlike the digest itself, since it is
+// a single character draft-gco-oauth-delegate-sd-jwt-00 §5.1.1 fixes rather
+// than a computation this package could fall out of step with.
+func delegatedClaim(chain, claim string) (string, error) {
+	parts := strings.Split(chain, "~")
+
+	// index 0 is the root's own Issuer-signed JWT, never empty for a chain
+	// this package built, so the search starts one past it — the same
+	// boundary withRootDisclosures locates by the same means, in
+	// delegate_test.go.
+	boundary := slices.Index(parts[1:], "")
+	if boundary >= 0 {
+		boundary++
+	}
+	if boundary < 1 || boundary+2 >= len(parts) {
+		return "", fmt.Errorf(
+			"%w: no delegating hop to read %s from", ErrMandateMalformed, claim)
+	}
+
+	disclosure, err := sdjwt.ParseDisclosure(parts[boundary+2])
+	if err != nil {
+		return "", fmt.Errorf("%w: the closed mandate's own disclosure: %w", ErrMandateMalformed, err)
+	}
+	content, ok := disclosure.Value().(map[string]any)
+	if !ok {
+		return "", fmt.Errorf(
+			"%w: the delegating hop's first disclosure is %T, not the closed mandate's claims",
+			ErrMandateMalformed, disclosure.Value())
+	}
+	return requireString(content, claim)
 }

@@ -460,6 +460,32 @@ func TestTheWatchBuysWhenTheMerchantsPriceComesIntoRange(t *testing.T) {
 		obs.KindMandatePresented, obs.KindMandatePresented,
 	}, recorded.kinds("agent"),
 		"the agent records what it signed and what it presented, and a refusal stops where it was refused")
+
+	// Issue #156: the spine runs down the agent's own column, and until now its
+	// steps did not name the checkout it is drawn from. Every event above has
+	// to carry the digest of the checkout its own artefact is bound to — read
+	// back off that artefact, per #156's own argument, not recomputed or
+	// copied — so a reader can attach each of the agent's steps to the same
+	// spine the merchant, the Credential Provider and the Payment Processor
+	// already attach theirs to.
+	refusedDigest, err := sdjwt.SHA256.Digest(refused.Delegated.Offer)
+	require.NoError(t, err, "computing the digest this test compares the refused attempt's events against")
+	boughtDigest, err := sdjwt.SHA256.Digest(bought.Delegated.Offer)
+	require.NoError(t, err, "computing the digest this test compares the bought attempt's events against")
+	require.NotEqual(t, refusedDigest, boughtDigest,
+		"beat 5 and beat 6 are offers for two different prices, and this test proves nothing about which digest landed where unless the two are distinguishable")
+
+	agentEvents := recorded.eventsOf("agent")
+	require.Len(t, agentEvents, 7,
+		"one entry per kind already asserted above; this is where each one's digest is checked")
+	wantDigests := []string{
+		refusedDigest, refusedDigest, refusedDigest,
+		boughtDigest, boughtDigest, boughtDigest, boughtDigest,
+	}
+	for i, want := range wantDigests {
+		assert.Equal(t, want, agentEvents[i].Digest,
+			"event %d (%s) has to name the checkout its own artefact is bound to, not a value left over from the other attempt in this run", i, agentEvents[i].Kind)
+	}
 }
 
 // TestTheRefusalAtTwoHundredAndTenIsAVerifiersOwnSignedAnswer is beat 5 stated
@@ -806,6 +832,21 @@ func (r *recorder) kinds(role string) []obs.Kind {
 	for _, e := range r.events {
 		if e.Role == role {
 			out = append(out, e.Kind)
+		}
+	}
+	return out
+}
+
+// eventsOf lists every event one role emitted, in order — kinds' counterpart
+// for a test that needs a field kinds does not expose, such as Digest.
+func (r *recorder) eventsOf(role string) []obs.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	out := make([]obs.Event, 0, len(r.events))
+	for _, e := range r.events {
+		if e.Role == role {
+			out = append(out, e)
 		}
 	}
 	return out
