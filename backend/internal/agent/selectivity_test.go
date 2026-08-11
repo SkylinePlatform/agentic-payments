@@ -1,61 +1,49 @@
 package agent
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 )
 
-// TestTheAgentsPrefixesAgreeWithFieldSelectivity is issue #132's first step.
+// TestTheSearchAsksTheRegistryWhichConstraintsSayWhatToLookFor is issue #132's
+// second step, and it replaces the test the first step left here.
 //
-// Whether a constraint field is selective — describes what to go looking for,
-// rather than a term the purchase has to meet — is a property of the field,
-// held as constraint.Field's selective column and published through the
-// FieldSpec values constraint.Vocabulary returns. internal/agent cannot read
-// that column directly: TestTheAgentCannotReachAConstraintEvaluator forbids
-// this package from importing the constraint package at all, since a
-// constraint is evaluated by the verifier and by nobody else. So authorise.go
-// keeps its own copy of the same fact as itemFieldPrefix and
-// merchantFieldPrefix, and this file is what is allowed to hold the two in
-// step: a _test.go file's imports are excluded from `go list`'s .Imports,
-// which is the whole reason a test can see what production code here may not
-// (see imports_test.go, and TestTheAgentSpellsTheMerchantsQueryParameters in
-// params_test.go for the same arrangement one axis along). Package agent
-// rather than agent_test, because itemFieldPrefix and merchantFieldPrefix are
-// unexported — exporting three characters of punctuation to make an assertion
-// would widen the package's surface for nothing this repository does
-// elsewhere.
+// That one — TestTheAgentsPrefixesAgreeWithFieldSelectivity — held two copies of
+// one fact in step: the registry's selective column, and the two string prefixes
+// authorise.go carried because it may not import the registry to ask. It was the
+// right test while the copy existed and it is the wrong test now, because the
+// copy is gone: identifying asks constraint.Selective, through
+// interpret.Selective, and there is no second statement of the fact left for a
+// test to hold against the first.
 //
-// Both directions are asserted, deliberately. A one-way check — "every
-// selective field is caught" — would let a prefix silently widen to cover a
-// term as well, and a term routed into the merchant's search is exactly the
-// case the watch loop exists for: a search carrying the user's price bound
-// returns nothing at all while the price is still too high. The other
-// direction is the one #132 opened over: a selective field registered outside
-// both prefixes compiles cleanly and fails no other test, and simply stops
-// being discoverable.
+// So what is worth asserting changed with it. The question is no longer *do the
+// two agree*, it is **does the agent ask at all** — a prefix quietly
+// reintroduced here would pass every other test in this package, because the
+// seven registered fields do split cleanly along "item." and "merchant." today
+// and a prefix is right about all of them. Walking the registry and demanding
+// the answer match, field by field, is what a reintroduced prefix would fail on
+// the day an eighth field made the two differ, which is the day nobody is
+// looking.
 //
-// # The open half is checked too, and it is the half that matters today
+// Package agent rather than agent_test, because identifying is unexported.
+// Importing the constraint package from a test file is the arrangement
+// params_test.go and imports_test.go both describe: a _test.go file's imports
+// are excluded from `go list`'s .Imports, so a test may name what this package's
+// build graph may not.
 //
-// The walk covers the closed registry Vocabulary publishes.
-// constraint.AttributePrefix — item.attr.<name> — is excluded from it by the
-// same design FieldNames already follows, since it is minted per name rather
-// than held in the table, so there is no entry to walk. Every name in that
-// family is selective, and what carries one into a search is itemFieldPrefix
-// matching "item." rather than anything asking the registry: the family is
-// caught because its prefix happens to begin with the agent's, which is a
-// coincidence between two literals in two packages that no compiler relates.
-// The last subtest is that coincidence stated as an assertion, and it is not a
-// hypothetical case — the built scenario's flight is discovered by
-// item.attr.route.origin and item.attr.route.destination and by nothing else,
-// so a rename moving the family out from under "item." would leave that search
-// matching every flight the merchant sells while every other test stayed
-// green.
-func TestTheAgentsPrefixesAgreeWithFieldSelectivity(t *testing.T) {
+// # The subject is a query, never a mandate
+//
+// Everything below is about what reaches GET /search. A constraint withheld from
+// a query is still in the mandate the user signed and is still enforced by the
+// verifier at the moment of purchase — Authorise's own comment is where that
+// distinction is argued. Nothing here can weaken a limit; it can only make the
+// agent look for the wrong thing.
+func TestTheSearchAsksTheRegistryWhichConstraintsSayWhatToLookFor(t *testing.T) {
 	t.Parallel()
 
 	vocab := constraint.Vocabulary()
@@ -63,52 +51,88 @@ func TestTheAgentsPrefixesAgreeWithFieldSelectivity(t *testing.T) {
 		"a walk over an empty registry asserts nothing while reporting success, which is the "+
 			"shape of guard this repository has been bitten by before")
 
-	// Counted here rather than inside the subtests, which run in parallel: both
+	// Counted from the test goroutine, before the parallel subtests start. Both
 	// arms below have to be reached by something, or half of this test is a
-	// branch nobody takes and a prefix could move under it unnoticed.
+	// branch nobody takes.
 	selective := 0
 	for _, spec := range vocab {
-		if spec.Selective {
+		if constraint.Selective(spec.Name) {
 			selective++
 		}
 	}
 	assert.NotZero(t, selective,
-		"with nothing in the registry marked selective the prefixes could say anything at all "+
-			"and every subtest below would still pass")
+		"with nothing in the registry selective, identifying could drop everything and every "+
+			"subtest below would still pass")
 	assert.Less(t, selective, len(vocab),
-		"with everything marked selective only the catching arm ever runs, and the arm that "+
-			"never runs is the one that notices a prefix widening to swallow a term")
+		"with everything selective, identifying could keep everything and the arm that notices "+
+			"a term being sent to the search would never run")
 
 	for _, spec := range vocab {
 		t.Run(spec.Name, func(t *testing.T) {
 			t.Parallel()
 
-			caught := strings.HasPrefix(spec.Name, itemFieldPrefix) ||
-				strings.HasPrefix(spec.Name, merchantFieldPrefix)
+			leaf := generated.Constraint{Op: "eq", Field: &spec.Name}
+			got := identifying([]generated.Constraint{leaf})
 
-			if spec.Selective {
-				assert.True(t, caught,
-					"a selective field the agent's prefixes miss is silently dropped from "+
-						"discovery: nothing fails to compile, no other test goes red, the query "+
-						"simply stops carrying it and a search returns more candidates than it "+
-						"should")
+			if constraint.Selective(spec.Name) {
+				assert.Equal(t, []generated.Constraint{leaf}, got,
+					"a selective field the query drops is silently dropped from discovery: "+
+						"nothing fails to compile, no other test goes red, the search simply "+
+						"returns more candidates than it should and the agent watches the first")
 			} else {
-				assert.False(t, caught,
-					"a term of the purchase the agent's prefixes wrongly treat as selective "+
-						"would be sent to the merchant's search, which is the one case the watch "+
-						"loop exists for: a search carrying the user's price bound would return "+
-						"nothing at all while the price is still too high")
+				assert.Empty(t, got,
+					"a term of the purchase carried into the merchant's search is the one case "+
+						"the watch loop exists for: a search carrying the user's price bound "+
+						"returns nothing at all while the price is still too high")
 			}
 		})
 	}
 
-	t.Run(constraint.AttributePrefix+"<name>", func(t *testing.T) {
+	// The open half of the vocabulary is in no walk — item.attr.<name> is minted
+	// per name rather than registered — and until #132's second step the only
+	// thing carrying one into a search was the agent's "item." prefix happening
+	// to match the family's. The built scenario's flight is discovered by two
+	// such names and by nothing else, so this is the arm that decides whether
+	// that search finds a route or every flight the merchant sells.
+	t.Run("item.attr.route.origin", func(t *testing.T) {
 		t.Parallel()
 
-		assert.True(t, strings.HasPrefix(constraint.AttributePrefix, itemFieldPrefix),
-			"every name in the open half of the vocabulary is selective and none of them is in "+
-				"the walk above, so the only thing carrying one into a search is this prefix "+
-				"sitting under the agent's — and the built scenario's route is two such names, "+
-				"discovered by nothing else")
+		field := "item.attr.route.origin"
+		leaf := generated.Constraint{Op: "eq", Field: &field, Value: "BEG"}
+		assert.Equal(t, []generated.Constraint{leaf}, identifying([]generated.Constraint{leaf}),
+			"the open half is selective by construction, and the registry is what says so now "+
+				"rather than a prefix in this package that happens to sit above it")
+	})
+
+	// The one case the prefix and the registry actually disagree about today,
+	// and the reason this file is a behaviour change rather than a rename. How
+	// far a name like this got is worth being exact about: Propose calls
+	// interpret.Validate before it searches, so on that path the interpretation
+	// is refused before identifying runs. Discover is exported and does not
+	// validate. So this asserts the second of two guards, which still has to be
+	// right — the day the first one moves is the day nobody notices.
+	t.Run("a field no verifier knows", func(t *testing.T) {
+		t.Parallel()
+
+		field := "item.colour"
+		leaf := generated.Constraint{Op: "eq", Field: &field, Value: "red"}
+		assert.Empty(t, identifying([]generated.Constraint{leaf}),
+			"a name the registry cannot read is refused as constraint_type_unknown at the "+
+				"moment of purchase; putting it in a query asks the merchant a question in a "+
+				"vocabulary neither party shares, and a prefix test is what classified it as "+
+				"something to ask")
+	})
+
+	t.Run("a group", func(t *testing.T) {
+		t.Parallel()
+
+		field := "item.id"
+		group := generated.Constraint{Op: "any", Of: []generated.Constraint{
+			{Op: "eq", Field: &field, Value: "gtin:0001"},
+		}}
+		assert.Empty(t, identifying([]generated.Constraint{group}),
+			"a group can mix a bound on the price with a fact about the object and there is no "+
+				"honest way to send half of one, so it is dropped whole — the one silent drop "+
+				"#132 named that this step does not close")
 	})
 }
