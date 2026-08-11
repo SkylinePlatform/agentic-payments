@@ -12,8 +12,8 @@
  *
  * # Two axes, and neither is invented here
  *
- * `RunState` — watching, bought, exhausted, expired, stopped, failed — is
- * `runState.String()`. `MandateState` — ready, awaiting_receipt, spent — is
+ * `RunState` — watching, bought, exhausted, expired, stopped, failed, refused
+ * — is `runState.String()`. `MandateState` — ready, awaiting_receipt, spent — is
  * `authz.MandateState.String()`, read off each attempt's `checkout_mandate`
  * and `payment_mandate`. Both are spelled exactly as the machine that owns
  * them spells them, because `internal/agent/console`'s own package doc is
@@ -31,8 +31,13 @@
  * value a `Run` or an attempt actually carries is a bare `string`, which
  * TypeScript cannot narrow, so `runStatus`/`mandateStatus` are the runtime
  * half: a value neither table recognises — this build shipped before the
- * agent grew a seventh run state, say — renders as a visible, named "unknown"
+ * agent grew an eighth run state, say — renders as a visible, named "unknown"
  * fact rather than as a blank cell. `model.test.ts` drives both halves.
+ *
+ * The seventh, `refused`, is what that sentence used to be written against and
+ * is the case worth knowing it covers: issue #198 added it to the agent, and a
+ * bundle built the day before draws it as an unrecognised status rather than
+ * as a blank row or as a refusal it invented.
  *
  * # The glyphs are gone
  *
