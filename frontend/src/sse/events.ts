@@ -75,10 +75,13 @@ export function isEventKind(value: unknown): value is EventKind {
  * dropped rather than carried through," would otherwise drop `amount` with
  * nothing failing anywhere near the change that caused it.
  *
- * Nothing in this module reads the array at runtime — `ProtocolEvent` and
- * `parseRecord` below are hand-written against the same seven names, the way
- * `EVENT_KINDS` is consulted by `isEventKind` but a field list has no
- * equivalent single call site. This exists for the Go test alone.
+ * Nothing reads the array at runtime — `ProtocolEvent` and `parseRecord` below
+ * are hand-written against the same eight names, the way `EVENT_KINDS` is
+ * consulted by `isEventKind` but a field list has no equivalent single call
+ * site. What holds it to them instead is {@link ProtocolEventFieldsAreExact},
+ * one declaration down, which is the half of the mechanism the Go test cannot
+ * supply: that test reads this file and `obs.Event`, so it catches the two
+ * languages disagreeing and cannot catch this file disagreeing with itself.
  */
 export const PROTOCOL_EVENT_FIELDS = [
   "kind",
@@ -90,6 +93,33 @@ export const PROTOCOL_EVENT_FIELDS = [
   "code",
   "amount",
 ] as const;
+
+/** One of the field names an event may carry. */
+export type ProtocolEventField = (typeof PROTOCOL_EVENT_FIELDS)[number];
+
+/** True when two unions have exactly the same members, `false` otherwise. */
+type Exactly<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+/** A type-level assertion: instantiating it with anything but `true` is an error. */
+type Assert<T extends true> = T;
+
+/**
+ * Compile-time proof that {@link PROTOCOL_EVENT_FIELDS} names exactly the
+ * fields {@link ProtocolEvent} declares — no more and no fewer.
+ *
+ * Without it the array is a comment the Go test happens to read. `tsc` would
+ * be perfectly happy with a field added to the interface and not to the list,
+ * or with one renamed in the interface alone, and `TestTheFrontendKnowsEveryField`
+ * would be happy too for as long as the list still matched `obs.Event` — which
+ * it would, because nobody touched it. That is the whole defect the field list
+ * exists to catch, arriving from the side the Go test cannot see.
+ *
+ * `Exactly` compares in both directions and wraps each side in a tuple, which
+ * is not decoration: a bare `A extends B` distributes over unions, and `never
+ * extends true` is *true*, so the obvious spelling of this assertion passes
+ * precisely when the comparison has collapsed.
+ */
+export type ProtocolEventFieldsAreExact = Assert<Exactly<keyof ProtocolEvent, ProtocolEventField>>;
 
 /**
  * One thing that happened, as `obs.Event` is serialised.

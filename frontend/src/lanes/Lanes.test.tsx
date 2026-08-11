@@ -370,16 +370,18 @@ describe("an attempt's outcome", () => {
 });
 
 describe("the price beside an attempt's outcome — issue #174", () => {
-  it("shows the merchant's own refusal price in the same register a constraint's limit uses", () => {
-    // The demo's own numbers: 210.00 refused against a 200.00 cap, in the
-    // "N.NN CCY" form a constraint sentence like "at most 200.00 USD" already
-    // uses, not formatAmount's "$210.00".
+  it("shows the refusing party's own price in the same register a constraint's limit uses", () => {
+    // The demonstration's own beat 5: the Credential Provider refusing 210.00
+    // against a 200.00 cap — that role is the one that evaluates the user's
+    // payment-side constraints, and it is the party the amount on this event
+    // belongs to. The form is the "N.NN CCY" a constraint sentence like "at
+    // most 200.00 USD" already uses, not formatAmount's "$210.00".
     seq = 0;
     showing([
-      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+      record({ kind: "mandate_presented", role: "agent", digest: DIGEST }),
       record({
         kind: "mandate_rejected",
-        role: "mpp",
+        role: "credprovider",
         digest: DIGEST,
         code: "constraint_violated",
         amount: { amount: 21000, currency: "USD" },
@@ -390,9 +392,9 @@ describe("the price beside an attempt's outcome — issue #174", () => {
     // figure on the step that carried it, once beside the outcome badge.
     expect(
       screen.getAllByText("210.00 USD"),
-      "the merchant's own quoted price, on the refusal it wrote — not $210.00, " +
-        "which is formatAmount's register for a price tag rather than a figure " +
-        "read beside a limit",
+      "the price the refusal was about, stated by the party that refused — and not " +
+        "$210.00, which is formatAmount's register for a price tag rather than a " +
+        "figure read beside a limit",
     ).toHaveLength(2);
   });
 
@@ -410,10 +412,10 @@ describe("the price beside an attempt's outcome — issue #174", () => {
   it("gives the refused and the bought attempt in one watch their own prices", () => {
     seq = 0;
     showing([
-      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+      record({ kind: "mandate_presented", role: "agent", digest: DIGEST }),
       record({
         kind: "mandate_rejected",
-        role: "mpp",
+        role: "credprovider",
         digest: DIGEST,
         code: "constraint_violated",
         amount: { amount: 21000, currency: "USD" },
