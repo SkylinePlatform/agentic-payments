@@ -165,12 +165,44 @@ export interface Transaction {
   readonly lastSeq: number;
 }
 
+/**
+ * The roles whose acceptance means the money moved.
+ *
+ * AP2 gives the last word on a payment to the Merchant Payment Processor: the
+ * merchant presents the Payment Mandate to it and does not speak for the
+ * outcome itself — see the merchant's own comment, "this is the leg AP2 gives
+ * the merchant rather than the agent". `mpp` accepting is therefore the one
+ * observable moment in the stream that means a purchase completed, and it is
+ * what separates {@link Verdict}'s `bought` from its `bound`.
+ *
+ * **Nothing on the Go side holds this list**, unlike `EVENT_KINDS`, which is
+ * why it is one named constant with its reasoning beside it rather than a role
+ * name buried in a condition. A flow with no processor in it — Human Present, or
+ * a TAP leg — simply never reaches `bought` and stays `bound`, which is the
+ * honest answer rather than a false one: what this screen can see is that the
+ * binding held and nobody refused.
+ */
+export const SETTLING_ROLES: readonly string[] = ["mpp"];
+
 /** Where one attempt stands, which is what its spine is drawn from. */
 export type Verdict =
   /** No party has confirmed a checkout yet. The axis is drawn with nothing on it. */
   | { readonly state: "pending" }
-  /** Every party that named a checkout named the same one, and nobody refused. */
+  /**
+   * Every party that has named a checkout named the same one and nobody
+   * refused — **and the purchase has not completed**.
+   *
+   * This is where an attempt spends nearly all of its life, and separating it
+   * from `bought` is the whole reason this state exists. The agent's very first
+   * step carries the digest, so an attempt is `bound` from the moment it is
+   * signed — long before any verifier has seen it, and, on the demo's first
+   * attempt, right up until the merchant refuses it. A screen that read `bound`
+   * as a purchase would show a completed sale for six steps and then replace it
+   * with the refusal it had been contradicting.
+   */
   | { readonly state: "bound"; readonly digest: string }
+  /** The binding held and a settling party accepted — see {@link SETTLING_ROLES}. */
+  | { readonly state: "bought"; readonly digest: string }
   /**
    * Somebody refused. `bindingFailed` distinguishes the two very different
    * reasons: a verifier enforcing a limit the user set is the protocol working,
@@ -196,7 +228,27 @@ export function verdictOf(attempt: Attempt): Verdict {
     };
   }
   if (attempt.digest === undefined) return { state: "pending" };
+  if (settled(attempt)) return { state: "bought", digest: attempt.digest };
   return { state: "bound", digest: attempt.digest };
+}
+
+/**
+ * Whether a settling party accepted this attempt.
+ *
+ * The acceptance rather than the receipt, and that is not a detail: **every
+ * verifier issues a receipt whether it accepted or refused** — a rejection
+ * produces one carrying the error, which `contracts/evidence/receipt.json`
+ * requires — so `receipt_issued` says only that somebody answered. The
+ * acceptance is `mandate_verified`, which the processor emits only when the
+ * payment went through.
+ *
+ * A refusal anywhere in the attempt is answered before this is reached, so this
+ * never has to weigh one party's acceptance against another's refusal.
+ */
+function settled(attempt: Attempt): boolean {
+  return attempt.steps.some(
+    (step) => step.kind === "mandate_verified" && SETTLING_ROLES.includes(step.role),
+  );
 }
 
 /*

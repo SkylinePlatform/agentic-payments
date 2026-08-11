@@ -41,6 +41,15 @@ function showing(records: readonly EventRecord[]) {
   return render(<Lanes transaction={transaction} />);
 }
 
+/** Whether a `class` attribute takes its element out of the document flow. */
+function outOfFlow(className: string): boolean {
+  return /(^|[\s:])(absolute|fixed)($|\s)/.test(className);
+}
+
+/** The `class` the removed spine rule carried, kept as what {@link outOfFlow} is for. */
+const REMOVED_RULE =
+  "pointer-events-none absolute inset-y-0 left-1/2 hidden w-px -translate-x-1/2 md:block bg-ink";
+
 describe("the three lanes", () => {
   it("names all three parties, in the order the protocol puts them", () => {
     seq = 0;
@@ -99,6 +108,7 @@ describe("the spine", () => {
     showing([
       record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
       record({ kind: "mandate_verified", role: "mpp", digest: DIGEST }),
+      record({ kind: "receipt_issued", role: "mpp", digest: DIGEST }),
     ]);
 
     expect(
@@ -181,6 +191,181 @@ describe("the spine", () => {
         "binding code that says so — two digests under one correlation do not, " +
         "because a retry looks identical from the event stream",
     ).not.toBeNull();
+  });
+
+  it("draws no vertical rule down the centre of the grid", () => {
+    seq = 0;
+    const { container } = showing([
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+    ]);
+
+    // The digest at the head is the axis now — issue #158. What is left of
+    // the old split was a hairline threaded behind the agent's own cards,
+    // absolutely positioned down the centre of the grid; it read as a
+    // rendering artefact rather than as an axis, and this pins it gone rather
+    // than trusting nobody brings it back.
+    expect(
+      container.innerHTML.includes("-translate-x-1/2"),
+      "that class was unique to the removed rule's centring; its presence " +
+        "would mean the accessory came back",
+    ).toBe(false);
+
+    // …and the shape rather than the one class name. A rule down the centre of
+    // the grid has to be taken out of flow, whatever it is centred with — that
+    // is what made the first version paint over the agent's own cards, since a
+    // positioned element paints above in-flow ones whatever the DOM order. A
+    // re-added axis centred some other way would slip past the assertion above
+    // and not past this one.
+    expect(
+      outOfFlow(REMOVED_RULE),
+      "the detector, run against what it is for — without this the assertion " +
+        "below is green whether it works or not",
+    ).toBe(true);
+    expect(outOfFlow("flex flex-col gap-4"), "and it must not flag the layout").toBe(false);
+
+    expect(
+      [...container.querySelectorAll("[class]")]
+        .map((element) => element.getAttribute("class") ?? "")
+        .filter(outOfFlow),
+      "nothing on this screen is taken out of flow; the layout is a grid and " +
+        "the spine is its head",
+    ).toEqual([]);
+  });
+});
+
+describe("an attempt's outcome", () => {
+  it("labels a refusal without making a reader parse the sentence for it", () => {
+    seq = 0;
+    const { container } = showing([
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+      record({
+        kind: "mandate_rejected",
+        role: "mpp",
+        digest: DIGEST,
+        code: "constraint_violated",
+      }),
+    ]);
+
+    expect(
+      screen.queryByText("Refused"),
+      "a clear label, not only the prose sentence the Thesis already carries",
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-icon="refused"]'),
+      "the icon is what survives a reader who cannot use the colour — #109's " +
+        "sibling rule is that a status is colour and icon, never colour alone",
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-icon="bought"]'),
+      "one attempt, one verdict — it should not carry the other outcome's icon",
+    ).toBeNull();
+  });
+
+  it("labels a completed purchase distinctly from a refusal", () => {
+    seq = 0;
+    const { container } = showing([
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+      record({ kind: "receipt_issued", role: "merchant", digest: DIGEST }),
+      record({ kind: "mandate_verified", role: "mpp", digest: DIGEST }),
+      record({ kind: "receipt_issued", role: "mpp", digest: DIGEST }),
+    ]);
+
+    expect(screen.queryByText("Bought")).not.toBeNull();
+    expect(screen.queryByText("Refused")).toBeNull();
+    expect(
+      container.querySelector('[data-icon="bought"]'),
+      "the shape a reader without colour vision, or a black-and-white " +
+        "screenshot, still gets the answer from",
+    ).not.toBeNull();
+    expect(container.querySelector('[data-icon="refused"]')).toBeNull();
+  });
+
+  it("does not call an attempt bought before a party that settles has accepted", () => {
+    // The bug this pins: the agent's own first step carries the digest, so an
+    // attempt is bound the moment it is signed. A badge reading "Bought" there
+    // claims a completed sale for every step of every attempt — including all
+    // six of the demo's first one, which ends in the refusal this screen exists
+    // to make visible.
+    seq = 0;
+    const { container } = showing([
+      record({ kind: "mandate_constructed", role: "agent", digest: DIGEST }),
+      record({ kind: "mandate_presented", role: "agent", digest: DIGEST }),
+      record({ kind: "mandate_verified", role: "credprovider", digest: DIGEST }),
+      record({ kind: "receipt_issued", role: "credprovider", digest: DIGEST }),
+    ]);
+
+    expect(
+      screen.queryByText("Bought"),
+      "nothing here says the money moved: a receipt is issued whether a " +
+        "verifier accepted or refused, and the Credential Provider does not " +
+        "speak for the payment",
+    ).toBeNull();
+    expect(container.querySelector('[data-icon="bought"]')).toBeNull();
+    expect(
+      screen.queryByText("Bound"),
+      "and it is not Pending either — a checkout is on the spine. The two are " +
+        "different claims and the screen has to make both",
+    ).not.toBeNull();
+  });
+
+  it("gives the refused and the bought attempt in one watch two different labels", () => {
+    // The demo's own shape: one correlation, two attempts — refused at $210,
+    // bought at $189. Issue #158's finding was that this reads as a
+    // repetition; the two badges are what make it read as two outcomes.
+    seq = 0;
+    const { container } = showing([
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+      record({
+        kind: "mandate_rejected",
+        role: "mpp",
+        digest: DIGEST,
+        code: "constraint_violated",
+      }),
+      record({ kind: "mandate_constructed", role: "agent" }),
+      record({ kind: "mandate_verified", role: "merchant", digest: OTHER }),
+      record({ kind: "receipt_issued", role: "merchant", digest: OTHER }),
+      record({ kind: "mandate_verified", role: "mpp", digest: OTHER }),
+      record({ kind: "receipt_issued", role: "mpp", digest: OTHER }),
+    ]);
+
+    expect(screen.getByText("Refused")).not.toBeNull();
+    expect(screen.getByText("Bought")).not.toBeNull();
+    expect(container.querySelectorAll('[data-icon="refused"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-icon="bought"]')).toHaveLength(1);
+  });
+
+  it("labels an attempt nobody has confirmed a checkout for, rather than showing nothing", () => {
+    seq = 0;
+    showing([record({ kind: "mandate_presented", role: "agent" })]);
+
+    expect(
+      screen.queryByText("Pending"),
+      "every mandate's state is unambiguous, including the one where nothing " +
+        "has attached to the spine yet — a blank space is not an answer",
+    ).not.toBeNull();
+  });
+
+  it("tells its two uncoloured states apart by the word alone", () => {
+    // `seal` and `broken` are the only saturated values here and each is paired
+    // with a shape. The other two states carry no colour at all, so the word is
+    // the whole of the distinction — and it has to be a real one: "not attached
+    // to the spine yet" and "attached and still running" are different claims
+    // and the screen must not conflate them.
+    // `within` a container each, rather than `screen`: cleanup runs between
+    // tests and not between two renders inside one, so the second would find
+    // the first's badge still in the document and the negative halves below
+    // would assert nothing.
+    seq = 0;
+    const waiting = showing([record({ kind: "mandate_presented", role: "agent" })]).container;
+    expect(within(waiting).queryByText("Pending")).not.toBeNull();
+    expect(within(waiting).queryByText("Bound")).toBeNull();
+
+    seq = 0;
+    const running = showing([
+      record({ kind: "mandate_constructed", role: "agent", digest: DIGEST }),
+    ]).container;
+    expect(within(running).queryByText("Bound")).not.toBeNull();
+    expect(within(running).queryByText("Pending")).toBeNull();
   });
 });
 
