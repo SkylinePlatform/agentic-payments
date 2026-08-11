@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PROTOCOL_EVENT_FIELDS } from "../sse";
 import type { EventRecord, ProtocolEvent } from "../sse";
@@ -30,10 +30,21 @@ import { BENEATH, COLUMNS, EventLog } from "./EventLog";
  * the alternative is a suite that is green in one timezone and red in
  * another for a reason none of the individual tests states.
  *
+ * `vi.stubEnv` rather than assigning `process.env.TZ` directly: this package
+ * keeps `@types/node` out of its tsconfig on purpose — `src/test/node-fs.d.ts`
+ * records why, in the same words this repeats — so `process` is not a global
+ * TypeScript knows here, and a raw assignment to it type-checks only by
+ * accident, whenever some other dependency's `.d.ts` happens to pull node's
+ * ambient types in first. `vi.stubEnv` is typed by vitest itself and needs
+ * neither. It reaches the same variable: vitest's own `metaEnv` proxy that
+ * backs it is a thin wrapper over `process.env` and every write passes
+ * through, which is what the empirical check below confirms rather than
+ * assumes.
+ *
  * The dedicated "time, rendered where the reader lives" cases below move it
  * away from UTC on purpose, and restore it before returning.
  */
-process.env.TZ = "UTC";
+vi.stubEnv("TZ", "UTC");
 
 const DIGEST = "Eo_-w3Yl9o0qXf3n";
 const SHOWN = "Eo_-w3Yl9o0q";
@@ -221,7 +232,7 @@ describe("time, rendered where the reader lives", () => {
    * `describe`'s "Time" assertions reading a zone they never pinned.
    */
   afterEach(() => {
-    process.env.TZ = "UTC";
+    vi.stubEnv("TZ", "UTC");
   });
 
   it("renders the reported defect's own numbers: 19:00:24 UTC as 21:00:24 for a reader in Berlin", () => {
@@ -229,7 +240,7 @@ describe("time, rendered where the reader lives", () => {
     // event a reader at 21:00 local had just watched happen — the UTC digits,
     // not their own clock. Berlin in August is UTC+2, so this is that exact
     // report, not a stand-in for it.
-    process.env.TZ = "Europe/Berlin";
+    vi.stubEnv("TZ", "Europe/Berlin");
     showing([
       record(1, { kind: "mandate_constructed", role: "surface", at: "2026-08-10T19:00:24Z" }),
     ]);
@@ -246,7 +257,7 @@ describe("time, rendered where the reader lives", () => {
   it("renders the same instant differently for a reader in a different zone", () => {
     // The property the case above cannot show on its own: it is the reader's
     // zone moving the string, not a fixed adjustment baked into timeOf.
-    process.env.TZ = "Pacific/Auckland";
+    vi.stubEnv("TZ", "Pacific/Auckland");
     showing([
       record(1, { kind: "mandate_constructed", role: "surface", at: "2026-08-10T19:00:24Z" }),
     ]);
