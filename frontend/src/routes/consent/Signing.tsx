@@ -222,11 +222,14 @@ export function Signing({
   // cannot be misread; the box now agrees with it instead of contradicting it.
   const isSigned = state.kind === "starting" || state.kind === "stranded";
   const signedHeading = isSigned ? "What you signed" : "What you are signing";
-  // Built by concatenation rather than inside a template literal: the guard
-  // that keeps `frontend/src/architecture.test.ts`'s palette closed reads a
-  // class as its own string literal and cannot see one named inside a
-  // template literal's interpolation (#194) — a `${isSigned ? … : …}` here
-  // would make `border-ink` and `bg-wash` invisible to it.
+  // Built by concatenation rather than inside a template literal, matching
+  // `SpineHead`, `Status` and `Inspector.tsx`'s `pill`. It read as
+  // load-bearing rather than stylistic until #194: `frontend/src/test/source.ts`
+  // used to take a backtick literal as one opaque string, so a `${isSigned ?
+  // … : …}` here would have made `border-ink` and `bg-wash` invisible to the
+  // palette guard. `scan` now reads an interpolation's contents with itself,
+  // so either shape is seen — concatenation here is a preference now, not a
+  // requirement.
   const enclosure = isSigned ? "border border-ink bg-wash" : "border border-graphite/40";
 
   return (

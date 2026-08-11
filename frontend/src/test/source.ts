@@ -42,13 +42,26 @@
  * too, the way it always was, so a class written outside any interpolation is
  * unaffected.
  *
- * # The single blind spot, stated rather than left to be found
+ * # Two blind spots, stated rather than left to be found
  *
  * A regular-expression literal containing a quote — `/['"]/` — opens a string
  * that is not there, and from that point the walk is one quote out of phase: it
- * can both invent a violation and swallow a real one. That is a note rather than
- * a parser because it has not been worth one yet. If a rule ever reports
- * something baffling, this is the first thing to grep for.
+ * can both invent a violation and swallow a real one. `endOfQuoted` shares this
+ * with the top-level walk above, so it reaches inside an interpolation too:
+ * `` `${/['"]/.test(x) ? "a" : "b"}` `` is thrown by the same coincidence one
+ * level in. That is a note rather than a parser because it has not been worth
+ * one yet. If a rule ever reports something baffling, this is the first thing
+ * to grep for.
+ *
+ * The second is narrower and lives in `endOfQuoted` alone: matching a template
+ * literal by its *next* backtick, with no awareness that the content in between
+ * might itself hold a quoted string, works only because a plain string almost
+ * never contains a raw backtick character. One that does, inside a template
+ * literal nested inside an interpolation — `` `${`${"a`b"}`}` `` has one level
+ * of nesting and one backtick inside the innermost string — desyncs which
+ * backtick closes which level, the same class of bug as the one above, one
+ * delimiter over. Not fixed for the same reason: it has not been worth a parser
+ * either, and this is what to grep for if it ever is.
  */
 
 /** What one pass over a TypeScript source pulls out of it. */
@@ -92,12 +105,33 @@ function endOfQuoted(source: string, at: number): number {
  * walked character by character, so a `}` that belongs to *it* cannot be
  * mistaken for the one that closes the interpolation. The same reasoning as
  * `endOfOpeningTag` in `architecture.test.ts`, one grammar over.
+ *
+ * A line comment or a block comment is skipped the same way, and for the same
+ * reason `scan` itself skips one: unlike a quoted string, a comment has no
+ * delimiter this function would otherwise recognise as such, so an unbalanced
+ * brace written in prose — `// keep this in sync with the store's Record<Mark,
+ * {…}>` — would decrement `depth` on its own `}` and close the interpolation
+ * right there, silently dropping everything real after it in the same
+ * template literal. A *balanced* `{note}` in a comment would not have shown
+ * this: depth returns to where it was regardless, which is what let this ship
+ * once before someone wrote an odd number of braces into a comment inside an
+ * interpolation.
  */
 function endOfInterpolation(source: string, at: number): number {
   let depth = 1;
   let i = at;
   while (i < source.length) {
     const c = source[i];
+    if (c === "/" && source[i + 1] === "/") {
+      while (i < source.length && source[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && source[i + 1] === "*") {
+      i += 2;
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
     if (c === '"' || c === "'" || c === "`") {
       i = endOfQuoted(source, i);
       continue;

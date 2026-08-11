@@ -677,6 +677,40 @@ describe("the frontend's architecture", () => {
           "interpolation; the fix is a recursive read, not a one-level lookahead",
       ).toEqual(["text-red-600"]);
     });
+
+    it("is not fooled by a comment's own brace inside an interpolation", () => {
+      // `endOfInterpolation` finds the `}` that closes `${…}` by counting
+      // braces, and a comment written inside the interpolation is not, on its
+      // own, a place braces stop counting — a `//` or `/* … */` has no
+      // delimiter the counter otherwise recognises. A *lone* `}` in that
+      // prose, with nothing before it in the same comment to balance it —
+      // realistic wherever a comment references `ENDING_EDGE`'s closing
+      // brace, or any object literal, by name — decrements `depth` to zero
+      // right there and closes the interpolation on the spot, silently
+      // dropping every literal after it in the same template literal. No
+      // exception, no failing test: fewer literals, quietly.
+      const strayBraceInLineComment =
+        'const c = `${ // mirrors ENDING_EDGE}\n cond ? "text-red-600" : "text-ink" }`;';
+      expect(
+        offPalette(strayBraceInLineComment, allowed),
+        "the `}` inside the // comment must not be read as the interpolation's " +
+          "own closing brace — both colours after it are still violations",
+      ).toEqual(["text-red-600"]);
+
+      const strayBraceInBlockComment =
+        'const c = `${ /* mirrors ENDING_EDGE} */ cond ? "text-red-600" : "text-ink" }`;';
+      expect(
+        offPalette(strayBraceInBlockComment, allowed),
+        "the same trap in a /* */ comment",
+      ).toEqual(["text-red-600"]);
+
+      // A *balanced* brace in a comment — `{note}` — could not have shown
+      // this: depth returns to where it started either way, so this is a
+      // regression lock on the case that already passed, not new coverage.
+      const balancedBraceInComment =
+        'const c = `${ /* {note} */ cond ? "text-red-600" : "text-ink" }`;';
+      expect(offPalette(balancedBraceInComment, allowed)).toEqual(["text-red-600"]);
+    });
   });
 
   describe("no semantic utility is unbacked by the palette", () => {
