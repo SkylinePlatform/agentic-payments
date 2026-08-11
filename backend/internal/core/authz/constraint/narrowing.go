@@ -155,6 +155,13 @@ func conjunction(parts []generated.Constraint) generated.Constraint {
 // Fields is already the published answer to "which facts does this read", and a
 // second walk here would be a copy of it free to drift — over the item-attribute
 // family first, which no listing enumerates.
+//
+// The parse below cannot fail, and the guard is kept rather than discarded. Its
+// only caller is narrowing's not arm, which runs over a tree Narrowing has
+// already parsed whole, and every subtree of an accepted tree parses on its own
+// at a shallower depth. So the false is unreachable today; it is also the answer
+// this function would have to give if that ever stopped being true, which is
+// what makes discarding the error the worse of the two spellings.
 func whollySelective(c generated.Constraint) bool {
 	e, err := Parse(c)
 	if err != nil {

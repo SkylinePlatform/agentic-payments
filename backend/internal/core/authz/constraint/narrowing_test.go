@@ -155,6 +155,15 @@ func TestNarrowingIsTheStrongestQuestionACatalogueCanBeAsked(t *testing.T) {
 				"weakenings is still implied by the disjunction the user signed",
 		},
 		{
+			name: "any of an all of two selectors and a third",
+			node: group("any", group("all", category, shop), route),
+			want: []string{group("any", group("all", category, shop), route)},
+			why: "the branch narrows to two constraints and a branch of an any has to be one " +
+				"node, so they are rejoined as the all they came from — an any there would " +
+				"weaken the branch to either of them, which still implies nothing wrong and " +
+				"still asks for less than the sentence described",
+		},
+		{
 			name: "any with a branch that cannot be read",
 			node: group("any", category, colour),
 			want: nil,
@@ -311,6 +320,7 @@ func TestAQueryNeverExcludesAnOfferTheMandateWouldAuthorise(t *testing.T) {
 		group("any", category, shop),
 		group("any", category, cap200),
 		group("any", group("all", category, cap200), shop),
+		group("any", group("all", category, shop), route),
 		group("not", category),
 		group("not", group("all", category, shop)),
 		group("not", group("all", category, cap200)),

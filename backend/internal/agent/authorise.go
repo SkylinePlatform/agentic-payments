@@ -384,10 +384,12 @@ type Proposal struct {
 //
 // # The search is not run with the constraint set the user signs
 //
-// It is run with the constraints that name *what* to buy — the ones whose field
-// sits under `item.` — and not with the ones that say on what terms. That is a
-// deliberate narrowing of the query and it is worth being exact about why,
-// because the obvious reading is that the agent is dropping a limit.
+// It is run with the constraints that name *what* to buy — whatever part of the
+// set the registry says a catalogue can be asked about, which is identifying's
+// answer and not a prefix on a field name — and not with the ones that say on
+// what terms. That is a deliberate narrowing of the query and it is worth being
+// exact about why, because the obvious reading is that the agent is dropping a
+// limit.
 //
 // It is not: the full set, price bound included, is what goes to the Trusted
 // Surface, what the user signs, and what every verifier evaluates. Nothing the

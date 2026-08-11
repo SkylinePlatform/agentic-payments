@@ -85,7 +85,7 @@
 // Neither infers anything from a sentence, and no model is on the path.
 //
 // **What may follow it is only more of the same.** This package is not the
-// window through which the agent reaches core, and reading Selective as a
+// window through which the agent reaches core, and reading Narrowing as a
 // precedent for routing some other fact through here would be the wrong
 // reading. Every package that can reach an interpreter is one hard rule 2 has to
 // argue about — reach_test.go's mayReach list is where that argument is written

@@ -13,11 +13,18 @@ import (
 // Whether a field says *what to go looking for*, rather than stating a term the
 // purchase has to meet, is a property of the field. It has lived as a column on
 // Field since #132's first step; what it did not have was a way to be asked by
-// name. The one caller that needs it — internal/agent, building a merchant
+// name. The caller that needed it — internal/agent, building a merchant
 // search — may not import this package, so it kept the same fact as two string
 // prefixes and a test held the two in step. This function is what lets that
 // second copy be deleted, so the answers below are now the whole of the fact
 // rather than one of two statements of it.
+//
+// **That caller asks Narrowing now**, which is issue #203: a constraint is not
+// always a leaf, and the leaf-level answer had nothing to say about a group. So
+// this is the primitive rather than the thing that crosses — Narrowing is built
+// out of it — and the table below is where the vocabulary states, field by
+// field, which of the two kinds of fact each one is. That job is unchanged by
+// #203 and is why the answers still have to be spelled out here.
 //
 // Nothing here is about selective *disclosure*, which is SD-JWT's and is
 // decided per mandate rather than per field. See internal/adapters/ap2/disclose.go.
