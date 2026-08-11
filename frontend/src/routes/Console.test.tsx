@@ -118,15 +118,62 @@ describe("the shopping console", () => {
     render(<Console />, { wrapper: Router });
 
     expect(await screen.findByText(/buy a flight to Palma under \$200, this summer/)).toBeTruthy();
+    // Said before the box is touched, not learned from a 422 afterwards.
+    expect(await screen.findByText(/only understands the sentences below/i)).toBeTruthy();
   });
 
   it("shows nothing when the interpreter has no menu", async () => {
-    // -interpreter gemini: any sentence is admissible, so there is no menu and
-    // inventing one would offer sentences nothing is scripted for.
+    // -interpreter gemini or -interpreter auto with a key: any sentence is
+    // admissible, so there is no menu and inventing one would offer sentences
+    // nothing is scripted for.
     stubFetch({ "/examples": { examples: [] } });
     render(<Console />, { wrapper: Router });
 
     await waitFor(() => expect(screen.queryByTestId("examples")).toBeNull());
+    expect(await screen.findByText(/reads free text/i)).toBeTruthy();
+  });
+
+  it("promises nothing about the box until the agent has said what it understands", async () => {
+    // /examples never settles, so the only claim this screen could make would
+    // be one it invented. Deterministic on purpose: a test that raced the
+    // resolved fetch would pass on a slow machine and prove nothing on a fast
+    // one.
+    vi.stubGlobal("fetch", (url: string) =>
+      url === "/examples"
+        ? new Promise(() => {})
+        : Promise.resolve(new Response(JSON.stringify({ watches: [] }))),
+    );
+    render(<Console />, { wrapper: Router });
+
+    await screen.findByRole("textbox");
+    expect(
+      screen.queryByTestId("interpreter-mode"),
+      "the first paint has no answer to base a claim on, and an unanswered call is not evidence",
+    ).toBeNull();
+  });
+
+  it("claims neither mode when the agent never answered what it understands", async () => {
+    // The failure this replaces was silent and read the right way round: a
+    // failed /examples resolved to an empty menu, and an empty menu is how a
+    // model-backed interpreter looks — so a browser that could not reach the
+    // agent at all promised free text on its behalf.
+    stubFetch({
+      "/examples": { status: 500, body: "the agent is not up" },
+      "/proposals": { status: 422, body: 'interpret: no script for this prompt: "buy a boat"' },
+    });
+    render(<Console />, { wrapper: Router });
+
+    // Driving a whole interpretation is what makes this deterministic: by the
+    // time the agent's own refusal is on screen, the failed /examples has long
+    // since settled, so an absent claim is an absent claim rather than a race.
+    await userEvent.type(screen.getByRole("textbox"), "buy a boat");
+    await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
+    await screen.findByText(/no script for this prompt/);
+
+    expect(
+      screen.queryByTestId("interpreter-mode"),
+      "an agent that did not answer is not an agent that answered 'anything goes'",
+    ).toBeNull();
   });
 
   it("renders the agent's own sentence on a refusal and keeps what was typed", async () => {

@@ -11,7 +11,10 @@
 //
 // `scripted`, the default, is interpret.Demo(): a fixed table of five prompts,
 // no key and no network. `gemini` is a model behind the same interface, reading
-// GEMINI_API_KEY from the environment.
+// GEMINI_API_KEY from the environment. `auto` is a third value beside them: it
+// asks for whichever is available rather than for a model by name — the model
+// if GEMINI_API_KEY is set, the scripted table if it is not — and prints which
+// one it picked, so a screenshot stays attributable either way.
 //
 // **The default is what deploy/demo.json runs and must stay so.** `make demo`
 // has to come up without a key and without reaching anything, and the golden
@@ -20,6 +23,39 @@
 // **There is no fallback.** `-interpreter gemini` with no key refuses to start,
 // because an agent asked for a model and quietly handed a fixed table produces a
 // screenshot nobody can attribute. interpreterFor is where that decision lives.
+//
+// **`auto` is not that fallback**, even though the two sound alike from a
+// distance. The refusal above is about `gemini` being asked for by name and not
+// honoured; `auto` never asks for a model by name, so there is nothing it
+// silently declines to give — it asks for the best available and says which one
+// that was. A screenshot taken under `auto` is attributable for the same reason
+// one taken under `gemini` is: the banner names the implementation that
+// actually read the prompt, not just the flag that was passed.
+//
+// **`auto` is not the default, and deploy/demo.json does not name it either —
+// both were tried and neither survived.** Putting `auto` into this flag's
+// default was the first shape considered: with no key set the two select the
+// same interpreter, so a machine with none would see nothing change. What it
+// would cost is the guarantee itself — whether `make demo` reads
+// deterministically from the scripted five would then depend on whether the
+// operator's shell happens to export GEMINI_API_KEY for some unrelated reason,
+// rather than on anything written in this repository. Writing `-interpreter
+// auto` into deploy/demo.json instead looked like the fix and was tried next,
+// but it repeats the same defect one level down: naming `auto` in a reviewed,
+// committed manifest makes the *opt-in* visible, not the *outcome*
+// deterministic. `make demo` would still show two different things on two
+// machines, and nothing in the repository would say which, because the thing
+// actually deciding is still whichever shell started it.
+//
+// So the default stays `scripted`, deploy/demo.json stays exactly as it is,
+// and `auto` is reachable only where a person types it: on the command line,
+// or through `make demo-live`, which is the same stack with this one flag
+// added at the runner rather than at either of the two places that were tried
+// and rejected — see that target's own comment in the Makefile, and
+// deploy/demo.json's $comment for why the manifest itself was the wrong place
+// for it. A command typed is attributable in the way neither a default nor a
+// manifest entry is on its own, because typing it is the one thing that cannot
+// happen by accident.
 //
 // It confirms every counterparty is reachable and publishing a readable key,
 // and then runs whichever flow it was asked for:
@@ -93,6 +129,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -159,9 +196,11 @@ func run() error {
 
 	// Which implementation reads the prompt. Defaulting to the scripted table is
 	// what keeps `make demo` needing no key and no network — and a
-	// non-deterministic demo would take the golden numbers with it.
+	// non-deterministic demo would take the golden numbers with it. `auto` is
+	// available beside `gemini` but is never the default, for the reason the
+	// package doc gives at length.
 	interpreter := flag.String("interpreter", interpreterScripted,
-		"which IntentInterpreter reads -prompt: "+interpreterScripted+" or "+interpreterGemini)
+		"which IntentInterpreter reads -prompt: "+interpreterScripted+", "+interpreterGemini+" or "+interpreterAuto)
 	geminiModel := flag.String("gemini-model", interpret.DefaultGeminiModel,
 		"the model -interpreter "+interpreterGemini+" calls")
 
@@ -283,6 +322,7 @@ func flagsAgree(addr string, once bool) error {
 const (
 	interpreterScripted = "scripted"
 	interpreterGemini   = "gemini"
+	interpreterAuto     = "auto"
 
 	geminiKeyVar = "GEMINI_API_KEY"
 )
@@ -301,10 +341,25 @@ const (
 // An unknown name is refused for the same reason rather than defaulted. A typo
 // that silently selected the scripted table would be the same screenshot.
 //
-// # Why it is a function rather than four lines inside run
+// # auto is a third branch, not a third name for the same decision
+//
+// -interpreter auto never refuses for a missing key: it degrades to exactly
+// interpret.Demo() when GEMINI_API_KEY is unset, and reaches the same Gemini
+// construction the gemini case uses when it is set. That is legitimate
+// precisely because auto never claimed to want a model in the first place — see
+// the package doc's "auto is not that fallback" for the distinction from the
+// refusal above. It still returns an error if geminiInterpreter fails for a
+// reason other than a missing key. Once apiKey is non-blank the only ways left
+// are defects rather than configuration — interpret.NewModel refuses a nil
+// clock and can fail describing the answer's shape — and the branch is kept
+// rather than assumed away for exactly that reason: swallowing a defect into
+// the scripted table is the silent fallback this function exists to prevent,
+// and it would be hardest to notice in the case nobody expected.
+//
+// # Why it is a function rather than lines inside run
 //
 // The same reason as flagsAgree: so that the decision is assertable without a
-// process. TestInterpreterFor is what holds it, and the row that matters is
+// process. TestInterpreterFor is what holds it, and the row that matters most is
 // gemini with no key — a fallback added there is a test that goes red rather
 // than a demo that looks fine.
 //
@@ -313,6 +368,7 @@ const (
 // counterparties. It is also what lets the test exist at all: hard rule 4
 // forbids a test that depends on a live model, and a constructor that dialled
 // anything would put one here.
+//
 // # The second return value is what the banner prints
 //
 // Which interpreter read the prompt is the one thing about this process that
@@ -320,7 +376,10 @@ const (
 // same sentence look alike on the approval screen — so it is printed on the way
 // up. That is the same argument as the refusal above, one step along: a
 // screenshot nobody can attribute is the failure, and saying which implementation
-// is in play is the cheap half of preventing it.
+// is in play is the cheap half of preventing it. For auto the banner carries
+// both facts rather than one — that auto was asked for, and which arm it
+// resolved to — because "auto" alone would tell a reader nothing they could not
+// already see on the command line.
 func interpreterFor(name, apiKey, model string, clk authz.Clock) (interpret.IntentInterpreter, string, error) {
 	switch name {
 	case interpreterScripted:
@@ -328,24 +387,57 @@ func interpreterFor(name, apiKey, model string, clk authz.Clock) (interpret.Inte
 		return scripted, fmt.Sprintf("%s — %d prompts, no model", interpreterScripted, len(scripted.Prompts())), nil
 
 	case interpreterGemini:
-		provider, err := interpret.NewGemini(apiKey, model)
+		reader, reading, err := geminiInterpreter(apiKey, model, clk)
 		if err != nil {
 			return nil, "", fmt.Errorf("agent: -interpreter %s: %w; export %s, or leave -interpreter at %s",
 				interpreterGemini, err, geminiKeyVar, interpreterScripted)
 		}
-		reader, err := interpret.NewModel(provider, clk)
-		if err != nil {
-			return nil, "", err
+		return reader, reading, nil
+
+	case interpreterAuto:
+		if strings.TrimSpace(apiKey) == "" {
+			scripted := interpret.Demo()
+			return scripted, fmt.Sprintf("%s — %s — %d prompts, no model (no %s)",
+				interpreterAuto, interpreterScripted, len(scripted.Prompts()), geminiKeyVar), nil
 		}
-		// The provider's own answer rather than the flag's, because NewGemini
-		// substitutes the default for an empty name and a banner repeating the
-		// flag would then print nothing where a model is.
-		return reader, interpreterGemini + " — " + provider.Model(), nil
+		reader, reading, err := geminiInterpreter(apiKey, model, clk)
+		if err != nil {
+			// Not the refusal `gemini` makes above: auto asked for the best
+			// available rather than for a model by name, so there is no
+			// silent fallback available here to reject in the first place — a
+			// key that turned out unusable for a reason other than being
+			// absent is still a real failure and still has to stop the
+			// process, not be swallowed into the scripted table.
+			return nil, "", fmt.Errorf("agent: -interpreter %s: %w", interpreterAuto, err)
+		}
+		return reader, interpreterAuto + " — " + reading, nil
 
 	default:
-		return nil, "", fmt.Errorf("agent: -interpreter %q is not one this build has; it is %q or %q",
-			name, interpreterScripted, interpreterGemini)
+		return nil, "", fmt.Errorf("agent: -interpreter %q is not one this build has; it is %q, %q or %q",
+			name, interpreterScripted, interpreterGemini, interpreterAuto)
 	}
+}
+
+// geminiInterpreter builds a model-backed interpreter over Gemini, and the
+// banner text naming the model that will be called.
+//
+// Factored out of the gemini case so that auto can reach the same construction
+// when it decides a key is present. Safe to share: NewGemini and NewModel
+// perform no I/O, so calling this from either branch fails identically and
+// costs nothing beyond the call itself.
+func geminiInterpreter(apiKey, model string, clk authz.Clock) (interpret.IntentInterpreter, string, error) {
+	provider, err := interpret.NewGemini(apiKey, model)
+	if err != nil {
+		return nil, "", err
+	}
+	reader, err := interpret.NewModel(provider, clk)
+	if err != nil {
+		return nil, "", err
+	}
+	// The provider's own answer rather than the flag's, because NewGemini
+	// substitutes the default for an empty name and a banner repeating the
+	// flag would then print nothing where a model is.
+	return reader, interpreterGemini + " — " + provider.Model(), nil
 }
 
 // afterWatch turns the end of a watch into what the process should do about it,

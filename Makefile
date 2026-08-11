@@ -112,10 +112,43 @@ tidy: ## go mod tidy
 # The binaries are built first rather than `go run` per process: nine `go run`s
 # would recompile nine times and the demo would start in its own good time.
 # deploy/demo.json is the topology; adding a process is an entry there.
+#
+# Reproducible on every machine, deliberately: no process this starts reads a
+# key or reaches a network, so the golden numbers every screenshot in this
+# repository shows are the scripted five, always. `make demo-live`, right
+# below, is the one command that trades that guarantee for the agent reading
+# free text — read its own comment before reaching for it.
 .PHONY: demo
 demo: generate-go generate-disclosure generate-ts ## Bring up every role, the collector and the frontend (needs Node)
 	cd $(BACKEND) && $(GO) build -o bin/ ./cmd/...
 	$(BACKEND)/bin/demo -manifest deploy/demo.json -root .
+
+# The opt-in `make demo` deliberately does not carry. Two other shapes were
+# tried first and rejected, both recorded in cmd/agent's own package doc:
+# `auto` as this flag's default would make the outcome depend on whichever
+# shell happened to run `make demo`, and naming `-interpreter auto` in
+# deploy/demo.json made that same opt-in visible in a reviewed file without
+# making the *outcome* any more deterministic — GEMINI_API_KEY still decides,
+# silently, which demonstration a machine gets. A command a person actually
+# types is the one thing that cannot happen by accident, so that is what this
+# target is.
+#
+# Same eight processes as `make demo`, unmodified — cmd/demo's own `-append`
+# flag hands agent-watch `-interpreter auto` at the runner, rather than a
+# second manifest that could drift from deploy/demo.json the moment either one
+# changes without the other. See deploy/demo.json's own $comment for why
+# agent-watch is the one process this reaches for.
+#
+# Reproducible only on a machine with no GEMINI_API_KEY exported — on one that
+# has, agent-watch reads free text and the demonstration is no longer the
+# scripted five `make demo` always shows. That is the point of running this
+# target rather than the other one, and it is safe because the console states
+# which mode it is in before the box is touched, so a screenshot stays
+# attributable to whichever this run actually was.
+.PHONY: demo-live
+demo-live: generate-go generate-disclosure generate-ts ## Same stack as `make demo`, but the agent reads free text when GEMINI_API_KEY is set (needs Node)
+	cd $(BACKEND) && $(GO) build -o bin/ ./cmd/...
+	$(BACKEND)/bin/demo -manifest deploy/demo.json -root . -append agent-watch=-interpreter,auto
 
 .PHONY: frontend
 frontend: generate-disclosure generate-ts ## Run the frontend dev server (needs Node)
