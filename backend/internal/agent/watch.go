@@ -19,7 +19,43 @@ import (
 // somebody stopping the agent, and this is the agent having run out of things to
 // wait for. A watch that returned nil here would look like a completed purchase
 // to every caller that only checks the error.
+//
+// **Unreachable against a cycling schedule.** merchant.NewCyclingJitteredSchedule
+// never reports Final — there is always a next boundary, the wrap included — so
+// a watch whose cap no price the merchant ever quotes can satisfy would poll for
+// as long as the process runs, minting nothing and reporting nothing, rather
+// than reaching this. ErrAuthorisationExpired is the bound that still ends that
+// watch.
 var ErrScheduleExhausted = errors.New("agent: the merchant has no further price to move to, and the last one did not buy")
+
+// ErrAuthorisationExpired means the pair the user signed ran out its own clock
+// before any attempt bought.
+//
+// # Why this exists beside ErrScheduleExhausted rather than instead of it
+//
+// A one-shot schedule ends the loop on its own: the last price holds forever,
+// so a cap nothing ever meets is eventually attempted against Final and
+// refused into ErrScheduleExhausted. merchant.NewCyclingJitteredSchedule has no
+// such moment — there is always a next boundary, the wrap included — so a watch
+// begun against a price the user's cap will never accept would otherwise poll
+// until the process stops, its row on a console never moving and never saying
+// why. This is that watch's own bound instead of a second, invented one: the
+// open mandate pair already carries an expiry — Authorisation.ExpiresAt, read
+// off the open mandate's own ExpiresAt by the Trusted Surface that signed it —
+// and a verifier would refuse any closed mandate minted from it after that
+// instant regardless. This is the loop reading the same fact before spending a
+// round trip on a delegation no verifier could ever accept, so "this will never
+// happen" becomes something the loop itself concludes and reports, on the same
+// terms ErrScheduleExhausted already does for a schedule that runs out.
+//
+// # Where it is checked, and where it deliberately is not
+//
+// Only immediately before minting a fresh attempt — see Run. An attempt already
+// presented and awaiting a receipt is left to resolve or to be re-delivered on
+// its own terms; abandoning one because the pair's expiry passed while it was
+// outstanding is a different question from the one this sentinel answers, which
+// is "does a wait that has not yet begun have anything left to wait for".
+var ErrAuthorisationExpired = errors.New("agent: the user's authorisation expired before any attempt bought")
 
 // Watch is the Human Not Present loop: hold a key, wait for the merchant's
 // commitment to move, and attempt a purchase when it does.
@@ -50,7 +86,9 @@ var ErrScheduleExhausted = errors.New("agent: the merchant has no further price 
 // agent not being allowed to look at the money: it cannot tell an acceptable
 // opening price from an unacceptable one, because telling them apart is
 // evaluating the user's constraint, which is the verifier's job. A watch begun
-// against an already-final offer therefore polls until its context ends.
+// against an already-final offer therefore polls until its context ends or its
+// authorisation expires — see ErrAuthorisationExpired, the bound that still
+// applies even where Final itself does not, on merchant.NewCyclingJitteredSchedule.
 //
 // # It does not poll the search endpoint
 //
@@ -310,7 +348,7 @@ type Watched struct {
 }
 
 // Run watches until the purchase goes through, the mandate is spent, the
-// schedule runs out or the context ends.
+// schedule runs out, the authorisation expires or the context ends.
 //
 // The Tracker is a local rather than a field, and that is the containment
 // Tracker's own comment claims: Fund and Settle are methods on this type, so a
@@ -377,6 +415,15 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 		// price in the record that nothing was presented at.
 		d, quoted := pending, pendingQuote
 		if d == nil {
+			// Checked here and nowhere else in the loop: an outstanding delivery
+			// is left to resolve on its own terms, and this is the moment a fresh
+			// attempt would otherwise be minted — see ErrAuthorisationExpired for
+			// why quoting the merchant first would be a round trip spent on a
+			// delegation no verifier could ever accept.
+			if w.expired() {
+				return out, ErrAuthorisationExpired
+			}
+
 			q, err := w.Client.QuoteItem(ctx, w.Authorisation.Item, w.quantity())
 			if err != nil {
 				// A poll that did not answer says nothing about the price, so it
@@ -569,6 +616,21 @@ func (w *Watch) quantity() int {
 		return 1
 	}
 	return w.Quantity
+}
+
+// expired reports whether the user's authorisation has run out its own clock,
+// as of now — see ErrAuthorisationExpired.
+//
+// A zero ExpiresAt is treated as no bound at all rather than as the earliest
+// possible instant, on the same reading Endorsement's own *time.Time gives an
+// absent expiry: "not stated" and "already over" are different claims, and
+// only the schema is allowed to make the first one. Every authorisation this
+// loop is actually run against carries a real one — the Trusted Surface always
+// computes Authorisation.ExpiresAt as clock.Now().Add(openMandateLifetime) — so
+// this is a guard for a value built by hand rather than a case the demo
+// reaches.
+func (w *Watch) expired() bool {
+	return !w.Authorisation.ExpiresAt.IsZero() && !w.Clock.Now().Before(w.Authorisation.ExpiresAt)
 }
 
 // valid refuses a watch that could not complete a purchase.

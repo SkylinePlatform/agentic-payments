@@ -901,6 +901,43 @@ func TestAWatchThatHasAttemptedNothingSaysWhatItIsLookingAt(t *testing.T) {
 		"what the agent is looking at right now is the whole of what a waiting screen has to show")
 }
 
+// TestAWatchWhoseAuthorisationExpiredIsDrawnAsExpiredNotAsWatching is the
+// tracker's own half of issue #181.
+//
+// merchant.NewCyclingJitteredSchedule never reports Final, so nothing about the
+// merchant's own state ends a watch whose cap it never meets — the open
+// mandate pair's own expiry does instead, agent.ErrAuthorisationExpired. A
+// viewer polling this endpoint has to be able to tell that terminal state
+// apart from a watch still genuinely waiting, which is the whole claim
+// `watching` makes; a row that stayed on `watching` forever after the loop had
+// already concluded there was nothing left to wait for would be exactly the
+// true-but-useless statement AGENTS.md's golden-vectors section says this
+// repository keeps removing.
+func TestAWatchWhoseAuthorisationExpiredIsDrawnAsExpiredNotAsWatching(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(p agent.Progress) (agent.Watched, error) {
+		p.Baseline(agent.Quote{Checkout: "the-offer", Price: generated.Amount{Amount: 24000, Currency: "USD"}})
+		return agent.Watched{}, agent.ErrAuthorisationExpired
+	})
+
+	run, err := c.service.Start(t.Context(), console.Watching{Prompt: "buy a flight to Palma"})
+	require.NoError(t, err)
+	<-run.Done()
+
+	status, view := c.get(t, "/watches/"+run.ID())
+	require.Equal(t, http.StatusOK, status)
+
+	assert.Equal(t, "expired", view["state"],
+		"a cap the merchant never meets under a cycling schedule has to end at a state visibly "+
+			"different from watching, or a viewer polling this row cannot tell the two apart")
+	assert.NotEqual(t, "exhausted", view["state"],
+		"exhaustion is the merchant's schedule running out, which a cycling one never does — "+
+			"conflating the two would misreport which bound actually ended the loop")
+	assert.Contains(t, view["error"], agent.ErrAuthorisationExpired.Error(),
+		"the reason travels beside the state, on the same terms every other terminal state already reports one")
+}
+
 // TestAnAttemptInFlightIsDrawnAwaitingAReceipt is the third mandate state on the
 // wire, and the only window in which it exists.
 //

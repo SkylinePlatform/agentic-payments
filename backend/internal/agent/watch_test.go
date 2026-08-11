@@ -1282,6 +1282,83 @@ func TestTheWatchStopsWhenTheLastPriceIsRefused(t *testing.T) {
 		"the merchant prices the basket, so the cap is compared against what will actually be charged")
 }
 
+// TestTheWatchStopsWhenTheAuthorisationExpires is ErrAuthorisationExpired, the
+// bound a cycling schedule needs. merchant.NewCyclingJitteredSchedule never
+// reports Final, so TestTheWatchStopsWhenTheLastPriceIsRefused's sentinel is
+// unreachable against one, and a watch whose cap no price the merchant ever
+// quotes can satisfy would otherwise poll for as long as the process runs. The
+// open mandate pair already carries a bound of its own — this is the loop
+// reading it rather than spending a round trip on a delegation no verifier
+// could ever accept.
+//
+// This world's merchant runs the plain, one-shot schedule every other test in
+// this file uses, and deliberately so: the pair's own clock is what is under
+// test here, and it has nothing to do with which constructor priced the
+// route.
+func TestTheWatchStopsWhenTheAuthorisationExpires(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	a := authorise(t, w)
+
+	wait, _ := a.running(t, a.watch(t))
+	a.quoted() // the baseline
+
+	// Past the pair's own expiry. Nothing about the merchant's schedule is
+	// touched, because this bound has nothing to do with price.
+	a.world.clock.Advance(2 * time.Hour)
+	a.beat()
+
+	watched, err := wait()
+	require.ErrorIs(t, err, agent.ErrAuthorisationExpired,
+		"the pair's own expiry has to end the loop, or a watch whose cap the merchant never meets polls forever under a schedule that never runs out")
+	assert.Nil(t, watched.Bought)
+	assert.Empty(t, watched.Attempts,
+		"nothing was minted once the pair had expired — a verifier would refuse it anyway, so the loop has no business spending a round trip finding that out")
+}
+
+// TestAnOutstandingAttemptIsStillRedeliveredAfterTheAuthorisationExpires is the
+// other half of ErrAuthorisationExpired: the check sits only where a fresh
+// attempt would be minted, not wherever the pair happens to be read, so a
+// delivery already presented and awaiting a receipt when the pair expires is
+// answered rather than abandoned mid-flight.
+func TestAnOutstandingAttemptIsStillRedeliveredAfterTheAuthorisationExpires(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	a := authorise(t, w)
+
+	// The first funding request never lands; the re-delivery does.
+	var broken atomic.Int32
+	a.breaks = func(r *http.Request) bool {
+		return strings.HasSuffix(r.URL.Path, "/credential") && broken.Add(1) == 1
+	}
+
+	wait, _ := a.running(t, a.watch(t))
+	a.quoted() // the baseline
+
+	a.step() // $210
+	a.quoted()
+	a.attempted() // the delivery that reached nobody
+
+	// Past the pair's own expiry, with the attempt still outstanding.
+	a.world.clock.Advance(2 * time.Hour)
+	a.beat()      // the re-delivery: no quote is taken, so no poll signal
+	a.attempted() // and this one is refused, by the Credential Provider
+
+	// One more tick: nothing is pending any more, and the pair has already
+	// expired — this is the tick that ends the loop.
+	a.beat()
+
+	watched, err := wait()
+	require.ErrorIs(t, err, agent.ErrAuthorisationExpired,
+		"the outstanding attempt got its answer; what ends the loop afterward is the pair having nothing left to authorise")
+	require.Len(t, watched.Attempts, 1,
+		"the attempt in flight when the pair expired was re-delivered rather than abandoned")
+	assert.Equal(t, 2, watched.Attempts[0].Deliveries,
+		"the re-delivery is visible on the row the same way a re-delivery before expiry already is")
+}
+
 // TestAWatchWithNoTickBuildsItsOwnTicker covers the pacing a running agent uses
 // and every other test in this file replaces.
 //

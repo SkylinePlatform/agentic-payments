@@ -73,7 +73,23 @@ const (
 	stateBought
 	// stateExhausted is agent.ErrScheduleExhausted: the merchant has committed
 	// to its last price, an attempt was made against it, and it did not buy.
+	//
+	// Unreachable against a cycling schedule — merchant.NewCyclingJitteredSchedule
+	// never reports Final, so a watch that runs against one never reaches this
+	// state. See stateExpired for the bound that still ends a watch like that.
 	stateExhausted
+	// stateExpired is agent.ErrAuthorisationExpired: the open mandate pair the
+	// user signed ran out its own clock before any attempt bought.
+	//
+	// This is what a watch whose cap no price ever meets reaches instead of
+	// stateExhausted once its schedule cycles rather than stopping: nothing
+	// about a cyclic schedule ever tells the loop "there is no next price", so
+	// the pair's own expiry is the fact that still lets it conclude and report
+	// "this will never happen" rather than sitting at stateWatching for as long
+	// as the process runs. Reachable on a one-shot schedule too — an
+	// authorisation can run out before its last price does — it is simply rarer
+	// there, since stateExhausted usually gets there first.
+	stateExpired
 	// stateStopped is the watch's context ending — somebody stopping the agent.
 	stateStopped
 	// stateFailed is every other way a watch can end.
@@ -91,6 +107,7 @@ var runStateNames = [...]string{
 	stateWatching:  "watching",
 	stateBought:    "bought",
 	stateExhausted: "exhausted",
+	stateExpired:   "expired",
 	stateStopped:   "stopped",
 	stateFailed:    "failed",
 }
@@ -353,6 +370,8 @@ func (r *Run) finished(watched agent.Watched, err error) {
 		r.state = stateStopped
 	case errors.Is(err, agent.ErrScheduleExhausted):
 		r.state = stateExhausted
+	case errors.Is(err, agent.ErrAuthorisationExpired):
+		r.state = stateExpired
 	default:
 		r.state = stateFailed
 	}

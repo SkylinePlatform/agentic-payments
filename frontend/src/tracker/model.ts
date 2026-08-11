@@ -12,7 +12,7 @@
  *
  * # Two axes, and neither is invented here
  *
- * `RunState` — watching, bought, exhausted, stopped, failed — is
+ * `RunState` — watching, bought, exhausted, expired, stopped, failed — is
  * `runState.String()`. `MandateState` — ready, awaiting_receipt, spent — is
  * `authz.MandateState.String()`, read off each attempt's `checkout_mandate`
  * and `payment_mandate`. Both are spelled exactly as the machine that owns
@@ -71,14 +71,22 @@ export function totalStatus<K extends string>(
 
 // --- the run's own axis: internal/agent/console's runState -----------------
 
-/** `runState.String()`'s five spellings, in `internal/agent/console/run.go`'s own order. */
-export const RUN_STATES = ["watching", "bought", "exhausted", "stopped", "failed"] as const;
+/** `runState.String()`'s six spellings, in `internal/agent/console/run.go`'s own order. */
+export const RUN_STATES = ["watching", "bought", "exhausted", "expired", "stopped", "failed"] as const;
 export type RunState = (typeof RUN_STATES)[number];
 
 export const RUN_STATE_META: Record<RunState, StatusMeta> = {
   watching: { label: "watching", icon: "◐", tone: "neutral" },
   bought: { label: "bought", icon: "✓", tone: "positive" },
   exhausted: { label: "exhausted — never bought", icon: "○", tone: "negative" },
+  // A cycling merchant schedule never reports exhausted — see
+  // internal/agent/watch.go's ErrAuthorisationExpired — so this is what a watch
+  // whose cap no price ever meets reaches instead: the open mandate pair ran
+  // out its own clock. Distinct from `exhausted` on purpose, and distinct from
+  // `watching` on the purpose the whole tracker exists for — a row parked here
+  // is a wait the agent has already concluded will never end, not one still in
+  // progress.
+  expired: { label: "expired — never bought", icon: "⏱", tone: "negative" },
   stopped: { label: "stopped", icon: "■", tone: "neutral" },
   failed: { label: "failed", icon: "✕", tone: "negative" },
 };
