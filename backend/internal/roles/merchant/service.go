@@ -921,8 +921,15 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	// event, and it carries the same correlation ID the agent's request arrived
 	// with — which is what makes the processor's verdict land in the same group
 	// as the mandate that caused it.
+	//
+	// quoted.Price again, and it is a stronger claim here than on the two
+	// events above: decide has by now run ap2.AmountMatches, so this merchant
+	// has confirmed that the payment it is forwarding pays exactly what its own
+	// offer asked for. The figure beside this step is the same one either
+	// document would give.
 	s.Events.Emit(r.Context(), obs.KindMandatePresented,
-		"Payment Mandate presented to the Merchant Payment Processor")
+		"Payment Mandate presented to the Merchant Payment Processor",
+		obs.WithAmount(quoted.Price))
 
 	paymentReceipt, settled, err := s.initiate(r.Context(), mode, req)
 	if err != nil {
