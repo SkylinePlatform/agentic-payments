@@ -3,6 +3,8 @@
 **Date:** 2026-08-10
 **Status:** approved, not yet built
 **Issues:** #22. First slice of #109. Follows #15, #16, #17, #20, #21.
+Bounded by #133 and #160, both of which it makes visible and neither of which it
+fixes — see *What this does not do*.
 
 ## What this settles
 
@@ -41,7 +43,7 @@ sequenceDiagram
     B->>A: POST /proposals {prompt, item?}
     A->>A: Interpret — the only model call
     A->>M: GET /search?constraints= (identifying only)
-    A-->>B: {prompt, constraints, agent_key, item, watch_slots_free}
+    A-->>B: {prompt, constraints, agent_key, item, offer, watch_slots_free}
 
     Note over B: /consent — nothing is signed yet
     B->>S: POST /authorise/preview {constraints}
@@ -132,10 +134,35 @@ is the serialisation rule working as written.
   "prompt": "…",
   "constraints": [ … ],
   "agent_key": { … },
-  "item": "offer:flight-pmi",
+  "item": "route:BEG-PMI",
+  "offer": {
+    "id": "route:BEG-PMI",
+    "title": "Belgrade → Palma de Mallorca",
+    "description": "Direct, 2h 40m. Cabin bag included, hold bag extra.",
+    "image_url": "/images/catalogue/flight-beg-pmi.svg",
+    "retailer": "Adria Wings",
+    "price": { "minor_units": 24000, "currency": "USD" }
+  },
   "watch_slots_free": 7
 }
 ```
+
+**`offer` is the merchant's own description of what `item` names, and the agent
+does not read it.** That distinction is the whole of why this is allowed to
+exist, because `agent.candidate` today reads the identifier and nothing else,
+under a comment that is still true and must stay true: *"the rest of what the
+merchant publishes — title, image, description — is for a person, and the agent
+is not one; the price is deliberately ignored too, because the agent compares no
+money anywhere and a field it read here would be the first place that stopped
+being true."*
+
+`discover` still selects on the identifier alone. What changes is that `Propose`
+now serves a caller that **is** a person, so it carries the record through
+instead of discarding it. Carrying is not reading: nothing in `internal/agent`
+compares `price` to anything, and the field exists on this response for the same
+reason `image_url` does. The comment on `candidate` is extended rather than
+deleted, and `TestDiscoverStillChoosesOnTheIdentifierAlone` is what keeps the
+first sentence of it honest.
 
 Error mapping is **the one `Service.start` already uses**, taken as it stands
 rather than restated. That `switch` has the reasoning written into it — an
@@ -289,6 +316,36 @@ a signing key — to serve one browser in one development setup.
 first answer, which is the point; editing the prompt and previewing again is a
 different decision and takes a new one.
 
+## What a demonstration can be driven with
+
+The screens below are built against what exists, and what exists is four offers
+in `deploy/catalogue.json` and five scripted sentences in
+`interpret.Scenarios()` — the flight carries two wordings of one intent, declared
+as two entries rather than matched fuzzily.
+
+| sentence | offer | prices (USD) | cap | what happens |
+|---|---|---|---|---|
+| *buy a flight to Palma when it drops below \$200, this summer* (and *…under \$200…*) | `route:BEG-PMI` | 240 → 210 → **189** | 200 | waits, **is refused at 210**, buys at 189 |
+| *buy me this bicycle when it drops below \$400* | `gtin:05012345678900` | 450 → **380** | 400 | waits, buys at 380 |
+| *two tickets to the Vlado Georgijev concert in November, up to \$160 all in* | `event:vlado-georgijev-2026-11-14` | **75** | 160 | buys at once |
+| *find and buy telescopic ladders, cheapest* | `gtin:05014477390221` | **139** | 150 | buys at once |
+
+**Only the flight demonstrates a refusal**, and whoever runs a demonstration has
+to know it. The bicycle's second price is already inside its cap, so no verifier
+ever says no on that path; the concert and the ladders are bought on the first
+quote. The beat where a verifier refuses — which is the one thing on these
+screens that a slide deck cannot fake — exists on one of the four.
+
+This is also the first time any of the five is reachable without a command line.
+`GET /examples` puts them under the box, so the four scenarios stop being
+something a reader has to find in a Go file.
+
+**Four is not enough and that is #160**, not this issue. Every scripted sentence
+narrows to exactly one offer, so `GET /search` answers a list of one and #109's
+table would have a single row. Nothing in this design depends on the number: the
+proposal settles on one offer, the consent screen describes that one, and both
+behave identically against a catalogue of two hundred.
+
 ## The screens
 
 ```
@@ -364,16 +421,59 @@ is #109's, and nothing built now has to move for it.
 │                                              │
 │  ┌─ What you are signing ────────────────┐   │
 │  │ the amount is at most 200.00 USD      │   │  ← ink, larger
-│  │ the item is offer:flight-pmi          │   │
-│  │ at is on or before 2026-09-30         │   │
+│  │ the item is route:BEG-PMI             │   │
+│  │ at is on or before 2026-08-31         │   │
 │  │ ───────────────────────────────────── │   │
 │  │ Pays    Visa ending 4242              │   │
 │  │ Valid   1 hour from signing           │   │
 │  └───────────────────────────────────────┘   │
 │                                              │
+│  ┌─ What route:BEG-PMI is ───────────────┐   │
+│  │ ┌────┐ Belgrade → Palma de Mallorca   │   │  ← graphite; the
+│  │ │ img│ Adria Wings · 240.00 USD today │   │    merchant's words
+│  │ └────┘ Direct, 2h 40m. Cabin bag…     │   │
+│  │                                       │   │
+│  │ The merchant's description of this    │   │
+│  │ offer. Not part of what you sign.     │   │
+│  └───────────────────────────────────────┘   │
+│                                              │
 │           [ Refuse ]      [ Sign ]           │
 └──────────────────────────────────────────────┘
 ```
+
+**The third zone exists because the sentence alone is unreadable.**
+`Render()` produces `the item is route:BEG-PMI` — and for the bicycle, `the item
+is gtin:05012345678900`. Those are the identifiers the constraint actually
+carries and the ones the merchant evaluates, so they are right; they are also
+nothing a person can act on. A user asked to approve a purchase they cannot
+identify is not giving consent.
+
+**It cannot be fixed by rendering the sentence differently.** The sentences come
+from the surface's own `Render()` precisely so that what is read is what is
+signed, and a second renderer on this path is what
+`constraint/architecture.test.ts` exists to forbid. So the identifier stays
+exactly as the constraint states it, and the merchant's description sits *beside*
+it, outside the signed box, labelled as not part of it — the same device the
+typed prompt uses at the top, one party along.
+
+**The price on the card is doing real teaching, and is worth keeping for that
+reason.** It says `240.00 USD today` next to a constraint reading `at most
+200.00 USD`. A reader who has never heard of AP2 can see, in one glance, that
+they are authorising a purchase that **cannot happen yet** — which is the entire
+premise of Human Not Present, stated by two numbers rather than by a paragraph.
+
+**And it is where a wrong item becomes catchable.** `agent.discover` takes
+`found[0]` under a comment saying that choosing among candidates is a product
+decision this demo does not make. With today's four offers every scripted
+sentence narrows to exactly one, so the choice never shows. When #160 widens the
+catalogue it will, and until #109 puts the picking in front of a person, this
+card is the only place a user can notice that the agent went looking for a
+bicycle and found a ladder. That is a reason to build it now rather than with the
+table.
+
+The card scales to a catalogue of any size because it describes **one** offer —
+the one the proposal settled on. Nothing about it changes when there are two
+hundred.
 
 **Both halves are on screen, and that is a decision.**
 `docs/specs/2026-08-06-hnp-screen-brief.md` §2 raises it and leaves it open; this
@@ -461,6 +561,8 @@ signature with nowhere to spend it.
 | test | what it fails on |
 |---|---|
 | `TestProposeDoesNotCallTheSurface` | a surface endpoint that fails the test if it is reached |
+| `TestDiscoverStillChoosesOnTheIdentifierAlone` | two candidates differing only in title and price — the first is chosen, so nothing began selecting on the fields the proposal now carries |
+| `TestTheProposalCarriesTheOfferTheMerchantPublished` | title, retailer, image and price arrive unaltered from `GET /search` |
 | `TestAProposalIsNotAWatch` | after `POST /proposals`, `GET /watches` is empty — the agent kept nothing |
 | `TestASignedAuthorisationStartsAWatchWithoutCallingTheSurface` | `Watcher.Authorise` must not be called |
 | `TestARepeatedKeyProposesOnce` | the interpreter is called once; the count is read **on the test goroutine** |
@@ -494,8 +596,10 @@ it was missing: the set of consent routes is non-empty.
 
 Beyond that: `Console` sends an `Idempotency-Key`, and two previews either side of
 an edit send **different** ones; a 422 renders the server's sentence and the typed
-text survives it; the consent screen distinguishes what was typed from what is
-signed; *Sign* is disabled when `rendered.length !== constraints.length`; *Refuse*
+text survives it; the consent screen distinguishes what was typed, what is signed
+and what the merchant says the identifier refers to — three zones, asserted as
+elements rather than as colours, with the offer card **outside** the signed box;
+*Sign* is disabled when `rendered.length !== constraints.length`; *Refuse*
 calls `refused` and **never** `authorise`; a `refused` that fails still returns;
 the full path lands on `/lanes?run=`; a `/watches` failure after signing produces
 the retry screen; a reload with no router state produces the resting state.
@@ -508,6 +612,24 @@ Gates: `make check` and `make frontend-check`.
   that flow has no screen worth building and nothing here disagrees.
 - **No catalogue, no quantity, no tracker.** Those are #109, and the seam is the
   proposal.
+
+- **No wider catalogue.** #160. Four offers is what these screens are built
+  against and what they are honest about; nothing here has to change when it
+  grows.
+
+- **No fix for the concert prompt's quantity, and the screen will make it
+  visible.** #133: *two tickets… up to \$160* interprets to `quantity lte 2`,
+  which is signed and enforced, while the watch takes its quantity from
+  `-quantity` and buys one. Nothing is violated — one satisfies `lte 2` — but the
+  consent screen now renders *"the quantity is at most 2"* to a person who then
+  receives one ticket, which is a worse experience of the same defect than a CLI
+  had. The real repair is a basket size the interpretation returns and the
+  surface renders, which is a change to `IntentInterpreter` and belongs to #133.
+  What this design must not do is quietly stop showing the constraint.
+
+- **No choice among candidates.** `discover` takes `found[0]`, and this design
+  does not change that. What it adds is the offer card, so a first match that was
+  wrong can at least be *seen* and refused. Choosing is #109's table.
 - **No repaint.** #159 owns the palette and the type hierarchy.
 - **No proof that a human was there.** Nothing in this design establishes it and
   nothing pretends to. What it establishes is that a signature can only cover a
