@@ -209,7 +209,19 @@ type DemoOptions struct {
 	// extra randomness at all: every price holds exactly Step, precisely as
 	// when this field did not exist. A positive value has to be at least Step,
 	// and each transition then draws its own width once from [Step, StepMax]
-	// via NewJitteredSchedule — see there for why crypto/rand.
+	// via NewJitteredSchedule — see there for why crypto/rand. A negative value
+	// is refused rather than read as zero, on the reasoning Step states.
+	//
+	// # It is not the only number Step has to be read against
+	//
+	// Step is also the shortest a price can hold, and two things downstream
+	// have to fit inside it: the watching agent's poll, which steps over a
+	// price it never polls during, and the time the rest of the stack takes to
+	// come up, since this schedule starts here and the agent that watches it
+	// starts later. deploy/demo.json states both numbers for that reason, and
+	// internal/demo's TestThePollStaysUnderTheShortestPriceHold and
+	// TestTheMerchantsFirstPriceOutlastsTheStackComingUp are what fail when one
+	// of them stops fitting.
 	//
 	// # What this does not change
 	//
@@ -282,6 +294,16 @@ func NewDemoService(role roles.Role, opts DemoOptions) (*Service, error) {
 		// the symptom is a demonstration where discovery silently finds nothing
 		// — which reads as a protocol failure rather than as a missing file.
 		return nil, errors.New("merchant: a demo service needs a catalogue; load one with LoadCatalogue")
+	}
+	if opts.StepMax < 0 {
+		// Refused rather than read as "off", on exactly the reasoning Step's
+		// own doc comment gives for zero: a flag somebody set to a value that
+		// cannot mean anything should stop the process, not quietly become the
+		// behaviour they were trying to change.
+		return nil, fmt.Errorf(
+			"merchant: step-max %s is negative; zero means every price holds exactly step, and a "+
+				"positive value is the longest one may hold",
+			opts.StepMax)
 	}
 	if opts.StepMax > 0 && opts.StepMax < opts.Step {
 		return nil, fmt.Errorf(

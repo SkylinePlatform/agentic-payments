@@ -118,6 +118,19 @@ func demoServiceWithStep(
 ) (*merchant.Service, *clock.Fake, demoKeys) {
 	t.Helper()
 
+	svc, under, keys, err := newDemoServiceWithStep(t, controls, step, stepMax)
+	require.NoError(t, err, "standing up the demo merchant")
+	return svc, under, keys
+}
+
+// newDemoServiceWithStep is demoServiceWithStep with the constructor's own
+// error handed back rather than asserted on, which is what lets a test drive
+// the pacing arguments NewDemoService refuses.
+func newDemoServiceWithStep(
+	t *testing.T, controls bool, step, stepMax time.Duration,
+) (*merchant.Service, *clock.Fake, demoKeys, error) {
+	t.Helper()
+
 	under := clock.NewFake(base)
 
 	party := func(name string) (authz.Signer, authz.Verifier, authz.KeySetPublisher) {
@@ -154,9 +167,8 @@ func demoServiceWithStep(
 			StepMax:   stepMax,
 			Controls:  controls,
 		})
-	require.NoError(t, err, "standing up the demo merchant")
 
-	return svc, under, demoKeys{user: userSigner, own: shopVerifier, blinder: blinder}
+	return svc, under, demoKeys{user: userSigner, own: shopVerifier, blinder: blinder}, err
 }
 
 // newDemoShop serves the service demoService builds.
@@ -555,6 +567,25 @@ func TestAMerchantWillNotServeAControlOverAClockItDoesNotRead(t *testing.T) {
 	})
 }
 
+// TestARangeThatNamesNothingIsRefused covers the two ways DemoOptions.StepMax
+// can be given a value that cannot mean anything.
+//
+// The negative case is the one worth a test rather than a reader's trust: zero
+// is the documented "no jitter at all", so a guard written as `StepMax > 0`
+// reads a negative as zero and leaves a flag somebody deliberately set doing
+// nothing, which is precisely what the field's neighbour Step refuses to do for
+// its own zero.
+func TestARangeThatNamesNothingIsRefused(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, err := newDemoServiceWithStep(t, false, demoStep, -time.Second)
+	assert.Error(t, err,
+		"a negative maximum quietly read as 'no jitter' is a flag that was set and did nothing")
+
+	_, _, _, err = newDemoServiceWithStep(t, false, demoStep, demoStep-time.Second)
+	assert.Error(t, err, "a maximum below the minimum describes a range with nothing in it to draw")
+}
+
 // TestAJitteredScheduleKeepsTheCatalogueAndInventoryAgreeing is issue #158's
 // second trap, the one beside the box: two independent draws for the same
 // flight entry would let GET /checkout?from=&to= (Inventory) and
@@ -567,18 +598,25 @@ func TestAJitteredScheduleKeepsTheCatalogueAndInventoryAgreeing(t *testing.T) {
 	t.Parallel()
 
 	// Millisecond-scale and not deploy/demo.json's own seconds: this drives a
-	// fake clock, so nothing here waits, and a tight range in a short loop
-	// reaches the final price inside a handful of iterations rather than a
-	// few hundred.
+	// fake clock, so nothing here waits.
 	const (
 		min = 200 * time.Millisecond
 		max = 400 * time.Millisecond
 	)
 
+	// One millisecond a step, and the fineness is the whole of what makes this
+	// a check rather than a coin toss. Two independent draws are caught only at
+	// an instant where they disagree about which price is in force, so a coarse
+	// grid lets two different draws land in one bucket and read as agreement:
+	// at 50ms over a 200ms range there are four buckets, and a reintroduced
+	// second draw would go unnoticed a few percent of the time. At 1ms the same
+	// coincidence needs two draws inside a millisecond of each other, twice.
+	const tick = time.Millisecond
+
 	svc, under, _ := demoServiceWithStep(t, false, min, max)
 
 	sawFinal := false
-	for range 200 {
+	for range int(2 * max / tick) {
 		routeQuote, err := svc.Inventory.Quote(merchant.DemoRoute)
 		require.NoError(t, err, "Quote")
 		itemQuote, err := svc.Catalogue.Price(merchant.DemoFlightID)
@@ -596,7 +634,7 @@ func TestAJitteredScheduleKeepsTheCatalogueAndInventoryAgreeing(t *testing.T) {
 			sawFinal = true
 			break
 		}
-		under.Advance(50 * time.Millisecond)
+		under.Advance(tick)
 	}
 	assert.True(t, sawFinal, "the run has to reach the final price at least once, or the loop above checked nothing new")
 }
