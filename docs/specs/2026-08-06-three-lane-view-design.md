@@ -132,6 +132,27 @@ neither of the first two says. Widening `ink` or `graphite` to carry that
 distinction would have made it a matter of weight rather than colour, and
 weight is not what the eye catches first in a screenshot.
 
+**What that argument does not settle is frequency, and frequency is where the
+original rule got its force.** The sentence it replaces was "`seal` and `broken`
+are the only colour *on the page*" — a claim about the rendered surface, not
+about how many entries the table has. `seal` and `broken` are verdict colours
+and a verdict is rare: one per transaction, at the end. A digest is not. The
+three-lane view draws one in every lane step and the event log draws one in
+every row, so a rule of "every digest is `signal`" would make the blue the most
+common colour on the screen by a wide margin — and `seal` arriving would then be
+a colour standing out against a field of colour rather than against a neutral
+page, which is the dilution the two-value rule existed to prevent. The third
+meaning is real; it is the third meaning applied everywhere that would spend the
+credibility the first two need.
+
+So the token comes with the discipline that makes the claim above true:
+**`signal` marks a value where that value is the subject, not every time one
+appears.** The digest on the spine is the subject and takes it. The same digest
+repeated down a log of steps is a column of identifiers the mono face and the
+alignment already distinguish, and it does not. That is a `className` decision
+and belongs to the type half of #159; it is written here because the guard
+cannot see it — `palette.test.ts` checks that `signal` on `paper` and on `wash`
+are legible, and legibility is not the question a colour used too often fails.
 **Checked against the guards `palette.test.ts` enforces, not merely asserted:**
 every pair the design uses clears the 4.5:1 text floor in both themes — the
 worst is `broken` on `wash` at 4.56:1 in light and `graphite` on `wash` at
