@@ -55,7 +55,7 @@ const (
 // the registry already held as a column on constraint.Field — where AGENTS.md's
 // "Open for extension" row says a fact about a purchase goes — kept here because
 // this package may not import the registry to ask. It reads it off
-// interpret.Selective now, which is the verifier's own answer arriving over an
+// interpret.Narrowing now, which is the verifier's own answer arriving over an
 // import this package already had.
 //
 // Naming a field is still not evaluating one. The agent never parses a
@@ -83,17 +83,20 @@ const (
 //     or the day the first one moves is the day nobody notices. The registry
 //     answers false for a name it cannot read.
 //
-// One silent drop is left, and it is not this one:
+// One silent drop outlived that step, and issue #203 is where it went:
 //
-//   - **Group nodes are dropped whole.** identifying reads leaves only, because
-//     a group can mix a bound on the price with a fact about the object and
-//     there is no honest way to send half of one. All five scripted
-//     interpretations are flat lists, and the model-backed interpreter of #17
-//     produces leaves only for exactly this reason — its structured-output
-//     schema's op enum carries no group operator, and
-//     TestTheSchemaDescribesLeafConstraintsOnly is what keeps that true. So the
-//     case is unreachable rather than merely unexercised, and closing the drop
-//     is what has to come before an interpreter is widened to produce one.
+//   - **Group nodes were dropped whole.** identifying read leaves only, on the
+//     ground that a group can mix a bound on the price with a fact about the
+//     object and there is no honest way to send half of one. That turned out to
+//     be true of one node kind and false of another — half of a conjunction is
+//     exactly honest, half of a disjunction is not, and a negation may travel
+//     only whole — so the answer is per node kind and lives beside the field's
+//     at constraint.Narrowing. The drop is closed **before** an interpreter is
+//     widened to produce a group rather than after, which is the order that
+//     matters: both interpreters produce flat lists today, so the case was
+//     unreachable rather than merely unexercised, and a producer widened first
+//     would have had part of every interpretation silently withheld from the
+//     merchant.
 const itemIDField = "item.id"
 
 // ErrNothingToBuy means discovery found no candidate to watch.
@@ -616,9 +619,7 @@ func (c *Client) candidates(
 		// the right answer to the wrong question: what is actually wrong is one
 		// layer up, in an interpretation that placed limits on the terms of a
 		// purchase and named neither an item nor a merchant.
-		return nil, fmt.Errorf(
-			"%w: the interpretation names nothing to go looking for — of its %d constraints, none reads a fact the registry calls selective",
-			ErrNothingToBuy, len(constraints))
+		return nil, fmt.Errorf("%w: %s", ErrNothingToBuy, nothingIdentifies(constraints))
 	}
 
 	encoded, err := json.Marshal(query)
@@ -671,34 +672,106 @@ func (c *Client) Discover(ctx context.Context, constraints []generated.Constrain
 //
 // A leaf whose field the registry calls selective — item.id, item.category,
 // item.attr.*, merchant.id, merchant.category today, and whatever else is
-// registered as one tomorrow without this function changing. Everything else is
-// a term of the purchase rather than a description of one, and the terms are
-// what the watch is waiting to be met.
+// registered as one tomorrow without this function changing — and, from a group,
+// whatever part of it a catalogue can be asked about. Everything else is a term
+// of the purchase rather than a description of one, and the terms are what the
+// watch is waiting to be met.
 //
 // **The classification is asked for rather than reproduced**, which is issue
-// #132 and is argued at interpret.Selective. This function decides only what to
-// do with the answer, and the one decision it still makes on its own is worth
-// separating from it:
+// #132 and is argued at interpret.Narrowing. This function decides only what to
+// do with the answer, and after issue #203 there is no decision left here that
+// the registry does not make.
 //
-//   - Nodes carrying no field are skipped, which is how group nodes are left
-//     out rather than walked into: a group carries op and of, never a field. A
-//     group can mix a bound on the price with a fact about the object and there
-//     is no honest way to send half of one. Still silent, and still waiting on
-//     an interpreter that can produce a group at all.
+// **A group used to be dropped whole, and that was the last one.** This loop
+// tested c.Field for nil and went round again, so all, any and not — which carry
+// op and of, never a field — never travelled, with nothing logged and nothing
+// failing. What a group contributes is not the same answer for the three of
+// them, and it is not one this package could reach by walking into children: an
+// all may send the part of itself a catalogue can answer, an any may not send
+// one branch without the others, and a not may travel only when every fact
+// beneath it is answerable. constraint.Narrowing is where those three are argued
+// from the one property that separates them, and the answers arrive here as
+// constraints to append.
+//
+// So a group now contributes between nothing and several entries, which is why
+// this appends a list rather than deciding a constraint's fate one at a time.
+// The list it appends to is conjunctive — every constraint in a search must hold
+// — and that is exactly why an all's children may join it individually.
 //
 // What is dropped is dropped from a *query*, never from the mandate. See
 // Authorise for why that distinction is the whole of this function.
 func identifying(constraints []generated.Constraint) []generated.Constraint {
 	out := make([]generated.Constraint, 0, len(constraints))
 	for _, c := range constraints {
-		if c.Field == nil {
-			continue
-		}
-		if interpret.Selective(*c.Field) {
-			out = append(out, c)
-		}
+		out = append(out, interpret.Narrowing(c)...)
 	}
 	return out
+}
+
+// nothingIdentifies says why a query came out empty, in terms that tell the two
+// cases apart.
+//
+// The message this replaced counted the whole set and said none of them read a
+// fact the registry calls selective. That was true of an interpretation which
+// placed bounds and named no object, and equally true of one whose every
+// constraint was a group — and issue #203 is the second of those being a defect
+// rather than a reading. A reader met the same sentence either way, so the one
+// case where something the user wrote about the object failed to reach the
+// merchant looked exactly like the case where they never wrote one.
+//
+// It counts nodes rather than asking the registry anything, because the
+// distinction it is drawing is structural: a leaf carries a field, a group
+// carries children. *Why* each of them narrowed nothing is
+// constraint.Narrowing's answer and is not restated here — a leaf usually
+// because its field states a term of the purchase, a group because what it says
+// about the object does not survive on its own — and the counts are what a
+// reader needs to know which of the two questions to go and ask.
+func nothingIdentifies(constraints []generated.Constraint) string {
+	if len(constraints) == 0 {
+		return "the interpretation placed no constraints at all, so there is nothing to go looking for"
+	}
+
+	var leaves, groups, neither int
+	for _, c := range constraints {
+		switch {
+		case c.Field != nil:
+			leaves++
+		case len(c.Of) > 0:
+			groups++
+		default:
+			neither++
+		}
+	}
+
+	counts := make([]string, 0, 3)
+	if leaves > 0 {
+		counts = append(counts, tally(leaves, "leaf", "leaves"))
+	}
+	if groups > 0 {
+		counts = append(counts, tally(groups, "group", "groups"))
+	}
+	if neither > 0 {
+		counts = append(counts, tally(neither,
+			"node carrying neither a field nor children",
+			"nodes carrying neither a field nor children"))
+	}
+
+	return fmt.Sprintf(
+		"the interpretation names nothing to go looking for — of its %d constraints, none narrows a merchant's catalogue search: %s",
+		len(constraints), strings.Join(counts, ", "))
+}
+
+// tally renders one count of that message with its noun agreeing with the
+// number.
+//
+// Four lines for grammar, and worth it here: this sentence is the whole of what
+// a person has to act on when discovery finds nothing, and "1 groups" is the
+// sort of thing that makes a reader stop trusting the numbers beside it.
+func tally(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return strconv.Itoa(n) + " " + many
 }
 
 // narrow returns the interpretation with one constraint added: this exact item.

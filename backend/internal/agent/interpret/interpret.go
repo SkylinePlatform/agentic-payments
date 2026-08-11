@@ -227,25 +227,37 @@ func Validate(interp Interpretation) error {
 	return nil
 }
 
-// Selective reports whether a constraint on this field says *what to go looking
-// for*, rather than stating a term the purchase has to meet.
+// Narrowing reports what a constraint narrows a merchant's catalogue search to:
+// nothing, itself, or the part of itself a catalogue can answer.
 //
-// It is the verifier's own answer, unaltered — constraint.Selective is where the
-// fact lives and this adds nothing to it. Issue #132 is why it is reachable from
-// here at all.
+// It is the verifier's own answer, unaltered — constraint.Narrowing is where the
+// fact lives, node kind by node kind, and this adds nothing to it. Issue #132 is
+// why an answer of this shape is reachable from here at all, and issue #203 is
+// why it is asked of a node rather than of a field name.
+//
+// # It replaced Selective rather than joining it
+//
+// Selective answered the same question for a field, and forwarding both would
+// leave the shape of #203's defect available to the next caller: ask the leaf
+// question, forget that a node is not always a leaf, and a group is dropped
+// whole with nothing failing. That is exactly what internal/agent did with the
+// field-level answer for as long as it had one. One forwarded fact, at the level
+// the caller actually has to decide something at, is the narrower position —
+// and this package's own doc says why widening the reasons to import it is a
+// thing to resist.
 //
 // # Why the agent asks this package rather than the registry
 //
-// internal/agent's discovery half needs the bit before it can build a merchant
-// search: a query naming the item or the merchant is answered by a catalogue,
-// while one naming the price is not, because the watch loop exists to wait for
-// exactly that and a search carrying the user's price bound returns nothing at
-// all while the price is still too high. It may not import the registry to ask.
-// A constraint is evaluated by the verifier and never by the party that
-// assembled the purchase, and TestTheAgentCannotReachAConstraintEvaluator holds
-// that against the import graph — so authorise.go kept the same fact as two
-// string prefixes, "item." and "merchant.", and a test held the copy against the
-// original.
+// internal/agent's discovery half needs the answer before it can build a
+// merchant search: a query naming the item or the merchant is answered by a
+// catalogue, while one naming the price is not, because the watch loop exists to
+// wait for exactly that and a search carrying the user's price bound returns
+// nothing at all while the price is still too high. It may not import the
+// registry to ask. A constraint is evaluated by the verifier and never by the
+// party that assembled the purchase, and
+// TestTheAgentCannotReachAConstraintEvaluator holds that against the import
+// graph — so authorise.go kept the same fact as two string prefixes, "item." and
+// "merchant.", and a test held the copy against the original.
 //
 // This package is where that copy could go, and the argument is not that a rule
 // was routed around. It is AGENTS.md's hard rule 4, already applied to the same
@@ -270,6 +282,16 @@ func Validate(interp Interpretation) error {
 // constraint.Parse, constraint.Subject or Expression.Evaluate, which is what its
 // own doc comment says it buys.
 //
+// # Asking is still not evaluating
+//
+// What comes back is a set of constraints to put in a query, never a verdict
+// about a purchase. The agent learns that a node narrows a search and never
+// whether anything satisfies it: no subject is built here, none is available to
+// build one from, and the merchant is still the party that decides which of its
+// offers the query describes. That is the line AGENTS.md draws — constraints are
+// evaluated by the verifier, never by the agent — and it is why this answer may
+// cross a boundary that constraint.Expression.Evaluate may not.
+//
 // # No model is anywhere near this
 //
 // It is a pure function of a compile-time table, in the package where a model
@@ -277,4 +299,6 @@ func Validate(interp Interpretation) error {
 // purchase is inferred from a sentence: the interpreter proposes constraints,
 // the user signs them, and this answers a question about the vocabulary they are
 // written in. AGENTS.md's hard rule 2 is about calls, and there is no call here.
-func Selective(field string) bool { return constraint.Selective(field) }
+func Narrowing(c generated.Constraint) []generated.Constraint {
+	return constraint.Narrowing(c)
+}
