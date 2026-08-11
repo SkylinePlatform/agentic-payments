@@ -518,14 +518,24 @@ func (f *CatalogueFile) schedule(e CatalogueEntry, start time.Time, step time.Du
 }
 
 // jitteredSchedule is schedule with each transition's width drawn once from
-// [min, max] instead of held fixed — see NewJitteredSchedule.
+// [min, max] instead of held fixed, and wrapping back to the first price once
+// the last one's own hold ends rather than holding it forever — see
+// NewCyclingJitteredSchedule.
+//
+// Cyclic rather than one-shot because this is the only constructor
+// jitteredCatalogue calls, and jitteredCatalogue is what NewDemoService uses
+// under DemoOptions.StepMax — the composition `make demo` runs. Issue #177 is
+// what a one-shot schedule cost there: a watch beginning after the schedule
+// had already run its course, which #163 made a matter of seconds rather than
+// minutes, saw a price that could never move again and never attempted
+// anything.
 func (f *CatalogueFile) jitteredSchedule(e CatalogueEntry, start time.Time, min, max time.Duration) (*Schedule, error) {
 	prices := make([]generated.Amount, 0, len(e.Prices))
 	for _, p := range e.Prices {
 		prices = append(prices, generated.Amount{Amount: p, Currency: f.Currency})
 	}
 
-	s, err := NewJitteredSchedule(start, min, max, prices...)
+	s, err := NewCyclingJitteredSchedule(start, min, max, prices...)
 	if err != nil {
 		return nil, fmt.Errorf("merchant: offer %q: %w", e.ID, err)
 	}

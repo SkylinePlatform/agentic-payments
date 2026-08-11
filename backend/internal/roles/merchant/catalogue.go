@@ -78,7 +78,8 @@ type Offer struct {
 	Retailer string `json:"retailer"`
 
 	// Schedule is what this offer costs over time. Required, and built with
-	// NewSchedule for the reasons Inventory.New gives.
+	// NewSchedule, NewJitteredSchedule or NewCyclingJitteredSchedule for the
+	// reasons Inventory.New gives.
 	Schedule *Schedule `json:"-"`
 }
 

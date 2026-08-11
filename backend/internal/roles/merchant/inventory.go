@@ -94,24 +94,42 @@ type Quote struct {
 //
 // The price is a pure function of the instant it is read at: prices[0] until
 // the first boundary, prices[1] until the second, and so on, with the last
-// price holding forever after. Before start, the first price applies — a
-// demonstration that begins early sees the opening price rather than an error.
+// price holding forever after — unless the schedule is cyclic, in which case
+// it wraps back to prices[0] instead. Before start, the first price applies —
+// a demonstration that begins early sees the opening price rather than an
+// error.
 //
 // # Why boundaries rather than a start-plus-step pair
 //
-// NewSchedule and NewJitteredSchedule both build down to the same shape: a
-// start and one boundary per transition, computed once at construction.
-// NewSchedule's boundaries happen to be evenly spaced and NewJitteredSchedule's
-// are not, but at cannot tell the difference — it walks boundaries either way,
-// which is what guarantees a price can never be reordered or skipped by
-// whichever constructor produced them. See at.
+// All three constructors build down to the same shape: a start and one
+// boundary per transition, computed once at construction. NewSchedule's
+// boundaries happen to be evenly spaced and NewJitteredSchedule's are not, but
+// at cannot tell the difference — it walks boundaries either way, which is
+// what guarantees a price can never be reordered or skipped by whichever
+// constructor produced them. NewCyclingJitteredSchedule adds one more
+// boundary than NewJitteredSchedule would for the same prices — the wrap back
+// to prices[0] — and one bit, cyclic, so at knows to treat that extra
+// boundary as a lap length to reduce t against rather than a place to stop.
+// See at.
 type Schedule struct {
 	prices []generated.Amount
 	start  time.Time
 
 	// boundaries holds one instant per transition: boundaries[i] is when
-	// prices[i+1] takes over from prices[i]. Always len(prices)-1 long.
+	// prices[i+1] takes over from prices[i]. Always len(prices)-1 long for a
+	// one-shot schedule; len(prices) long for a cyclic one, the extra entry
+	// being when the wrap back to prices[0] happens. See cyclic and at.
 	boundaries []time.Time
+
+	// cyclic reports whether this schedule wraps back to prices[0] once its
+	// last boundary passes, rather than holding prices[len-1] forever.
+	//
+	// Only NewCyclingJitteredSchedule ever sets it. NewSchedule and
+	// NewJitteredSchedule both leave it false, which is what keeps "the last
+	// price holds" true for every caller of either — this package's own
+	// fixed-step tests among them, see TestTheLastPriceHolds and
+	// TestQuotesAreReproducible.
+	cyclic bool
 }
 
 // NewSchedule returns a schedule stepping through prices, one every step,
@@ -159,6 +177,72 @@ func NewJitteredSchedule(start time.Time, min, max time.Duration, prices ...gene
 	return buildSchedule(start, widths, prices)
 }
 
+// NewCyclingJitteredSchedule is NewJitteredSchedule, except the schedule wraps
+// back to prices[0] once the last price's own hold ends, rather than holding
+// that last price forever.
+//
+// # Why this exists, and why it is not NewJitteredSchedule itself
+//
+// A one-shot schedule is a pure function of the clock only until it runs out —
+// after that, every reader agrees on the same frozen last price for ever. That
+// is fine for a watch already running before the schedule is spent, and #163
+// made spending it a matter of seconds, not minutes. It is not fine for a
+// watch that starts *after* that point, which is exactly what a browser tab
+// opened a while after `make demo` prints its banner does: it takes a baseline
+// that is already the last price, sees no further step change, and never
+// attempts anything. Issue #177 is that bug, and cycling is the fix — see
+// there for the full argument, including why the refusal at the middle price
+// now happens on every lap rather than once.
+//
+// This is a sibling of NewJitteredSchedule rather than a change to it, because
+// "the last price holds" is a property some of NewJitteredSchedule's own
+// callers assert — TestJitteredScheduleObservesEveryPriceInOrder among them —
+// and a schedule that sometimes wraps and sometimes does not is not a
+// schedule anybody could write a test against.
+//
+// # Each transition draws its own width, wrap included
+//
+// n prices need n transitions here rather than n-1, because the last price
+// now has a hold of its own to draw before the schedule loops — see
+// cyclicTransitions. A single price still draws nothing: cycling a schedule
+// with nothing to cycle to would be a no-op wearing a random number
+// generator, so it is refused the draw rather than given one, exactly as
+// NewJitteredSchedule already refuses it for a one-shot schedule of one price.
+//
+// # What a caller loses
+//
+// Final never reports true once there is more than one price — there is
+// always a next price to move to, the wrap included. A caller that used Final
+// to mean "nothing left to wait for" (Watch does, as ErrScheduleExhausted)
+// instead keeps waiting, which for this schedule is correct: there always is
+// something to wait for.
+func NewCyclingJitteredSchedule(start time.Time, min, max time.Duration, prices ...generated.Amount) (*Schedule, error) {
+	if min <= 0 {
+		return nil, fmt.Errorf("merchant: min must be positive, got %s", min)
+	}
+	if max < min {
+		return nil, fmt.Errorf("merchant: max %s is less than min %s", max, min)
+	}
+
+	widths := make([]time.Duration, cyclicTransitions(len(prices)))
+	for i := range widths {
+		w, err := randDuration(min, max)
+		if err != nil {
+			return nil, fmt.Errorf("merchant: drawing a random step width: %w", err)
+		}
+		widths[i] = w
+	}
+	s, err := buildSchedule(start, widths, prices)
+	if err != nil {
+		return nil, err
+	}
+	// Only when there is a wrap transition to take: a single price built no
+	// widths above, and a Schedule with nothing to wrap around behaves exactly
+	// as the one-shot constructors already leave it — see at.
+	s.cyclic = len(widths) > 0
+	return s, nil
+}
+
 // randDuration draws a duration uniformly from [min, max], inclusive, using
 // crypto/rand — see NewJitteredSchedule for why crypto/rand rather than
 // math/rand.
@@ -178,8 +262,9 @@ func randDuration(min, max time.Duration) (time.Duration, error) {
 	return min + time.Duration(n.Int64()), nil
 }
 
-// numTransitions is how many boundaries a schedule over n prices needs: one
-// less than the count, floored at zero for the flat, single-price case.
+// numTransitions is how many boundaries a one-shot schedule over n prices
+// needs: one less than the count, floored at zero for the flat, single-price
+// case.
 func numTransitions(n int) int {
 	if n <= 1 {
 		return 0
@@ -187,9 +272,22 @@ func numTransitions(n int) int {
 	return n - 1
 }
 
-// buildSchedule is what NewSchedule and NewJitteredSchedule both build down
-// to: prices, validated, with one boundary per width already computed from
-// start.
+// cyclicTransitions is numTransitions for a schedule that wraps: one width per
+// price rather than one per gap between them, because the last price also
+// needs a hold of its own before the schedule loops back to the first. A
+// single price still needs none — there is nothing for it to wrap to.
+func cyclicTransitions(n int) int {
+	if n <= 1 {
+		return 0
+	}
+	return n
+}
+
+// buildSchedule is what NewSchedule, NewJitteredSchedule and
+// NewCyclingJitteredSchedule all build down to: prices, validated, with one
+// boundary per width already computed from start. Setting cyclic is left to
+// the caller — this only lays out the boundaries the cyclic case then reads
+// its lap length from.
 func buildSchedule(start time.Time, widths []time.Duration, prices []generated.Amount) (*Schedule, error) {
 	if len(prices) == 0 {
 		return nil, ErrEmptySchedule
@@ -227,8 +325,31 @@ func buildSchedule(start time.Time, widths []time.Duration, prices []generated.A
 // lets one implementation serve both a uniform schedule and a jittered one:
 // idx is the count of boundaries at or before t, a rule that does not care
 // whether those boundaries are evenly spaced.
+//
+// # The cyclic case
+//
+// A cyclic schedule's boundaries hold one full lap: the last entry is not a
+// hold-forever point but the instant the wrap back to prices[0] happens, so
+// this reduces t to its position within one lap — t.Sub(start) modulo the
+// lap's own length — before doing the exact walk above. That walk cannot then
+// reach the wrap boundary itself: the reduced offset is always strictly less
+// than the lap length, so the loop always breaks before incrementing past the
+// last price, and idx ranges over the same [0, len(prices)-1] a one-shot
+// schedule's would. Final is reported false unconditionally in this case —
+// see NewCyclingJitteredSchedule for what that costs a caller.
 func (s *Schedule) at(t time.Time) (generated.Amount, int, bool) {
 	last := len(s.prices) - 1
+
+	if s.cyclic {
+		elapsed := t.Sub(s.start)
+		if elapsed < 0 {
+			// Before start, same rule as the one-shot case: the first price
+			// applies.
+			elapsed = 0
+		}
+		lap := s.boundaries[len(s.boundaries)-1].Sub(s.start)
+		t = s.start.Add(elapsed % lap)
+	}
 
 	idx := 0
 	for _, b := range s.boundaries {
@@ -240,7 +361,7 @@ func (s *Schedule) at(t time.Time) (generated.Amount, int, bool) {
 		}
 		idx++
 	}
-	return s.prices[idx], idx, idx == last
+	return s.prices[idx], idx, idx == last && !s.cyclic
 }
 
 // Steps reports how many prices the schedule moves through.
