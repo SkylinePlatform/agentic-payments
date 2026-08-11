@@ -651,6 +651,126 @@ func TestACyclingScheduleObservesEveryPriceInOrderRepeatedly(t *testing.T) {
 	}
 }
 
+// stepAt reads which entry of the schedule is in force at one exact instant,
+// by moving the fake clock to it. Set rather than Advance, because finding a
+// boundary exactly means reading instants out of order.
+func stepAt(t *testing.T, inv *merchant.Inventory, c *clock.Fake, at time.Time) int {
+	t.Helper()
+	c.Set(at)
+	return quote(t, inv).Step
+}
+
+// transitions returns the exact instants, to the nanosecond, at which s changes
+// price over [base, base+within].
+//
+// Exact rather than sampled, and that is its whole reason for existing beside
+// observedSequence. The property #163 rests on is about the *width* of every
+// hold, and a poll-shaped test can only ever bound a width to within its own
+// tick — which is precisely the resolution at which a wrap that shortened a
+// hold would hide. So this scans forward in strides of stride, which the caller
+// must keep at or below the shortest hold so that at most one change can fall
+// inside any one stride, and bisects whichever stride contains a change down to
+// a single nanosecond.
+func transitions(t *testing.T, s *merchant.Schedule, stride, within time.Duration) []time.Time {
+	t.Helper()
+
+	c := clock.NewFake(base)
+	inv, err := merchant.New(c, map[merchant.Route]*merchant.Schedule{merchant.DemoRoute: s})
+	require.NoError(t, err, "New")
+
+	end := base.Add(within)
+	var found []time.Time
+	for lo := base; lo.Before(end); {
+		hi := lo.Add(stride)
+		if hi.After(end) {
+			hi = end
+		}
+		was := stepAt(t, inv, c, lo)
+		if stepAt(t, inv, c, hi) == was {
+			lo = hi
+			continue
+		}
+		// Exactly one change sits in (lo, hi]: two would need two holds inside
+		// one stride, and every hold is at least one stride wide. So the
+		// predicate "still the step lo was at" is monotone here, and bisection
+		// finds the first instant it stops holding.
+		for hi.Sub(lo) > time.Nanosecond {
+			mid := lo.Add(hi.Sub(lo) / 2)
+			if stepAt(t, inv, c, mid) == was {
+				lo = mid
+			} else {
+				hi = mid
+			}
+		}
+		found = append(found, hi)
+		lo = hi
+	}
+	return found
+}
+
+// TestACyclingScheduleShortensNoHoldAtTheWrap is the property #163's guarantee
+// actually needs, measured rather than sampled.
+//
+// #163 excluded a skipped price by construction: a price is skipped only if its
+// whole hold falls strictly between two polls, which a poll no longer than the
+// *shortest* hold makes impossible. That argument is about hold widths, so
+// cycling keeps it only if the wrap produces no hold narrower than the widths
+// crypto/rand drew. Two ways it could have failed, and neither is visible to a
+// test that polls: the wrap could land inside a hold and cut it short, or laps
+// could drift so that a later one is not the first one repeated.
+//
+// So this measures every boundary to the nanosecond over three laps and states
+// both halves directly — every hold, prices[0]'s after a wrap and prices[n-1]'s
+// included, lies in [min, max]; and boundary j sits exactly one lap after
+// boundary j-n, for every j. TestACyclingScheduleObservesEveryPriceInOrderRepeatedly
+// polls the same schedules and is worth its runtime for what no arithmetic
+// covers — that at really walks these boundaries in the order they were built —
+// but it is this test that says the refusal at $210 is guaranteed rather than
+// likely.
+func TestACyclingScheduleShortensNoHoldAtTheWrap(t *testing.T) {
+	t.Parallel()
+
+	require.LessOrEqual(t, demoPoll, demoJitterMin,
+		"the bound this test measures against is the one the agent's poll has to clear, and a poll "+
+			"above the floor would make every width below irrelevant")
+
+	prices := merchant.DemoPrices()
+	perLap := len(prices)
+	const laps = 3
+
+	const draws = 20
+	for i := range draws {
+		s, err := merchant.NewCyclingJitteredSchedule(base, demoJitterMin, demoJitterMax, prices...)
+		require.NoError(t, err, "NewCyclingJitteredSchedule")
+
+		// The slowest possible three laps, so the window holds them whatever
+		// was drawn. A faster draw simply yields more boundaries, all checked.
+		got := transitions(t, s, demoJitterMin, laps*time.Duration(perLap)*demoJitterMax)
+		require.GreaterOrEqualf(t, len(got), laps*perLap,
+			"draw %d: a window sized for the slowest possible laps has to contain that many transitions, "+
+				"or the schedule stopped moving somewhere inside it", i)
+
+		prev := base
+		for j, b := range got {
+			width := b.Sub(prev)
+			assert.GreaterOrEqualf(t, width, demoJitterMin,
+				"draw %d hold %d: a hold under the floor is a price the agent's poll can step over, which "+
+					"is the $210 refusal disappearing at random in front of an audience", i, j)
+			assert.LessOrEqualf(t, width, demoJitterMax,
+				"draw %d hold %d: a hold over the ceiling is time the demonstration spends on a price "+
+					"nobody is waiting for", i, j)
+			prev = b
+		}
+
+		lap := got[perLap-1].Sub(base)
+		for j := perLap; j < len(got); j++ {
+			assert.Equalf(t, lap, got[j].Sub(got[j-perLap]),
+				"draw %d boundary %d: laps have to be exact repeats, or the sequence drifts and a hold "+
+					"eventually lands somewhere the widths above never say it can", i, j)
+		}
+	}
+}
+
 // TestCyclingJitteredScheduleRejectsNonsense covers the constructor, on the
 // same terms TestJitteredScheduleRejectsNonsense covers NewJitteredSchedule.
 func TestCyclingJitteredScheduleRejectsNonsense(t *testing.T) {

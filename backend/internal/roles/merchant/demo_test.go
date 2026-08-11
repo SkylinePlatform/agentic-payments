@@ -700,7 +700,14 @@ func TestABrowserSignedWatchStillSeesThePriceMove(t *testing.T) {
 	require.NoError(t, err, "Quote")
 	last := baseline.Step
 
-	var moved, sawRejected, sawAccepted bool
+	// Every price the schedule moved *to*, in the order it moved. Order and not
+	// a pair of flags, because the beat is "refused at $210, then bought at
+	// $189" — a run that reached both in the other order, or with the opening
+	// $240 between them, would satisfy two flags and would not be beats 5 and
+	// 6. Two full laps fit in this window whatever was drawn, so an adjacent
+	// pair is guaranteed rather than hoped for.
+	var seen []int
+	sawRefusalThenPurchase := false
 	for range int(6 * max / time.Millisecond) {
 		under.Advance(time.Millisecond)
 		q, err := svc.Inventory.Quote(merchant.DemoRoute)
@@ -708,24 +715,19 @@ func TestABrowserSignedWatchStillSeesThePriceMove(t *testing.T) {
 		if q.Step == last {
 			continue
 		}
-		moved = true
 		last = q.Step
-		switch q.Price.Amount {
-		case merchant.DemoPriceRejected:
-			sawRejected = true
-		case merchant.DemoPriceAccepted:
-			sawAccepted = true
-		}
-		if sawRejected && sawAccepted {
+		seen = append(seen, q.Price.Amount)
+		if n := len(seen); n >= 2 &&
+			seen[n-2] == merchant.DemoPriceRejected && seen[n-1] == merchant.DemoPriceAccepted {
+			sawRefusalThenPurchase = true
 			break
 		}
 	}
 
-	assert.True(t, moved,
+	assert.NotEmpty(t, seen,
 		"a watch beginning after the old schedule was already spent must still see the step change — "+
 			"this is issue #177: attempts stayed at zero for ever")
-	assert.True(t, sawRejected,
-		"the refusal at $210 is the one beat this whole screen exists for, and a late baseline must still reach it")
-	assert.True(t, sawAccepted,
-		"the purchase at $189 has to follow the refusal, or the watch never buys")
+	assert.True(t, sawRefusalThenPurchase,
+		"the refusal at $210 is the one beat this whole screen exists for, and the purchase at $189 has "+
+			"to come straight after it — a late baseline must still reach both, in that order")
 }
