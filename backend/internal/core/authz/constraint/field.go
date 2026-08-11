@@ -128,18 +128,28 @@ const attributePrefix = "item.attr."
 // registration is one entry of the closed registry, together with the
 // classification a new field is not allowed to skip.
 //
-// The type exists to be unavailable outside this file's two constructors.
-// buildFields takes registrations rather than Fields, so a field added as a bare
-// Field literal — the natural thing to write, and the thing that leaves
-// selective at its zero value — does not compile. That matters because the zero
-// value is a real answer rather than an absent one: false means *this is a term
-// of the purchase*, so a forgotten column is not a gap anybody notices, it is a
-// field quietly withheld from every catalogue search.
+// The type exists so that term and selector are the only way in. buildFields
+// takes registrations rather than Fields, so a field added as a bare Field
+// literal — the natural thing to write, and the thing that leaves selective at
+// its zero value — does not compile. That matters because the zero value is a
+// real answer rather than an absent one: false means *this is a term of the
+// purchase*, so a forgotten column is not a gap anybody notices, it is a field
+// quietly withheld from every catalogue search.
 //
 // Issue #132's first step held that with a test in internal/agent, which could
 // only work while a second copy of the fact existed to disagree with. Deleting
 // the copy is what this step is for, so the guard had to become something else,
 // and the compiler is the strongest thing available.
+//
+// **Strongest, not total, and the gap has a backstop.** Go has no file-scoped
+// visibility, so anything in this package could still write
+// registration{field: Field{…}} and set nothing — which is true of every
+// in-package invariant in the language. What narrows it to almost nothing is
+// TestSelectiveAnswersForBothHalvesOfTheVocabulary: it demands a row per
+// registered name saying which of the two the field is, so a bypass meant as a
+// selector fails there rather than passing quietly. The residue is a bypass
+// whose author also writes "term" in that table, and that is a field correctly
+// described as a term.
 type registration struct{ field Field }
 
 // term registers a fact that states a term the purchase has to meet — a bound

@@ -143,7 +143,11 @@ func Validate(constraints []generated.Constraint) error {
 // copy would drift in the direction that accepts what the verifier cannot read".
 // A prefix is that copy, one column along, and it drifted in both directions —
 // it dropped any selective field registered outside the two stems, and it
-// carried item.colour, a name no verifier can read, straight into a query.
+// classified item.colour, a name no verifier can read, as something to send a
+// merchant. How far the second one got is worth stating exactly: Propose calls
+// Validate before it builds a query, so that name fails there first, and it is
+// the exported Discover that has nothing in front of it. A guard standing
+// behind another guard still has to give the right answer.
 //
 // Three things make this the narrow move rather than a wide one. **No new
 // import edge exists**: internal/agent already imports this package, for the

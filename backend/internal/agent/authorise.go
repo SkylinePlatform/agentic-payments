@@ -72,10 +72,16 @@ const (
 //     step made that a red test; this one makes it unrepresentable, since there
 //     is no longer a second list to be missing from.
 //   - **A field under one of the stems that the registry does not know was
-//     carried into the query.** item.colour matched "item." and reached the
-//     merchant, which can only refuse it as malformed or match nothing with it.
-//     The registry answers false for a name it cannot read, so that direction
-//     closed with the same change.
+//     classified as selective.** item.colour matched "item.", so identifying
+//     put it in the query it built. Be precise about how far it got: Propose
+//     calls interpret.Validate before it searches anything, and a name no
+//     verifier can read fails there, so on that path the interpretation was
+//     refused before this function ran. Discover is the exported entry point
+//     with nothing in front of it. So the prefix was the second of two guards
+//     and it was the one giving the wrong answer, which is worth closing on its
+//     own terms — a guard standing behind another guard still has to be right,
+//     or the day the first one moves is the day nobody notices. The registry
+//     answers false for a name it cannot read.
 //
 // One silent drop is left, and it is not this one:
 //

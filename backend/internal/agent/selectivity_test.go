@@ -104,6 +104,13 @@ func TestTheSearchAsksTheRegistryWhichConstraintsSayWhatToLookFor(t *testing.T) 
 				"rather than a prefix in this package that happens to sit above it")
 	})
 
+	// The one case the prefix and the registry actually disagree about today,
+	// and the reason this file is a behaviour change rather than a rename. How
+	// far a name like this got is worth being exact about: Propose calls
+	// interpret.Validate before it searches, so on that path the interpretation
+	// is refused before identifying runs. Discover is exported and does not
+	// validate. So this asserts the second of two guards, which still has to be
+	// right — the day the first one moves is the day nobody notices.
 	t.Run("a field no verifier knows", func(t *testing.T) {
 		t.Parallel()
 
@@ -112,7 +119,8 @@ func TestTheSearchAsksTheRegistryWhichConstraintsSayWhatToLookFor(t *testing.T) 
 		assert.Empty(t, identifying([]generated.Constraint{leaf}),
 			"a name the registry cannot read is refused as constraint_type_unknown at the "+
 				"moment of purchase; putting it in a query asks the merchant a question in a "+
-				"vocabulary neither party shares, and a prefix test is exactly what did that")
+				"vocabulary neither party shares, and a prefix test is what classified it as "+
+				"something to ask")
 	})
 
 	t.Run("a group", func(t *testing.T) {

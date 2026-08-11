@@ -45,6 +45,29 @@
 // signed, and then rejected as constraint_type_unknown at the moment of
 // purchase, having looked like a limit the whole way along.
 //
+// # One other thing crosses this boundary, and the limit on it is the point
+//
+// Selective says whether a constraint field describes what to go looking for or
+// states a term the purchase has to meet. The fact belongs to the registry and
+// this package only forwards it, unaltered: internal/agent needs it to build a
+// merchant search and may not import the registry to ask, so it carried two
+// string prefixes instead until issue #132.
+//
+// It is here for Validate's reason rather than merely beside it. Both are the
+// verifier's own answer about the constraint vocabulary, reached through the one
+// package that already had to hold such an answer so that no second list of
+// field names could drift — and the prefixes were exactly that second list.
+// Neither infers anything from a sentence, and no model is on the path.
+//
+// **What may follow it is only more of the same.** This package is not the
+// window through which the agent reaches core, and reading Selective as a
+// precedent for routing some other fact through here would be the wrong
+// reading. Every package that can reach an interpreter is one hard rule 2 has to
+// argue about — reach_test.go's mayReach list is where that argument is written
+// down, and widening the reasons to import this package, for anything that is
+// not the verifier's own answer about the vocabulary, is how a rule about where
+// a model may live decays into a formality.
+//
 // # Two implementations, and the suite that holds both to the same promise
 //
 // ScriptedInterpreter maps fixed prompts to fixed constraint sets. It is what
