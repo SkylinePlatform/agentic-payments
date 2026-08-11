@@ -21,6 +21,19 @@ var (
 	// ErrChallengeInvalid means this is not a value this Challenger produced:
 	// the wrong shape, or a MAC that does not hold under its key. Whoever
 	// presented it either made it up or was issued it by somebody else.
+	//
+	// A third case joins those two and does not read like them at first,
+	// because the MAC holds: a challenge whose stamp sits so far from this
+	// verifier's clock that Sub cannot represent the distance — see the guard
+	// in Check for the arithmetic. It belongs here rather than under
+	// ErrChallengeExpired because that sentinel's advice is "ask me for another
+	// one", and the truthful statement about a stamp centuries away is that
+	// this clock has never read that instant and so cannot vouch for having
+	// issued anything at it. Which is the sentence above, read strictly.
+	//
+	// The message is what separates the three for a reader; the sentinel
+	// deliberately does not grow a third value, because no caller acts on them
+	// differently — every one answers Problem Details and reads no mandate.
 	ErrChallengeInvalid = errors.New("crypto: challenge was not issued by this verifier")
 
 	// ErrChallengeExpired means the MAC held — this verifier really did issue
