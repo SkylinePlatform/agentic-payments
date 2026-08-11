@@ -103,9 +103,25 @@ func DemoPrices() []generated.Amount {
 // TestTheCatalogueFileIsTheDocumentedScenario is what stops somebody adjusting a
 // price in deploy/catalogue.json and quietly making a prompt find nothing.
 //
-// Two of the four move and two do not, deliberately. A screen where everything
-// changes at once is one a viewer cannot read; the concert and the ladders hold
-// still while the flight and the bicycle fall into range around them.
+// Every offer moves at least once, and issue #192 is why.
+//
+// A Human Not Present watch attempts only on a step change — see agent.Watch's
+// own doc — so a schedule that never moved left a prompt with nothing to act
+// on. The concert and the ladders used to be exactly that: one flat price,
+// already inside the cap their own prompt names, so a browser starting either
+// from GET /examples took a baseline that could never step and polled for the
+// life of the process, only ever ending an hour later when the open mandate
+// pair itself expired — a state about the clock, not about the purchase.
+//
+// The four still split into two pairs, and what tells them apart now is *why*
+// each one moves rather than whether it does. The bicycle steps across the cap
+// its own prompt names, the same shape as the flight, one vertical over — "buy
+// me this bicycle when it drops below $400" has nothing to demonstrate if the
+// bicycle is already below $400 when the demonstration starts. The concert and
+// the ladders were never outside their cap, so their second price is the
+// merchant re-committing to a number that was already affordable rather than a
+// price crossing into range: nothing is ever refused on either of those two,
+// and the purchase completes on the first step there is one.
 const (
 	// The bicycle steps across the $400 its prompt names: $450.00, then
 	// $380.00. The same shape as the flight, one vertical over — "buy me this
@@ -115,18 +131,22 @@ const (
 	DemoBicycleAccepted = 38000
 	DemoBicycleCap      = 40000
 
-	// One concert ticket at $75.00, against a prompt approving two for $160.00
-	// all in. The quantity is what makes that prompt interesting and the price
-	// is deliberately dull: a flat schedule is one fewer thing moving on screen.
-	DemoConcertPrice = 7500
-	DemoConcertCap   = 16000
+	// One concert ticket at $75.00, then $79.00 — both inside the $160.00 all
+	// in the prompt approves for two. The quantity is what makes that prompt
+	// interesting; the price was never the obstacle. The second figure exists
+	// only so the watch has a step to act on, and it buys there rather than
+	// crossing into range, on the terms the block comment above states.
+	DemoConcertPrice         = 7500
+	DemoConcertPriceRepriced = 7900
+	DemoConcertCap           = 16000
 
-	// Telescopic ladders at $139.00, against a $150.00 bound. Flat, and that is
-	// the scenario's own point rather than laziness — "cheapest" is not a
-	// constraint any verifier can check, so what the interpreter turns it into
-	// is a bound, and a bound is satisfied or it is not whatever the price does.
-	DemoLadderPrice = 13900
-	DemoLadderCap   = 15000
+	// Telescopic ladders at $139.00, then $135.00 — both inside the $150.00
+	// bound "cheapest" became. A flat schedule made the point about the
+	// interpretation; it stopped making the point about the watch, which is
+	// what the second figure restores.
+	DemoLadderPrice         = 13900
+	DemoLadderPriceRepriced = 13500
+	DemoLadderCap           = 15000
 )
 
 // The catalogue's four identifiers, as deploy/catalogue.json states them.

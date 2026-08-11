@@ -280,9 +280,21 @@ func TestTheCataloguePricesSitWhereTheScriptedPromptsNeedThem(t *testing.T) {
 	assert.LessOrEqual(t, 2*merchant.DemoConcertPrice, merchant.DemoConcertCap,
 		"the prompt approves two tickets 'all in', so two at this price have to fit "+
 			"inside the cap or the search finds something the checkout would refuse")
+	// The repriced figure is issue #192's: the concert was always affordable, so
+	// its second price only exists to give a watch a step to act on, and it has
+	// to stay inside the cap too or the purchase it is meant to demonstrate would
+	// be the one thing this offer refuses.
+	assert.LessOrEqual(t, merchant.DemoConcertPriceRepriced, merchant.DemoConcertCap,
+		"the repriced ticket alone costs more than the whole approved total")
+	assert.LessOrEqual(t, 2*merchant.DemoConcertPriceRepriced, merchant.DemoConcertCap,
+		"two at the repriced price have to still fit inside the cap, or the watch's one "+
+			"attempt is refused instead of bought")
 
 	assert.Less(t, merchant.DemoLadderPrice, merchant.DemoLadderCap,
 		"the ladders cost more than the bound the interpreter turned 'cheapest' into")
+	assert.Less(t, merchant.DemoLadderPriceRepriced, merchant.DemoLadderCap,
+		"the repriced ladder price, issue #192's step for a watch to act on, has to stay "+
+			"inside the bound too")
 }
 
 // TestAnEmptyConstraintSetIsRefused covers the trap that a search and a mandate

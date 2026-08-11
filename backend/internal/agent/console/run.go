@@ -76,11 +76,13 @@ const (
 	//
 	// **Unreachable on the demo path**, and the reason is worth reading in
 	// agent.ErrScheduleExhausted rather than compressed here, because the short
-	// version — "a cycling schedule never reports Final" — is false for an offer
-	// with a single price, of which deploy/catalogue.json ships two. Kept
-	// regardless: nothing about this console decides which schedule a merchant
-	// runs, and an agent watching a one-shot multi-price offer still reaches it.
-	// See stateExpired for what ends a watch that cannot.
+	// version — "a cycling schedule never reports Final" — is false in general
+	// for an offer with a single price. Every offer deploy/catalogue.json ships
+	// has at least two prices as of issue #192, so today that second route is
+	// unreachable for the simpler reason that nothing here is single priced —
+	// not because the shape stopped existing. A merchant carrying a single-price
+	// offer, or an agent watching a one-shot multi-price offer that runs out,
+	// still reaches this. See stateExpired for what ends a watch that cannot.
 	stateExhausted
 	// stateExpired is agent.ErrAuthorisationExpired: the open mandate pair the
 	// user signed ran out its own clock before any attempt bought.
@@ -90,13 +92,13 @@ const (
 	// about them ever tells the loop "there is no next price it can act on", so
 	// the pair's own expiry is the fact that still lets it conclude and report
 	// "this will never happen" rather than sitting at stateWatching for as long
-	// as the process runs. Two of the five prompts interpret.Scenarios() serves
-	// name a single-price offer and so can never attempt anything at all, which
-	// makes this the state a browser starting one from GET /examples ends on.
-	//
-	// Reachable on a one-shot multi-price schedule too — an authorisation can
-	// run out before its last price does — it is simply rarer there, since
-	// stateExhausted usually gets there first.
+	// as the process runs. Before issue #192 this was also the state a browser
+	// starting the concert or the ladders prompt from GET /examples ended on,
+	// an hour after starting, because both named an offer whose single price
+	// could never step. Neither offer is single priced any longer, so nothing
+	// interpret.Scenarios() serves reaches this state today; it stays reachable
+	// for a prompt naming a schedule the user's cap never meets, or a
+	// counterparty that stops answering.
 	stateExpired
 	// stateStopped is the watch's context ending — somebody stopping the agent.
 	stateStopped

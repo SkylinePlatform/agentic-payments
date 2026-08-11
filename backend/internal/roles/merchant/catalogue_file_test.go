@@ -84,12 +84,12 @@ func TestTheCatalogueFileIsTheDocumentedScenario(t *testing.T) {
 			found:  merchant.FoundAtTheLastPrice,
 		},
 		merchant.DemoConcertID: {
-			prices: []int{merchant.DemoConcertPrice},
+			prices: []int{merchant.DemoConcertPrice, merchant.DemoConcertPriceRepriced},
 			bound:  merchant.DemoConcertCap,
 			found:  merchant.FoundAlways,
 		},
 		merchant.DemoLadderID: {
-			prices: []int{merchant.DemoLadderPrice},
+			prices: []int{merchant.DemoLadderPrice, merchant.DemoLadderPriceRepriced},
 			bound:  merchant.DemoLadderCap,
 			found:  merchant.FoundAlways,
 		},
