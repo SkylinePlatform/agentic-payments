@@ -65,7 +65,16 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
   const [previewed, setPreviewed] = useState<Previewed | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [signing, setSigning] = useState(false);
-  const [refusalNotRecorded, setRefusalNotRecorded] = useState(false);
+  // Set before the `await` below and never cleared: once a refusal has been
+  // sent, this screen is done — both buttons stay disabled rather than
+  // reopening a decision that was already made. It also closes two races at
+  // once: a second click here would send a second `/authorise/refused` under
+  // a second idempotency key (`client.ts`'s `key()` mints one per call), so
+  // one decision would record as two events; and a click on Sign while a
+  // refusal is still in flight would mount `Signing` — inert today, but the
+  // moment Task 10 wires it to `/authorise` this screen could authorise a
+  // purchase whose refusal is already on the wire.
+  const [refusing, setRefusing] = useState(false);
 
   useEffect(() => {
     preview(proposal)
@@ -78,18 +87,22 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
   }
 
   async function onRefuse() {
-    if (previewed === null) return;
+    if (previewed === null || refusing) return;
+    setRefusing(true);
     // A refusal is never conditional on the network: the user's "no" holds
     // whether or not the record of it reaches the collector, because
     // /authorise was never called either way — nothing was signed. So the
-    // navigation happens regardless, and only the message told to the user
-    // differs.
+    // navigation happens regardless, and `recorded` carries which case this
+    // was. Rendering that fact is `Console`'s job, not this file's: React 19
+    // batches this `setState` with the `navigate` below into one commit, and
+    // the router swaps this screen out for `Console` in that same commit —
+    // there is no paint in between for a message here to appear in.
     try {
       await refuse(proposal, previewed.constraints_digest);
+      navigate("/", { state: { refused: true, recorded: true } });
     } catch {
-      setRefusalNotRecorded(true);
+      navigate("/", { state: { refused: true, recorded: false } });
     }
-    navigate("/", { state: { refused: true } });
   }
 
   const heading = (
@@ -159,20 +172,13 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
         </p>
       </section>
 
-      {refusalNotRecorded && (
-        <p className="font-sans text-sm text-broken">
-          Your refusal was not recorded — the Trusted Surface did not answer. Nothing was signed
-          either way.
-        </p>
-      )}
-
       <div className="flex gap-3">
-        <Button type="button" variant="outline" onClick={() => void onRefuse()}>
+        <Button type="button" variant="outline" disabled={refusing} onClick={() => void onRefuse()}>
           Refuse
         </Button>
         <Button
           type="button"
-          disabled={!canSign(proposal, previewed)}
+          disabled={refusing || !canSign(proposal, previewed)}
           onClick={() => setSigning(true)}
         >
           Sign

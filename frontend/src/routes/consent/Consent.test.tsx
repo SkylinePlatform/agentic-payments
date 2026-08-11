@@ -128,7 +128,13 @@ describe("the consent screen", () => {
     expect(screen.getByText(/not what you sign/i)).toBeTruthy();
     // The sentences come from the surface's own Render(), never from
     // src/constraint — architecture.test.ts is what forbids the second one.
-    expect(screen.getByText("the item is gtin:05014477390221")).toBeTruthy();
+    // Scoped to signed-box rather than a document-wide query: the same
+    // string appearing anywhere on the page is not the claim this screen
+    // makes, and a document-wide getByText would still pass if the sentence
+    // were rendered in the offer card instead.
+    expect(
+      within(screen.getByTestId("signed-box")).getByText("the item is gtin:05014477390221"),
+    ).toBeTruthy();
   });
 
   it("names what the identifier refers to, outside the signed box", async () => {
@@ -171,14 +177,20 @@ describe("the consent screen", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /refuse/i }));
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/", state: expect.anything() }]));
+    await waitFor(() =>
+      expect(navigations).toEqual([{ to: "/", state: { refused: true, recorded: true } }]),
+    );
     expect(calls.map((c) => c.url)).not.toContain("/authorise");
   });
 
   it("stands by the refusal when recording it fails", async () => {
     // A Refuse button that stops working when the collector is down is the
     // worst available way to lose a person's decision. Nothing was signed,
-    // because /authorise was simply never called.
+    // because /authorise was simply never called. `recorded: false` is what
+    // this screen can honestly say — rendering that fact belongs to whoever
+    // owns Console, which reads it from router state after landing there;
+    // this screen has already unmounted by the time it would show, so there
+    // is nothing on this screen's own DOM for a test to assert.
     stubFetch({
       "/authorise/preview": { body: aPreview() },
       "/authorise/refused": { status: 502, body: "the surface did not answer" },
@@ -187,8 +199,49 @@ describe("the consent screen", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /refuse/i }));
 
+    await waitFor(() =>
+      expect(navigations).toEqual([{ to: "/", state: { refused: true, recorded: false } }]),
+    );
+  });
+
+  it("disables both buttons while a refusal is in flight, so a double click or a race with Sign cannot happen", async () => {
+    const calls: string[] = [];
+    let resolveRefuse: (response: Response) => void = () => {};
+    const refusePending = new Promise<Response>((resolve) => {
+      resolveRefuse = resolve;
+    });
+    vi.stubGlobal("fetch", (url: string) => {
+      calls.push(url);
+      if (url === "/authorise/preview") {
+        return Promise.resolve(new Response(JSON.stringify(aPreview()), { status: 200 }));
+      }
+      if (url === "/authorise/refused") return refusePending;
+      return Promise.resolve(new Response("not stubbed: " + url, { status: 404 }));
+    });
+    renderConsent(aProposal());
+
+    const refuseButton = await screen.findByRole("button", { name: /refuse/i });
+    const signButton = screen.getByRole("button", { name: /sign/i });
+
+    await userEvent.click(refuseButton);
+
+    // The refusal is still in flight — `/authorise/refused` has not resolved.
+    // A second click here, and a click on Sign, must both be no-ops: the
+    // former would record one decision as two events under two idempotency
+    // keys, and the latter would mount `Signing` before the "no" is even
+    // recorded — inert today, but the one invariant the refuse path exists
+    // to hold once Task 10 wires it to /authorise.
+    await userEvent.click(refuseButton);
+    await userEvent.click(signButton);
+
+    expect((refuseButton as HTMLButtonElement).disabled).toBe(true);
+    expect((signButton as HTMLButtonElement).disabled).toBe(true);
+    expect(calls.filter((url) => url === "/authorise/refused")).toHaveLength(1);
+    // Still Consent, not Signing: the signed box is still there to find.
+    expect(screen.queryByTestId("signed-box")).toBeTruthy();
+
+    resolveRefuse(new Response(JSON.stringify({ constraints_digest: "d" }), { status: 200 }));
     await waitFor(() => expect(navigations).toHaveLength(1));
-    expect(screen.queryByText(/not recorded/i)).toBeTruthy();
   });
 
   it("rests when there is no proposal to approve", () => {
