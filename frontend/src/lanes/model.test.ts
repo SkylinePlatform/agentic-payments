@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { EventRecord, ProtocolEvent } from "../sse";
 
-import { group, laneOf, LANES, shortDigest, stepsIn, titleOf, verdictOf } from "./model";
+import { amountOf, group, laneOf, LANES, shortDigest, stepsIn, titleOf, verdictOf } from "./model";
 
 /**
  * The screen's argument, as assertions.
@@ -194,6 +194,74 @@ describe("attempts, which a correlation ID can hold more than one of", () => {
       record({ kind: "mandate_verified", role: "mpp", digest: DIGEST }),
     ]);
     expect(transaction.attempts).toHaveLength(1);
+  });
+});
+
+describe("amountOf, the price beside an attempt's outcome — issue #174", () => {
+  it("picks the most recent step that carries one", () => {
+    fresh();
+    const [transaction] = group([
+      record({
+        kind: "mandate_presented",
+        role: "agent",
+        digest: DIGEST,
+        amount: { amount: 21000, currency: "USD" },
+      }),
+      record({
+        kind: "mandate_rejected",
+        role: "merchant",
+        digest: DIGEST,
+        code: "constraint_violated",
+        amount: { amount: 21000, currency: "USD" },
+      }),
+      record({ kind: "receipt_issued", role: "merchant", digest: DIGEST }),
+    ]);
+
+    expect(
+      amountOf(transaction.attempts[0]),
+      "the merchant's own refusal is the most recent word on this attempt's " +
+        "price, and receipt_issued carries none to displace it",
+    ).toEqual({ amount: 21000, currency: "USD" });
+  });
+
+  it("is undefined when nothing in the attempt carries one", () => {
+    fresh();
+    const [transaction] = group([record({ kind: "mandate_constructed", role: "surface" })]);
+
+    expect(
+      amountOf(transaction.attempts[0]),
+      "an open mandate signed before any checkout is quoted has no price to report",
+    ).toBeUndefined();
+  });
+
+  it("does not read a later attempt's price into an earlier one", () => {
+    fresh();
+    const [transaction] = group([
+      record({
+        kind: "mandate_rejected",
+        role: "merchant",
+        digest: DIGEST,
+        code: "constraint_violated",
+        amount: { amount: 21000, currency: "USD" },
+      }),
+      record({ kind: "mandate_constructed", role: "agent" }),
+      record({ kind: "mandate_presented", role: "agent" }),
+      record({
+        kind: "mandate_verified",
+        role: "merchant",
+        digest: OTHER,
+        amount: { amount: 18900, currency: "USD" },
+      }),
+    ]);
+
+    expect(amountOf(transaction.attempts[0]), "the refused attempt's own price").toEqual({
+      amount: 21000,
+      currency: "USD",
+    });
+    expect(amountOf(transaction.attempts[1]), "the bought attempt's own price").toEqual({
+      amount: 18900,
+      currency: "USD",
+    });
   });
 });
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 )
 
 // Kind is what happened. The set is closed at exactly the six moments ADR 0003
@@ -136,6 +138,82 @@ type Event struct {
 	// model and should not drag the generated one into every role's import
 	// graph for a field nothing branches on.
 	Code string `json:"code,omitempty"`
+
+	// Amount is the price this event is about — what a party quoted, presented,
+	// verified or refused — carried in the same {amount, currency} shape
+	// generated.Amount already uses. Unlike Code and Digest, this field does
+	// drag the canonical model into this package's import graph, on purpose:
+	// issue #174 is explicit that a second money representation must not exist,
+	// and amounts here are never branched on either — the same "a label on a
+	// screenshot" standing Digest's own comment states.
+	//
+	// A pointer, not a value, because a zero amount and an absent one are
+	// different facts. generated.Amount{Amount: 0, Currency: "USD"} is a
+	// genuine zero-value authorisation — contracts/instrument/amount.json
+	// allows one, "how an instrument is verified without charging it" — while
+	// nil says this step has nothing to report, on the same terms Digest's ""
+	// does for a step before any mandate has been read.
+	//
+	// There is deliberately no "failed to read" state for this field the way
+	// there is for the digest — see internal/agent/digest.go's reportDigest.
+	// checkout_hash is recomputed by the adapter each time a mandate is
+	// issued, so the only way to state the value actually signed is to decode
+	// it back out afterwards, and that decode can fail with the mandate itself
+	// perfectly good. An amount has no such step of its own. Half the call
+	// sites hold it as a typed Go field before any mandate exists — the price
+	// the merchant quoted, the price the surface is about to sign — and the
+	// other half do read it out of a mandate, but out of one their own
+	// verification has already decoded: a Credential Provider and a processor
+	// take it from the closed mandate a signature has established. **A failed
+	// read there is not a separate failure to report, it is the verdict**, and
+	// the same event says so as a rejection carrying a canonical code. What
+	// those two roles must not do is state an amount off a decode that did not
+	// complete, which is why credprovider and mpp both gate this field on the
+	// invariant that names one — see their examined.amount.
+	Amount *generated.Amount `json:"amount,omitempty"`
+}
+
+// amountKinds is the closed set of moments a structured price is meaningful
+// for, enforced by Validate below rather than left optional everywhere.
+//
+// All four are a statement about one specific mandate for one specific
+// purchase: constructing it, presenting it, accepting it or refusing it.
+// KindReceiptIssued is excluded on purpose — the receipt that event announces
+// already carries the canonical amount as signed evidence, and restating it on
+// the event about writing it would be a second, unauthoritative echo of a fact
+// that already has a home, the same "never copied" rule the digest follows
+// (see digest.go). KindAuthorisationRefused is excluded for the reason an open
+// mandate carries no digest either: a refusal there is a person declining an
+// *interpretation* — a set of limits — before any checkout has been quoted, so
+// there is no purchase price yet for anybody to state.
+var amountKinds = []Kind{
+	KindMandateConstructed,
+	KindMandatePresented,
+	KindMandateVerified,
+	KindMandateRejected,
+}
+
+// wellFormed reports whether an amount says something a reader can act on.
+//
+// Two states, not three. nil is "nothing to report" and a pointer is a price;
+// generated.Amount's own zero value — no currency at all — is neither, and it
+// is what a call site that attached an amount off a decode that never
+// completed would produce.
+//
+// Refusing it here rather than shrugging is the whole point. The frontend's
+// optionalAmount refuses the **record**, not the field, so an amount with no
+// currency does not cost a price on a screen, it costs the entire event: the
+// collector has already counted it, so the browser sees a hole in the sequence
+// one frame later, several roles away from whatever produced it. Validate is
+// where that becomes a Stats().Rejected at the role that emitted it.
+//
+// The check is the frontend's, not the schema's. contracts/instrument/amount.json
+// pins the currency to three upper-case letters and this does not, on the same
+// reasoning optionalAmount gives for the looser test: re-deriving a backend
+// pattern by hand in a second place is how the two drift apart, and what this
+// has to keep out is the zero value rather than a typo.
+func wellFormed(a generated.Amount) bool {
+	return a.Currency != "" && a.Amount >= 0
 }
 
 // ErrInvalidEvent is returned by Validate. It is a single sentinel with the
@@ -163,6 +241,12 @@ func (e Event) Validate() error {
 		return fmt.Errorf("%w: correlation_id %q is not a valid identifier", ErrInvalidEvent, e.CorrelationID)
 	case e.Code != "" && e.Kind != KindMandateRejected:
 		return fmt.Errorf("%w: code is set on %s, which is not a rejection", ErrInvalidEvent, e.Kind)
+	case e.Amount != nil && !slices.Contains(amountKinds, e.Kind):
+		return fmt.Errorf("%w: amount is set on %s, which is not one of the kinds a purchase price is meaningful for",
+			ErrInvalidEvent, e.Kind)
+	case e.Amount != nil && !wellFormed(*e.Amount):
+		return fmt.Errorf("%w: amount %+v names no currency or no money, which is neither a price nor the absence of one",
+			ErrInvalidEvent, *e.Amount)
 	}
 	return nil
 }

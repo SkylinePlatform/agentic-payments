@@ -13,6 +13,13 @@
  * side of the wire — see {@link EVENT_KINDS}.
  */
 
+// Amount is the one canonical type this hand-written module takes from the
+// generated barrel rather than declaring itself — issue #174 is explicit that
+// a second money representation must not exist, so `amount` below is typed
+// against the same shape `formatAmount` and every constraint's `Money` value
+// already are, not a structurally-identical duplicate.
+import type { Amount } from "../protocol";
+
 /**
  * The six protocol-significant moments, and **the frontend's only copy of
  * them**.
@@ -53,6 +60,68 @@ export function isEventKind(value: unknown): value is EventKind {
 }
 
 /**
+ * Every field `obs.Event` may carry, in Go's own struct order, and **the
+ * frontend's only copy of that list**.
+ *
+ * `TestTheFrontendKnowsEveryField`, in `backend/internal/platform/obs`, reads
+ * this array literal the way `TestTheFrontendKnowsEveryKind` reads
+ * {@link EVENT_KINDS} — by scanning the source text for it, not by importing
+ * anything — and fails when it disagrees with `obs.Event`'s json tags. That is
+ * what issue #174 asked for: "a field the two languages disagree about is the
+ * defect this repository keeps finding," the same sentence `EVENT_KINDS`
+ * above answers for kinds. A kind missing from the frontend makes a whole
+ * event invisible; a field missing here makes one fact about a visible event
+ * invisible instead — `parseRecord`'s own rule, "unrecognised fields are
+ * dropped rather than carried through," would otherwise drop `amount` with
+ * nothing failing anywhere near the change that caused it.
+ *
+ * Nothing reads the array at runtime — `ProtocolEvent` and `parseRecord` below
+ * are hand-written against the same eight names, the way `EVENT_KINDS` is
+ * consulted by `isEventKind` but a field list has no equivalent single call
+ * site. What holds it to them instead is {@link ProtocolEventFieldsAreExact},
+ * one declaration down, which is the half of the mechanism the Go test cannot
+ * supply: that test reads this file and `obs.Event`, so it catches the two
+ * languages disagreeing and cannot catch this file disagreeing with itself.
+ */
+export const PROTOCOL_EVENT_FIELDS = [
+  "kind",
+  "correlation_id",
+  "role",
+  "at",
+  "detail",
+  "digest",
+  "code",
+  "amount",
+] as const;
+
+/** One of the field names an event may carry. */
+export type ProtocolEventField = (typeof PROTOCOL_EVENT_FIELDS)[number];
+
+/** True when two unions have exactly the same members, `false` otherwise. */
+type Exactly<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+/** A type-level assertion: instantiating it with anything but `true` is an error. */
+type Assert<T extends true> = T;
+
+/**
+ * Compile-time proof that {@link PROTOCOL_EVENT_FIELDS} names exactly the
+ * fields {@link ProtocolEvent} declares — no more and no fewer.
+ *
+ * Without it the array is a comment the Go test happens to read. `tsc` would
+ * be perfectly happy with a field added to the interface and not to the list,
+ * or with one renamed in the interface alone, and `TestTheFrontendKnowsEveryField`
+ * would be happy too for as long as the list still matched `obs.Event` — which
+ * it would, because nobody touched it. That is the whole defect the field list
+ * exists to catch, arriving from the side the Go test cannot see.
+ *
+ * `Exactly` compares in both directions and wraps each side in a tuple, which
+ * is not decoration: a bare `A extends B` distributes over unions, and `never
+ * extends true` is *true*, so the obvious spelling of this assertion passes
+ * precisely when the comparison has collapsed.
+ */
+export type ProtocolEventFieldsAreExact = Assert<Exactly<keyof ProtocolEvent, ProtocolEventField>>;
+
+/**
  * One thing that happened, as `obs.Event` is serialised.
  *
  * The field names are the wire's, not camelCase, and deliberately so. The
@@ -86,6 +155,30 @@ export interface ProtocolEvent {
    * decide anything from it.
    */
   readonly detail?: string;
+
+  /**
+   * The price this event is about — what a party quoted, presented, verified
+   * or refused — in the canonical `{amount, currency}` shape `Amount` already
+   * uses. Issue #174's field, added on `digest`'s own precedent: a value the
+   * screen needs to make a true claim, carried structurally rather than
+   * scraped out of `detail`.
+   *
+   * Set only on the four kinds a purchase price is meaningful for —
+   * `mandate_constructed`, `mandate_presented`, `mandate_verified`,
+   * `mandate_rejected` — which `obs.Event`'s own `amountKinds` enforces on
+   * the way in, not this type. Absent either because the step legitimately
+   * has none (an open mandate signed before any checkout is quoted, the same
+   * reason `digest` above is sometimes absent) or because its kind is one of
+   * the two an amount is never meaningful for.
+   *
+   * A zero amount and an absent one are different facts, on the same terms
+   * `digest`'s own comment draws for `""` versus absence: `{amount: 0,
+   * currency: "USD"}` is a genuine zero-value authorisation and `undefined`
+   * says this step has nothing to report. `optionalAmount` below is what
+   * keeps the two from collapsing into each other on the way through
+   * `parseRecord`.
+   */
+  readonly amount?: Amount;
 
   /**
    * The checkout digest this event is about, when it is about one.
@@ -151,6 +244,30 @@ function requiredText(value: unknown): value is string {
 }
 
 /**
+ * Whether an optional wire field is absent or a well-formed `{amount,
+ * currency}` pair.
+ *
+ * Checked rather than cast, on `parseRecord`'s own standing rule: a cast would
+ * type `record.event.amount` as `Amount` and let a malformed payload reach a
+ * renderer as a number that silently is not one. `amount` is required to be a
+ * non-negative integer and `currency` a non-empty string, mirroring
+ * `contracts/instrument/amount.json` without reaching for its regex — the
+ * looser check matches every other field this function's neighbours validate,
+ * none of which re-derives a backend pattern by hand.
+ */
+function optionalAmount(value: unknown): value is Amount | undefined {
+  if (value === undefined) return true;
+  if (!isObject(value)) return false;
+  return (
+    typeof value.amount === "number" &&
+    Number.isInteger(value.amount) &&
+    value.amount >= 0 &&
+    typeof value.currency === "string" &&
+    value.currency !== ""
+  );
+}
+
+/**
  * Reads one `data:` line into a record.
  *
  * Every field is checked rather than asserted with a cast. A cast would make
@@ -201,6 +318,9 @@ export function parseRecord(data: string): ParsedRecord {
   if (!optionalText(event.code)) {
     return { ok: false, reason: "code is present and is not a string" };
   }
+  if (!optionalAmount(event.amount)) {
+    return { ok: false, reason: "amount is present and is not a well-formed {amount, currency} pair" };
+  }
 
   return {
     ok: true,
@@ -214,6 +334,7 @@ export function parseRecord(data: string): ParsedRecord {
         detail: event.detail,
         digest: event.digest,
         code: event.code,
+        amount: event.amount,
       },
     },
   };

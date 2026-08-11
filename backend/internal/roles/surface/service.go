@@ -315,7 +315,15 @@ func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 	// exists rather than what was attempted. This is where a Human Present
 	// transaction's mandates come into being: the user is the signer, and the
 	// surface is the party holding the pen.
-	s.Events.Emit(r.Context(), obs.KindMandateConstructed, "Checkout Mandate signed by the user")
+	//
+	// req.Payment.PaymentAmount, not a value parsed out of the checkout this
+	// mandate wraps: the wire CheckoutMandate carries no structured amount at
+	// all — see generated.CheckoutMandate — and this surface already holds the
+	// same purchase's price in the request it decoded, before either mandate
+	// is signed. That is "the amount it held" for a party whose own artefact
+	// carries none, on the same footing quoted.Price is for the merchant.
+	s.Events.Emit(r.Context(), obs.KindMandateConstructed, "Checkout Mandate signed by the user",
+		obs.WithAmount(req.Payment.PaymentAmount))
 
 	payment := req.Payment
 	stamp(s.Clock, &payment.IssuedAt, &payment.ExpiresAt)
@@ -325,7 +333,8 @@ func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 		reject(w, "signing the Payment Mandate", err)
 		return
 	}
-	s.Events.Emit(r.Context(), obs.KindMandateConstructed, "Payment Mandate signed by the user")
+	s.Events.Emit(r.Context(), obs.KindMandateConstructed, "Payment Mandate signed by the user",
+		obs.WithAmount(payment.PaymentAmount))
 
 	roles.OK(w, http.StatusOK, approved{
 		CheckoutMandate: signedCheckout.String(),

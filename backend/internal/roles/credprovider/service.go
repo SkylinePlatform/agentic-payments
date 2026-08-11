@@ -156,7 +156,53 @@ type examined struct {
 	// checkoutHash is read only when verdict is nil; a refused presentation
 	// scopes no credential.
 	checkoutHash string
-	verdict      error
+	// amount is the payment amount the closed mandate declared, for the event
+	// this role emits about it and for nothing else — never for the verdict,
+	// which this role reaches without consulting it.
+	//
+	// Set exactly when this role's own verification decoded the closed mandate,
+	// which is a wider condition than "and accepted it" and deliberately so.
+	// Under Human Not Present the check that refuses a purchase over the user's
+	// cap is an amount check — ap2.AuthorisePaymentChain evaluates the open
+	// mandate's constraints against ap2.PaymentSubject, whose amount is this
+	// very field — so a refusal there is not merely *able* to name the price,
+	// it is a verdict about that price, and the demonstration's one refusal is
+	// that case. Leaving it absent would be the log declining to state the
+	// number the refusal was about.
+	//
+	// What it must not do is state a price off a decode that never finished, in
+	// which case generated.Amount is its zero value and reads as neither a
+	// price nor an absence — obs.Event.Validate refuses one. The invariant that
+	// tells the two apart is CheckoutHash: decodePayment refuses a mandate
+	// carrying no transaction_id, so a non-empty hash is exactly the state in
+	// which every other claim in the mandate has been read, and both examine
+	// paths gate on it.
+	amount  *generated.Amount
+	verdict error
+}
+
+// amountFrom returns the mandate's amount when this role decoded the mandate,
+// and nil when it did not.
+//
+// One function for both modes, because the invariant is the same in both: see
+// examined.amount, whose comment is what this is derived from rather than a
+// second statement of.
+func amountFrom(mandate generated.PaymentMandate) *generated.Amount {
+	if mandate.CheckoutHash == "" {
+		return nil
+	}
+	amount := mandate.PaymentAmount
+	return &amount
+}
+
+// amountOpt turns a possibly-nil amount into the EventOpt slice Emit and
+// EmitRejection take, so a call site with nothing to report attaches nothing
+// rather than a zero-value generated.Amount.
+func amountOpt(amount *generated.Amount) []obs.EventOpt {
+	if amount == nil {
+		return nil
+	}
+	return []obs.EventOpt{obs.WithAmount(*amount)}
 }
 
 // fund verifies a Payment Mandate and mints a credential scoped to its checkout.
@@ -200,11 +246,18 @@ func (s *Service) fund(w http.ResponseWriter, r *http.Request) {
 	// code in the log and the code in the signed answer cannot disagree — which
 	// matters because a reader comparing them would have no way to tell which
 	// one was wrong.
+	// The same option on both branches, because the question the amount answers
+	// is the same one either way: what was the price this role read out of the
+	// mandate it verified. It is nil exactly when the mandate never decoded —
+	// see examined.amount — and amountOpt turns that into no option at all
+	// rather than a zero-value Amount that reads as neither a price nor an
+	// absence.
+	opts := amountOpt(got.amount)
 	if got.verdict != nil {
 		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(got.verdict)),
-			"Payment Mandate refused: "+got.verdict.Error())
+			"Payment Mandate refused: "+got.verdict.Error(), opts...)
 	} else {
-		s.Events.Emit(r.Context(), obs.KindMandateVerified, "Payment Mandate verified")
+		s.Events.Emit(r.Context(), obs.KindMandateVerified, "Payment Mandate verified", opts...)
 	}
 
 	receipt, err := ap2.IssueReceipt(r.Context(), got.presented, got.verdict, ap2.ReceiptOptions{
@@ -275,7 +328,12 @@ func (s *Service) examineMandate(w http.ResponseWriter, req request) (examined, 
 	}
 
 	mandate, verdict := s.Rules.VerifyPayment(presented)
-	return examined{presented: presented, checkoutHash: mandate.CheckoutHash, verdict: verdict}, true
+	return examined{
+		presented:    presented,
+		checkoutHash: mandate.CheckoutHash,
+		amount:       amountFrom(mandate),
+		verdict:      verdict,
+	}, true
 }
 
 // examineChain is the Human Not Present path: a delegation chain, authorised
@@ -334,6 +392,7 @@ func (s *Service) examineChain(w http.ResponseWriter, req request) (examined, bo
 	return examined{
 		presented:    chain,
 		checkoutHash: authorised.Closed.CheckoutHash,
+		amount:       amountFrom(authorised.Closed),
 		verdict:      verdict,
 	}, true
 }

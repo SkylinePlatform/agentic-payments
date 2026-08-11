@@ -104,6 +104,33 @@ func TestEventValidate(t *testing.T) {
 			e.Code = "constraint_violated"
 			return e
 		}},
+		// amountKinds is closed the same way the code check is: a price on a
+		// kind nothing about a purchase amount is meaningful for is a bug in
+		// the emitting code, not a smaller claim.
+		{"amount on a receipt", func(e obs.Event) obs.Event {
+			e.Kind = obs.KindReceiptIssued
+			amount := generated.Amount{Amount: 18900, Currency: "USD"}
+			e.Amount = &amount
+			return e
+		}},
+		{"amount on an authorisation refusal", func(e obs.Event) obs.Event {
+			e.Kind = obs.KindAuthorisationRefused
+			amount := generated.Amount{Amount: 18900, Currency: "USD"}
+			e.Amount = &amount
+			return e
+		}},
+		// generated.Amount's zero value is the third state the pointer exists to
+		// rule out: not a price, and not the absence of one either. It is what a
+		// role attaching an amount off a decode that never completed would
+		// produce, and the frontend answers it by refusing the whole record —
+		// so an event carrying one costs a step on the screen rather than a
+		// figure. Refused here instead, where Stats().Rejected counts it at the
+		// role that emitted it.
+		{"amount naming no currency", func(e obs.Event) obs.Event {
+			var amount generated.Amount
+			e.Amount = &amount
+			return e
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -124,6 +151,47 @@ func TestZeroTimeIsRejected(t *testing.T) {
 	if err := e.Validate(); !errors.Is(err, obs.ErrInvalidEvent) {
 		t.Errorf("an event with no timestamp was accepted: %v", err)
 	}
+}
+
+// TestAmountIsPermittedOnTheFourMandateKinds is amountKinds pinned positively:
+// every kind whose event is about one specific mandate for one specific
+// purchase accepts a price, and TestEventValidate's table already covers the
+// two that must not.
+func TestAmountIsPermittedOnTheFourMandateKinds(t *testing.T) {
+	t.Parallel()
+
+	price := generated.Amount{Amount: 18900, Currency: "USD"}
+	for _, kind := range []obs.Kind{
+		obs.KindMandateConstructed,
+		obs.KindMandatePresented,
+		obs.KindMandateVerified,
+		obs.KindMandateRejected,
+	} {
+		e := anEvent(kind)
+		e.Amount = &price
+		assert.NoError(t, e.Validate(), "%s is one of the four kinds a purchase price is meaningful for", kind)
+	}
+}
+
+// TestAZeroAmountIsNotAnAbsentOne is issue #174's "done when": a step that
+// legitimately has no amount has to read differently from one whose amount is
+// genuinely zero, which contracts/instrument/amount.json allows — "how an
+// instrument is verified without charging it". A pointer is what makes the
+// two distinguishable; this pins that Validate does not conflate them.
+func TestAZeroAmountIsNotAnAbsentOne(t *testing.T) {
+	t.Parallel()
+
+	absent := anEvent(obs.KindMandateVerified)
+	require.Nil(t, absent.Amount, "the baseline event must start with no amount for this test to mean anything")
+	assert.NoError(t, absent.Validate(), "an event stating no price is well-formed")
+
+	zero := absent
+	zeroAmount := generated.Amount{Amount: 0, Currency: "USD"}
+	zero.Amount = &zeroAmount
+	assert.NoError(t, zero.Validate(), "a genuine zero-value authorisation is well-formed too")
+
+	assert.NotEqual(t, absent, zero,
+		"nil and a pointer to a zero Amount must not compare equal, or a reader could not tell the two facts apart")
 }
 
 // TestARefusalIsAKindAndCarriesNoCode is the shape of the sixth moment.

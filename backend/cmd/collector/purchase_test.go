@@ -228,6 +228,10 @@ type watched struct {
 	all    []collector.Record
 	byRole map[string][]obs.Kind
 	corr   map[string]int
+	// prices is every event that stated one, by role, in that role's own order.
+	// A step with no price contributes no entry rather than a zero — see
+	// obs.Event.Amount on why the two are different facts.
+	prices map[string][]generated.Amount
 }
 
 // watch subscribes to the hub and reads everything it holds.
@@ -241,10 +245,18 @@ func watch(t *testing.T, hub *collector.Hub) watched {
 	history, sub := hub.Subscribe(0)
 	t.Cleanup(sub.Unsubscribe)
 
-	w := watched{all: history, byRole: map[string][]obs.Kind{}, corr: map[string]int{}}
+	w := watched{
+		all:    history,
+		byRole: map[string][]obs.Kind{},
+		corr:   map[string]int{},
+		prices: map[string][]generated.Amount{},
+	}
 	for _, rec := range history {
 		w.byRole[rec.Event.Role] = append(w.byRole[rec.Event.Role], rec.Event.Kind)
 		w.corr[rec.Event.CorrelationID]++
+		if rec.Event.Amount != nil {
+			w.prices[rec.Event.Role] = append(w.prices[rec.Event.Role], *rec.Event.Amount)
+		}
 	}
 	return w
 }
@@ -296,6 +308,33 @@ func TestAPurchaseArrivesOnTheStream(t *testing.T) {
 	}, seen.byRole,
 		"the stream is what the three-lane view teaches from, so an event has to be "+
 			"emitted by the party that actually performed it")
+
+	// And what each party said it cost. Issue #174's rule is that every party
+	// emits the amount **it** held, so the assertion is per role rather than
+	// over the stream: one number, agreed by five parties that each arrived at
+	// it separately — the merchant off the offer it signed, the surface off the
+	// request it decoded, the agent off the quote it was given, and the two
+	// payment verifiers off a mandate they verified before reading it.
+	//
+	// A count per role as well as a value, because the failure this catches is
+	// a site that quietly states nothing: the merchant's presentation to its
+	// processor carried no price at all until it was noticed here, and an
+	// assertion shaped as "every amount that appeared was 189.00" would have
+	// passed throughout.
+	price := quoted.Price
+	assert.Equal(t, map[string][]generated.Amount{
+		"surface":      {price, price},
+		"agent":        {price, price},
+		"credprovider": {price},
+		// Two of the merchant's three events: the verdict, and the presentation
+		// to the processor. The receipt between them states none — it announces
+		// an artefact that already carries the amount as signed evidence, and a
+		// second copy on the event about writing it could only ever disagree.
+		"merchant": {price, price},
+		"mpp":      {price},
+	}, seen.prices,
+		"a price on the log is the emitting party's own, so a role that held one and said "+
+			"nothing leaves the three-lane view inferring it from the step before")
 
 	// One transaction, one identifier. This is the whole reason the correlation
 	// ID exists: before this change every hop minted its own, so the value
