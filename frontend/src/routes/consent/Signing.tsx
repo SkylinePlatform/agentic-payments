@@ -28,14 +28,16 @@ import { lifetime } from "./format";
  *   nothing to click.
  *
  *   **The property is about the code's sites, not about that one case**, and
- *   the distinction is what a future reader has to be able to check.
- *   `roles/surface`'s `authorise` emits `request_malformed` from four places
- *   and `transport.Idempotency` from a fifth, and *every one of them precedes
- *   the first call to `Issue…`* — the empty-constraint refusal, the body that
- *   would not decode, the digest mismatch, and the middleware's own failed
- *   read. That is what makes the code answerable, and it is the thing a change
- *   to the surface could quietly break. A new site for it *after* a signature
- *   would not fail a test here; it would make this state lie.
+ *   the distinction is what a future reader has to be able to check. Five
+ *   sites can put this code on a `POST /authorise` response — two in
+ *   `roles.DecodeJSON`, being a body it could not read and a body it could not
+ *   unmarshal; `vetted`'s refusal of an empty constraint set; the digest
+ *   mismatch in `surface.authorise` itself; and `transport.Idempotency`'s own
+ *   failed read, which is written before the handler runs at all. **Every one
+ *   of them precedes the first call to `Issue…`**, and that, rather than any
+ *   one of them, is what makes the code answerable. It is also the thing a
+ *   change to the surface could quietly break: a new site for it *after* a
+ *   signature would fail no test here, and would make this state lie.
  * - `unresolved` — every other way `authorise` can fail, and its separation
  *   from the state above is the whole of #206. A 502, a dropped connection, a
  *   backgrounded tab: `authorise`'s own doc comment in `client.ts` is explicit
