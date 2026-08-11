@@ -218,7 +218,7 @@ describe("the verdict, which is what one attempt's spine draws", () => {
     ).toEqual({ state: "pending" });
   });
 
-  it("is bound when every party in the attempt named the same checkout", () => {
+  it("is bought when every party in the attempt named the same checkout", () => {
     fresh();
     expect(
       verdictOf(
@@ -230,6 +230,34 @@ describe("the verdict, which is what one attempt's spine draws", () => {
       ),
       "this is the thesis holding: three parties verified three different " +
         "artefacts and each independently arrived at the same value",
+    ).toEqual({ state: "bought", digest: DIGEST });
+  });
+
+  it("is bound, not bought, from the moment the agent signs", () => {
+    fresh();
+    expect(
+      verdictOf(only([record({ kind: "mandate_constructed", role: "agent", digest: DIGEST })])),
+      "the agent's own first step already carries the digest, so an attempt is " +
+        "bound before any verifier has seen it — calling that a purchase would " +
+        "put a completed sale on screen for the whole of the demo's first " +
+        "attempt, which ends in a refusal",
+    ).toEqual({ state: "bound", digest: DIGEST });
+  });
+
+  it("is still bound while only the merchant has accepted", () => {
+    fresh();
+    expect(
+      verdictOf(
+        only([
+          record({ kind: "mandate_verified", role: "credprovider", digest: DIGEST }),
+          record({ kind: "receipt_issued", role: "credprovider", digest: DIGEST }),
+          record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+          record({ kind: "receipt_issued", role: "merchant", digest: DIGEST }),
+        ]),
+      ),
+      "a receipt is not an acceptance — every verifier issues one whether it " +
+        "accepted or refused — and the merchant does not speak for the payment; " +
+        "AP2 gives that leg to the processor",
     ).toEqual({ state: "bound", digest: DIGEST });
   });
 

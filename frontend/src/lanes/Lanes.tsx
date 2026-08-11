@@ -174,6 +174,13 @@ function Thesis({ verdict }: { readonly verdict: Verdict }) {
     case "bound":
       return (
         <p className="font-sans text-sm text-ink">
+          Every party that has named a checkout named this one, and nobody has
+          refused. The payment has not been answered yet.
+        </p>
+      );
+    case "bought":
+      return (
+        <p className="font-sans text-sm text-ink">
           Every party that named a checkout named this one. Different signatures,
           one purchase.
         </p>
@@ -269,13 +276,32 @@ function RefusedIcon() {
  * the issue asks for, not a replacement for the prose: the descriptions stay,
  * because they are what makes the screen teach.
  *
- * There is deliberately no fourth branch for "the amount". The event stream
- * this screen reads carries no structured price — `ProtocolEvent.detail` is
- * free text an emitter writes for a person, and `src/sse/events.test.ts`'s own
+ * **Four states rather than three, and the fourth is the one worth explaining.**
+ * The model's `bound` means the binding held and nobody refused — it does not
+ * mean a purchase happened, and the agent's own first step already carries the
+ * digest, so an attempt is `bound` from the moment it is signed. Labelling that
+ * "Bought" put a completed sale on screen for the whole of every attempt,
+ * including the six steps of the demo's first one that ends in the refusal this
+ * screen exists to show. `Bound` says what is true then; `Bought` waits for a
+ * settling party to accept.
+ *
+ * There is deliberately no figure for "the amount". The event stream this
+ * screen reads carries no structured price — `ProtocolEvent.detail` is free
+ * text an emitter writes for a person, and `src/sse/events.test.ts`'s own
  * "never parses detail" case pins that no consumer may read a number back out
- * of it. Showing a figure honestly needs the collector's wire schema to carry
- * one, which is a `backend/internal/platform/obs` change outside this
- * component's reach.
+ * of it. Issue #174 is the honest fix: an amount on the wire, emitted by each
+ * party that held one.
+ *
+ * The agent's console *does* serve a structured price — `GET /watches/{id}`
+ * answers `attempts[].price` as a canonical Amount, and `vite.config.ts`
+ * already proxies it for the Inspector. **That route is deliberately not taken
+ * here.** It joins on an attempt ordinal the two sides derive differently — the
+ * console numbers its own attempts and excludes step changes it never minted,
+ * while these are cut on the digest changing — so an extra or missing attempt
+ * on either side puts one attempt's money against another's verdict, and a
+ * wrong price beside a merchant's refusal is worse than no price at all. It is
+ * also the buyer's own bookkeeping about itself, drawn beside verdicts this
+ * screen's whole claim is that each party reached independently.
  */
 function Outcome({ verdict }: { readonly verdict: Verdict }) {
   switch (verdict.state) {
@@ -286,6 +312,16 @@ function Outcome({ verdict }: { readonly verdict: Verdict }) {
         </span>
       );
     case "bound":
+      // No icon and no saturated tone: `seal` and `broken` are reserved for a
+      // verdict having been reached, and an attempt still in flight has not
+      // reached one. The word is the whole of the distinction from Pending,
+      // which is what makes both survive a reader who cannot use colour.
+      return (
+        <span className="inline-flex items-center gap-1.5 border border-ink px-2 py-0.5 font-sans text-xs font-semibold uppercase tracking-widest text-ink">
+          Bound
+        </span>
+      );
+    case "bought":
       return (
         <span className="inline-flex items-center gap-1.5 border border-seal px-2 py-0.5 font-sans text-xs font-semibold uppercase tracking-widest text-seal">
           <BoughtIcon />

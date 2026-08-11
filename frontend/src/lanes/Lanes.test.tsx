@@ -99,6 +99,7 @@ describe("the spine", () => {
     showing([
       record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
       record({ kind: "mandate_verified", role: "mpp", digest: DIGEST }),
+      record({ kind: "receipt_issued", role: "mpp", digest: DIGEST }),
     ]);
 
     expect(
@@ -230,11 +231,13 @@ describe("an attempt's outcome", () => {
     ).toBeNull();
   });
 
-  it("labels a clean purchase distinctly from a refusal", () => {
+  it("labels a completed purchase distinctly from a refusal", () => {
     seq = 0;
     const { container } = showing([
       record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
       record({ kind: "receipt_issued", role: "merchant", digest: DIGEST }),
+      record({ kind: "mandate_verified", role: "mpp", digest: DIGEST }),
+      record({ kind: "receipt_issued", role: "mpp", digest: DIGEST }),
     ]);
 
     expect(screen.queryByText("Bought")).not.toBeNull();
@@ -245,6 +248,34 @@ describe("an attempt's outcome", () => {
         "screenshot, still gets the answer from",
     ).not.toBeNull();
     expect(container.querySelector('[data-icon="refused"]')).toBeNull();
+  });
+
+  it("does not call an attempt bought before a party that settles has accepted", () => {
+    // The bug this pins: the agent's own first step carries the digest, so an
+    // attempt is bound the moment it is signed. A badge reading "Bought" there
+    // claims a completed sale for every step of every attempt — including all
+    // six of the demo's first one, which ends in the refusal this screen exists
+    // to make visible.
+    seq = 0;
+    const { container } = showing([
+      record({ kind: "mandate_constructed", role: "agent", digest: DIGEST }),
+      record({ kind: "mandate_presented", role: "agent", digest: DIGEST }),
+      record({ kind: "mandate_verified", role: "credprovider", digest: DIGEST }),
+      record({ kind: "receipt_issued", role: "credprovider", digest: DIGEST }),
+    ]);
+
+    expect(
+      screen.queryByText("Bought"),
+      "nothing here says the money moved: a receipt is issued whether a " +
+        "verifier accepted or refused, and the Credential Provider does not " +
+        "speak for the payment",
+    ).toBeNull();
+    expect(container.querySelector('[data-icon="bought"]')).toBeNull();
+    expect(
+      screen.queryByText("Bound"),
+      "and it is not Pending either — a checkout is on the spine. The two are " +
+        "different claims and the screen has to make both",
+    ).not.toBeNull();
   });
 
   it("gives the refused and the bought attempt in one watch two different labels", () => {
@@ -263,6 +294,8 @@ describe("an attempt's outcome", () => {
       record({ kind: "mandate_constructed", role: "agent" }),
       record({ kind: "mandate_verified", role: "merchant", digest: OTHER }),
       record({ kind: "receipt_issued", role: "merchant", digest: OTHER }),
+      record({ kind: "mandate_verified", role: "mpp", digest: OTHER }),
+      record({ kind: "receipt_issued", role: "mpp", digest: OTHER }),
     ]);
 
     expect(screen.getByText("Refused")).not.toBeNull();
@@ -280,6 +313,29 @@ describe("an attempt's outcome", () => {
       "every mandate's state is unambiguous, including the one where nothing " +
         "has attached to the spine yet — a blank space is not an answer",
     ).not.toBeNull();
+  });
+
+  it("tells its two uncoloured states apart by the word alone", () => {
+    // `seal` and `broken` are the only saturated values here and each is paired
+    // with a shape. The other two states carry no colour at all, so the word is
+    // the whole of the distinction — and it has to be a real one: "not attached
+    // to the spine yet" and "attached and still running" are different claims
+    // and the screen must not conflate them.
+    // `within` a container each, rather than `screen`: cleanup runs between
+    // tests and not between two renders inside one, so the second would find
+    // the first's badge still in the document and the negative halves below
+    // would assert nothing.
+    seq = 0;
+    const waiting = showing([record({ kind: "mandate_presented", role: "agent" })]).container;
+    expect(within(waiting).queryByText("Pending")).not.toBeNull();
+    expect(within(waiting).queryByText("Bound")).toBeNull();
+
+    seq = 0;
+    const running = showing([
+      record({ kind: "mandate_constructed", role: "agent", digest: DIGEST }),
+    ]).container;
+    expect(within(running).queryByText("Bound")).not.toBeNull();
+    expect(within(running).queryByText("Pending")).toBeNull();
   });
 });
 
