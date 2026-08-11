@@ -161,7 +161,17 @@ const REFUSED_BEFORE_SIGNING = "request_malformed";
  * failure that still cannot be finished drops the half it made rather than
  * announcing it, so no mandate anybody holds comes out of an attempt that did
  * not complete. The key is therefore what makes the retry safe, and the case
- * where the key was not enough is gone.
+ * #212 named is gone.
+ *
+ * **One case survives it and is not this screen's**, recorded here so the
+ * paragraph above is not read as the absolute it is one word away from being.
+ * The middleware keeps a response only up to a megabyte and forgets — never
+ * refuses — a larger one, so a constraint set big enough to push the surface's
+ * answer past the cap completes, is not remembered, and is signed again on the
+ * retry. Issue #223 is where bounding that is decided. It is out of reach from
+ * here for the reason this screen exists: a set of limits large enough to do
+ * it is a set nobody could have read on the way past, and what this component
+ * sends is what a person was shown.
  *
  * **What has not changed is what this screen may assert**, which is why no
  * sentence below moved. The guarantee is the surface's to keep, and a browser
