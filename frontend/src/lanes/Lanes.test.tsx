@@ -41,6 +41,20 @@ function showing(records: readonly EventRecord[]) {
   return render(<Lanes transaction={transaction} />);
 }
 
+/**
+ * Every mark on the screen, in the order it is drawn.
+ *
+ * The whole list rather than a count of one shape, because the vocabulary's
+ * failures are pairings rather than absences: `receipt_issued` wearing a
+ * `check` and a mandate wearing one are both extra marks in the right places,
+ * and only the sequence catches them.
+ */
+function marks(container: HTMLElement): string[] {
+  return [...container.querySelectorAll("[data-mark]")].map(
+    (mark) => mark.getAttribute("data-mark") ?? "",
+  );
+}
+
 /** Whether a `class` attribute takes its element out of the document flow. */
 function outOfFlow(className: string): boolean {
   return /(^|[\s:])(absolute|fixed)($|\s)/.test(className);
@@ -247,21 +261,26 @@ describe("an attempt's outcome", () => {
     ]);
 
     expect(
-      screen.queryByText("Refused"),
-      "a clear label, not only the prose sentence the Thesis already carries",
-    ).not.toBeNull();
+      screen.getAllByText("refused"),
+      "twice, and both are wanted: the attempt's own outcome above the lanes, " +
+        "and the step where the party that said no is drawn",
+    ).toHaveLength(2);
     expect(
-      container.querySelector('[data-icon="refused"]'),
-      "the icon is what survives a reader who cannot use the colour — #109's " +
-        "sibling rule is that a status is colour and icon, never colour alone",
-    ).not.toBeNull();
-    expect(
-      container.querySelector('[data-icon="bought"]'),
-      "one attempt, one verdict — it should not carry the other outcome's icon",
-    ).toBeNull();
+      marks(container),
+      "the outcome is `full` and a `cross` — over, and it ended in a verifier " +
+        "saying no — and the two steps beneath it carry the merchant's " +
+        "acceptance and the processor's refusal. The shapes are what survive a " +
+        "reader who cannot use colour, a black-and-white screenshot, and a " +
+        "screen reader that never announces a colour at all",
+    ).toEqual(["full", "cross", "check", "cross"]);
   });
 
-  it("labels a completed purchase distinctly from a refusal", () => {
+  it("draws no mark on a receipt, because a rejection produces one too", () => {
+    // Issue #191's first row, and the argument is in `model.ts`: every verifier
+    // issues a receipt whether it accepted or refused. `receipt_issued` wore
+    // `seal` until #183, which put a green mark immediately after the
+    // demonstration's headline refusal — on the one event that is equally
+    // consistent with the purchase having been refused.
     seq = 0;
     const { container } = showing([
       record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
@@ -270,19 +289,18 @@ describe("an attempt's outcome", () => {
       record({ kind: "receipt_issued", role: "mpp", digest: DIGEST }),
     ]);
 
-    expect(screen.queryByText("Bought")).not.toBeNull();
-    expect(screen.queryByText("Refused")).toBeNull();
+    expect(screen.getAllByText("receipt"), "both receipts are still on screen").toHaveLength(2);
     expect(
-      container.querySelector('[data-icon="bought"]'),
-      "the shape a reader without colour vision, or a black-and-white " +
-        "screenshot, still gets the answer from",
-    ).not.toBeNull();
-    expect(container.querySelector('[data-icon="refused"]')).toBeNull();
+      marks(container),
+      "three checks — the attempt's outcome, the merchant's acceptance and the " +
+        "processor's — and not one of them on a receipt",
+    ).toEqual(["full", "check", "check", "check"]);
+    expect(screen.queryByText("refused")).toBeNull();
   });
 
   it("does not call an attempt bought before a party that settles has accepted", () => {
     // The bug this pins: the agent's own first step carries the digest, so an
-    // attempt is bound the moment it is signed. A badge reading "Bought" there
+    // attempt is bound the moment it is signed. A badge reading "bought" there
     // claims a completed sale for every step of every attempt — including all
     // six of the demo's first one, which ends in the refusal this screen exists
     // to make visible.
@@ -295,23 +313,29 @@ describe("an attempt's outcome", () => {
     ]);
 
     expect(
-      screen.queryByText("Bought"),
+      screen.queryByText("bought"),
       "nothing here says the money moved: a receipt is issued whether a " +
         "verifier accepted or refused, and the Credential Provider does not " +
         "speak for the payment",
     ).toBeNull();
-    expect(container.querySelector('[data-icon="bought"]')).toBeNull();
     expect(
-      screen.queryByText("Bound"),
-      "and it is not Pending either — a checkout is on the spine. The two are " +
+      marks(container),
+      "`half` says an answer is owed, which is the honest pip for an attempt " +
+        "that is signed and not yet settled — the Credential Provider's own " +
+        "acceptance is the only ending on screen, and it is not the attempt's",
+    ).toEqual(["half", "check"]);
+    expect(
+      screen.queryByText("bound"),
+      "and it is not pending either — a checkout is on the spine. The two are " +
         "different claims and the screen has to make both",
     ).not.toBeNull();
   });
 
-  it("gives the refused and the bought attempt in one watch two different labels", () => {
+  it("gives the refused and the bought attempt in one watch two different shapes", () => {
     // The demo's own shape: one correlation, two attempts — refused at $210,
     // bought at $189. Issue #158's finding was that this reads as a
-    // repetition; the two badges are what make it read as two outcomes.
+    // repetition; the two outcomes are what make it read as two endings, and
+    // #183's pip is what makes it read as two attempts that are both *over*.
     seq = 0;
     const { container } = showing([
       record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
@@ -328,44 +352,113 @@ describe("an attempt's outcome", () => {
       record({ kind: "receipt_issued", role: "mpp", digest: OTHER }),
     ]);
 
-    expect(screen.getByText("Refused")).not.toBeNull();
-    expect(screen.getByText("Bought")).not.toBeNull();
-    expect(container.querySelectorAll('[data-icon="refused"]')).toHaveLength(1);
-    expect(container.querySelectorAll('[data-icon="bought"]')).toHaveLength(1);
+    expect(
+      marks(container),
+      "both pips are `full` and the endings differ — which is the whole of what " +
+        "a reader has to take in to see that one watch tried twice and got two " +
+        "answers",
+    ).toEqual(["full", "cross", "check", "cross", "full", "check", "check", "check"]);
   });
 
   it("labels an attempt nobody has confirmed a checkout for, rather than showing nothing", () => {
     seq = 0;
-    showing([record({ kind: "mandate_presented", role: "agent" })]);
+    const { container } = showing([record({ kind: "mandate_presented", role: "agent" })]);
 
     expect(
-      screen.queryByText("Pending"),
+      screen.queryByText("pending"),
       "every mandate's state is unambiguous, including the one where nothing " +
         "has attached to the spine yet — a blank space is not an answer",
     ).not.toBeNull();
+    expect(
+      marks(container),
+      "`open` — at its beginning, nothing outstanding — and no ending, because " +
+        "nothing has closed",
+    ).toEqual(["open"]);
   });
 
-  it("tells its two uncoloured states apart by the word alone", () => {
+  it("tells its two uncoloured states apart by the pip and the word", () => {
     // `seal` and `broken` are the only saturated values here and each is paired
-    // with a shape. The other two states carry no colour at all, so the word is
-    // the whole of the distinction — and it has to be a real one: "not attached
-    // to the spine yet" and "attached and still running" are different claims
-    // and the screen must not conflate them.
+    // with a shape. The other two states carry no verdict colour at all, so the
+    // pip and the word are the whole of the distinction — and it has to be a
+    // real one: "not attached to the spine yet" and "attached and still
+    // running" are different claims and the screen must not conflate them.
     // `within` a container each, rather than `screen`: cleanup runs between
     // tests and not between two renders inside one, so the second would find
     // the first's badge still in the document and the negative halves below
     // would assert nothing.
     seq = 0;
     const waiting = showing([record({ kind: "mandate_presented", role: "agent" })]).container;
-    expect(within(waiting).queryByText("Pending")).not.toBeNull();
-    expect(within(waiting).queryByText("Bound")).toBeNull();
+    expect(within(waiting).queryByText("pending")).not.toBeNull();
+    expect(within(waiting).queryByText("bound")).toBeNull();
+    expect(marks(waiting)).toEqual(["open"]);
 
     seq = 0;
     const running = showing([
       record({ kind: "mandate_constructed", role: "agent", digest: DIGEST }),
     ]).container;
-    expect(within(running).queryByText("Bound")).not.toBeNull();
-    expect(within(running).queryByText("Pending")).toBeNull();
+    expect(within(running).queryByText("bound")).not.toBeNull();
+    expect(within(running).queryByText("pending")).toBeNull();
+    expect(
+      marks(running),
+      "`half` rather than `open`: something is outstanding and an answer is owed",
+    ).toEqual(["half"]);
+  });
+});
+
+describe("the refusal beat", () => {
+  /**
+   * The moment this screen exists for, asserted as one scene.
+   *
+   * Three carriers, and the test is that all three are present at once: the
+   * `cross` says a verifier said no, the intact spine says the parties agreed
+   * about what they were talking about, and the sentence is the only one of the
+   * three that can say *which of the two lessons* this is. Losing any one of
+   * them turns the demonstration's headline into something else — a protocol
+   * that broke, or a purchase that quietly did not happen.
+   */
+  it("draws the cross, keeps the spine, and says which lesson it is", () => {
+    seq = 0;
+    const { container } = showing([
+      record({ kind: "mandate_presented", role: "agent", digest: DIGEST }),
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+      record({
+        kind: "mandate_rejected",
+        role: "credprovider",
+        digest: DIGEST,
+        code: "constraint_violated",
+        amount: { amount: 21000, currency: "USD" },
+      }),
+      record({ kind: "receipt_issued", role: "credprovider", digest: DIGEST }),
+    ]);
+
+    expect(marks(container), "over, and a verifier is what ended it").toEqual([
+      "full",
+      "cross",
+      "check",
+      "cross",
+    ]);
+    expect(
+      screen.getAllByText(SHOWN).length,
+      "the same twelve characters at the head and on the refusing party's own " +
+        "card: the binding held, and a reader checks that by eye rather than " +
+        "being told",
+    ).toBeGreaterThan(1);
+    expect(
+      screen.queryByText(/The binding held/),
+      "the sentence no mark can carry — a cross does not say whether the " +
+        "binding failed or a limit was enforced, and that difference is the " +
+        "single most valuable thing this screen teaches",
+    ).not.toBeNull();
+    expect(
+      screen.queryByText("constraint_violated"),
+      "and the canonical code beneath the step, in mono, which is the same one " +
+        "the receipt carries",
+    ).not.toBeNull();
+    expect(
+      screen.getAllByText("210.00 USD"),
+      "the price against the cap the user signed, which is the whole of Human " +
+        "Not Present in two numbers",
+    ).toHaveLength(2);
   });
 });
 

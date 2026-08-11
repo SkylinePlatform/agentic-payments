@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { formatAmount } from "../protocol";
+import { Status } from "../status/Status";
 import { fetchRun, fetchRuns } from "./client";
 import { mandateStatus, runStatus } from "./model";
-import type { Attempt, RunView, StatusMeta } from "./model";
+import type { Attempt, RunView } from "./model";
 
 /**
  * The mandate tracker — #109's third slice.
@@ -55,27 +56,33 @@ function useTracker() {
   return { runs, error, refresh };
 }
 
-/** `StatusMeta.tone` to a palette token — text only, never colour alone: the icon and the label travel with it. */
-function toneClass(tone: StatusMeta["tone"]): string {
-  switch (tone) {
-    case "positive":
-      return "text-seal";
-    case "negative":
-      return "text-broken";
-    case "neutral":
-      return "text-graphite";
-  }
-}
-
-function StatusBadge({ status }: { readonly status: StatusMeta }) {
-  return (
-    <span className={`inline-flex items-center gap-1 font-sans text-sm ${toneClass(status.tone)}`}>
-      <span aria-hidden="true">{status.icon}</span>
-      {status.label}
-    </span>
-  );
-}
-
+/**
+ * One attempt, with its two mandates' pairs on their own line.
+ *
+ * **Two axes never share a row**, which is the whole of what stops the row of
+ * coloured dots #185 was filed against: the run's pair sits on the row above,
+ * behind its own label, and each mandate's sits behind the words *checkout
+ * mandate* and *payment mandate*. They answer different questions — *is the
+ * agent still trying* against *can this authorisation be spent again* — and a
+ * line that ran them together would make a mandate reaching `spent` look like a
+ * verdict.
+ *
+ * **The attempt itself carries no pair here, and the lanes' does.** That is the
+ * one place this screen and the three-lane view are allowed to differ:
+ * *density may differ, the vocabulary may not*, and the console draws one pair
+ * per run and one per mandate where the lanes draw one per attempt. There is a
+ * second reason and it is the stronger one — `console.attemptView` carries no
+ * verdict, only `settled` and the text of whatever the delivery returned, and
+ * `view.go`'s own comment refuses an error *code* field on the grounds that it
+ * would be the buyer stating the verifier's finding. A `cross` derived from
+ * that text would be this screen inventing a verdict out of the agent's
+ * account of its own failure, which is precisely the distinction the cross
+ * exists to hold.
+ *
+ * `settled` therefore loses the `seal` it wore before #183. Money moving is a
+ * fact worth stating and it is not a mark: the acceptance was already stated
+ * once, on the run's own `check`.
+ */
 function AttemptRow({ attempt }: { readonly attempt: Attempt }) {
   const checkout = mandateStatus(attempt.checkout_mandate);
   const payment = mandateStatus(attempt.payment_mandate);
@@ -85,18 +92,24 @@ function AttemptRow({ attempt }: { readonly attempt: Attempt }) {
       <div className="flex flex-wrap items-baseline gap-3">
         <span className="font-sans text-sm text-ink">attempt {attempt.n}</span>
         <span className="font-sans text-sm text-graphite">{formatAmount(attempt.price)}</span>
-        {attempt.settled && (
-          <span className="font-sans text-sm text-seal">settled</span>
-        )}
+        {attempt.settled && <span className="font-sans text-sm text-ink">settled</span>}
       </div>
-      <div className="flex flex-wrap gap-4">
-        <span className="font-sans text-xs text-graphite">
-          checkout mandate <StatusBadge status={checkout} />
+      <div className="flex flex-wrap gap-4 text-xs">
+        <span className="font-sans text-graphite">
+          checkout mandate{" "}
+          <Status subdued word={checkout.label} pip={checkout.pip} ending={checkout.ending} raw={checkout.raw} />
         </span>
-        <span className="font-sans text-xs text-graphite">
-          payment mandate <StatusBadge status={payment} />
+        <span className="font-sans text-graphite">
+          payment mandate{" "}
+          <Status subdued word={payment.label} pip={payment.pip} ending={payment.ending} raw={payment.raw} />
         </span>
       </div>
+      {/*
+        The agent's own account of what ended this attempt, in `broken` and
+        without a mark. It is not a verdict — nothing here refused anything —
+        and no mark can hold a reason, which is why this sentence is the honest
+        carrier and stays.
+      */}
       {attempt.error !== undefined && (
         <p className="font-sans text-sm text-broken">{attempt.error}</p>
       )}
@@ -112,9 +125,9 @@ function RunRow({ run }: { readonly run: RunView }) {
       data-testid={`run-${run.id}`}
       className="flex flex-col gap-3 border border-graphite/40 bg-paper px-4 py-3"
     >
-      <div className="flex flex-wrap items-baseline gap-3">
+      <div className="flex flex-wrap items-baseline gap-3 text-sm">
         <code className="font-mono text-sm text-ink">{run.id}</code>
-        <StatusBadge status={status} />
+        <Status word={status.label} pip={status.pip} ending={status.ending} raw={status.raw} />
       </div>
       <p className="font-sans text-sm text-ink">&ldquo;{run.typed}&rdquo;</p>
       <p className="font-sans text-xs text-graphite">
@@ -122,7 +135,12 @@ function RunRow({ run }: { readonly run: RunView }) {
       </p>
 
       {run.attempts.length === 0 ? (
-        <p className="font-sans text-xs text-graphite">no attempt yet — it is still watching the price</p>
+        // "no attempt yet", and no longer "— it is still watching the price".
+        // The pair beside the run's id already says which of the six states it
+        // is in, and the tail was not merely repeating it: a `stopped` or an
+        // `expired` run with no attempt is not watching anything, so the
+        // sentence was wrong on two of the six rows it rendered under.
+        <p className="font-sans text-xs text-graphite">no attempt yet</p>
       ) : (
         <ul>
           {run.attempts.map((attempt) => (

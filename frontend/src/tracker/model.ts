@@ -33,41 +33,22 @@
  * half: a value neither table recognises — this build shipped before the
  * agent grew a seventh run state, say — renders as a visible, named "unknown"
  * fact rather than as a blank cell. `model.test.ts` drives both halves.
- */
-
-/** How one status is drawn: a word, a glyph and a tone — never colour alone. */
-export interface StatusMeta {
-  readonly label: string;
-  /** A short text glyph. There is no icon font in this app; a character is one. */
-  readonly icon: string;
-  readonly tone: "neutral" | "positive" | "negative";
-}
-
-/**
- * Looks a wire value up in an exhaustive table over a closed union, and draws
- * a status the table does not recognise as a loud, visible fact instead of as
- * a blank.
  *
- * The exhaustiveness itself is `table`'s type, `Record<K, StatusMeta>` — this
- * function's own job is only the runtime edge a `Record` cannot cover: `raw`
- * arrived off the wire typed as `string`, not narrowed to `K`, so a state this
- * table has never heard of has to be *recognisable as unknown* rather than
- * indexed into `undefined` and rendered as nothing.
+ * # The glyphs are gone
+ *
+ * Until #183 each entry carried a status character — `◐ ✓ ○ ■ ✕`, and `⏱`
+ * after #188 — and **five of those six were outside the font subset this
+ * application ships**, so they rendered from whatever fallback the reader's
+ * machine happened to have. #190 is that defect; `src/status/Status.tsx` is the
+ * answer, because an inline SVG path is not a character and has no font to be
+ * missing. Two conflations went with them: `○` was both `ready` and
+ * `exhausted`, and `✓` was both `bought` and `spent` — one glyph carrying two
+ * states on two axes, which is exactly the collapse the vocabulary exists to
+ * prevent.
  */
-export function totalStatus<K extends string>(
-  known: readonly K[],
-  table: Record<K, StatusMeta>,
-  raw: string,
-): StatusMeta {
-  if ((known as readonly string[]).includes(raw)) {
-    return table[raw as K];
-  }
-  return {
-    label: `unrecognised status: ${raw}`,
-    icon: "?",
-    tone: "negative",
-  };
-}
+
+import { totalStatus } from "../status/model";
+import type { StatusMeta } from "../status/model";
 
 // --- the run's own axis: internal/agent/console's runState -----------------
 
@@ -75,10 +56,23 @@ export function totalStatus<K extends string>(
 export const RUN_STATES = ["watching", "bought", "exhausted", "expired", "stopped", "failed"] as const;
 export type RunState = (typeof RUN_STATES)[number];
 
+/**
+ * Is the agent still trying, and how did it stop?
+ *
+ * The axis with a full pair on every row, and the only one on this screen that
+ * takes an ending: a run is the thing that finishes. Four of the six finish
+ * with a `bar` rather than a `cross`, and that is the rule rather than a
+ * coincidence — **the cross is a verifier's verdict and nothing else**. A
+ * schedule running out, an authorisation running out its own clock, a person
+ * stopping the watch and the agent failing are four ways to end with no
+ * verifier anywhere in them, so none of them may wear the shape that means one
+ * said no. `failed` in particular: the agent's own error sentence is what says
+ * why, and no mark can hold a reason.
+ */
 export const RUN_STATE_META: Record<RunState, StatusMeta> = {
-  watching: { label: "watching", icon: "◐", tone: "neutral" },
-  bought: { label: "bought", icon: "✓", tone: "positive" },
-  exhausted: { label: "exhausted — never bought", icon: "○", tone: "negative" },
+  watching: { label: "watching", pip: "half", ending: null },
+  bought: { label: "bought", pip: "full", ending: "check" },
+  exhausted: { label: "exhausted — never bought", pip: "full", ending: "bar" },
   // Nothing about the merchant's schedules as the demonstration runs them ever
   // produces `exhausted` — `internal/agent/watch.go`'s `ErrScheduleExhausted`
   // gives the two routes by which it does not — so this is what a watch that
@@ -86,9 +80,12 @@ export const RUN_STATE_META: Record<RunState, StatusMeta> = {
   // clock. Distinct from `exhausted` on purpose, and distinct from `watching`
   // on the purpose the whole tracker exists for — a row parked here is a wait
   // the agent has already concluded will never end, not one still in progress.
-  expired: { label: "expired — never bought", icon: "⏱", tone: "negative" },
-  stopped: { label: "stopped", icon: "■", tone: "neutral" },
-  failed: { label: "failed", icon: "✕", tone: "negative" },
+  //
+  // Same shape as `exhausted`, deliberately: the two differ in reachability and
+  // not in kind, so a reader who has learnt one has learnt the other.
+  expired: { label: "expired — never bought", pip: "full", ending: "bar" },
+  stopped: { label: "stopped", pip: "full", ending: "bar" },
+  failed: { label: "failed", pip: "full", ending: "bar" },
 };
 
 export function runStatus(raw: string): StatusMeta {
@@ -101,10 +98,37 @@ export function runStatus(raw: string): StatusMeta {
 export const MANDATE_STATES = ["ready", "awaiting_receipt", "spent"] as const;
 export type MandateState = (typeof MANDATE_STATES)[number];
 
+/**
+ * Can this mandate still be used?
+ *
+ * **No ending anywhere in this table, and that is the axis's defining property
+ * rather than an omission.** A mandate reaching `spent` because a receipt
+ * accepted the purchase is the same fact the run's own `check` above already
+ * carries — and a checkout mandate and a payment mandate reach `spent`
+ * together, so drawing it here would put three `seal` marks on one row for one
+ * acceptance. That is the dilution the palette's frequency argument exists to
+ * prevent: *a mark per party that decided is one fact each; a mark per artefact
+ * that a single decision moved is one fact several times.* `spent` was `seal`
+ * before #183 for exactly that reason and is now `ink`.
+ *
+ * The pip is what the axis is actually for, and it is the one place in this
+ * application where a pip goes **backwards**: a rejection receipt returns both
+ * mandates from `awaiting_receipt` to `ready`, so the pip retreats from `half`
+ * to `open` when a purchase is refused. That retreat is the rejection-receipt
+ * rule made visible, and it is drawn by nothing else here.
+ *
+ * `open` therefore reads *"at its beginning"* and not *"nothing has happened"*.
+ * A mandate a rejection returned to `ready` can be spent again, which is the
+ * only beginning `authz.MandateState` has — and it is emphatically not a
+ * mandate nothing has happened to. That state holds no attempt count and no
+ * checkout identity, so a never-attempted `ready` and a returned-to `ready` are
+ * drawn identically: a screen that invented the difference would be reporting
+ * something no machine here knows.
+ */
 export const MANDATE_STATE_META: Record<MandateState, StatusMeta> = {
-  ready: { label: "ready", icon: "○", tone: "neutral" },
-  awaiting_receipt: { label: "awaiting receipt", icon: "◐", tone: "neutral" },
-  spent: { label: "spent", icon: "✓", tone: "positive" },
+  ready: { label: "ready", pip: "open", ending: null },
+  awaiting_receipt: { label: "awaiting receipt", pip: "half", ending: null },
+  spent: { label: "spent", pip: "full", ending: null },
 };
 
 export function mandateStatus(raw: string): StatusMeta {

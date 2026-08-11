@@ -1,0 +1,357 @@
+import { describe, expect, it } from "vitest";
+
+import subsetScript from "../../scripts/subset-fonts.sh?raw";
+import { codeOf, stringLiterals } from "../test/source";
+
+/**
+ * The rules that keep the indicator vocabulary one vocabulary.
+ *
+ * `docs/specs/2026-08-06-three-lane-view-design.md`'s *Indicators* section names
+ * them, and each exists because the mistake it prevents compiles, renders and
+ * looks right on a screenshot:
+ *
+ * 1. **No component draws a mark.** A lane, a log row or an Inspector cell
+ *    inventing a seventh shape is the second-dialect failure the whole section
+ *    exists to prevent — two dialects already existed before #185, and they were
+ *    invisible because each was locally reasonable.
+ * 2. **`seal` is contained.** It says one thing — a verifier accepted — and it
+ *    says it in one grammatical position, on a `check`. A component that could
+ *    write `text-seal` could claim an acceptance without going through the one
+ *    component that can draw one, which is exactly how `receipt_issued` came to
+ *    be green.
+ * 3. **Every non-ASCII character the app prints is in the font it ships.** This
+ *    is #190, and it is the argument for drawing marks rather than typing them:
+ *    the tracker's status glyphs were served by whatever fallback face the
+ *    reader's machine happened to have, and a screenshot is this project's
+ *    deliverable.
+ *
+ * A separate file from `src/architecture.test.ts` rather than an addition to it,
+ * on `src/constraint/architecture.test.ts`'s own precedent: that one is the
+ * palette's guard and is owned by whoever owns the design system, and these are
+ * rules about one module, so they belong beside it.
+ *
+ * Every rule below is a negative assertion, so every one of them is also run
+ * against a fixture that violates it. This tree has spent time deleting rules
+ * that passed vacuously; a detector that had stopped detecting anything has to
+ * fail here rather than pass everywhere.
+ */
+
+// --- reading the sources ---------------------------------------------------
+
+const GLOBBED = import.meta.glob(["../**/*.{ts,tsx}", "!../protocol/generated/**"], {
+  query: "?raw",
+  eager: true,
+  import: "default",
+}) as Record<string, string>;
+
+/**
+ * Glob keys are relative to this file, in two spellings — `../lanes/Lanes.tsx`
+ * for a sibling directory and `./model.ts` for this one. Both become one
+ * `src/`-rooted path, which is the vocabulary the rules and their allow-lists
+ * are written in. Lifted from `src/constraint/architecture.test.ts`, which
+ * needed the same normalisation for the same reason.
+ */
+const THIS_DIRECTORY = "status";
+
+function srcRooted(key: string): string {
+  if (key.startsWith("../")) return key.slice("../".length);
+  if (key.startsWith("./")) return `${THIS_DIRECTORY}/${key.slice("./".length)}`;
+  return key;
+}
+
+const SOURCES: ReadonlyMap<string, string> = new Map(
+  Object.entries(GLOBBED).map(([path, source]) => [srcRooted(path), source]),
+);
+
+/** What the app ships. Tests and test helpers are not part of the graph these rules govern. */
+const APP_SOURCES = [...SOURCES].filter(
+  ([path]) => !/\.test\.tsx?$/.test(path) && !path.startsWith("test/"),
+);
+
+/** The one module that draws a mark, and the one control affordance that is not one. */
+const MAY_DRAW = ["status/Status.tsx", "components/ui/dialog.tsx"] as const;
+
+/**
+ * `components/ui/dialog.tsx` is on that list and is not an exception being
+ * tolerated. Its `<svg>` is the close cross on a modal, which is a **control
+ * affordance** and not a status: it says what a click will do rather than what a
+ * verifier decided, and nothing about it belongs in a vocabulary of verdicts.
+ * Routing it through `Status` would give it a required word it does not want and
+ * would put a status colour within reach of a button.
+ */
+function drawsAMark(source: string): string[] {
+  return codeOf(source)
+    .split("\n")
+    .map((line, n) => `${n + 1}: ${line.trim()}`)
+    .filter((line) => line.includes("<svg"));
+}
+
+// --- rule: seal is contained ------------------------------------------------
+
+/**
+ * Any utility whose colour is `seal`, in any variant and at any opacity.
+ *
+ * Deliberately crude in the direction that over-reports: a false positive fails
+ * loudly and is fixed by rewording, where a class this missed would be a
+ * component claiming a verifier accepted with nothing to notice. The word
+ * `seal` in prose is not matched — a utility prefix and a hyphen are required —
+ * and `text-sealant` is not either, because the boundary after `seal` is real.
+ */
+const SEAL_UTILITY =
+  /\b(?:bg|text|border|fill|stroke|ring|outline|divide|placeholder|accent|caret|from|via|to|shadow)(?:-(?:x|y|s|e|t|r|b|l))?-seal\b/;
+
+function wearsSeal(source: string): string[] {
+  return stringLiterals(source)
+    .flatMap((literal) => literal.split(/\s+/))
+    .filter((word) => SEAL_UTILITY.test(word));
+}
+
+/**
+ * Files allowed to name `seal`, and the second entry is a debt rather than a
+ * decision.
+ *
+ * `inspector/Inspector.tsx` paints its *read* cell `seal`, which is the second
+ * of the three rows #191 filed: **reading is not verifying**, and
+ * `src/sdjwt/never-verifies.test.ts` exists to hold precisely that line for the
+ * whole module. #186 owns that screen and is where the cell becomes `ink`; this
+ * entry is what lets the rule land now rather than waiting for it, and removing
+ * it is part of that issue rather than a tidy-up somebody may or may not
+ * notice. The `exempts only files that exist` case below is what stops it
+ * becoming a comment.
+ */
+const MAY_WEAR_SEAL = ["status/Status.tsx", "inspector/Inspector.tsx"] as const;
+
+// --- rule: the app prints nothing the font does not ship ---------------------
+
+/**
+ * The codepoint ranges `frontend/scripts/subset-fonts.sh` ships, read out of the
+ * script itself.
+ *
+ * Read rather than copied, for the reason `src/test/palette.ts` gives about the
+ * stylesheet: a second list here would be a second repertoire, and it would
+ * drift in the direction that accepts what the fonts do not carry. #190's own
+ * diagnosis is that the subset script and the glyph table had no relationship a
+ * test could see.
+ */
+function shippedRanges(script: string): readonly (readonly [number, number])[] {
+  const declaration = /readonly UNICODES='([^']+)'/.exec(script);
+  if (declaration === null) {
+    throw new Error("subset-fonts.sh declares no UNICODES; this rule has nothing to read");
+  }
+  return declaration[1].split(",").map((item) => {
+    const range = /^U\+([0-9A-Fa-f]+)(?:-([0-9A-Fa-f]+))?$/.exec(item.trim());
+    if (range === null) {
+      throw new Error(`cannot read \`${item}\` as a unicode range`);
+    }
+    const from = parseInt(range[1], 16);
+    return [from, range[2] === undefined ? from : parseInt(range[2], 16)] as const;
+  });
+}
+
+const RANGES = shippedRanges(subsetScript);
+
+function ships(codepoint: number): boolean {
+  return RANGES.some(([from, to]) => codepoint >= from && codepoint <= to);
+}
+
+/**
+ * Every character a source could put on screen that the shipped fonts do not
+ * carry.
+ *
+ * Over `codeOf`, so a comment may name a character the app must not print —
+ * which the tracker's own module doc and `status/Status.tsx` both do, on
+ * purpose, because the argument for drawing marks has to be able to show the
+ * glyphs it replaced. What is left is string literals, JSX text and
+ * identifiers, which is everything the source *does*.
+ */
+function unshipped(source: string): string[] {
+  const found = new Set<string>();
+  for (const character of codeOf(source)) {
+    const codepoint = character.codePointAt(0) ?? 0;
+    if (codepoint > 0x7f && !ships(codepoint)) {
+      found.add(`${character} U+${codepoint.toString(16).toUpperCase().padStart(4, "0")}`);
+    }
+  }
+  return [...found];
+}
+
+/**
+ * The one file that names a character it never prints.
+ *
+ * `constraint/render.ts` holds `İ` as `DOTTED_CAPITAL_I`, the single codepoint
+ * whose lowercase mapping differs between Go and JavaScript, and `fold` replaces
+ * it with `i` before anything is compared or rendered. It is an input this
+ * renderer refuses to let through, not a character it draws, so the font that
+ * would have to carry it is nobody's.
+ */
+const MAY_NAME_AN_UNSHIPPED_CHARACTER = ["constraint/render.ts"] as const;
+
+// --- the rules --------------------------------------------------------------
+
+describe("the indicator vocabulary is one vocabulary", () => {
+  it("is being read — the glob resolves to the app's own sources", () => {
+    const paths = APP_SOURCES.map(([path]) => path);
+    expect(paths, "these are the files every rule below is asserted over").toEqual(
+      expect.arrayContaining([
+        "status/Status.tsx",
+        "status/model.ts",
+        "lanes/Lanes.tsx",
+        "tracker/Tracker.tsx",
+        "components/ui/dialog.tsx",
+      ]),
+    );
+    expect(paths.length).toBeGreaterThan(10);
+  });
+
+  describe("no component draws a mark", () => {
+    const governed = APP_SOURCES.filter(
+      ([path]) => !(MAY_DRAW as readonly string[]).includes(path),
+    );
+
+    it("allows only files that exist", () => {
+      // An allow-list naming a file that was renamed stops allowing anything and
+      // starts being a comment — and reads as though the exemption were still in
+      // force, so the next person moving that code puts an `<svg>` somewhere new
+      // and the list grows a second dead entry.
+      expect(
+        MAY_DRAW.filter((path) => !SOURCES.has(path)),
+        "an allow-list entry for a path no longer in the app is a line that " +
+          "looks like a rule and enforces nothing",
+      ).toEqual([]);
+    });
+
+    it.each(governed)("%s asks the status module for a shape", (_path, source) => {
+      expect(
+        drawsAMark(source),
+        "there are six marks and they are drawn in one place. A component that " +
+          "draws its own is a second dialect for a state that already has a " +
+          "word, and the two go out of step silently because each is locally " +
+          "reasonable",
+      ).toEqual([]);
+    });
+
+    it("catches the shape it claims to catch", () => {
+      expect(
+        drawsAMark(`function Tick() {\n  return <svg viewBox="0 0 16 16" />;\n}`),
+        "the shape the rule is named for",
+      ).toEqual([`2: return <svg viewBox="0 0 16 16" />;`]);
+      expect(
+        drawsAMark(`// a <svg> here would be a seventh mark\nconst x = 1;`),
+        "prose may explain the rule, which is why the scan runs over code alone",
+      ).toEqual([]);
+      expect(drawsAMark(`const svg = "chart";`), "the word is not the tag").toEqual([]);
+    });
+  });
+
+  describe("seal is contained", () => {
+    const governed = APP_SOURCES.filter(
+      ([path]) => !(MAY_WEAR_SEAL as readonly string[]).includes(path),
+    );
+
+    it("exempts only files that exist", () => {
+      expect(
+        MAY_WEAR_SEAL.filter((path) => !SOURCES.has(path)),
+        "the same argument as the allow-list above, and it matters more here: " +
+          "the second entry is #186's debt and has to fail visibly once that " +
+          "screen moves",
+      ).toEqual([]);
+    });
+
+    it.each(governed)("%s claims no acceptance of its own", (_path, source) => {
+      expect(
+        wearsSeal(source),
+        "`seal` says a verifier accepted and says it on a `check`. A component " +
+          "that can write the colour without the mark can put a verdict on " +
+          "screen that no verifier reached — which is what a receipt coloured " +
+          "as an acceptance was",
+      ).toEqual([]);
+    });
+
+    it("still has something to contain", () => {
+      // The rule is a negative assertion over every file but two. If nothing
+      // wore `seal` at all it would pass, and the app would have lost the one
+      // colour that says a verifier accepted — which `declares no token that
+      // nothing wears` in src/architecture.test.ts would also catch, from the
+      // other direction.
+      expect(
+        wearsSeal(SOURCES.get("status/Status.tsx") ?? ""),
+        "the one component that may draw a check is the one that wears the colour",
+      ).toContain("text-seal");
+    });
+
+    it("catches the classes it claims to catch", () => {
+      expect(wearsSeal(`const c = "text-seal";`)).toEqual(["text-seal"]);
+      expect(wearsSeal(`const c = "border-seal px-2";`)).toEqual(["border-seal"]);
+      expect(wearsSeal(`const c = "hover:bg-seal/40";`), "behind a variant, at an opacity").toEqual([
+        "hover:bg-seal/40",
+      ]);
+      expect(wearsSeal(`const c = "border-t-seal";`), "on one side").toEqual(["border-t-seal"]);
+
+      // …and does not flag what is not a colour, or the rule becomes unusable
+      // and the next person exempts their file rather than fixing it.
+      expect(wearsSeal(`const c = "text-sealant";`), "a longer word is a different word").toEqual([]);
+      expect(wearsSeal(`const s = "the seal is reserved";`), "prose naming the token").toEqual([]);
+      expect(wearsSeal(`const c = "text-ink border-graphite/40";`)).toEqual([]);
+    });
+  });
+
+  describe("every character the app prints is in the font it ships", () => {
+    const governed = APP_SOURCES.filter(
+      ([path]) => !(MAY_NAME_AN_UNSHIPPED_CHARACTER as readonly string[]).includes(path),
+    );
+
+    it("reads the repertoire out of the subset script", () => {
+      expect(RANGES.length, "the script declares a list, not one range").toBeGreaterThan(10);
+      expect(ships(0x2014), "the em dash, which this documentation uses everywhere").toBe(true);
+      expect(ships(0x2026), "the ellipsis").toBe(true);
+      expect(ships(0x00b7), "the middle dot the tracker separates a row with").toBe(true);
+      expect(
+        ships(0x25d0),
+        "and the half-filled circle the tracker used to print, which is the " +
+          "whole of #190: Geometric Shapes is in neither the latin range nor " +
+          "either of the two additions",
+      ).toBe(false);
+      expect(ships(0x2713), "nor the dingbat check").toBe(false);
+      expect(ships(0x23f1), "nor the stopwatch #188 added").toBe(false);
+    });
+
+    it("exempts only files that exist", () => {
+      expect(
+        MAY_NAME_AN_UNSHIPPED_CHARACTER.filter((path) => !SOURCES.has(path)),
+        "an exemption for a path no longer in the app is a line that looks like " +
+          "a rule and enforces nothing",
+      ).toEqual([]);
+    });
+
+    it.each(governed)("%s prints nothing the reader's machine has to guess at", (_path, source) => {
+      expect(
+        unshipped(source),
+        "a character outside the subset is served by whatever fallback face the " +
+          "reader happens to have — a different weight, a different baseline and " +
+          "a different advance width per operating system, and tofu on a machine " +
+          "missing the block. A screenshot is this project's deliverable",
+      ).toEqual([]);
+    });
+
+    it("catches the characters it claims to catch", () => {
+      expect(unshipped(`const glyph = "◐";`), "the shape the rule is named for").toEqual([
+        "◐ U+25D0",
+      ]);
+      expect(unshipped(`const meta = { icon: "✓" };`)).toEqual(["✓ U+2713"]);
+      expect(unshipped(`<p>A stopwatch ⏱ here</p>`), "JSX text, not only a literal").toEqual([
+        "⏱ U+23F1",
+      ]);
+      expect(
+        unshipped(`// the tracker used to print ◐ and ✓\nconst x = 1;`),
+        "a comment may name the glyphs it replaced — this file and two modules " +
+          "do exactly that, and a rule that forbade it would delete its own " +
+          "argument",
+      ).toEqual([]);
+
+      // …and does not flag what the subset does carry.
+      expect(unshipped(`const label = "exhausted — never bought";`), "the em dash").toEqual([]);
+      expect(unshipped(`<p>Reading the console…</p>`), "the ellipsis").toEqual([]);
+      expect(unshipped(`const s = "RFC 9901 §7.1";`), "the section sign, in Latin-1").toEqual([]);
+    });
+  });
+});

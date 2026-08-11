@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { UNREADABLE } from "../status/model";
 import {
   MANDATE_STATE_META,
   MANDATE_STATES,
@@ -23,14 +24,28 @@ describe("run status", () => {
     // nothing on it; this one has to say, visibly, that it does not
     // recognise the word.
     const status = runStatus("awaiting_something_new");
-    expect(status.label, "the raw word travels, so the row is debuggable rather than mute").toContain(
+    expect(status.raw, "the raw word travels, so the row is debuggable rather than mute").toBe(
       "awaiting_something_new",
     );
-    expect(status.icon, "an icon is still required — see the totality rule this is the runtime half of").not.toBe("");
+    expect(status.label, "and a sentence beside it, because a bare wire value is not an answer").toBe(
+      UNREADABLE,
+    );
+  });
+
+  it("draws a run state it cannot read as a gap in the reader, never as a verdict", () => {
+    // #191's third row. `?` in `broken` said a verifier refused, and nothing
+    // refused anything: an unrecognised status is this build not knowing a
+    // word. Drawing it as a refusal converts "I cannot read this" into "this
+    // was rejected", on a purchase that may well have succeeded — the same
+    // failure AGENTS.md describes for a constraint nobody understands, one
+    // layer up.
+    const status = runStatus("hibernating");
     expect(
-      status.tone,
-      "a state nobody told this build about is drawn as loud as a real failure, never as though nothing happened",
-    ).toBe("negative");
+      status.ending,
+      "no ending mark, because an ending says how something closed and this build " +
+        "does not know that it did",
+    ).toBeNull();
+    expect(status.pip, "and no pip, because a pip says how far along and this build cannot tell").toBeNull();
   });
 
   it("is genuinely exhaustive — every declared state has a table entry, not just the ones somebody remembered", () => {
@@ -45,8 +60,9 @@ describe("mandate status", () => {
 
   it("never renders an unknown mandate state as blank", () => {
     const status = mandateStatus("revoked");
-    expect(status.label).toContain("revoked");
-    expect(status.tone).toBe("negative");
+    expect(status.raw).toBe("revoked");
+    expect(status.label).toBe(UNREADABLE);
+    expect(status.ending, "a state this build cannot read reached no verdict").toBeNull();
   });
 
   it("is genuinely exhaustive", () => {
