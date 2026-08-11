@@ -37,7 +37,15 @@ func main() {
 	catalogue := flag.String("catalogue", "../deploy/catalogue.json",
 		"path to the catalogue this merchant sells from")
 	step := flag.Duration("step", merchant.DefaultStep,
-		"how long each price holds before the schedule moves on")
+		"how long each price holds before the schedule moves on — the shortest it holds, "+
+			"once -step-max is also set")
+	// Zero, the default, means no extra randomness: every price holds exactly
+	// -step, precisely as if this flag did not exist. See
+	// merchant.DemoOptions.StepMax for what a positive value costs
+	// -demo-controls' own precision, and why that is accepted rather than
+	// solved here.
+	stepMax := flag.Duration("step-max", 0,
+		"the longest a price holds; each price's own hold is then drawn once from [-step, -step-max]")
 	// Off by default, and that is a guard rail rather than a taste: this
 	// registers an endpoint that moves this merchant's clock, which is
 	// catastrophic anywhere but a demonstration. Absent, the route does not
@@ -88,6 +96,7 @@ func main() {
 			User:      user,
 			Processor: &merchant.HTTPProcessor{Base: *processor},
 			Step:      *step,
+			StepMax:   *stepMax,
 			Controls:  *demoControls,
 		})
 		if err != nil {

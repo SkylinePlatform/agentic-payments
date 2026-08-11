@@ -360,3 +360,199 @@ func TestConstructionCopiesItsInputs(t *testing.T) {
 		t.Errorf("price = %d, want %d — the schedule kept the caller's slice", got, merchant.DemoPriceWatched)
 	}
 }
+
+// Issue #158: a random 3-6 second hold per price, replacing the fixed 30
+// second one, so a demonstration reaches the accepted price in roughly twelve
+// seconds instead of two and a half minutes. deploy/demo.json's -step and
+// -step-max carry these same two numbers, and -poll carries demoPoll — if any
+// of the three move there, this constant has to move with it, on the terms
+// DefaultStep's own doc comment already accepts for the deterministic case:
+// nothing checks that the two agree, and they do not have to, but a test
+// pinned to invented numbers proves less than one pinned to the numbers that
+// actually run.
+const (
+	demoJitterMin = 3 * time.Second
+	demoJitterMax = 6 * time.Second
+	demoPoll      = time.Second
+)
+
+// observedSequence polls s the way the agent watches a live merchant — every
+// poll, starting at s's own start, through runFor — and returns the distinct
+// prices seen, in the order seen, collapsing consecutive repeats into one
+// entry. Comparing the result against a schedule's own price list is what
+// TestJitteredScheduleObservesEveryPriceInOrder turns into a property: every
+// price observable, in order, none skipped.
+func observedSequence(t *testing.T, s *merchant.Schedule, poll, runFor time.Duration) []int {
+	t.Helper()
+
+	c := clock.NewFake(base)
+	inv, err := merchant.New(c, map[merchant.Route]*merchant.Schedule{merchant.DemoRoute: s})
+	require.NoError(t, err, "New")
+
+	var seen []int
+	for elapsed := time.Duration(0); elapsed <= runFor; elapsed += poll {
+		price := quote(t, inv).Price.Amount
+		if len(seen) == 0 || seen[len(seen)-1] != price {
+			seen = append(seen, price)
+		}
+		c.Advance(poll)
+	}
+	return seen
+}
+
+// TestJitteredScheduleObservesEveryPriceInOrder is the box issue #158 exists
+// to close: "the refusal at $210 happens on every run, and a test says so
+// rather than a reader hoping." A randomised schedule that only usually
+// produces the $210 refusal is worse than a fixed one, because a naive random
+// schedule can step over it at random, silently, in front of an audience.
+//
+// # The draws confirm the arithmetic. They are not what guarantees it
+//
+// Polls sit a fixed distance apart, so a price is skipped only if its whole
+// hold falls strictly between two of them — which cannot happen once the hold
+// is at least one poll long. A poll at or below the *floor* of the range
+// therefore excludes a skip by construction, whatever comes out of crypto/rand;
+// at the shipped second against a three second floor the shortest possible hold
+// contains at least three polls. That condition is the first assertion below,
+// stated where it can fail, because a reader who takes five hundred draws for
+// the guarantee will be wrong about what happens when somebody sets -step to
+// 500ms: the draws would still pass, taken at numbers the demonstration no
+// longer runs.
+//
+// The draws are worth their runtime anyway, for the part no arithmetic covers —
+// that at really does walk the boundaries NewJitteredSchedule produced, in the
+// order it produced them.
+//
+// # What it does not reach
+//
+// Only the poll. The other way beat 5 is lost is a watch whose *baseline* is
+// already past the $210, because the merchant's schedule has been running since
+// the merchant started and the agent is several processes further down
+// deploy/demo.json. Nothing in this package can see that;
+// TestTheMerchantsFirstPriceOutlastsTheStackComingUp in internal/demo is where
+// it is pinned.
+func TestJitteredScheduleObservesEveryPriceInOrder(t *testing.T) {
+	t.Parallel()
+
+	require.LessOrEqual(t, demoPoll, demoJitterMin,
+		"this is the guarantee, and the draws below only confirm it: a hold at least one poll "+
+			"long always contains a poll, so no draw can hide a price from a watcher")
+
+	want := []int{merchant.DemoPriceWatched, merchant.DemoPriceRejected, merchant.DemoPriceAccepted}
+	// Comfortably past the widest possible schedule: two transitions at
+	// demoJitterMax each, plus a margin so the final price's own hold is
+	// observed too, not just reached.
+	runFor := 3 * demoJitterMax
+
+	const draws = 500
+	for i := range draws {
+		s, err := merchant.NewJitteredSchedule(base, demoJitterMin, demoJitterMax, merchant.DemoPrices()...)
+		require.NoError(t, err, "NewJitteredSchedule")
+
+		got := observedSequence(t, s, demoPoll, runFor)
+		require.Equal(t, want, got,
+			"draw %d: polling at the agent's own interval must show every price in order, with "+
+				"none skipped — a schedule that only usually produces the $210 refusal is worse "+
+				"than a fixed one", i)
+	}
+}
+
+// TestJitteredScheduleWidthsVaryAcrossConstructions confirms the draw is
+// real — that NewJitteredSchedule is not, by some construction mistake,
+// silently returning the same width every time it is called. Detected the
+// practical way: read off which poll first shows the second price, across
+// many independent constructions, and require more than one distinct answer.
+// A test that only checked "no error" would pass a NewJitteredSchedule that
+// quietly ignored max and always used min — which would still make
+// TestJitteredScheduleObservesEveryPriceInOrder pass, since a fixed 3-second
+// hold skips nothing either.
+func TestJitteredScheduleWidthsVaryAcrossConstructions(t *testing.T) {
+	t.Parallel()
+
+	// One transition is enough to time.
+	prices := merchant.DemoPrices()[:2]
+
+	firstTransitionPoll := func() int {
+		s, err := merchant.NewJitteredSchedule(base, demoJitterMin, demoJitterMax, prices...)
+		require.NoError(t, err, "NewJitteredSchedule")
+
+		c := clock.NewFake(base)
+		inv, err := merchant.New(c, map[merchant.Route]*merchant.Schedule{merchant.DemoRoute: s})
+		require.NoError(t, err, "New")
+
+		opening := quote(t, inv).Price.Amount
+		for poll := 1; ; poll++ {
+			c.Advance(demoPoll)
+			if quote(t, inv).Price.Amount != opening {
+				return poll
+			}
+		}
+	}
+
+	seen := make(map[int]struct{})
+	for range 50 {
+		seen[firstTransitionPoll()] = struct{}{}
+	}
+	assert.Greater(t, len(seen), 1,
+		"fifty independent draws all transitioned on the same poll — the width looks fixed, not drawn")
+}
+
+// TestJitteredScheduleWithEqualBoundsIsDeterministic pins the degenerate case:
+// min == max draws nothing, because randDuration short-circuits before ever
+// reaching crypto/rand, so a schedule built this way is exactly as
+// reproducible as one NewSchedule would have built — which is what lets a
+// caller reach for one constructor whether or not it wants the jitter.
+func TestJitteredScheduleWithEqualBoundsIsDeterministic(t *testing.T) {
+	t.Parallel()
+
+	read := func() []int {
+		s, err := merchant.NewJitteredSchedule(base, time.Minute, time.Minute, merchant.DemoPrices()...)
+		require.NoError(t, err, "NewJitteredSchedule")
+		return observedSequence(t, s, 30*time.Second, 3*time.Minute)
+	}
+
+	first, second := read(), read()
+	assert.Equal(t, first, second, "min == max must not introduce any randomness")
+}
+
+// TestJitteredScheduleRejectsNonsense covers the constructor, on the same
+// terms TestRejectsNonsense covers NewSchedule.
+func TestJitteredScheduleRejectsNonsense(t *testing.T) {
+	t.Parallel()
+	ok := generated.Amount{Amount: 100, Currency: "USD"}
+
+	_, err := merchant.NewJitteredSchedule(base, 0, time.Minute, ok)
+	assert.Error(t, err,
+		"a zero minimum lets a price hold for no time at all, which is a price no watcher can observe")
+
+	_, err = merchant.NewJitteredSchedule(base, -time.Second, time.Minute, ok)
+	assert.Error(t, err, "a negative minimum would put a boundary before the schedule's own start")
+
+	_, err = merchant.NewJitteredSchedule(base, time.Minute, 30*time.Second, ok, ok)
+	assert.Error(t, err, "a maximum below the minimum leaves no range for a width to be drawn from")
+
+	_, err = merchant.NewJitteredSchedule(base, time.Second, time.Minute)
+	assert.ErrorIs(t, err, merchant.ErrEmptySchedule,
+		"a schedule with no prices has no answer to give, and a zero amount would read as a free flight")
+
+	_, err = merchant.NewJitteredSchedule(base, time.Second, time.Minute,
+		generated.Amount{Amount: -1, Currency: "USD"})
+	assert.Error(t, err, "a negative price is money owed to the buyer, which every cap on amount waves through")
+
+	_, err = merchant.NewJitteredSchedule(base, time.Second, time.Minute,
+		generated.Amount{Amount: 100, Currency: "DOLLAR"})
+	assert.Error(t, err,
+		"contracts/instrument/amount.json requires an ISO 4217 code, and a cap in USD is refused "+
+			"against anything else rather than converted")
+
+	// min == max is the degenerate, deterministic case, and has to be
+	// accepted — it is what a caller reaches for when it wants NewSchedule's
+	// guarantee without a second constructor to import.
+	_, err = merchant.NewJitteredSchedule(base, time.Minute, time.Minute, ok, ok)
+	assert.NoError(t, err, "min == max is the deterministic case a caller is entitled to ask for")
+
+	// A single price needs no transition at all, so min and max are validated
+	// but never drawn from.
+	_, err = merchant.NewJitteredSchedule(base, time.Second, time.Minute, ok)
+	assert.NoError(t, err, "a single price never transitions, so there is nothing to draw and nothing to refuse")
+}
