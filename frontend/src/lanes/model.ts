@@ -162,11 +162,23 @@ export function mandateLabel(mandate: MandateRef): string {
  * and `optionalAmount` in `sse/events.ts` refuses a negative one off the wire,
  * so there is nothing here to be wrong about.
  *
- * **`Lanes.tsx` holds an identical private copy**, which is where this
- * algorithm came from. #184 could not touch that file, so lifting it here — the
- * module in this directory that holds what the screen knows with no React in
- * it — is what let a second component use it without a third copy. Deleting the
- * private one is an import line in whichever branch next opens `Lanes.tsx`.
+ * **`Lanes.tsx` is where this algorithm came from**, and it now imports it from
+ * here rather than holding a second copy. #184 lifted it into this module — the
+ * one in this directory that holds what the screen knows with no React in it —
+ * so that `EventLog.tsx` could use it, and left the private original in place
+ * on the grounds that `Lanes.tsx` was outside its scope; the review of that
+ * change deleted it, because the reason had expired (#208 had merged and #207
+ * does not touch the file) and two byte-identical renderers of one string with
+ * nothing comparing them is the drift `contracts/testdata/render_vectors.json`
+ * exists one module across to prevent. There is no vector for this one, so the
+ * single definition is the whole of what keeps the lane card and the log
+ * spelling a price the same way.
+ *
+ * `renderMoney` in `constraint/render.ts` makes the same choice for the same
+ * reason and is still not imported: it is unexported, and that module's own doc
+ * scopes it to two screens with no signature nearby, neither of which these
+ * are. Five lines of string surgery cost less than widening a boundary a
+ * different file's tests hold.
  */
 export function renderPrice(amount: Amount): string {
   const MINOR_DIGITS = 2;

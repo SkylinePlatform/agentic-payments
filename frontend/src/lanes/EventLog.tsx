@@ -29,6 +29,28 @@
  * from `detail` would have no field to name, and a field added to `obs.Event`
  * that nothing here drew would be a fact the log had quietly stopped carrying.
  *
+ * **It closes at `obs.Event`'s own json tags and no deeper, which is the same
+ * boundary `TestTheFrontendKnowsEveryField` has and is worth saying out loud
+ * because the heading above reads wider than the guard is.** `mandate` and
+ * `amount` are one entry each in `PROTOCOL_EVENT_FIELDS`, so what this asserts
+ * about them is that a *column* draws them — not that the column draws
+ * everything they carry. A third member on `obs.Mandate` would be forced into
+ * `MandateRef` by `TestTheFrontendKnowsEveryMandateField`, which is #205's
+ * fourth pin and exists because the other three stop at the top level too; it
+ * would then be drawn nowhere, because `mandateLabel` names two members by
+ * hand, and this guard would not notice. Confirmed by adding one: the whole
+ * frontend suite and `tsc` stay green. Closing that is a rule about
+ * `lanes/model.ts`'s two label functions rather than about this table, so it
+ * belongs with them if it is ever worth writing.
+ *
+ * The one thing it does **not** catch on the top level either is a column that
+ * declares an honest source and renders something else — `source` is a
+ * declaration, not a derivation, so nothing structural stops the `Amount` cell
+ * being backfilled out of `detail`. That is caught behaviourally instead, by
+ * the JSON-shaped fixture in `EventLog.test.tsx` that pins the Amount cell to
+ * an em dash while `detail` holds `{"amount":18900,…}`. Both halves of the
+ * rule have a test; they are different tests.
+ *
  * # This is the only place `detail` is rendered
  *
  * #200 took the sentence off the step card, and the argument it made for doing
@@ -342,9 +364,25 @@ export const COLUMNS: readonly Column[] = [
     // The last column and the one with no `nowrap`: a canonical code is the
     // longest value in the row and it is the one that may wrap rather than
     // push the table into a scroll.
+    //
+    // `wrap-anywhere` is what makes that sentence true, and it was measured
+    // rather than assumed. A canonical code is `snake_case` — one token with
+    // no space and no hyphen — so it has no break opportunity, and dropping
+    // `nowrap` alone bought nothing: the cell's min-content width stayed the
+    // full string and the table grew by it. At a 1440px viewport with
+    // `mandate_version_unsupported`, the longest of the thirty-one codes
+    // `contracts/evidence/error_code.json` declares, the wrapper measured
+    // `clientWidth` 974 against `scrollWidth` 988 — the Code column clipped,
+    // on the one screen whose screenshots carry the article series.
+    // `overflow-wrap: anywhere` is the one of the three spellings that
+    // reduces min-content width: `break-word` breaks a line and not the
+    // intrinsic width, and `break-all` would break every code rather than the
+    // one that does not fit. It changes no copied text, because a soft wrap
+    // inserts no character — and at the design width the longest code still
+    // comes out on one line, with the table no longer overflowing at all.
     title: "Code",
     source: "code",
-    shape: "w-full",
+    shape: "w-full wrap-anywhere",
     cell: (record) => <Code code={record.event.code} />,
   },
 ];
@@ -357,11 +395,13 @@ const CELL = "px-2 py-1.5 text-left align-baseline ";
  * One toggle, in the shape `Inspector.tsx` and `MandateInspector.tsx` already
  * use.
  *
- * A plain string concatenation rather than a template literal, on purpose: #194
- * found that the palette guard reads a backtick literal as one opaque string, so
- * a colour class written inside `${…}` is invisible to it and *declares no token
- * that nothing wears* cannot see it either. Concatenation keeps each class name
- * its own string literal, which is what the guard scans.
+ * A plain string concatenation rather than a template literal, matching those
+ * two. #194 found the palette guard reading a backtick literal as one opaque
+ * string, so a colour class written inside `${…}` was invisible to it and to
+ * *declares no token that nothing wears*; #208 taught `scan` to read an
+ * interpolation's contents with itself, so the guard would see one here too.
+ * This stays concatenated because the sibling filter pills are, not because the
+ * guard still needs it to be.
  */
 function pill(active: boolean): string {
   return (
@@ -445,6 +485,21 @@ export function EventLog({ records }: { readonly records: readonly EventRecord[]
   // nothing ever overflows it. `Lanes.tsx`'s columns and the Inspector's tables
   // carry the same class for the same reason, and the Inspector's own note
   // records that nothing in a test notices a page scrolling sideways.
+  //
+  // **This class is necessary and was not sufficient, which is worth stating
+  // because the obvious reading is that it is both.** The chain of flex items
+  // between this table and the viewport is two long, and until the review of
+  // this change `layout/Shell.tsx`'s `<main>` — the *other* one, a row-flex
+  // item holding every routed surface — carried no `min-w-0` of its own.
+  // Measured at a 1024px viewport: `main` took its automatic minimum from this
+  // table and became 946px inside 768px of room, the document's `scrollWidth`
+  // went to 1202 against a 1024 viewport, and this wrapper's `clientWidth` and
+  // `scrollWidth` were both 896 — never overflowing, so never scrolling, which
+  // is exactly the failure the paragraph above describes, happening one
+  // element further out. `Shell.tsx` carries the class now and the same
+  // measurement reads 1024/1024, with `clientWidth` 718 against `scrollWidth`
+  // 896 here. A guard on either would be a class-name assertion, so what holds
+  // both is the note in each file saying it was looked at.
   return (
     <section className="flex min-w-0 flex-col gap-3" aria-label="Event log">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">

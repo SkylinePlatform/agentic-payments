@@ -333,12 +333,24 @@ describe("the order, which is the sequence and only the sequence", () => {
 });
 
 describe("filtering, which says what it is hiding", () => {
+  /**
+   * Five parties over six records, and the sixth is there for arithmetic.
+   *
+   * Under the Merchant filter this splits 2 shown / 3 from other parties / 1
+   * from a role no column claims — **three counts no two of which are equal**,
+   * which is the property the caption case below actually needs. Five records
+   * gave 2 / 2 / 1, and a caption that printed the hidden count where the shown
+   * count belongs reads identically at those numbers; three distinct positive
+   * numbers cannot sum to five, so the sixth record is the smallest fixture
+   * that can tell the two apart on its own.
+   */
   const MIXED = [
     record(1, { kind: "mandate_constructed", role: "surface" }),
     record(2, { kind: "mandate_presented", role: "agent" }),
     record(3, { kind: "mandate_verified", role: "merchant" }),
     record(4, { kind: "mandate_verified", role: "credprovider" }),
     record(5, { kind: "receipt_issued", role: "registry" }),
+    record(6, { kind: "mandate_presented", role: "agent" }),
   ];
 
   it("shows every party until a party is chosen", () => {
@@ -348,7 +360,14 @@ describe("filtering, which says what it is hiding", () => {
       column("Party"),
       "a role no column claims — `registry` arrives with TAP — is in the log " +
         "and nowhere else on this page, so the unfiltered view has to hold it",
-    ).toEqual(["registry", "Credential Provider", "Merchant", "Shopping Agent", "Trusted Surface"]);
+    ).toEqual([
+      "Shopping Agent",
+      "registry",
+      "Credential Provider",
+      "Merchant",
+      "Shopping Agent",
+      "Trusted Surface",
+    ]);
   });
 
   it("narrows to one party", () => {
@@ -365,10 +384,13 @@ describe("filtering, which says what it is hiding", () => {
     expect(
       screen.getByRole("status").textContent,
       "a count of what is kept says something was removed and not what; a " +
-        "reader who cannot see the other three parties has to be told they are " +
-        "three, and that one of them sits in no column at all",
+        "reader who cannot see the other parties has to be told how many they " +
+        "are, and that one of them sits in no column at all. The three numbers " +
+        "are 2, 3 and 1 rather than 2, 2 and 1 so that this case fails on its " +
+        "own when the shown and hidden counts are transposed, instead of " +
+        "leaning on a sibling case to notice",
     ).toBe(
-      "2 of 5 records, from the Merchant. The filter hides 2 from the other parties " +
+      "2 of 6 records, from the Merchant. The filter hides 3 from the other parties " +
         "and 1 from roles no column claims.",
     );
   });

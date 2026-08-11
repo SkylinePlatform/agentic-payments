@@ -47,42 +47,13 @@ import {
   STEP_META,
   amountOf,
   mandateLabel,
+  renderPrice,
   shortDigest,
   stepsIn,
   titleOf,
   verdictOf,
 } from "./model";
 import type { Attempt, Lane, Step, Transaction, Verdict } from "./model";
-import type { Amount } from "../protocol";
-
-/**
- * A price, in the register a constraint's own sentence uses — `"210.00 USD"`
- * — not `formatAmount`'s `"$210.00"`.
- *
- * The choice is deliberate rather than incidental. `formatAmount`, from
- * `../protocol`, divides through `Intl.NumberFormat` for a price tag a general
- * reader sees on its own; this screen instead sits a figure next to a
- * constraint's own limit — the design's example is `240.00 USD today` beside
- * `at most 200.00 USD` — and the two only read as the same kind of number when
- * neither borrows a currency symbol the other lacks. `renderMoney` in
- * `constraint/render.ts` already makes this exact choice for the same reason,
- * but is not imported here: it is unexported, and that module's own doc scopes
- * it to two screens with no signature nearby, neither of which this is. Five
- * lines of string surgery, unchanged from that function's algorithm, cost
- * less than widening a boundary a different file's tests hold.
- *
- * No sign handling, unlike that original: `contracts/instrument/amount.json`
- * requires `amount >= 0`, and `optionalAmount` in `sse/events.ts` already
- * refuses a negative one off the wire, so there is nothing here to be wrong
- * about.
- */
-function renderPrice(amount: Amount): string {
-  const MINOR_DIGITS = 2;
-  const digits = String(amount.amount).padStart(MINOR_DIGITS + 1, "0");
-  const whole = digits.slice(0, digits.length - MINOR_DIGITS);
-  const fraction = digits.slice(digits.length - MINOR_DIGITS);
-  return `${whole}.${fraction} ${amount.currency}`;
-}
 
 function StepCard({ step }: { readonly step: Step }) {
   const meta = STEP_META[step.kind];
