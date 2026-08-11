@@ -700,8 +700,11 @@ func issueClosedPair(
 // same bytes. That is what makes this unlike GET /search, whose price moves
 // with the clock and which had to leave the middleware to keep moving.
 //
-// Nothing calls it yet. The consent screen is #22, several branches away, and
-// the agent has no screen to show sentences on.
+// The consent screen calls it — frontend/src/consent/client.ts posts here and
+// frontend/src/routes/consent renders what comes back — which is what makes
+// every field on previewed a term somebody is actually shown rather than a
+// promise. The agent does not: it has no screen to put sentences on, and calls
+// /authorise directly.
 func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 	var req authorisation
 	if !roles.DecodeJSON(w, r, &req) {
