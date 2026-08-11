@@ -30,9 +30,11 @@ type Agent struct {
 	// Client is how the agent talks to its counterparties. Required.
 	Client *agent.Client
 
-	// Interpreter turns a prompt into constraints. Required. The demo wires
-	// interpret.Demo(), a scripted table; cmd/agent -interpreter gemini wires a
-	// model behind this same interface.
+	// Interpreter turns a prompt into constraints. Required. cmd/agent
+	// -interpreter scripted wires interpret.Demo(), a scripted table, and
+	// -interpreter gemini wires a model behind this same interface; the demo
+	// asks for -interpreter auto, which is the first of those unless
+	// GEMINI_API_KEY is exported.
 	Interpreter interpret.IntentInterpreter
 
 	// AgentKey is the public half of the key this agent signs delegations with.

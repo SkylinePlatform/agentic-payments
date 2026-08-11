@@ -32,8 +32,9 @@ import (
 //
 // What a rolling alias costs is that the model behind it moves, so two runs
 // months apart may read a sentence differently. That is the right trade here —
-// the deterministic path is `-interpreter scripted`, which is what `make demo`
-// runs and what every golden number in this repository comes from.
+// the deterministic path is `-interpreter scripted`, which is what every golden
+// number in this repository comes from and what `make demo` resolves to on any
+// machine that does not export a key.
 const DefaultGeminiModel = "gemini-flash-latest"
 
 // geminiEndpoint is the Generative Language API's base.

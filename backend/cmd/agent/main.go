@@ -16,9 +16,14 @@
 // if GEMINI_API_KEY is set, the scripted table if it is not — and prints which
 // one it picked, so a screenshot stays attributable either way.
 //
-// **The default is what deploy/demo.json runs and must stay so.** `make demo`
-// has to come up without a key and without reaching anything, and the golden
-// numbers every screenshot in this repository shows are the scripted five.
+// **`make demo` has to come up without a key and without reaching anything,
+// and that is now a property of `auto` rather than of the manifest leaving this
+// flag alone.** deploy/demo.json gives agent-watch `-interpreter auto`, so on a
+// machine with no GEMINI_API_KEY the interpreter it builds is interpret.Demo()
+// and the golden numbers every screenshot in this repository shows are still
+// the scripted five. What it costs on a machine that does export one — a demo
+// that is no longer the scripted five — is argued in deploy/demo.json beside
+// the flag, and it is why the console states its mode before anybody types.
 //
 // **There is no fallback.** `-interpreter gemini` with no key refuses to start,
 // because an agent asked for a model and quietly handed a fixed table produces a
@@ -33,18 +38,26 @@
 // actually read the prompt, not just the flag that was passed.
 //
 // **`auto` is not the default, and that is deliberate rather than an
-// oversight.** When no key is set the two are byte-identical — `auto` degrades
-// to exactly `interpret.Demo()` — so defaulting to it would cost nothing on a
-// machine with no key. What it would cost is the guarantee itself: whether
-// `make demo` reads deterministically from the scripted five would then depend
-// on whether the operator's shell happens to export GEMINI_API_KEY for some
-// unrelated reason, rather than on anything written in this repository. That is
-// a worse property than the one this comment already promises, so the default
-// stays `scripted`, deploy/demo.json stays exactly as it is, and `auto` is
-// something a caller opts into by naming it — by hand, or by a manifest that
-// says so — never something ambient shell state opts a caller into on its
-// behalf. A future manifest choosing `auto` is a one-line, reviewed change; a
-// stray environment variable choosing it would not be.
+// oversight.** With no key set the two select the same interpreter — `auto`
+// degrades to exactly `interpret.Demo()`, the same value the scripted case
+// returns — so defaulting to it would change nothing a demonstration prints
+// except this binary's own banner line, which says `auto` rather than
+// `scripted` and is the attribution being bought. What it would cost is the
+// guarantee: whether `make demo` reads deterministically from the scripted five
+// would then depend on whether the operator's shell happens to export
+// GEMINI_API_KEY for some unrelated reason, rather than on anything written in
+// this repository. That is a worse property than the one this comment already
+// promises, so the default stays `scripted`, and `auto` is something a caller
+// opts into by naming it — never something ambient shell state opts a caller
+// into on its behalf.
+//
+// **deploy/demo.json is a caller that names it, and that is the distinction
+// rather than a hole in it.** A flag written into a reviewed, committed file is
+// a choice every reader of that file can see, and it applies to one process
+// this repository ships. A default reading the environment would apply to every
+// caller of this binary, on a fact nothing here writes down. So the manifest
+// naming `auto` and the flag defaulting to `scripted` are the same argument,
+// not two.
 //
 // It confirms every counterparty is reachable and publishing a readable key,
 // and then runs whichever flow it was asked for:
@@ -330,11 +343,12 @@ const (
 // precisely because auto never claimed to want a model in the first place — see
 // the package doc's "auto is not that fallback" for the distinction from the
 // refusal above. It still returns an error if geminiInterpreter fails for a
-// reason other than a missing key — which, given what interpret.NewGemini and
-// interpret.NewModel check today, cannot happen once apiKey is non-empty — but
-// the branch is kept rather than assumed away, because papering over a real
-// failure there would be exactly the silent-fallback failure this function
-// exists to prevent.
+// reason other than a missing key. Once apiKey is non-blank the only ways left
+// are defects rather than configuration — interpret.NewModel refuses a nil
+// clock and can fail describing the answer's shape — and the branch is kept
+// rather than assumed away for exactly that reason: swallowing a defect into
+// the scripted table is the silent fallback this function exists to prevent,
+// and it would be hardest to notice in the case nobody expected.
 //
 // # Why it is a function rather than lines inside run
 //
