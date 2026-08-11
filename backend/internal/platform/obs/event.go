@@ -313,10 +313,23 @@ type Event struct {
 	//
 	// It follows that this field says which mandate the role was **acting on**,
 	// not what the bytes turned out to be. A Credential Provider handed a
-	// Checkout Mandate refuses with wrong_mandate_type and the event still says
-	// payment: the step is the payment hop, and the mark and the code are what
-	// say the artefact was not one. Reading it as a claim about the payload
-	// would be reading it as evidence, which nothing here is.
+	// Checkout Mandate still says payment, because the step is the payment hop.
+	// Reading it as a claim about the payload would be reading it as evidence,
+	// which nothing here is.
+	//
+	// **What the card does not recover in that case is worth stating exactly,
+	// because the obvious sentence overstates it.** The Go sentinel is
+	// ap2.ErrWrongMandateType, but there is no wrong_mandate_type canonical
+	// code: it maps to mandate_version_unsupported, which it shares with
+	// ErrUnsupportedVersion. So the card reads "closed Payment Mandate" beside
+	// mandate_version_unsupported, and a reader recovers that this hop refused
+	// the credential type it was sent — not which mandate actually arrived. The
+	// sharpest case is the one testdata/rejections.json calls the most useful
+	// one, an open Checkout Mandate where a closed one belongs: the state member
+	// is then counterfactual too, and the code says nothing about open against
+	// closed either. That is the accepted cost of a label fixed by the hop, and
+	// it is bounded by the same rule as everything else here — the receipt is
+	// what names the artefact as evidence, and this is a screen.
 	Mandate *Mandate `json:"mandate,omitempty"`
 }
 

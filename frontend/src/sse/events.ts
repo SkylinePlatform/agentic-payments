@@ -295,9 +295,15 @@ export interface ProtocolEvent {
    * where a person declined before any mandate existed.
    *
    * It says which mandate the emitting role was **acting on**, not what the
-   * bytes turned out to be: a verifier that refuses `wrong_mandate_type` still
-   * names the hop it was answering, and the mark and the code are what say the
-   * artefact was not one. Nothing here is evidence.
+   * bytes turned out to be: a verifier handed the other mandate still names the
+   * hop it was answering. Nothing here is evidence.
+   *
+   * **So a card can name a mandate the payload was not**, and the code beside
+   * it does not close the gap: `ap2.ErrWrongMandateType` carries the canonical
+   * code `mandate_version_unsupported`, which says this hop refused the
+   * credential type it was sent and not which one arrived. `obs.Event.Mandate`
+   * in the Go source argues the trade in full. The receipt is what names an
+   * artefact as evidence; this is a label on a screen.
    */
   readonly mandate?: MandateRef;
 }
