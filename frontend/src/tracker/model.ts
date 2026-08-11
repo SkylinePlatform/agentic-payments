@@ -12,7 +12,7 @@
  *
  * # Two axes, and neither is invented here
  *
- * `RunState` — watching, bought, exhausted, stopped, failed — is
+ * `RunState` — watching, bought, exhausted, expired, stopped, failed — is
  * `runState.String()`. `MandateState` — ready, awaiting_receipt, spent — is
  * `authz.MandateState.String()`, read off each attempt's `checkout_mandate`
  * and `payment_mandate`. Both are spelled exactly as the machine that owns
@@ -31,7 +31,7 @@
  * value a `Run` or an attempt actually carries is a bare `string`, which
  * TypeScript cannot narrow, so `runStatus`/`mandateStatus` are the runtime
  * half: a value neither table recognises — this build shipped before the
- * agent grew a sixth run state, say — renders as a visible, named "unknown"
+ * agent grew a seventh run state, say — renders as a visible, named "unknown"
  * fact rather than as a blank cell. `model.test.ts` drives both halves.
  */
 
@@ -71,14 +71,22 @@ export function totalStatus<K extends string>(
 
 // --- the run's own axis: internal/agent/console's runState -----------------
 
-/** `runState.String()`'s five spellings, in `internal/agent/console/run.go`'s own order. */
-export const RUN_STATES = ["watching", "bought", "exhausted", "stopped", "failed"] as const;
+/** `runState.String()`'s six spellings, in `internal/agent/console/run.go`'s own order. */
+export const RUN_STATES = ["watching", "bought", "exhausted", "expired", "stopped", "failed"] as const;
 export type RunState = (typeof RUN_STATES)[number];
 
 export const RUN_STATE_META: Record<RunState, StatusMeta> = {
   watching: { label: "watching", icon: "◐", tone: "neutral" },
   bought: { label: "bought", icon: "✓", tone: "positive" },
   exhausted: { label: "exhausted — never bought", icon: "○", tone: "negative" },
+  // Nothing about the merchant's schedules as the demonstration runs them ever
+  // produces `exhausted` — `internal/agent/watch.go`'s `ErrScheduleExhausted`
+  // gives the two routes by which it does not — so this is what a watch that
+  // will never buy reaches instead: the open mandate pair ran out its own
+  // clock. Distinct from `exhausted` on purpose, and distinct from `watching`
+  // on the purpose the whole tracker exists for — a row parked here is a wait
+  // the agent has already concluded will never end, not one still in progress.
+  expired: { label: "expired — never bought", icon: "⏱", tone: "negative" },
   stopped: { label: "stopped", icon: "■", tone: "neutral" },
   failed: { label: "failed", icon: "✕", tone: "negative" },
 };

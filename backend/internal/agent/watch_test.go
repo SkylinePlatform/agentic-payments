@@ -1282,6 +1282,87 @@ func TestTheWatchStopsWhenTheLastPriceIsRefused(t *testing.T) {
 		"the merchant prices the basket, so the cap is compared against what will actually be charged")
 }
 
+// TestTheWatchStopsWhenTheAuthorisationExpires is ErrAuthorisationExpired, the
+// bound that ends a watch nothing about the merchant's own state will —
+// ErrScheduleExhausted's doc gives the two routes by which the schedules the
+// demonstration runs never produce it. The open mandate pair already carries a
+// bound of its own, and this is the loop reading it rather than spending a
+// round trip on a delegation no verifier could ever accept.
+//
+// This world's merchant runs the plain, one-shot schedule every other test in
+// this file uses, which is what makes this the *contested* case rather than the
+// easy one. One fake clock drives the whole world, so advancing it past the
+// pair's expiry also runs that schedule out — both bounds come due on the same
+// tick, and the loop has to answer with this one. Removing the check in Run is
+// how to see that it matters: the loop then quotes, mints, is refused
+// mandate_expired by the Credential Provider, and returns ErrScheduleExhausted
+// instead, having spent exactly the round trip this sentinel exists to save.
+func TestTheWatchStopsWhenTheAuthorisationExpires(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	a := authorise(t, w)
+
+	wait, _ := a.running(t, a.watch(t))
+	a.quoted() // the baseline
+
+	// Past the pair's own expiry — and, since one clock drives everything here,
+	// past the merchant's last step too. Which of the two the loop reports is
+	// the whole of what this test is about.
+	a.world.clock.Advance(2 * time.Hour)
+	a.beat()
+
+	watched, err := wait()
+	require.ErrorIs(t, err, agent.ErrAuthorisationExpired,
+		"the pair's own expiry has to end the loop, and has to win over a schedule that ran out on the same tick — a watch on a schedule that never runs out has nothing else to end it")
+	assert.Nil(t, watched.Bought,
+		"a watch that ended on its own expiry bought nothing, and a caller checking only this field must not read the terminal state as a purchase")
+	assert.Empty(t, watched.Attempts,
+		"nothing was minted once the pair had expired — a verifier would refuse it anyway, so the loop has no business spending a round trip finding that out")
+}
+
+// TestAnOutstandingAttemptIsStillRedeliveredAfterTheAuthorisationExpires is the
+// other half of ErrAuthorisationExpired: the check sits only where a fresh
+// attempt would be minted, not wherever the pair happens to be read, so a
+// delivery already presented and awaiting a receipt when the pair expires is
+// answered rather than abandoned mid-flight.
+func TestAnOutstandingAttemptIsStillRedeliveredAfterTheAuthorisationExpires(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	a := authorise(t, w)
+
+	// The first funding request never lands; the re-delivery does.
+	var broken atomic.Int32
+	a.breaks = func(r *http.Request) bool {
+		return strings.HasSuffix(r.URL.Path, "/credential") && broken.Add(1) == 1
+	}
+
+	wait, _ := a.running(t, a.watch(t))
+	a.quoted() // the baseline
+
+	a.step() // $210
+	a.quoted()
+	a.attempted() // the delivery that reached nobody
+
+	// Past the pair's own expiry, with the attempt still outstanding.
+	a.world.clock.Advance(2 * time.Hour)
+	a.beat()      // the re-delivery: no quote is taken, so no poll signal
+	a.attempted() // and this one is refused, by the Credential Provider
+
+	// One more tick: nothing is pending any more, and the pair has already
+	// expired — this is the tick that ends the loop.
+	a.beat()
+
+	watched, err := wait()
+	require.ErrorIs(t, err, agent.ErrAuthorisationExpired,
+		"the outstanding attempt got its answer; what ends the loop afterward is the pair having nothing left to authorise")
+	require.Len(t, watched.Attempts, 1,
+		"the attempt in flight when the pair expired was re-delivered rather than abandoned")
+	assert.Equal(t, 2, watched.Attempts[0].Deliveries,
+		"the re-delivery is visible on the row the same way a re-delivery before expiry already is")
+}
+
 // TestAWatchWithNoTickBuildsItsOwnTicker covers the pacing a running agent uses
 // and every other test in this file replaces.
 //

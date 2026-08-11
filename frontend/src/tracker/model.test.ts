@@ -17,10 +17,11 @@ describe("run status", () => {
   it("never renders an unknown run state as blank", () => {
     // The state this console tells is runState.String() from
     // internal/agent/console/run.go — "watching", "bought", "exhausted",
-    // "stopped", "failed" — and nothing stops a future sixth state shipping on
-    // the agent before this frontend has been rebuilt against it. A lookup
-    // with a silent fallback would draw that row with nothing on it; this one
-    // has to say, visibly, that it does not recognise the word.
+    // "expired", "stopped", "failed" — and nothing stops a future seventh
+    // state shipping on the agent before this frontend has been rebuilt
+    // against it. A lookup with a silent fallback would draw that row with
+    // nothing on it; this one has to say, visibly, that it does not
+    // recognise the word.
     const status = runStatus("awaiting_something_new");
     expect(status.label, "the raw word travels, so the row is debuggable rather than mute").toContain(
       "awaiting_something_new",

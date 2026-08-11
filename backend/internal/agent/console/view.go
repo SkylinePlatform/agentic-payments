@@ -129,8 +129,9 @@ type view struct {
 	Quantity  int       `json:"quantity"`
 	ExpiresAt time.Time `json:"expires_at"`
 
-	// State is the run's own axis — watching, bought, exhausted, stopped,
-	// failed — and never a mandate's. The mandate states are on the attempts.
+	// State is the run's own axis — watching, bought, exhausted, expired,
+	// stopped, failed — and never a mandate's. The mandate states are on the
+	// attempts.
 	State string `json:"state"`
 
 	// Baseline is the offer in force when the watch began, present from the
