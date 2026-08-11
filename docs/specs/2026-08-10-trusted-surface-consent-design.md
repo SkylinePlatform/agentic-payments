@@ -141,7 +141,7 @@ is the serialisation rule working as written.
     "description": "Direct, 2h 40m. Cabin bag included, hold bag extra.",
     "image_url": "/images/catalogue/flight-beg-pmi.svg",
     "retailer": "Adria Wings",
-    "price": { "minor_units": 24000, "currency": "USD" }
+    "price": { "amount": 24000, "currency": "USD" }
   },
   "watch_slots_free": 7
 }
