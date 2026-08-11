@@ -115,7 +115,8 @@ func TestTheProposalCarriesTheOfferTheMerchantPublished(t *testing.T) {
 		"the card describes the offer the proposal settled on, and a mismatch would describe a different purchase than the one being signed for")
 	assert.Equal(t, "Telescopic ladder, 3.8 m", got.Offer.Title,
 		"this is what the screen shows instead of a raw identifier")
-	assert.Equal(t, "Balkan Hardware", got.Offer.Retailer)
+	assert.Equal(t, "Balkan Hardware", got.Offer.Retailer,
+		"who the screen says the purchase is from, distinct from merchant.id which is who authorisation compares")
 	assert.Equal(t, "/images/catalogue/ladder-telescopic-38.svg", got.Offer.ImageURL,
 		"root-relative, so a screenshot never depends on a host this project does not control")
 	assert.Positive(t, got.Offer.Price.Amount,
@@ -123,12 +124,13 @@ func TestTheProposalCarriesTheOfferTheMerchantPublished(t *testing.T) {
 }
 
 // TestDiscoverStillChoosesOnTheIdentifierAlone is the half of candidate's
-// comment that must stay true.
+// comment that must stay true: the richer decode carries title, image and
+// price through in catalogue order, unranked.
 //
-// The agent now carries title, image and price to a caller that is serving a
-// person. Carrying is not reading: nothing here compares money or ranks a
-// result, and the moment discovery consulted one of these fields the comment
-// on candidate would become false.
+// It chooses nothing — Discover returns every identifier a search found — so
+// it does not exercise selection at all.
+// TestProposeTakesTheFirstCandidateRegardlessOfPriceOrTitle is what does: this
+// test alone would stay green even if settle started sorting by price.
 func TestDiscoverStillChoosesOnTheIdentifierAlone(t *testing.T) {
 	t.Parallel()
 
@@ -150,4 +152,71 @@ func TestDiscoverStillChoosesOnTheIdentifierAlone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"gtin:0001", "gtin:0002"}, found,
 		"catalogue order, unchanged: a cheaper second result must not start winning because the agent can now see the price")
+}
+
+// TestProposeTakesTheFirstCandidateRegardlessOfPriceOrTitle is what
+// TestDiscoverStillChoosesOnTheIdentifierAlone does not pin, because Discover
+// chooses nothing. The selection this change introduces is settle taking
+// found[0], and this is the test that drives it with more than one candidate.
+//
+// Discover's own comment records this repository hitting exactly this failure
+// mode before: a test that asserted only the identifier stayed green while the
+// claim it was cited for — that there was only ever one candidate — became
+// false. Same fixture as the test above, so the same two offers are here to
+// prove settle does not start preferring the cheaper, better-titled second one.
+func TestProposeTakesTheFirstCandidateRegardlessOfPriceOrTitle(t *testing.T) {
+	t.Parallel()
+
+	merchantURL := merchantReturning(t, `{"offers":[
+		{"id":"gtin:0001","title":"Expensive","retailer":"A","image_url":"/a.svg","price":{"amount":99900,"currency":"USD"}},
+		{"id":"gtin:0002","title":"Cheap","retailer":"B","image_url":"/b.svg","price":{"amount":100,"currency":"USD"}}
+	]}`)
+
+	client := &agent.Client{Endpoints: agent.Endpoints{
+		Surface:  unreachableSurface(t),
+		Merchant: merchantURL,
+	}}
+
+	got, err := client.Propose(t.Context(), agent.Intent{
+		Prompt:      "find and buy telescopic ladders, cheapest",
+		Interpreter: interpret.Demo(),
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "gtin:0001", got.Item,
+		"settle takes found[0] without ranking; a cheaper second offer must not start winning")
+	assert.Equal(t, "Expensive", got.Offer.Title,
+		"the offer carried through has to be the one actually selected, not the better-sounding one")
+}
+
+// TestProposeRefusesAMerchantThatAnsweredADifferentOffer pins settle's refusal
+// when Intent.Item is set: a search for one identifier has exactly one honest
+// answer, so a merchant that comes back with a different one is answering a
+// question it was not asked, and is not trusted over the caller's own choice.
+//
+// Without this check, the constraint the user signs would name whatever the
+// merchant answered rather than the offer the console showed them — the
+// merchant deciding what the buyer approved, which is the inversion this
+// package's comments spend paragraphs guarding against elsewhere.
+func TestProposeRefusesAMerchantThatAnsweredADifferentOffer(t *testing.T) {
+	t.Parallel()
+
+	merchantURL := merchantReturning(t, `{"offers":[
+		{"id":"gtin:9999","title":"Not the offer that was asked about","retailer":"A","image_url":"/a.svg","price":{"amount":100,"currency":"USD"}}
+	]}`)
+
+	client := &agent.Client{Endpoints: agent.Endpoints{
+		Surface:  unreachableSurface(t),
+		Merchant: merchantURL,
+	}}
+
+	_, err := client.Propose(t.Context(), agent.Intent{
+		Prompt:      "find and buy telescopic ladders, cheapest",
+		Interpreter: interpret.Demo(),
+		Item:        "gtin:0001",
+	})
+	require.Error(t, err,
+		"a merchant answering a different identifier than the one asked about must not be trusted over the caller's own choice")
+	assert.ErrorIs(t, err, agent.ErrNothingToBuy,
+		"the canonical refusal for 'nothing here matches what was asked for', which this is a case of")
 }

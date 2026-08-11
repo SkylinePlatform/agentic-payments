@@ -128,8 +128,7 @@ type Intent struct {
 	// both open mandates' cnf claim.
 	AgentKey generated.PublicKey
 
-	// Item, when set, is the catalogue offer the caller has already chosen, and
-	// discovery is skipped.
+	// Item, when set, is the catalogue offer the caller has already chosen.
 	//
 	// It is for a caller that has one: the shopping console of #109 shows the
 	// merchant's own search results in a table and the user picks a row, so by
@@ -137,11 +136,19 @@ type Intent struct {
 	// somewhere a person could see it. Empty is the command line's case, where
 	// nobody was there and Discover picks the first match.
 	//
-	// **What is skipped is the search, never the narrowing.** The constraint
-	// saying this exact item is appended either way, so the Trusted Surface
-	// renders `the item is …` and the user reads it before signing — which is
-	// the property #22 exists for and is exactly what a caller-supplied item
-	// would otherwise quietly bypass.
+	// **What changes is the query, never the narrowing, and the merchant is
+	// still asked.** A set item turns the search into one identifier instead of
+	// the interpretation — see settle and candidates — rather than skipping it.
+	// The constraint saying this exact item is appended either way, so the
+	// Trusted Surface renders `the item is …` and the user reads it before
+	// signing — which is the property #22 exists for and is exactly what a
+	// caller-supplied item would otherwise quietly bypass.
+	//
+	// Because the merchant is still asked, this path can now fail where a
+	// caller-named item previously could not: ErrNothingToBuy if the identifier
+	// no longer exists, or if the merchant answers with a different one than was
+	// asked for — settle refuses that rather than trusting either side over the
+	// other — or a transport error reaching the merchant at all.
 	//
 	// **The agent does not check it against the rest of the interpretation**,
 	// and that is not an oversight to be closed later. Asking whether this offer
@@ -189,20 +196,62 @@ type Authorisation struct {
 	Instrument generated.PaymentInstrument
 }
 
-// Authorise runs the discovery half: interpret, search, narrow, and collect the
-// user's signature over the result.
+// Authorise runs Propose and then collects the user's signature over the
+// result, at the Trusted Surface. See Propose for the discovery half and sign
+// for the one call this adds.
+func (c *Client) Authorise(ctx context.Context, in Intent) (Authorisation, error) {
+	proposal, err := c.Propose(ctx, in)
+	if err != nil {
+		return Authorisation{}, err
+	}
+	return c.sign(ctx, in.Prompt, proposal)
+}
+
+// Offer is the merchant's own description of one thing it sells.
+//
+// It exists so a consent screen can say what an identifier refers to. No
+// verifier sees it, no constraint addresses it, and nothing in this package
+// compares any of it — see candidate. It is deliberately not in contracts/:
+// how a shop describes its stock is presentation, and putting it in the
+// canonical model would mean core knew what a flight is.
+type Offer struct {
+	ID          string           `json:"id"`
+	Title       string           `json:"title"`
+	Description string           `json:"description"`
+	ImageURL    string           `json:"image_url"`
+	Retailer    string           `json:"retailer"`
+	Price       generated.Amount `json:"price"`
+}
+
+// Proposal is what the agent puts in front of a person: the limits it read out
+// of their sentence, the offer it narrowed to, and the key it wants endorsed.
+//
+// Nothing in it is signed and nothing about it is remembered. It is the input to
+// a decision, and if the decision is no there is nothing to clean up.
+type Proposal struct {
+	Item        string
+	Offer       Offer
+	Constraints []generated.Constraint
+	AgentKey    generated.PublicKey
+}
+
+// Propose runs the discovery half: interpret, search, narrow — everything
+// Authorise does, short of collecting the user's signature. A consent screen
+// needs exactly this: something to render that does not yet exist as a
+// mandate.
 //
 // # The order, and why each step needs the one before it
 //
 // The interpretation is what the user is shown, so it has to exist before the
 // surface is called. The search is what turns "a flight to Palma" into a
-// specific thing this merchant sells, so it has to run before the narrowing —
-// unless Intent.Item says a caller has already done the picking, which is the
-// one step of the four that can be skipped and the field's own comment argues
-// why. And the narrowing has to happen before the signature, because the point of it is
-// that the user approves buying *that* item rather than anything matching a
-// description — an open mandate constraining only a category authorises every
-// offer in it, for as long as it lives.
+// specific thing this merchant sells, so it has to run before the narrowing.
+// Intent.Item changes what that search asks for — one identifier instead of
+// the interpretation — but never skips it; see settle and Intent.Item for why
+// the merchant is still asked. And the narrowing has to happen before the
+// signature, because the point of it is that the user approves buying *that*
+// item rather than anything matching a description — an open mandate
+// constraining only a category authorises every offer in it, for as long as it
+// lives.
 //
 // # The search is not run with the constraint set the user signs
 //
@@ -246,52 +295,6 @@ type Authorisation struct {
 // Surface parses the whole set with the verifier's own parser before signing any
 // of it — so a defect in it fails the authorisation loudly, at the same place
 // and under the same code as a defect in the interpretation.
-func (c *Client) Authorise(ctx context.Context, in Intent) (Authorisation, error) {
-	proposal, err := c.Propose(ctx, in)
-	if err != nil {
-		return Authorisation{}, err
-	}
-	return c.sign(ctx, in.Prompt, proposal)
-}
-
-// Offer is the merchant's own description of one thing it sells.
-//
-// It exists so a consent screen can say what an identifier refers to. No
-// verifier sees it, no constraint addresses it, and nothing in this package
-// compares any of it — see candidate. It is deliberately not in contracts/:
-// how a shop describes its stock is presentation, and putting it in the
-// canonical model would mean core knew what a flight is.
-type Offer struct {
-	ID          string           `json:"id"`
-	Title       string           `json:"title"`
-	Description string           `json:"description"`
-	ImageURL    string           `json:"image_url"`
-	Retailer    string           `json:"retailer"`
-	Price       generated.Amount `json:"price"`
-}
-
-// Proposal is what the agent puts in front of a person: the limits it read out
-// of their sentence, the offer it narrowed to, and the key it wants endorsed.
-//
-// Nothing in it is signed and nothing about it is remembered. It is the input to
-// a decision, and if the decision is no there is nothing to clean up.
-type Proposal struct {
-	Item        string
-	Offer       Offer
-	Constraints []generated.Constraint
-	AgentKey    generated.PublicKey
-}
-
-// Propose runs the discovery half and stops before the signature.
-//
-// Interpret, search, narrow — the three steps of Authorise that produce what a
-// user is shown, without the one that collects their signature. A consent screen
-// needs exactly this: something to render that does not yet exist as a mandate.
-//
-// The ordering argument, the reason the search is not run with the constraint
-// set the user signs, and the obligation to call interpret.Validate on what an
-// interpreter returned are all Authorise's and are unchanged — they live here
-// now because this is where those three steps live.
 func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 	var out Proposal
 
@@ -323,9 +326,11 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 
 // settle picks the offer this proposal is about, and describes it.
 //
-// A caller that already named one skips the search and nothing else; see
-// Intent.Item. The description is fetched either way, because a screen needs it
-// whether the picking happened here or upstream.
+// A caller that already named one changes what candidates asks the merchant
+// for, never whether it asks; see Intent.Item. The description is fetched
+// either way, because a screen needs it whether the picking happened here or
+// upstream — and asking is also what lets a caller-named item be refused
+// rather than trusted blindly, below.
 func (c *Client) settle(
 	ctx context.Context, constraints []generated.Constraint, chosen string,
 ) (string, Offer, error) {
@@ -337,13 +342,31 @@ func (c *Client) settle(
 		return "", Offer{}, fmt.Errorf("%w: the search matched no offer", ErrNothingToBuy)
 	}
 
-	// The first result, unchanged: choosing among candidates is a product
-	// decision this demo does not make, and discover's comment carries why.
-	// When a caller named an item, candidates returns that one alone.
+	// The first result wins, and the merchant returns them in catalogue order,
+	// so the choice is stable rather than considered. A real agent ranks, or
+	// asks. Choosing among candidates is a product decision this demo does not
+	// make.
 	//
+	// TestTheCatalogueAnswersTheScriptedPrompts, in internal/roles/merchant,
+	// does *not* pin this: it searches with the whole constraint set, which is
+	// the query this path deliberately does not send. What does is
+	// TestProposeTakesTheFirstCandidateRegardlessOfPriceOrTitle.
+	c0 := found[0]
+
+	// When a caller named an item, candidates asked the merchant about that one
+	// identifier, and a search on item.id has exactly one honest answer. A
+	// merchant that comes back with a different one is answering a question it
+	// was not asked — prefix-matching, a bug, or hostile — and the identifier
+	// and the description this proposal carries would describe two different
+	// things. Refused rather than trusted over the caller's own choice.
+	if chosen != "" && c0.ID != chosen {
+		return "", Offer{}, fmt.Errorf(
+			"%w: asked the merchant for the offer identified as %q and it answered with %q instead",
+			ErrNothingToBuy, chosen, c0.ID)
+	}
+
 	// candidate and Offer carry the same fields for the same reason, so the
 	// conversion below is not a shortcut past a copy — it is that copy.
-	c0 := found[0]
 	return c0.ID, Offer(c0), nil
 }
 
