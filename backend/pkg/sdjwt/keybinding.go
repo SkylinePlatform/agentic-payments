@@ -4,7 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
+)
+
+// minDuration and maxDuration are time.Duration's most negative and most
+// positive representable values. They are also the exact values
+// time.Time.Sub returns when the true difference between two instants would
+// not fit in an int64 of nanoseconds — roughly 292 years — rather than
+// wrapping or reporting an error: Sub saturates. checkFreshness compares a
+// skew against these to tell a value arithmetic could not represent from one
+// that is merely outside the window; see its comment for why the distinction
+// is load-bearing rather than cosmetic.
+const (
+	minDuration = time.Duration(math.MinInt64)
+	maxDuration = time.Duration(math.MaxInt64)
 )
 
 // kbType is the required "typ" of a Key Binding JWT (RFC 9901 §4.3).
@@ -252,6 +266,27 @@ func checkFreshness(got freshness, wantNonce, wantAudience string, maxAge time.D
 
 	issuedAt := time.Unix(got.issuedAt, 0)
 	skew := clk.Now().Sub(issuedAt)
+
+	// skew is refused outright, before the symmetric fold below, when Sub has
+	// saturated rather than reporting the true difference: negating
+	// minDuration is a no-op under two's complement — its magnitude has no
+	// positive int64 representation, so -minDuration is minDuration, still
+	// negative — which meant a KB-JWT stamped more than ~292 years in the
+	// future made Sub saturate to minDuration, survived the
+	// "if skew < 0 { skew = -skew }" fold unchanged, and compared as fresher
+	// than the window on the line below. Freshness here is a security control:
+	// it is what stops a captured key-binding proof being replayed later, so
+	// an unrepresentable skew is refused as malformed (ErrKeyBindingInvalid,
+	// the same sentinel the window check below already uses — this package
+	// has no separate "expired" sentinel to misreport it as) rather than let
+	// through by arithmetic that could not represent it.
+	//
+	// internal/platform/crypto/challenge.go's Check carries the identical
+	// guard over the identical construct, for the identical reason.
+	if skew == minDuration || skew == maxDuration {
+		return fmt.Errorf("%w: issued at %s cannot be dated against this clock",
+			ErrKeyBindingInvalid, issuedAt.UTC().Format(time.RFC3339))
+	}
 	if skew < 0 {
 		skew = -skew
 	}

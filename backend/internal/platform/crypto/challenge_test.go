@@ -143,6 +143,63 @@ func TestAChallengeOutsideItsWindowIsRefused(t *testing.T) {
 		"a symmetric window is the same rule pkg/sdjwt applies to a key binding's iat, and for the same reason")
 }
 
+// TestAStampCenturiesFromThisClockIsRefusedNotAcceptedAsFresh demonstrates the
+// hole this package's own comment used to only note: time.Duration is an int64
+// of nanoseconds, so Time.Sub does not overflow when two instants are more than
+// ~292 years apart, it saturates — and negating a saturated minimum is a
+// no-op under two's complement. Before the fix, that made the "if age < 0 {
+// age = -age }" fold in Check a no-op on exactly that input, leaving age
+// negative and the window comparison false: a challenge stamped centuries in
+// the future compared as fresher than one issued a second ago, and Check
+// returned nil.
+//
+// # Both directions, because the guard is written as symmetric
+//
+// Only the forward half is a fail-open. Backwards, Sub saturates to
+// maxDuration, which survives the fold and which the window refuses anyway —
+// but as ErrChallengeExpired, which is the wrong sentinel for exactly the
+// reason it is wrong forwards, and which the change to this package moved. With
+// the forward case alone, deleting "|| age == maxDuration" turns nothing red:
+// the half of the guard that only reclassifies would be unpinned, and the claim
+// that the two directions are answered alike would be a sentence in a comment
+// rather than a property of the code.
+//
+// The stamp is minted honestly at both offsets, by moving the fake clock and
+// calling Issue there rather than assembling one by hand — Issue is what a
+// caller actually gets a challenge from, and the point is that a value this
+// Challenger itself produced, read back on a saner clock, must not verify.
+func TestAStampCenturiesFromThisClockIsRefusedNotAcceptedAsFresh(t *testing.T) {
+	t.Parallel()
+
+	// 400 years comfortably clears time.Duration's ~292-year range in either
+	// direction, which is what the table in issue #112 measured.
+	for _, tc := range []struct {
+		name  string
+		years int
+	}{
+		{name: "stamped centuries ahead of the clock that reads it back", years: 400},
+		{name: "stamped centuries behind it", years: -400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			c, clk := newChallenger(t)
+
+			clk.Set(base.AddDate(tc.years, 0, 0))
+			minted, err := c.Issue()
+			require.NoError(t, err,
+				"the challenge both assertions below are about has to exist before either can mean anything")
+
+			clk.Set(base)
+			err = c.Check(minted)
+			assert.ErrorIs(t, err, crypto.ErrChallengeInvalid,
+				"a stamp Sub cannot represent the distance to is not a fact this verifier can honestly age at all, and a window is a security control that must fail closed on a value it cannot measure")
+			assert.NotErrorIs(t, err, crypto.ErrChallengeExpired,
+				"this verifier really did stamp it, on a clock it no longer agrees with — 'ask me for another one' is the wrong answer to a value that was never a sensible instant")
+		})
+	}
+}
+
 // TestTwoChallengesIssuedInOneInstantDiffer is the salt itself, asserted beside
 // the four paragraphs in challenge.go that argue for it.
 //

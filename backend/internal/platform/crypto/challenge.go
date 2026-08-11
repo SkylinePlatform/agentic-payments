@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -20,6 +21,19 @@ var (
 	// ErrChallengeInvalid means this is not a value this Challenger produced:
 	// the wrong shape, or a MAC that does not hold under its key. Whoever
 	// presented it either made it up or was issued it by somebody else.
+	//
+	// A third case joins those two and does not read like them at first,
+	// because the MAC holds: a challenge whose stamp sits so far from this
+	// verifier's clock that Sub cannot represent the distance — see the guard
+	// in Check for the arithmetic. It belongs here rather than under
+	// ErrChallengeExpired because that sentinel's advice is "ask me for another
+	// one", and the truthful statement about a stamp centuries away is that
+	// this clock has never read that instant and so cannot vouch for having
+	// issued anything at it. Which is the sentence above, read strictly.
+	//
+	// The message is what separates the three for a reader; the sentinel
+	// deliberately does not grow a third value, because no caller acts on them
+	// differently — every one answers Problem Details and reads no mandate.
 	ErrChallengeInvalid = errors.New("crypto: challenge was not issued by this verifier")
 
 	// ErrChallengeExpired means the MAC held — this verifier really did issue
@@ -41,6 +55,19 @@ const (
 	// comment for why the salt exists at all.
 	challengeSaltLen    = 16
 	challengePayloadLen = challengeStampLen + challengeSaltLen
+)
+
+// minDuration and maxDuration are time.Duration's most negative and most
+// positive representable values. They are also the exact values
+// time.Time.Sub returns when the true difference between two instants would
+// not fit in an int64 of nanoseconds — roughly 292 years — rather than
+// wrapping or reporting an error: Sub saturates. Check compares an age
+// against these to tell a value arithmetic could not represent from one that
+// is merely outside the window; see its comment for why the distinction is
+// load-bearing rather than cosmetic.
+const (
+	minDuration = time.Duration(math.MinInt64)
+	maxDuration = time.Duration(math.MaxInt64)
 )
 
 // Challenger issues and checks the nonce a delegation chain's key binding is
@@ -246,22 +273,35 @@ func (c *Challenger) Check(nonce string) error {
 
 	issued := time.Unix(int64(binary.BigEndian.Uint64(payload[:challengeStampLen])), 0)
 	age := c.clk.Now().Sub(issued)
+
+	// age is refused outright, before the symmetric fold below, when Sub has
+	// saturated rather than reporting the true difference: this verifier
+	// stamped the token with its own clock, so a challenge whose stamp is
+	// centuries away in either direction is not a stale credential, it is a
+	// value this Challenger cannot honestly age at all.
+	//
+	// This is the fix for the corner the symmetric fold below used to fall
+	// into. Negating minDuration is a no-op under two's complement — its
+	// magnitude has no positive int64 representation, so -minDuration is
+	// minDuration, still negative — which meant a challenge stamped more than
+	// ~292 years in the future made Sub saturate to minDuration, survived the
+	// "if age < 0 { age = -age }" fold unchanged, and compared as younger than
+	// the window on the line below. A freshness window is a security control:
+	// it is what stops a captured key-binding proof being replayed later, so
+	// an unrepresentable value is refused as malformed (ErrChallengeInvalid)
+	// rather than let through by arithmetic that could not represent it — and
+	// deliberately not reported as ErrChallengeExpired, which reads as "ask me
+	// for another one" and would send whoever reads it looking for a timing
+	// problem instead of a value that never had a sensible age.
+	//
+	// pkg/sdjwt/keybinding.go's checkFreshness is the same construct — a
+	// stamped instant folded against "now" into a symmetric window — and
+	// carries the identical guard for the identical reason.
+	if age == minDuration || age == maxDuration {
+		return fmt.Errorf("%w: issued-at %s cannot be dated against this clock",
+			ErrChallengeInvalid, issued.UTC().Format(time.RFC3339))
+	}
 	if age < 0 {
-		// Symmetric, the way pkg/sdjwt's own key-binding window is: this
-		// verifier stamped the token with its own clock, so a challenge from
-		// the future means that clock moved backwards, and a token issued
-		// under an instant this verifier no longer agrees with is not one it
-		// can honestly age.
-		//
-		// The construct saturates, in both places. time.Duration is an int64 of
-		// nanoseconds, so a stamp more than ~292 years ahead of this clock makes
-		// Sub return minDuration, and negating math.MinInt64 returns it
-		// unchanged — leaving age negative, under the comparison below, and the
-		// challenge accepted. It is unreachable without the key, since the stamp
-		// is under the MAC, and pkg/sdjwt/keybinding.go's own window is the same
-		// construct with the same corner. Noted rather than fixed here: a fix
-		// belongs to both at once, so it is an issue against the pair rather
-		// than a divergence introduced on one side.
 		age = -age
 	}
 	// Strictly greater: a challenge whose age is exactly the window is still
