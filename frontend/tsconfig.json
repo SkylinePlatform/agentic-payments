@@ -6,7 +6,13 @@
   // ambient global declared in one file is visible to every file compiled
   // alongside it. This file exists so an editor opened at frontend/ still
   // finds one tsconfig.json and routes each open file to the right project.
-  // See #222.
+  //
+  // Worth knowing before reaching for the obvious command: `tsc --noEmit` here
+  // resolves to this file, compiles the empty `files` list and **exits 0
+  // having checked nothing** — which is what `npm run build` used to be, so it
+  // is what muscle memory reaches for. `npm run typecheck` is the one that
+  // checks both programs; `npx tsc -b` also works and checks both, at the cost
+  // of the .tsbuildinfo files .gitignore covers. See #222.
   "files": [],
   "references": [
     { "path": "./tsconfig.app.json" },

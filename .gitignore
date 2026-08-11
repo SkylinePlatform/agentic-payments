@@ -17,6 +17,9 @@ node_modules/
 dist/
 .vite/
 *.local
+# frontend/tsconfig.json is a solution file, which makes `tsc -b` a natural
+# thing to run there; it drops one of these per referenced project.
+*.tsbuildinfo
 
 # Exported diagrams. `make diagrams` regenerates them; committing them would
 # add a class of file that can silently go stale against the document it came

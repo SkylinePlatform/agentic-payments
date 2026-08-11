@@ -21,6 +21,14 @@
     // stand-in named `node` that intercepts the one reference this pin alone
     // cannot stop — see src/test/types/node/index.d.ts for the mechanism and
     // why the pin has to be paired with it. #222.
+    //
+    // **The order is the behaviour, not a preference.** @types/node is a real
+    // devDependency of this package — tsconfig.node.json's program is granted
+    // it — so the second entry below holds the genuine article, and swapping
+    // the two resolves vite's `/// <reference types="node" />` to it: every
+    // Node global reaches every component, and nothing here goes red.
+    // src/test/no-node-globals.ts is what does go red, in this program, on
+    // that edit and on any other that lets `process` resolve.
     "typeRoots": ["./src/test/types", "./node_modules/@types"],
 
     "allowImportingTsExtensions": true,

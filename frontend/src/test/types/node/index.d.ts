@@ -38,6 +38,13 @@
  * while diagnosing #222, both with and without a stray `@types/node` present
  * above the repository: the outcome no longer depends on it either way.
  *
+ * What keeps that from being a configuration nobody re-checks is
+ * `src/test/no-node-globals.ts`, which asserts the *property* this file is one
+ * half of the mechanism for: it fails the build if `process` ever resolves in
+ * this program, whether because this stand-in was removed, because the
+ * `typeRoots` entries were reordered, or because a future `vite` reached for
+ * Node's globals by a name this interception does not cover.
+ *
  * This file exports nothing and declares nothing global, so the reference is
  * satisfied without granting a single Node symbol. `skipLibCheck` means
  * `vite`'s own `.d.ts` is never checked for internal consistency against
