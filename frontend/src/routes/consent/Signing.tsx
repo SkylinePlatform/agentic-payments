@@ -37,6 +37,14 @@ const NOT_RETRYABLE = "request_malformed";
 /**
  * The signing screen — Task 10, #22's last slice.
  *
+ * **The signed box's enclosure is the decision axis's only carrier, #193.**
+ * `Consent.tsx` draws the same box as a plain outline in every state, and that
+ * is already right — nothing is ever signed on `/consent`. This is the screen
+ * where the box has a transition to make: an outline while nothing is signed,
+ * filled `wash` with an `ink` border once `POST /authorise` has answered. See
+ * `isSigned` below for why heading and enclosure are computed from the one
+ * boolean rather than left free to drift apart the way they had.
+ *
  * Takes `proposal` and `previewed`, not a third `digest` prop: the digest
  * `authorise` needs, to confirm it is signing the set it rendered, is
  * `previewed.constraints_digest` — already on the object this component
@@ -197,23 +205,36 @@ export function Signing({
     }
   }
 
-  // The heading names what state the signature is actually in, not what the
-  // box always looked like: "What you are signing" while nothing has been
-  // signed yet — mid-flight in `signing`, or `authorise` having just failed
-  // in `failed`, where the state's own doc comment is explicit that nothing
-  // was signed — and "What you signed" only once `authorise` has actually
-  // succeeded, in `starting` and `stranded`. A heading that said "signed" over
-  // sentences nobody produced a signature for would misstate the one fact
-  // this screen exists to get right.
-  const signedHeading =
-    state.kind === "signing" || state.kind === "failed" ? "What you are signing" : "What you signed";
+  // True exactly once `authorise` has succeeded — `starting` and `stranded`
+  // both hold an `Authorised`; `signing` and `failed` do not, and the latter's
+  // own doc comment is explicit that nothing was signed there either. Heading
+  // and enclosure are both computed from this one boolean rather than from two
+  // independent state checks, because two carriers computed separately are two
+  // carriers that can disagree — which is exactly the gap #193 found: the
+  // heading already made this distinction and the box did not, so a person
+  // reading only the box saw the same outline either side of a signature.
+  //
+  // docs/specs/2026-08-06-three-lane-view-design.md's *Indicators* section
+  // gives the decision axis no pip and no `check` — a consent decision is one
+  // moment and nothing about it has been to a verifier — so *enclosure* is its
+  // only carrier: an outline while nothing is signed, filled `wash` with an
+  // `ink` border once it has answered. The heading stays the device that
+  // cannot be misread; the box now agrees with it instead of contradicting it.
+  const isSigned = state.kind === "starting" || state.kind === "stranded";
+  const signedHeading = isSigned ? "What you signed" : "What you are signing";
+  // Built by concatenation rather than inside a template literal: the guard
+  // that keeps `frontend/src/architecture.test.ts`'s palette closed reads a
+  // class as its own string literal and cannot see one named inside a
+  // template literal's interpolation (#194) — a `${isSigned ? … : …}` here
+  // would make `border-ink` and `bg-wash` invisible to it.
+  const enclosure = isSigned ? "border border-ink bg-wash" : "border border-graphite/40";
 
   return (
     <section className="flex flex-col gap-8">
       <h1 className="font-display text-3xl tracking-tight text-ink">Signing</h1>
 
       <section
-        className="flex flex-col gap-2 border border-graphite/40 px-4 py-3"
+        className={"flex flex-col gap-2 px-4 py-3 " + enclosure}
         data-testid="signed-box"
         aria-labelledby="signed"
       >
