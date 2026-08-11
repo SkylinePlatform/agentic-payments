@@ -168,6 +168,35 @@ describe("the consent screen", () => {
     expect((sign as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("mounts the signing screen when Sign is clicked, and asks the surface to sign what it previewed", async () => {
+    // The seam between the two consent screens: nothing else in this file
+    // ever clicks Sign to completion — the test above clicks it only to find
+    // it disabled, and Signing.test.tsx mounts `Signing` directly, never
+    // through `Consent`. A regression that left Sign permanently disabled, or
+    // that stopped it from mounting `Signing` at all, would pass every other
+    // test in this suite and fail only here.
+    const calls = stubFetch({
+      "/authorise/preview": { body: aPreview() },
+      "/authorise": {
+        body: {
+          open_checkout_mandate: "checkout.jwt",
+          open_payment_mandate: "payment.jwt",
+          rendered: aPreview().rendered,
+          expires_at: "2026-01-01T01:00:00Z",
+          payment_instrument: aPreview().payment_instrument,
+        },
+      },
+    });
+    renderConsent(aProposal());
+
+    await userEvent.click(await screen.findByRole("button", { name: "Sign" }));
+
+    // Signing's own heading, not Consent's — proof the click actually
+    // mounted the other screen rather than merely toggling something local.
+    expect(await screen.findByRole("heading", { name: "Signing" })).toBeTruthy();
+    expect(calls.map((c) => c.url)).toContain("/authorise");
+  });
+
   it("refuses without ever calling authorise", async () => {
     const calls = stubFetch({
       "/authorise/preview": { body: aPreview() },
