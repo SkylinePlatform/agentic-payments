@@ -411,6 +411,17 @@ func (s *Service) start(w http.ResponseWriter, r *http.Request) {
 		// answers with one.
 		http.Error(w, err.Error(), http.StatusTooManyRequests)
 		return
+	case errors.Is(err, agent.ErrMerchantAnsweredDifferently):
+		// Checked before the arm below on purpose: settle wraps this alongside
+		// agent.ErrNothingToBuy, so without an arm of its own it would be caught
+		// by that one's errors.Is and answered 422 — which is the wrong arm. A
+		// merchant answering a question it was not asked is not this agent's own
+		// account of a request it cannot fulfil; it is a party outside this
+		// agent behaving unexpectedly, which is exactly what the arm below
+		// already reserves for "anything else, including a merchant that did not
+		// answer".
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
 	case errors.Is(err, interpret.ErrNoScript),
 		errors.Is(err, interpret.ErrNoConstraints),
 		errors.Is(err, agent.ErrNothingToBuy):
@@ -465,6 +476,13 @@ func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
 
 	proposal, err := s.Watcher.Propose(r.Context(), req.Prompt, req.Item)
 	switch {
+	case errors.Is(err, agent.ErrMerchantAnsweredDifferently):
+		// Same precedence reason as Service.start's arm of the same name: this
+		// also wraps agent.ErrNothingToBuy, so it has to be checked first or the
+		// case below would claim it and answer 422 for what is actually a
+		// merchant that did not answer the question asked.
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
 	case errors.Is(err, interpret.ErrNoScript),
 		errors.Is(err, interpret.ErrNoConstraints),
 		errors.Is(err, agent.ErrNothingToBuy):

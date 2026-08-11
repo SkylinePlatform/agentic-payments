@@ -531,6 +531,17 @@ func TestASentenceThisAgentCannotReadIsTheCallersMistake(t *testing.T) {
 			why:  "a watch with no item polls nothing for ever, which surfaces as a demo where nothing happens",
 		},
 		{
+			// settle wraps both sentinels on this failure — see authorise.go —
+			// so this case is what proves the switch checks
+			// ErrMerchantAnsweredDifferently before it checks ErrNothingToBuy.
+			// Reordered, this would answer 422 like the case above, for a
+			// failure that is not the caller's account of its own request.
+			name: "the merchant answered a different offer than was asked for",
+			err:  fmt.Errorf("%w: %w", agent.ErrMerchantAnsweredDifferently, agent.ErrNothingToBuy),
+			want: http.StatusBadGateway,
+			why:  "a merchant answering a question it was not asked is the arm below's case, not this one's, even though it also wraps ErrNothingToBuy",
+		},
+		{
 			name: "the surface did not answer", err: errors.New("dial tcp: connection refused"),
 			want: http.StatusBadGateway,
 			why:  "this one is not the caller's to fix, and a console cannot offer them a different sentence",
@@ -554,6 +565,32 @@ func TestASentenceThisAgentCannotReadIsTheCallersMistake(t *testing.T) {
 			assert.Equal(t, tc.want, status, tc.why)
 		})
 	}
+}
+
+// TestAProposalCarriesTheSameArmAsAWatch is Service.propose's own copy of the
+// precedence check above.
+//
+// propose's doc comment says its error mapping is Service.start's, "taken as
+// it stands rather than restated" — the switch is duplicated in the two
+// handlers rather than shared, so a fix landing in one and not the other would
+// leave the second silently wrong. This is the second half of that fix.
+func TestAProposalCarriesTheSameArmAsAWatch(t *testing.T) {
+	t.Parallel()
+
+	watcher := console.NewMockWatcher(t)
+	watcher.EXPECT().Propose(mock.Anything, mock.Anything, mock.Anything).
+		Return(agent.Proposal{}, fmt.Errorf("%w: %w",
+			agent.ErrMerchantAnsweredDifferently, agent.ErrNothingToBuy)).Maybe()
+
+	service := &console.Service{Watcher: watcher, Clock: clock.New()}
+	handler, err := service.Handler()
+	require.NoError(t, err)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	status := post(t, server.URL+"/proposals", map[string]any{"prompt": "buy something"}, nil)
+	assert.Equal(t, http.StatusBadGateway, status,
+		"without its own arm for ErrMerchantAnsweredDifferently, propose's switch would fall into the ErrNothingToBuy case and answer 422")
 }
 
 // TestAProposalIsNotAWatch is the state this route must not acquire.

@@ -109,6 +109,23 @@ const (
 // nothing ever happens rather than as an error anybody can act on.
 var ErrNothingToBuy = errors.New("agent: nothing in this merchant's catalogue matches what the user described")
 
+// ErrMerchantAnsweredDifferently means a search that named one identifier came
+// back naming another.
+//
+// Wrapped alongside ErrNothingToBuy in settle rather than instead of it — a
+// caller checking only for ErrNothingToBuy still finds this is a case of it,
+// which is true: there is still nothing here this proposal can use. But it is
+// not the *same* failure, and console.go's two switches have to tell them
+// apart. ErrNothingToBuy on its own is this agent's own account of a request
+// it cannot turn into a watch — an interpretation named something and the
+// catalogue has none of it. This is a different party misbehaving: the search
+// asked for one identifier and got back another, which is prefix-matching, a
+// bug, or hostile, never an honest answer to the question asked — see settle.
+// So it belongs with "the Trusted Surface did not answer", not with "this is
+// not one of the sentences the interpreter knows".
+var ErrMerchantAnsweredDifferently = errors.New(
+	"agent: the merchant answered a search for one offer by naming a different one")
+
 // Intent is what the discovery half is given: the sentence the user typed, the
 // interpreter that reads it, and the key the agent wants endorsed.
 //
@@ -368,8 +385,8 @@ func (c *Client) settle(
 	// things. Refused rather than trusted over the caller's own choice.
 	if chosen != "" && c0.ID != chosen {
 		return "", Offer{}, fmt.Errorf(
-			"%w: asked the merchant for the offer identified as %q and it answered with %q instead",
-			ErrNothingToBuy, chosen, c0.ID)
+			"%w: %w: asked the merchant for the offer identified as %q and it answered with %q instead",
+			ErrMerchantAnsweredDifferently, ErrNothingToBuy, chosen, c0.ID)
 	}
 
 	// candidate and Offer carry the same fields for the same reason, so the
