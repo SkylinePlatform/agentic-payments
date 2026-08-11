@@ -1,6 +1,7 @@
 package ap2_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"strings"
@@ -124,6 +125,103 @@ func cnfClaim(t *testing.T, key generated.PublicKey) map[string]any {
 // this produces is one a Holder can send and a Verifier must refuse.
 func appendDisclosure(presented string, extra sdjwt.Disclosure) string {
 	return strings.TrimSuffix(presented, "~") + "~" + extra.String() + "~"
+}
+
+// chainWithASecondDelegatePayloadElement takes a chain chainFixture already
+// built and splices a second element into the delegating hop's
+// delegate_payload array, referenced by its own array disclosure — the
+// multi-element half of sdjwt.ErrDelegatePayloadInvalid, which its own comment
+// in pkg/sdjwt/errors.go explains: "more than one means the Verifier would
+// have to choose which authorisation it was being shown, and a Verifier that
+// picks is a Verifier an attacker can steer."
+//
+// Modelled on chain_test.go's rebindToIssuerJWTHash: decode the delegating
+// JWT's own claims, change exactly the one field under test, and re-sign with
+// the agent's key, so a failure here is about the one thing under test and
+// nothing else about the chain — the same discipline
+// TestExactlyOneDelegatePayloadElementIsDisclosed's own fixture in
+// pkg/sdjwt/chain_test.go follows one layer down, generalised to two elements
+// rather than built from scratch.
+func chainWithASecondDelegatePayloadElement(t *testing.T, fx *checkoutChainFx) *sdjwt.Chain {
+	t.Helper()
+
+	parts, sep := splitChainAtSeparator(t, fx.chain)
+
+	segments := strings.Split(parts[sep+1], ".")
+	require.Len(t, segments, 3, "the delegating JWT is a compact JWS")
+
+	headerBytes, err := base64.RawURLEncoding.DecodeString(segments[0])
+	require.NoError(t, err, "buildClosedCheckoutChain encoded this header a moment ago, so an unreadable one means the fixture is re-signing something else")
+	var header struct {
+		Typ string `json:"typ"`
+	}
+	require.NoError(t, json.Unmarshal(headerBytes, &header),
+		"typ is carried over unchanged; re-signing as an untyped JWT would be refused before delegate_payload is ever read")
+
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(segments[1])
+	require.NoError(t, err, "as above, for the claims this fixture is about to rewrite")
+	var claims map[string]any
+	require.NoError(t, json.Unmarshal(payloadBytes, &claims),
+		"decoding these wrongly would put a different delegation under test from the one named")
+
+	extra, err := sdjwt.NewArrayDisclosure("salt-second-delegate-element", map[string]any{"vct": "impostor"})
+	require.NoError(t, err, "the extra disclosure has to be well-formed or the digest below means nothing")
+	digest, err := extra.Digest(sdjwt.SHA256)
+	require.NoError(t, err, "chainFixture's blinder defaults to sha-256, and the delegating hop's own _sd_alg is left untouched here")
+
+	existing, ok := claims["delegate_payload"].([]any)
+	require.True(t, ok, "buildClosedCheckoutChain always writes delegate_payload as a one-element array")
+	claims["delegate_payload"] = append(existing, map[string]any{"...": digest})
+
+	resigned, err := sdjwt.SignJWT(t.Context(), ap2.JOSESigner(fx.agentSigner), header.Typ, claims)
+	require.NoError(t, err, "the agent signs its own delegation, so this is the key the chain will be verified against")
+
+	// parts[:sep+1] is the root's own serialisation plus the separator;
+	// parts[sep+1] is the delegating JWT, now replaced; parts[sep+2:len-1] are
+	// its existing Disclosures, carried over unchanged; the extra Disclosure
+	// and the trailing separator go on the end.
+	rebuilt := make([]string, 0, len(parts)+1)
+	rebuilt = append(rebuilt, parts[:sep+1]...)
+	rebuilt = append(rebuilt, resigned)
+	rebuilt = append(rebuilt, parts[sep+2:len(parts)-1]...)
+	rebuilt = append(rebuilt, extra.String(), "")
+
+	again, err := sdjwt.ParseChain(strings.Join(rebuilt, "~"))
+	require.NoError(t, err, "the mutated chain must still be the shape ParseChain accepts")
+	return again
+}
+
+// chainWithNothingDelegated presents a chain's delegating hop with none of its
+// Disclosures — the zero-element half of sdjwt.ErrDelegatePayloadInvalid, and
+// the other thing draft §6 step 3.2's "exactly one" refuses.
+//
+// Every Disclosure has to go, not only the array Disclosure carrying the
+// delegate payload. That one is the parent: the closed mandate's own claims are
+// blinded *inside* it, so dropping it alone would leave them referenced by
+// nothing and the presentation would be refused as ErrDisclosureUnmatched
+// several steps earlier — a vector passing for a different reason than the one
+// beside it. Dropping the lot leaves delegate_payload processing to an empty
+// array, which is the shape under test.
+//
+// Nothing is re-signed, and that is what makes it the right fixture here where
+// the sibling above re-signs: this is precisely what a party that only relays a
+// chain can do to one, with no cooperation from anybody holding a key. The
+// two-element case needs the agent's own key and this one needs nobody's.
+func chainWithNothingDelegated(t *testing.T, c *sdjwt.Chain) *sdjwt.Chain {
+	t.Helper()
+
+	parts, sep := splitChainAtSeparator(t, c)
+	require.Greater(t, len(parts), sep+2,
+		"the fixture has to start from a delegation that discloses something, or it would be asserting the absence of what was never there")
+
+	// parts[:sep+2] is the root, its Disclosures, the separator and the
+	// delegating JWT; the empty string on the end is the trailing separator the
+	// compact serialisation requires.
+	stripped := append(append([]string{}, parts[:sep+2]...), "")
+
+	again, err := sdjwt.ParseChain(strings.Join(stripped, "~"))
+	require.NoError(t, err, "a delegation that discloses nothing is still a well-formed chain; the refusal under test is a verification one")
+	return again
 }
 
 // rejectionVectors is the suite, as data.
@@ -308,6 +406,35 @@ func rejectionVectors() []rejectionVector {
 				fx.opts.RequireConstrained = []string{"merchant.id"}
 
 				_, err := ap2.AuthoriseCheckoutChain(fx.chain, fx.subject, fx.checkoutJWT, fx.opts)
+				return err
+			},
+		},
+		{
+			name:     "a delegation whose delegate_payload discloses two elements",
+			code:     generated.ErrorCodeMandateMalformed,
+			sentinel: sdjwt.ErrDelegatePayloadInvalid,
+			reading: "draft §6 step 3.2 requires exactly one delegated element; two means the verifier would have to choose which authorisation it was shown, " +
+				"and a verifier that picks is a verifier an attacker can steer — #162: this is reachable through AuthoriseCheckoutChain, the same live entry point every counterparty drives, unlike #147's ErrMalformedChain",
+			provoke: func(t *testing.T) error {
+				fx := chainFixture(t, 18900)
+				chain := chainWithASecondDelegatePayloadElement(t, fx)
+
+				_, err := ap2.AuthoriseCheckoutChain(chain, fx.subject, fx.checkoutJWT, fx.opts)
+				return err
+			},
+		},
+		{
+			name:     "a delegation whose delegate_payload discloses nothing at all",
+			code:     generated.ErrorCodeMandateMalformed,
+			sentinel: sdjwt.ErrDelegatePayloadInvalid,
+			reading: "the other half of the same sentinel, and the half whose code is arguable: zero elements is literally a withheld Disclosure, which the vocabulary elsewhere calls disclosure_insufficient — " +
+				"one code serves both because pkg/sdjwt raises one sentinel for both, and mandate_malformed is the safe conflation, since the alternative would invite the two-element presenter to retry a shape no retry may be allowed to fix. " +
+				"This row is what fails if that sentinel is ever split and only one half is re-mapped",
+			provoke: func(t *testing.T) error {
+				fx := chainFixture(t, 18900)
+				chain := chainWithNothingDelegated(t, fx.chain)
+
+				_, err := ap2.AuthoriseCheckoutChain(chain, fx.subject, fx.checkoutJWT, fx.opts)
 				return err
 			},
 		},

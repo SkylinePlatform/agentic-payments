@@ -313,18 +313,34 @@ func CodeOf(err error) generated.ErrorCode {
 // written from the protocol documentation rather than from this package — so a
 // gap here is a gap in the mapping, not in the vocabulary.
 //
-// ErrInvalidOptions is the one that leaves that block, for the reason
-// ErrMisconfigured gives: pkg/sdjwt raises it when Verify is handed a policy it
-// cannot apply, which is the calling verifier's fault and not the mandate's.
-// VerifyCheckout guards the two cases it could reach today, so this arm is
-// currently unreachable through it — but an unmapped sentinel returns the empty
-// code, and an empty code is not in the enum, so the day a second caller
-// appears the failure would be a rejection nobody can name.
+// ErrInvalidOptions and ErrNoSuchClaim are the two that leave that block, and
+// both are enforced rather than merely commented. TestEverySDJWTSentinelIsMappedOrAllowlisted
+// in errors_internal_test.go reads every exported var pkg/sdjwt declares and
+// partitions the answers this function may give for one: any code but
+// verifier_unavailable, or verifier_unavailable and a reason in that test's own
+// allowlist saying why the verifier is confessing about itself. Both halves are
+// checked, so neither a sentinel with no arm nor an arm quietly returning
+// verifier_unavailable can pass. #147 and #162 were both found by a person
+// reading this switch by eye instead — an unmapped sentinel falls through to
+// the empty code, which is not in the enum, so a missing arm was invisible
+// until that test existed.
+//
+// ErrInvalidOptions is for the reason ErrMisconfigured gives: pkg/sdjwt raises
+// it when Verify is handed a policy it cannot apply, which is the calling
+// verifier's fault and not the mandate's. VerifyCheckout guards the two cases
+// it could reach today, so this arm is currently unreachable through it — but
+// the day a second caller appears the failure is already nameable.
+//
+// ErrNoSuchClaim is raised only by Blinder.Blind, whose production callers are
+// all issuance-side: the surface builds the disclosure paths itself, so a path
+// naming nothing is this verifier's own bookkeeping error and not a claim about
+// a counterparty's mandate — the same reasoning as ErrInvalidOptions, over a
+// different mistake.
 func sdjwtCodeOf(err error) generated.ErrorCode {
 	switch {
 	case err == nil:
 		return ""
-	case is(err, sdjwt.ErrInvalidOptions):
+	case is(err, sdjwt.ErrInvalidOptions), is(err, sdjwt.ErrNoSuchClaim):
 		return generated.ErrorCodeVerifierUnavailable
 	case is(err, sdjwt.ErrUnexpectedType):
 		// request_malformed rather than mandate_malformed, and the distinction
@@ -366,6 +382,60 @@ func sdjwtCodeOf(err error) generated.ErrorCode {
 		// error value. #147: this arm was missing, so a malformed chain fell
 		// through to the default instead and answered verifier_unavailable —
 		// blaming this verifier for a shape only the presenter controlled.
+		return generated.ErrorCodeMandateMalformed
+	case is(err, sdjwt.ErrDelegatePayloadInvalid):
+		// mandate_malformed, on the same reasoning as the arm above: a
+		// delegate_payload that is not exactly one disclosed object is not the
+		// shape draft section 6 step 3.2 requires, which is "not parseable as
+		// the securing format requires" just as much as a chain that never
+		// parsed at all.
+		//
+		// #162: unlike #147's ErrMalformedChain, this one was live rather than
+		// latent. sdjwt.VerifyChain returns it directly (pkg/sdjwt/chain.go);
+		// verifyDelegationChain and AuthoriseCheckoutChain in this package's
+		// chain.go return it unchanged; and every role that calls
+		// AuthoriseCheckoutChain hands the result to CodeOf and then to
+		// IssueReceipt, which stamps the code into a signed receipt. So a
+		// presentation this verifier refused for a reason entirely the
+		// presenter's doing came back as a signed statement that *this
+		// verifier* could not reach a conclusion. That travels further than
+		// #147 ever could: #147's wrong code could only ever have appeared in a
+		// Problem Details response, and this one is evidence in a dispute.
+		//
+		// # One sentinel, two conditions, and why they share a code
+		//
+		// The obvious argument for mandate_malformed — that no retry can change
+		// the presentation, so verifier_unavailable's implicit "try again" is a
+		// lie — is only true of one of the two conditions this sentinel covers,
+		// and it is worth being exact about which.
+		//
+		//	two or more elements  the Verifier would have to choose which
+		//	                      authorisation it was shown, and one that picks
+		//	                      is one an attacker can steer. Nothing about it
+		//	                      is retryable and nothing about it is innocent.
+		//	zero elements         the delegate withheld the very content it is
+		//	                      delegating. A retry that disclosed it *would*
+		//	                      succeed, which reads a lot like
+		//	                      disclosure_insufficient — "a claim this
+		//	                      verifier needs was withheld" — the code
+		//	                      ErrBindingUnverifiable already carries for the
+		//	                      withheld Checkout JWT.
+		//
+		// They are told apart in pkg/sdjwt's message and nowhere in its error
+		// vocabulary: one sentinel covers both, so this function cannot answer
+		// differently without matching on wrapped text, which is not a contract.
+		// Splitting it is a change to a package implementing a public standard,
+		// where the draft's own step 3.2 states the two as one rule — a decision
+		// for whoever needs it, not a side effect of an error-code fix.
+		//
+		// Given one code for both, mandate_malformed is the one to fail closed
+		// on. disclosure_insufficient names something the presenter can fix by
+		// showing more, and saying that to the multi-element case would invite
+		// the steerable presenter to keep trying; mandate_malformed said to the
+		// zero-element case is merely blunter than it could be. Both readings
+		// blame the presenter, which is the correction #162 is actually about,
+		// and both are vectored in golden_rejection_test.go so a future split
+		// cannot re-map one half and leave the other behind unnoticed.
 		return generated.ErrorCodeMandateMalformed
 	default:
 		return ""
