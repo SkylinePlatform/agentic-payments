@@ -95,7 +95,11 @@ asserts all three cases, the residual hole included.
 
 ## Which verifier holds which facts
 
-| Fact | Merchant | Credential Provider / Network / Merchant Payment Processor |
+The columns are the two rows of `evaluations`, and they are named by the closed
+mandate under evaluation rather than by role — because `Minimise` reads the row
+off the open mandate's own `vct` and never takes a role as an argument.
+
+| Fact | `ForCheckout` — a Merchant evaluating a Checkout Mandate | `ForPayment` — anybody evaluating a Payment Mandate |
 |---|---|---|
 | `amount` | yes | yes — `payment_amount` |
 | `at` | yes | yes — its own clock |
@@ -113,21 +117,44 @@ withholds nothing today. The row still earns its place: the day a fact arrives
 that a merchant cannot state, this table is where that is decided rather than
 somewhere a widening happens silently.
 
-**The payment-side column is one column for three roles, and #126 is what
-settled that as a decision rather than an approximation.** AP2 sends the
-Credential Provider, the Network and the Merchant Payment Processor the same
-Payment Mandate and nothing else — `contracts/authz/payment_mandate.json`'s own
-description names all three as its verifiers, and `docs/protocols/ap2.md`'s
-binding section is explicit that neither the Credential Provider nor the
-processor is ever sent the checkout. None of the three can acquire an item or a
-quantity without being sent a document this leg of the protocol never carries to
-any of them, so the column is short for the same reason for all three, not for
-the first of them alone with the other two merely riding along. `ForPayment`'s
-own doc comment in `internal/adapters/ap2/disclose.go` carries the argument in
-full, including what it would take for a specific deployment's Merchant Payment
-Processor to know more — a document this table has no way to represent, held
-privately and combined with this row by the role that holds it, not a fourth
-column here.
+**The payment-side column is one column for every verifier of a Payment
+Mandate, and #126 is what settled that as a decision rather than an
+approximation.** AP2 names three of them — Credential Provider, Network and
+Merchant Payment Processor, which `contracts/authz/payment_mandate.json`'s own
+description repeats — and **this implementation has four**, because
+`merchant.Service.decideChain` is wired with `ap2.CredentialProviderRules` and
+calls `AuthorisePaymentChain` on the payment leg of a purchase whose checkout it
+wrote.
+
+Four readers, one column, and the reason differs per reader. That is the part
+worth being exact about, because the summary that fits on one line — *none of
+them is ever sent the checkout* — is true of three of the four and false of the
+fourth:
+
+- **A Credential Provider and a Network are one case.** The specification puts
+  them under a single verification heading with a single rule set — *"The
+  Credential Provider and, if applicable, the Network MUST receive an
+  appropriate Payment Mandate from the Shopping Agent before returning a payment
+  credential"* — so it is one artefact from one sender, and there is no fact one
+  holds that the other does not. Neither is sent a checkout.
+- **A Merchant Payment Processor is the one AP2 treats differently**, and not in
+  the direction the earlier draft of this section feared. Its own section has it
+  *"receive an appropriate Payment Credential from the Merchant"* and *"verify
+  the Payment Credential is appropriately scoped to the Checkout"* — a different
+  artefact, from a different party, with no instruction to evaluate constraints
+  at all. Routing it through `CredentialProviderRules`, which #120 did, asks
+  *more* of it than the protocol does. Nothing here sends it a checkout either:
+  `mpp.Service`'s settlement body is a mandate or a chain, a nonce and a
+  credential.
+- **A Merchant reads this column too, and for it the column is not a ceiling
+  imposed by ignorance.** It issued the checkout and could state every fact the
+  registry holds. What makes the column right there is that the same request
+  carries a Checkout Mandate chain it evaluates under `ForCheckout` with the
+  full registry, so a constraint withheld from it here is enforced by it one leg
+  over — the trade `merchant.decideChain`'s own comment records.
+
+`ForPayment`'s doc comment in `internal/adapters/ap2/disclose.go` carries all
+four with the specification quoted for each.
 
 The table lives in `internal/adapters/ap2/disclose.go`, and it is enumerated
 rather than derived from `constraint.FieldNames`. A derived list would agree with
@@ -279,8 +306,8 @@ would have refused the purchase, because it has nothing to evaluate against.
 
 ## What is recorded rather than built
 
-One gap and one decision, both worth naming so that nobody reads the table
-above as more than it is.
+One gap, one decision and one asymmetry, all three worth naming so that nobody
+reads the table above as more than it is.
 
 **The reach table is per role; the specification's granularity is per checkout.**
 AP2 says the agent determines disclosures *"ad-hoc based on the Checkout"*.
@@ -291,13 +318,14 @@ a constraint on `item.category` it will refuse in ignorance. So *"both, and they
 turn out to be one question"* is true at role granularity and is not a claim
 about per-transaction reach. This one is still open.
 
-**The payment row credits three verifiers, and whether that was the narrowest
-of them or the ceiling for all three was an open question until #126.** AP2 has
-the Payment Mandate verified by the Credential Provider, the Network *and* the
-Merchant Payment Processor. `ForPayment` was one row, and until #126 its own
-comment read as written for the first of the three and merely tolerated by the
-other two — a Merchant Payment Processor sits merchant-side, so it *could*
-plausibly hold the checkout and be shown less than it can state.
+**The payment row credits several verifiers, and whether that was the narrowest
+of them or the ceiling for all of them was an open question until #126.** AP2
+has the Payment Mandate verified by the Credential Provider, the Network *and*
+the Merchant Payment Processor; this implementation adds the Merchant, which
+verifies one at settlement. `ForPayment` was one row, and until #126 its own
+comment read as written for the first of them and merely tolerated by the rest —
+a Merchant Payment Processor sits merchant-side, so it *could* plausibly hold
+the checkout and be shown less than it can state.
 
 When that comment was written it was a gap nothing could reach:
 `MPPRules.VerifyCredential` answers a different question, about a credential
@@ -307,28 +335,31 @@ live.** `mpp.Service` gained a chain entry point and verifies through
 Credential Provider's reach today — and #120 corrected the sentences describing
 that without settling whether the reach itself was right.
 
-**#126 settled it, and the answer is that the coincidence is real rather than
-convenient.** AP2 gives the Credential Provider, the Network and the Merchant
-Payment Processor exactly one artefact for this leg — the Payment Mandate — and
-`contracts/authz/payment_mandate.json`'s own description names all three as its
-verifiers. `docs/protocols/ap2.md`'s binding section settles the "may well hold
-the checkout" half directly, for this implementation: *"a Credential Provider or
-a Merchant Payment Processor sent only that mandate holds a digest with no price
-to compare it against,"* and *"the Credential Provider and the processor are
-sent no checkout, so nothing about them changes."* `internal/adapters/ap2`
-processes one wire artefact for the payment leg and hands it to whichever of the
-three is asking; there is no second channel here for a checkout to travel down,
-so a fourth row is not a table entry this package could add on its own
-initiative. A deployment that gives its own Merchant Payment Processor the
-checkout out of band — plausible, since one entity may play several roles —
-would need a second, role-owned subject combining `PaymentSubject` with what it
-independently holds; that composition belongs to `internal/roles/mpp`, which
-knows what its deployment holds, not to this table. `ForPayment`'s doc comment
-in `internal/adapters/ap2/disclose.go` carries the argument in full, and
-`TestTheSubjectEveryPaymentSideVerifierEvaluatesIsExactlyWhatItCanState` — renamed
-from `TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState` for the
-same reason — is what turns red if the row is widened or narrowed for any of the
-three.
+**#126 settled it, and the specification is what settles it rather than this
+package's own convenience.** The reader-by-reader argument is in the table
+section above and in `ForPayment`'s doc comment; the part that belongs here is
+what it does to the gap. AP2 does not ask a Merchant Payment Processor to
+evaluate constraints at all — its section has it verify that a Payment
+Credential received *from the Merchant* is scoped to the Checkout — so the
+processor being shown a Credential Provider's reach is this implementation
+asking more of it than the protocol does, not less. And the *"may well hold the
+checkout"* half has the specification's own answer: *"A particular role can
+always delegate the responsibilities to a technology provider. For example, a
+Merchant could have their payment processor perform verifications on their
+behalf. In such a case, the delegate follows the verification rules for that
+role instead."* A processor holding the checkout because it verifies on the
+Merchant's behalf is following the **Merchant's** rules, which is `ForCheckout`
+and already the whole registry.
+
+What is left of the gap is a processor that holds the checkout out of band while
+doing its own job. That needs a second, role-owned subject combining
+`PaymentSubject` with what it privately holds — a document this table has no way
+to represent — and that composition belongs to `internal/roles/mpp`, which knows
+what its deployment holds, not to a fourth column here.
+`TestTheSubjectEveryPaymentSideVerifierEvaluatesIsExactlyWhatItCanState` —
+renamed from `TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState`
+for the same reason — is what turns red if the row is widened or narrowed for
+any reader.
 
 **The payment row is now tied to the `constraint.Subject` a verifier evaluates;
 the checkout row is not.** A verifier populating fewer facts than its row claims
