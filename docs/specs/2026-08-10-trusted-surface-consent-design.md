@@ -538,12 +538,34 @@ sentences still on screen, and navigates to `/lanes?run=<correlation_id>` only o
 | `POST /authorise/preview` refuses a constraint | the canonical code, and **no sign button** | nothing |
 | `POST /authorise/refused` fails | the refusal stands; a note that it was not recorded | nothing |
 | `POST /authorise` → `request_malformed` | shown plainly, with no retry — this one is our defect | nothing |
+| `POST /authorise` → anything else | the surface's sentence, a line saying the surface may have signed and this browser was not told, and a retry | **unknown** |
 
 **A refusal is never conditional on the network.** If `POST /authorise/refused`
 fails, the user's *no* still holds, because `/authorise` was simply never called.
 The screen returns and says the record did not go through. The alternative is a
 *Refuse* button that stops working when the collector is down, which is the worst
 available way to lose a person's decision.
+
+**The last row is the only `unknown` in that column, and it is #206's.** Every
+other row can say *nothing* because something the browser can see proves it: the
+call was never made, or the surface answered before it signed.
+`request_malformed` is in the second group — every site emitting it on that route
+sits before the first `Issue…` — and it is the *only* answer in that group the
+browser can rely on, which is why the row above it is one code rather than a
+class. A 502, a dropped connection or a backgrounded tab leaves no answer to
+read, and `client.ts`'s own doc comment is explicit that the surface may have
+signed and only the response was lost. Writing *nothing* there would have this
+screen assert the absence of a mandate carrying the user's key on the strength of
+a failure it cannot classify, so the column says what is true and the screen
+carries it in a sentence.
+
+**A retry is offered on that row and not on the one above it**, and the reason is
+not that nothing was signed — it may have been. It is that the retry repeats the
+same request under the same `Idempotency-Key`, which is what lets the surface
+answer with the mandates it already produced. That mechanism has a gap where
+`authorise` fails *between* its two signatures, since a 5xx is deliberately not
+remembered; issue #212 is where that is tracked, and the screen's wording states
+the mechanism rather than promising the guarantee.
 
 ### The one that is not routine: `/watches` fails after `/authorise` succeeded
 

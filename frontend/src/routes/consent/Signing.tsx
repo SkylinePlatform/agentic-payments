@@ -8,7 +8,7 @@ import type { Authorised, Previewed, Proposal } from "../../consent/model";
 import { lifetime } from "./format";
 
 /**
- * Four states, explicit rather than implicit through `if` chains — the same
+ * Five states, explicit rather than implicit through `if` chains — the same
  * standard the Go side of this repository is held to, and for the same
  * reason: a screen with no revocation to fall back on cannot afford a state
  * nobody named.
@@ -19,21 +19,82 @@ import { lifetime } from "./format";
  *   `stranded` resends.
  * - `stranded` — the watch did not start, and the signature is not
  *   un-collectable. See below.
- * - `failed` — `authorise` itself failed, so **nothing was signed**.
- *   `retryable` is `false` only for `request_malformed`: that one means the
- *   browser mutated the constraint set between preview and signature, which
- *   is this app's defect, and retrying would only repeat it. Anything
- *   else — a 502, a network burp — touched nothing the user or the browser
- *   did, and a retry might simply work; the reviewed gap this state closes.
+ * - `unsigned` — `authorise` was refused *before* the surface signed
+ *   anything, and the surface's own answer is what proves it. That answer is
+ *   `request_malformed`. The case a person actually reaches is the digest: the
+ *   browser sent a set other than the one that was rendered, so the surface
+ *   stopped before signing. This app's defect, **nothing was signed**, and
+ *   sending the same request again would only be refused again — so there is
+ *   nothing to click.
+ *
+ *   **The property is about the code's sites, not about that one case**, and
+ *   the distinction is what a future reader has to be able to check. Five
+ *   sites can put this code on a `POST /authorise` response — two in
+ *   `roles.DecodeJSON`, being a body it could not read and a body it could not
+ *   unmarshal; `vetted`'s refusal of an empty constraint set; the digest
+ *   mismatch in `surface.authorise` itself; and `transport.Idempotency`'s own
+ *   failed read, which is written before the handler runs at all. **Every one
+ *   of them precedes the first call to `Issue…`**, and that, rather than any
+ *   one of them, is what makes the code answerable. It is also the thing a
+ *   change to the surface could quietly break: a new site for it *after* a
+ *   signature would fail no test here, and would make this state lie.
+ * - `unresolved` — every other way `authorise` can fail, and its separation
+ *   from the state above is the whole of #206. A 502, a dropped connection, a
+ *   backgrounded tab: `authorise`'s own doc comment in `client.ts` is explicit
+ *   that the surface "may have already signed and only the response was
+ *   lost", and that the browser then "sees a bare rejected fetch, not an
+ *   answer it can read a code from". So this state claims only what is true —
+ *   nothing here settles whether a signature exists — rather than borrowing
+ *   the certainty the state above earns from an answer it actually received.
+ *
+ * **These two used to be one state with a `retryable` flag, and the flag was
+ * the smaller half of what the split says.** Whether a retry is worth
+ * offering and whether a signature exists are different questions with the
+ * same answer here by coincidence, and a type that stated only the first left
+ * the second to a doc comment that got it wrong. A retry is safe because of
+ * `signatureKey` below, never because nothing was signed.
+ *
+ * `unresolved` is the default: a code this screen does not recognise, or no
+ * code at all, lands there, because exactly one answer is known to prove the
+ * surface signed nothing. A failure this screen learns to classify later
+ * moves *into* `unsigned`, never out of it.
  */
 type State =
   | { readonly kind: "signing" }
   | { readonly kind: "starting"; readonly authorised: Authorised }
   | { readonly kind: "stranded"; readonly authorised: Authorised }
-  | { readonly kind: "failed"; readonly message: string; readonly retryable: boolean };
+  | { readonly kind: "unsigned"; readonly message: string }
+  | { readonly kind: "unresolved"; readonly message: string };
 
-/** The one `authorise` failure that retrying would only repeat. */
-const NOT_RETRYABLE = "request_malformed";
+/**
+ * The one `authorise` answer that proves the surface signed nothing: every
+ * site that emits it does so before the first signature. Retrying it would
+ * only repeat this browser's own defect — which is why it is also the one
+ * failure with no retry, though that is a consequence and not the reason it is
+ * named here.
+ *
+ * **Two codes are provably pre-signature as well and are deliberately not
+ * here**, because the reason to widen has to beat the reason not to and does
+ * not. `request_too_large` and the constraint refusals — `constraint_type_unknown`
+ * and its neighbours — are both emitted by `vetted` or above it, so either
+ * would be a true `unsigned`. Neither is reachable by a browser that got this
+ * far: `/authorise/preview` runs the same `vetted` first, so a constraint the
+ * surface cannot parse was refused while the Sign button was still unrendered,
+ * and a handful of constraints is nowhere near the megabyte cap. So widening
+ * buys a sharper sentence on paths nobody walks, and costs a standing
+ * obligation that no future site may emit those codes after a signature.
+ *
+ * **`verifier_unavailable` is why that obligation is worth taking seriously**,
+ * and it is the code that settles the question by example: the surface already
+ * emits it from both sides of the signature — from the idempotency store at
+ * capacity, before the handler runs at all, and from `IssueOpenPayment`
+ * failing *after* `IssueOpenCheckout` has signed. One code, two truths, and
+ * only one of them safe. `mandate_malformed`, `idempotency_conflict` and
+ * `idempotency_in_flight` are all ambiguous in the same direction. A screen
+ * that guessed would be asserting the absence of a mandate carrying the user's
+ * key, which is the one error this state exists to make unavailable.
+ */
+const REFUSED_BEFORE_SIGNING = "request_malformed";
 
 /**
  * The signing screen — Task 10, #22's last slice.
@@ -70,17 +131,32 @@ const NOT_RETRYABLE = "request_malformed";
  * decided once, and a second signature would both fail to undo the first
  * pair of mandates and collect consent for a decision already made.
  *
- * **`failed`'s own retry calls `authorise` again, and that is safe for a
+ * **`unresolved`'s own retry calls `authorise` again, and that is safe for a
  * different reason than "a failed call produced no mandate" might suggest.**
  * That premise is false in general — a response can be lost *after* the
  * surface already signed, which is exactly what a bare network failure
- * cannot be told apart from — so it is not what makes the retry safe. What
+ * cannot be told apart from, and #206 is where the state's own name stopped
+ * pretending otherwise — so it is not what makes the retry safe. What
  * makes it safe is that the retry reuses the **same** idempotency key
  * `signatureKey` below mints once for the whole decision to sign: the
  * surface's own idempotency middleware is what turns a repeated key into
- * "answer with what I already signed" rather than "sign again", regardless
- * of what the first attempt actually did on the surface. See `signatureKey`'s
- * own comment, and `authorise`'s in `client.ts`, for the mechanism.
+ * "answer with what I already signed" rather than "sign again". See
+ * `signatureKey`'s own comment, and `authorise`'s in `client.ts`, for the
+ * mechanism.
+ *
+ * **It used to say "regardless of what the first attempt actually did on the
+ * surface", and #212 is where that stopped being claimed.** The middleware
+ * replays an answer it remembers, and it deliberately remembers no 5xx —
+ * `transport.Idempotency`'s own comment gives the reason, that an operation
+ * which failed for the verifier's own reasons has not happened once. That
+ * reasoning holds for a handler that is atomic and `authorise` is not: it
+ * signs the Checkout Mandate, then the Payment Mandate, and a failure between
+ * them answers 503 with one signature already made and nothing remembered to
+ * replay. So the key is what makes the retry safe in the case this state is
+ * usually reached by, and #212 is the case where it is not. Not a reason to
+ * withhold the button — a person with no way forward is worse off than one
+ * whose retry is imperfect — but every sentence on screen is written to the
+ * weaker guarantee rather than to this paragraph's old absolute.
  */
 export function Signing({
   proposal,
@@ -94,7 +170,7 @@ export function Signing({
 
   // One idempotency key for the whole decision to sign, minted once and
   // reused by every attempt of `authorise` — including a retry from
-  // `failed`. `authorise`'s own doc comment in client.ts says why: if the
+  // `unresolved`. `authorise`'s own doc comment in client.ts says why: if the
   // surface already signed and only the response was lost — a dropped
   // connection, a proxy timeout, a backgrounded tab — a fresh key on retry
   // would ask it to sign a second, independent pair of open mandates for one
@@ -128,12 +204,14 @@ export function Signing({
   /**
    * Runs `signing`: collects the signature, then hands it to `attemptWatch`.
    * Reachable twice — once automatically on mount, and again from
-   * `onTryAgain`'s `failed` branch. **Not because a failed `authorise`
+   * `onTryAgain`'s `unresolved` branch. **Not because a failed `authorise`
    * proved no mandate exists** — a lost response means it cannot prove
-   * that — but because every call here carries `signatureKey`, the one key
-   * minted for this whole decision, so the surface's idempotency middleware
-   * is what keeps a retry from ever becoming a second signature. See
-   * `signatureKey`'s own comment above.
+   * that, and `unresolved` is now the state that says so — but because every
+   * call here carries `signatureKey`, the one key minted for this whole
+   * decision, so the surface's idempotency middleware is what stands between a
+   * retry and a second signature. See `signatureKey`'s own comment above, and
+   * this component's own doc for the case where that middleware has nothing
+   * remembered to answer with.
    *
    * `isCancelled` gates the request itself, not only the `setState` calls
    * that follow it — see the `await Promise.resolve()` below for why that
@@ -168,18 +246,21 @@ export function Signing({
       authorised = await authorise(proposal, previewed.constraints_digest, signatureKey);
     } catch (err) {
       if (isCancelled()) return;
-      setState({
-        kind: "failed",
-        message: err instanceof Error ? err.message : String(err),
-        // `RequestFailed.code` is the Problem Details code, not a substring
-        // of the human sentence — `detail` never repeats it in production,
-        // so this is the only reliable signal for which failure this was.
-        // A code this screen does not recognise, or no code at all (the
-        // agent's plain-text errors, or a `fetch` that never reached a
-        // response), defaults to retryable: only one specific code is known
-        // to make retrying pointless.
-        retryable: !(err instanceof RequestFailed) || err.code !== NOT_RETRYABLE,
-      });
+      const message = err instanceof Error ? err.message : String(err);
+      // `RequestFailed.code` is the Problem Details code, not a substring of
+      // the human sentence — `detail` never repeats it in production, so this
+      // is the only reliable signal for which failure this was. A code this
+      // screen does not recognise, or no code at all (the agent's plain-text
+      // errors, or a `fetch` that never reached a response), is `unresolved`:
+      // one specific answer proves the surface signed nothing, and everything
+      // else leaves the question open. Defaulting the other way would have the
+      // screen assert the absence of a mandate carrying the user's key on the
+      // strength of not recognising a string.
+      setState(
+        err instanceof RequestFailed && err.code === REFUSED_BEFORE_SIGNING
+          ? { kind: "unsigned", message }
+          : { kind: "unresolved", message },
+      );
       return;
     }
     if (isCancelled()) return;
@@ -201,19 +282,19 @@ export function Signing({
   function onTryAgain() {
     if (state.kind === "stranded") {
       void attemptWatch(state.authorised);
-    } else if (state.kind === "failed" && state.retryable) {
+    } else if (state.kind === "unresolved") {
       void sign(() => false);
     }
   }
 
-  // True exactly once `authorise` has succeeded — `starting` and `stranded`
-  // both hold an `Authorised`; `signing` and `failed` do not, and the latter's
-  // own doc comment is explicit that nothing was signed there either. Heading
-  // and enclosure are both computed from this one boolean rather than from two
-  // independent state checks, because two carriers computed separately are two
-  // carriers that can disagree — which is exactly the gap #193 found: the
-  // heading already made this distinction and the box did not, so a person
-  // reading only the box saw the same outline either side of a signature.
+  // True exactly once `authorise` has answered with a signature — `starting`
+  // and `stranded` both hold an `Authorised`, and the other three do not.
+  // Heading and enclosure are both computed from this one boolean rather than
+  // from two independent state checks, because two carriers computed
+  // separately are two carriers that can disagree — which is exactly the gap
+  // #193 found: the heading already made this distinction and the box did not,
+  // so a person reading only the box saw the same outline either side of a
+  // signature.
   //
   // docs/specs/2026-08-06-three-lane-view-design.md's *Indicators* section
   // gives the decision axis no pip and no `check` — a consent decision is one
@@ -221,6 +302,23 @@ export function Signing({
   // only carrier: an outline while nothing is signed, filled `wash` with an
   // `ink` border once it has answered. The heading stays the device that
   // cannot be misread; the box now agrees with it instead of contradicting it.
+  //
+  // **What the outline claims is bounded by what this screen can know, and
+  // #206 is why that has to be written down.** It says this browser holds no
+  // signature for the sentences in that box — the spec's own second clause,
+  // *once `POST /authorise` has answered* — and it never says a signature is
+  // impossible, because in `unresolved` one may exist at the surface and
+  // nothing here can check. An enclosure cannot carry an unknown: filling the
+  // box would claim a signature this browser was never handed, and a third
+  // enclosure would be a second dialect of a vocabulary that is closed on
+  // purpose. So the unknown is carried by a sentence beside the box instead
+  // — the answer that section already reaches for a refusal whose record did
+  // not land, and for the same reason.
+  //
+  // Which is why the two failure states share a heading and an enclosure and
+  // differ only in prose. That is not the pair being sloppy about a
+  // distinction; it is the distinction being put where it can be stated
+  // truthfully.
   const isSigned = state.kind === "starting" || state.kind === "stranded";
   const signedHeading = isSigned ? "What you signed" : "What you are signing";
   // Built by concatenation rather than inside a template literal, matching
@@ -303,29 +401,82 @@ export function Signing({
         </p>
       )}
 
-      {state.kind === "failed" && (
+      {(state.kind === "unsigned" || state.kind === "unresolved") && (
         // `role="alert"` — assertive — because this is the outcome of the
         // one action this screen exists to collect, not routine progress.
+        //
+        // One region rather than two, so the surface's own sentence is
+        // rendered in exactly one place whichever failure it was, and the two
+        // states differ only in what follows it — which is the point of #206
+        // and would be easy to lose in two blocks that drifted apart.
         <section role="alert" className="flex flex-col gap-2">
           {/* The Trusted Surface's own sentence, verbatim — the same choice
               Consent makes for a failed preview, and for the same reason:
               only it knows why authorise refused. */}
           <p className="font-sans text-sm text-broken">{state.message}</p>
-          {state.retryable && (
-            <div>
-              <Button type="button" onClick={onTryAgain}>
-                Try again
-              </Button>
-            </div>
+          {state.kind === "unsigned" ? (
+            // The one branch entitled to this claim, and it says it in words
+            // rather than leaving it to the box: the outline reads the same in
+            // both branches, so a reader given only the outline cannot tell
+            // which of the two they are in — and that difference is the whole
+            // of what they need. `graphite`, not `broken`: this is not the
+            // surface reporting its own failure, which is the line above.
+            <p className="font-sans text-sm text-graphite">
+              Nothing was signed: the surface refused this request before signing anything, and
+              sending the same one again would only be refused again.
+            </p>
+          ) : (
+            <>
+              {/* And the branch that cannot say it. This is the *Indicators*
+                  section's third category of prose — what a screen cannot see
+                  — and prose is the only honest carrier, for the reason that
+                  section gives about a refusal whose record did not reach the
+                  collector: no mark and no enclosure can hold an unknown, and
+                  drawing one would state something untrue in order to look
+                  consistent.
+
+                  It does not state the mandates' lifetime the way `stranded`
+                  does. There the signature certainly exists and nothing can
+                  resolve it, so the hour is the only fact that bounds it; here
+                  the button below resolves it, and an expiry quoted for
+                  mandates that may not exist would be the same overclaim in a
+                  quieter voice.
+
+                  **The second sentence says what the retry does, not what it
+                  guarantees**, and that is #212's correction rather than
+                  hedging for its own sake. It read *"trying again cannot
+                  produce a second signature"* — an absolute about the surface,
+                  asserted by the one screen that cannot see it. The key is
+                  what lets the surface answer with the pair it already made,
+                  and it does exactly that for the failure this state is
+                  usually reached by; what it is not is a guarantee this
+                  browser is in any position to give, and #212 records the
+                  reachable case where the surface signs and then has nothing
+                  to replay. Stating the mechanism is the most a client can
+                  honestly say, and it is still the whole of what a person
+                  needs in order to press the button. */}
+              <p className="font-sans text-sm text-graphite">
+                The Trusted Surface may have signed already — this browser was not told either way.
+                Trying again sends the same request under the same key, which is what lets the
+                surface answer with the signature it already made rather than make a second one.
+              </p>
+              <div>
+                <Button type="button" onClick={onTryAgain}>
+                  Try again
+                </Button>
+              </div>
+            </>
           )}
         </section>
       )}
 
       {state.kind === "stranded" && (
-        // `role="alert"`, for the same reason as `failed` and more so: this
-        // is the state that tells a person something irreversible happened
-        // — a signature exists, unattached to any running watch, expiring
-        // in an hour.
+        // `role="alert"`, for the same reason as the two failure states above
+        // and more so: this is the state that tells a person something
+        // irreversible happened — a signature exists, unattached to any
+        // running watch, expiring in an hour. It is also the one state that
+        // knows a signature exists rather than suspecting it, which is why the
+        // expiry is stated here and nowhere else.
         <section role="alert" className="flex flex-col gap-3" aria-labelledby="stranded">
           <h2 id="stranded" className="font-sans text-lg text-broken">
             Signed, and the watch did not start
