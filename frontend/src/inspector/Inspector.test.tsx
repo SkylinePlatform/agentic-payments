@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { Inspector } from "./Inspector";
@@ -188,5 +188,150 @@ describe("the two claims a reader of AP2 comes for", () => {
       "closed by default: the tables are the argument, this is the evidence " +
         "behind them",
     ).toBe(false);
+  });
+});
+
+/**
+ * A reader comparing what one verifier saw against what another did is doing a
+ * set difference by eye — #21's own words. These fixtures give each of two
+ * payment audiences a claim the other did not get, which BUILT above does not:
+ * its one withheld row is withheld from all three audiences alike, so it cannot
+ * tell a filter that flattens "withheld from this reader" into "withheld from
+ * everyone" apart from one that does not.
+ */
+const MIXED: Inspection = {
+  mandates: [
+    mandate("checkout", ["air-serbia"], [{ label: AMOUNT, got: { "air-serbia": "disclosed" } }]),
+    mandate("payment", ["mock-credential-provider", "mock-payment-processor"], [
+      {
+        label: AMOUNT,
+        got: { "mock-credential-provider": "disclosed", "mock-payment-processor": "withheld" },
+      },
+      {
+        label: ITEM,
+        got: { "mock-credential-provider": "withheld", "mock-payment-processor": "disclosed" },
+      },
+    ]),
+  ],
+};
+
+describe("filtering by reader and by what that reader was shown", () => {
+  it("narrows to what a named verifier was withheld, and leaves the other reader's own column visible on the row that stayed", () => {
+    render(<Inspector inspection={MIXED} />);
+    const payment = screen.getByRole("region", { name: "Payment Mandate" });
+
+    fireEvent.click(within(payment).getByRole("button", { name: "Credential Provider" }));
+    fireEvent.click(within(payment).getByRole("button", { name: "Withheld" }));
+
+    expect(
+      within(payment).queryByText(AMOUNT),
+      "the Credential Provider could read this one, so the withheld filter drops it",
+    ).toBeNull();
+    const row = within(payment).getByText(ITEM).closest("tr");
+    expect(row, "the row withheld from the Credential Provider is the one that stays").not.toBeNull();
+    expect(
+      within(row as HTMLElement).getByText("read"),
+      "the point of the feature: the Payment Processor's own column, on the same " +
+        "row, still says it could read this — the set difference a reader compares by eye",
+    ).not.toBeNull();
+  });
+
+  it("narrows to what a named verifier could read", () => {
+    render(<Inspector inspection={MIXED} />);
+    const payment = screen.getByRole("region", { name: "Payment Mandate" });
+
+    fireEvent.click(within(payment).getByRole("button", { name: "Credential Provider" }));
+    fireEvent.click(within(payment).getByRole("button", { name: "Could read" }));
+
+    expect(within(payment).queryByText(AMOUNT), "disclosed to the Credential Provider").not.toBeNull();
+    expect(within(payment).queryByText(ITEM), "withheld from the Credential Provider").toBeNull();
+  });
+
+  it("states which reader and which state the filter is hiding", () => {
+    render(<Inspector inspection={MIXED} />);
+    const payment = screen.getByRole("region", { name: "Payment Mandate" });
+    fireEvent.click(within(payment).getByRole("button", { name: "Credential Provider" }));
+    fireEvent.click(within(payment).getByRole("button", { name: "Withheld" }));
+
+    expect(
+      within(payment).queryByText(/withheld from Credential Provider/),
+      "the caption names the reader and the state, not just a row count",
+    ).not.toBeNull();
+    expect(
+      within(payment).queryByText(/Credential Provider can read/),
+      "and says what the filter is hiding, not only what it kept",
+    ).not.toBeNull();
+  });
+
+  it("clears the reception filter when the reader is set back to every reader", () => {
+    render(<Inspector inspection={MIXED} />);
+    const payment = screen.getByRole("region", { name: "Payment Mandate" });
+    fireEvent.click(within(payment).getByRole("button", { name: "Credential Provider" }));
+    fireEvent.click(within(payment).getByRole("button", { name: "Withheld" }));
+    expect(within(payment).queryByText(AMOUNT)).toBeNull();
+
+    fireEvent.click(within(payment).getByRole("button", { name: "All readers" }));
+
+    expect(
+      within(payment).queryByText(AMOUNT),
+      "withheld from nobody in particular is not a state this axis has — clearing " +
+        "the reader has to clear the reception filter with it, or the distinction " +
+        "would quietly become absolute instead of staying per-verifier",
+    ).not.toBeNull();
+    expect(
+      within(payment).queryByRole("button", { name: "Withheld" }),
+      "with no reader chosen there is no verifier for 'withheld' to be withheld " +
+        "from, so the control is not offered rather than offered and ignored",
+    ).toBeNull();
+  });
+
+  it("offers no reader picker for a mandate with one audience, and filters straight against it", () => {
+    render(<Inspector inspection={MIXED} />);
+    const checkout = screen.getByRole("region", { name: "Checkout Mandate" });
+
+    expect(
+      within(checkout).queryByRole("button", { name: "All readers" }),
+      "one audience is not a choice between readers",
+    ).toBeNull();
+
+    fireEvent.click(within(checkout).getByRole("button", { name: "Withheld" }));
+    expect(
+      within(checkout).queryByText(AMOUNT),
+      "the mandate's one claim is disclosed to its one audience, so nothing " +
+        "withheld from it survives the filter",
+    ).toBeNull();
+    expect(within(checkout).queryByText(/matches this filter/)).not.toBeNull();
+  });
+
+  it("keeps every row when the filter is left at Everything", () => {
+    render(<Inspector inspection={MIXED} />);
+    const payment = screen.getByRole("region", { name: "Payment Mandate" });
+    expect(within(payment).queryByText(AMOUNT)).not.toBeNull();
+    expect(within(payment).queryByText(ITEM)).not.toBeNull();
+  });
+});
+
+describe("reading is not verifying, on the cells the filters do not change (#191)", () => {
+  it("does not colour the read cell as a verdict", () => {
+    render(<Inspector inspection={BUILT} />);
+    const cell = screen.getAllByText("read")[0];
+    expect(
+      cell.className,
+      "text-seal claims a verifier accepted; this screen never checks a " +
+        "signature, so the cell that says a reader can see a value must not " +
+        "borrow the colour that says one was verified",
+    ).not.toMatch(/\btext-seal\b/);
+  });
+
+  it("draws the withheld digest as the subject, in signal", () => {
+    render(<Inspector inspection={BUILT} />);
+    const payment = screen.getByRole("region", { name: "Payment Mandate" });
+    const cell = within(payment).getAllByText(SHOWN)[0];
+    expect(
+      cell.className,
+      "the withheld claim is drawn as its digest instead of a grey box, which " +
+        "is what makes it the subject of the cell rather than an identifier " +
+        "in a column — the design's own test for the signal token",
+    ).toMatch(/\btext-signal\b/);
   });
 });
