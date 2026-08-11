@@ -115,3 +115,51 @@ func Validate(constraints []generated.Constraint) error {
 	}
 	return nil
 }
+
+// Selective reports whether a constraint on this field says *what to go looking
+// for*, rather than stating a term the purchase has to meet.
+//
+// It is the verifier's own answer, unaltered — constraint.Selective is where the
+// fact lives and this adds nothing to it. Issue #132 is why it is reachable from
+// here at all.
+//
+// # Why the agent asks this package rather than the registry
+//
+// internal/agent's discovery half needs the bit before it can build a merchant
+// search: a query naming the item or the merchant is answered by a catalogue,
+// while one naming the price is not, because the watch loop exists to wait for
+// exactly that and a search carrying the user's price bound returns nothing at
+// all while the price is still too high. It may not import the registry to ask.
+// A constraint is evaluated by the verifier and never by the party that
+// assembled the purchase, and TestTheAgentCannotReachAConstraintEvaluator holds
+// that against the import graph — so authorise.go kept the same fact as two
+// string prefixes, "item." and "merchant.", and a test held the copy against the
+// original.
+//
+// This package is where that copy could go, and the argument is not that a rule
+// was routed around. It is AGENTS.md's hard rule 4, already applied to the same
+// registry for the same reason: Validate checks an interpretation with *the
+// verifier's own parser* rather than a second list of field names, "because a
+// copy would drift in the direction that accepts what the verifier cannot read".
+// A prefix is that copy, one column along, and it drifted in both directions —
+// it dropped any selective field registered outside the two stems, and it
+// carried item.colour, a name no verifier can read, straight into a query.
+//
+// Three things make this the narrow move rather than a wide one. **No new
+// import edge exists**: internal/agent already imports this package, for the
+// interpreter itself, and this package already imports the registry, for
+// Validate. **No new package was invented** to hold one fact — a package whose
+// only job was to be the thing internal/agent may import in order to reach the
+// registry would launder that test rather than honour it. And **the ban still
+// bans what it was drawn around**: no file in internal/agent can name
+// constraint.Parse, constraint.Subject or Expression.Evaluate, which is what its
+// own doc comment says it buys.
+//
+// # No model is anywhere near this
+//
+// It is a pure function of a compile-time table, in the package where a model
+// may live but not in a path one is on. Nothing about which facts describe a
+// purchase is inferred from a sentence: the interpreter proposes constraints,
+// the user signs them, and this answers a question about the vocabulary they are
+// written in. AGENTS.md's hard rule 2 is about calls, and there is no call here.
+func Selective(field string) bool { return constraint.Selective(field) }

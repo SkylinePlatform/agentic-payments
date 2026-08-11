@@ -46,70 +46,49 @@ const (
 	searchParam   = "constraints"
 )
 
-// itemFieldPrefix and merchantFieldPrefix are the two prefixes under which a
-// constraint says *what* to buy or *from whom*, as opposed to the terms a
-// purchase has to meet. itemIDField is the one field this file writes.
+// itemIDField is the one field this file writes.
 //
-// The registry holds seven named fields plus item.attr.*. Three of them —
-// amount, at, quantity — are terms: they describe a purchase rather than pick
-// one out, and they are the ones the watch exists to wait for. The other four
-// sit under these two prefixes, and all four are things Catalogue.Search can
-// evaluate: Catalogue.Subject fills Item.ID, Item.Category, Item.Attributes and
-// Merchant, so a query carrying merchant.id or merchant.category is answered
-// rather than ignored. That is why `merchant.` is here and not only `item.` —
-// "buy it from this shop" is as much a description of what to go looking for as
-// "buy this bicycle" is.
+// **Two string prefixes used to sit beside it, and issue #132 is the whole story
+// of why they are gone.** Which constraints say *what* to buy or *from whom*, as
+// opposed to the terms a purchase has to meet, was decided here by testing field
+// names against "item." and "merchant.". That was a second statement of a fact
+// the registry already held as a column on constraint.Field — where AGENTS.md's
+// "Open for extension" row says a fact about a purchase goes — kept here because
+// this package may not import the registry to ask. It reads it off
+// interpret.Selective now, which is the verifier's own answer arriving over an
+// import this package already had.
 //
-// Naming a field is not evaluating one. The agent never parses a constraint,
-// never builds a subject and never reaches a verdict — internal/agent does not
-// import internal/core/authz/constraint, and
+// Naming a field is still not evaluating one. The agent never parses a
+// constraint, never builds a subject and never reaches a verdict —
+// internal/agent does not import internal/core/authz/constraint, and
 // TestTheAgentCannotReachAConstraintEvaluator is what keeps that true.
 //
-// # A prefix is the wrong place for this, and the right place is unreachable
+// What the copy cost while it existed is worth keeping written down, because
+// both halves were live rather than theoretical:
 //
-// Whether a field is selective is a property *of the field*, so its home is a
-// column on constraint.Field beside Kind, Noun and exact — which is exactly
-// where AGENTS.md's "Open for extension" row says a new fact about a purchase
-// goes. **The agent cannot read it there.** Doing so means importing the
-// constraint package, and that import is the thing #121's fourth box forbids and
-// TestTheAgentCannotReachAConstraintEvaluator fails on. So the knowledge is
-// duplicated here as a string prefix, in the one package that must not ask the
-// registry.
+//   - **A selective field registered outside the two stems was dropped from
+//     discovery**: the query stopped carrying it and a search returned more
+//     candidates than it should, with nothing failing to compile. #132's first
+//     step made that a red test; this one makes it unrepresentable, since there
+//     is no longer a second list to be missing from.
+//   - **A field under one of the stems that the registry does not know was
+//     carried into the query.** item.colour matched "item." and reached the
+//     merchant, which can only refuse it as malformed or match nothing with it.
+//     The registry answers false for a name it cannot read, so that direction
+//     closed with the same change.
 //
-// That tension is real and is tracked as issue #132, which sets out the three
-// ways out. The third — a test walking the registry from the *test* package —
-// has landed; the duplication itself has not gone, so the issue stays open.
-// Two consequences worth knowing before the next field lands, and they no
-// longer both announce themselves the same way:
+// One silent drop is left, and it is not this one:
 //
-//   - **A selective field added to the registry outside these prefixes is
-//     dropped from discovery**: the query simply stops carrying it and a search
-//     returns more candidates than it should. Nothing fails to compile, and
-//     until #132's first step nothing went red either.
-//     TestTheAgentsPrefixesAgreeWithFieldSelectivity is what goes red now. It
-//     walks constraint.Vocabulary() from this package's test binary and holds
-//     these two prefixes against the registry's own selective column in both
-//     directions — the reverse one because a prefix that widened to swallow
-//     `amount` would send the user's price bound to the search, which is the
-//     one case the watch exists for — and names constraint.AttributePrefix so
-//     that item.attr.*, which is selective and is in no registry to walk, is
-//     caught by argument no longer.
-//   - **Group nodes are dropped whole, and that one is still silent.**
-//     identifying reads leaves only, because
+//   - **Group nodes are dropped whole.** identifying reads leaves only, because
 //     a group can mix a bound on the price with a fact about the object and
 //     there is no honest way to send half of one. All five scripted
 //     interpretations are flat lists, and the model-backed interpreter of #17
 //     produces leaves only for exactly this reason — its structured-output
 //     schema's op enum carries no group operator, and
 //     TestTheSchemaDescribesLeafConstraintsOnly is what keeps that true. So the
-//     case is currently unreachable rather than merely unexercised, and closing
-//     the drop is what has to come before an interpreter is widened to produce
-//     one.
-const (
-	itemFieldPrefix     = "item."
-	merchantFieldPrefix = "merchant."
-	itemIDField         = "item.id"
-)
+//     case is unreachable rather than merely unexercised, and closing the drop
+//     is what has to come before an interpreter is widened to produce one.
+const itemIDField = "item.id"
 
 // ErrNothingToBuy means discovery found no candidate to watch.
 //
@@ -589,8 +568,8 @@ func (c *Client) candidates(
 		// layer up, in an interpretation that placed limits on the terms of a
 		// purchase and named neither an item nor a merchant.
 		return nil, fmt.Errorf(
-			"%w: the interpretation names nothing to go looking for — of its %d constraints, none reads a fact under %q or %q",
-			ErrNothingToBuy, len(constraints), itemFieldPrefix, merchantFieldPrefix)
+			"%w: the interpretation names nothing to go looking for — of its %d constraints, none reads a fact the registry calls selective",
+			ErrNothingToBuy, len(constraints))
 	}
 
 	encoded, err := json.Marshal(query)
@@ -641,16 +620,22 @@ func (c *Client) Discover(ctx context.Context, constraints []generated.Constrain
 
 // identifying returns the constraints that say what to go looking for.
 //
-// A leaf whose field sits under one of selectivePrefixes — item.id,
-// item.category, item.attr.*, merchant.id, merchant.category. Everything else is
+// A leaf whose field the registry calls selective — item.id, item.category,
+// item.attr.*, merchant.id, merchant.category today, and whatever else is
+// registered as one tomorrow without this function changing. Everything else is
 // a term of the purchase rather than a description of one, and the terms are
 // what the watch is waiting to be met.
 //
-// Group nodes are left out rather than walked into, and a selective field
-// registered outside those two prefixes would be left out too. Both are argued
-// where the prefixes are declared. The second now fails a test rather than
-// passing quietly; the first is still silent, and still waiting on an
-// interpreter that can produce a group at all.
+// **The classification is asked for rather than reproduced**, which is issue
+// #132 and is argued at interpret.Selective. This function decides only what to
+// do with the answer, and the one decision it still makes on its own is worth
+// separating from it:
+//
+//   - Nodes carrying no field are skipped, which is how group nodes are left
+//     out rather than walked into: a group carries op and of, never a field. A
+//     group can mix a bound on the price with a fact about the object and there
+//     is no honest way to send half of one. Still silent, and still waiting on
+//     an interpreter that can produce a group at all.
 //
 // What is dropped is dropped from a *query*, never from the mandate. See
 // Authorise for why that distinction is the whole of this function.
@@ -660,8 +645,7 @@ func identifying(constraints []generated.Constraint) []generated.Constraint {
 		if c.Field == nil {
 			continue
 		}
-		if strings.HasPrefix(*c.Field, itemFieldPrefix) ||
-			strings.HasPrefix(*c.Field, merchantFieldPrefix) {
+		if interpret.Selective(*c.Field) {
 			out = append(out, c)
 		}
 	}

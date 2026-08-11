@@ -84,20 +84,17 @@ type Field struct {
 	// satisfied, and a search carrying the user's price bound back to the
 	// merchant would return nothing at all while the price is still too high.
 	//
-	// internal/agent may not import this package — a constraint is evaluated
-	// by the verifier, never by the party that assembled the purchase, and
-	// TestTheAgentCannotReachAConstraintEvaluator holds that against the import
-	// graph — so it cannot read this column here either. It reads the bit off
-	// the FieldSpec values Vocabulary returns instead, and
-	// TestTheAgentsPrefixesAgreeWithFieldSelectivity in internal/agent holds the
-	// two string prefixes authorise.go still carries against this column, in
-	// both directions. See issue #132.
+	// Nothing to do with selective *disclosure*, which is SD-JWT's, is decided
+	// per mandate rather than per field, and lives in
+	// internal/adapters/ap2/disclose.go. The two words collide and the concepts
+	// do not touch.
 	//
-	// Unexported for the reason exact is, and the reason is not consistency: a
-	// Field is the registry's own entry and nothing outside this package ever
-	// holds one, so exporting the column would publish it twice — here, where
-	// it cannot be read usefully, and on FieldSpec, where it can. Vocabulary is
-	// in this package and reads it either way.
+	// Never set in a Field literal. term and selector are what set it, and
+	// buildFields takes only what they return, so the classification is a thing
+	// the compiler makes a new field state rather than a thing a reviewer has to
+	// notice was left out — see registration. Selective is how it is read, by
+	// name and for both halves of the vocabulary; nothing outside this package
+	// holds a Field.
 	selective bool
 
 	// read pulls the value out of a subject. The second result is false when
@@ -106,27 +103,58 @@ type Field struct {
 	read func(Subject) (value, bool)
 }
 
-// AttributePrefix addresses a fact belonging to one kind of purchase rather
+// attributePrefix addresses a fact belonging to one kind of purchase rather
 // than to purchases in general — "item.attr.route.origin".
 //
-// Exported because the open half of the vocabulary is the half no list can
-// answer for. Vocabulary and FieldNames both omit it on purpose — it is a rule
-// rather than a table — so a caller reasoning about the family has nothing to
-// hold but this string, and until it was published the only way to name the
-// family outside this package was to write the literal again.
+// **It used to be exported, and #132's second step is what took that back.** The
+// open half of the vocabulary is the half no list can answer for: Vocabulary and
+// FieldNames both omit it on purpose, because it is a rule rather than a table.
+// So a caller classifying a route had nothing to hold but this string, and the
+// only thing that carried one into a merchant search was internal/agent's own
+// "item." prefix matching it — a coincidence between two literals in two
+// packages that no compiler relates, which #169 published this constant to let a
+// test assert. Selective answers for the family directly now, through
+// lookupField, so the caller that made the export worth having has a function to
+// call instead of a prefix to reproduce, and the coincidence has stopped being
+// load-bearing.
 //
-// The caller that made it worth publishing is a test. Every name under this
-// prefix is selective, and none of them is in Vocabulary, so what carries a
-// route into a merchant search is internal/agent's itemFieldPrefix matching
-// "item." — which works only because this constant happens to begin with it, a
-// coincidence between two literals in two packages that no compiler relates.
-// TestTheAgentsPrefixesAgreeWithFieldSelectivity names this constant so the
-// coincidence is checked rather than argued, and the case is not hypothetical:
-// the built scenario's flight is discovered by item.attr.route.origin and
-// item.attr.route.destination and by nothing else, so a rename that moved the
-// family out from under "item." would leave that search matching every flight
-// this merchant sells.
-const AttributePrefix = "item.attr."
+// The case it was load-bearing for was never hypothetical: the built scenario's
+// flight is discovered by item.attr.route.origin and item.attr.route.destination
+// and by nothing else, so a rename that moved the family out from under "item."
+// used to leave that search matching every flight this merchant sells. After
+// this it is a rename inside one package.
+const attributePrefix = "item.attr."
+
+// registration is one entry of the closed registry, together with the
+// classification a new field is not allowed to skip.
+//
+// The type exists to be unavailable outside this file's two constructors.
+// buildFields takes registrations rather than Fields, so a field added as a bare
+// Field literal — the natural thing to write, and the thing that leaves
+// selective at its zero value — does not compile. That matters because the zero
+// value is a real answer rather than an absent one: false means *this is a term
+// of the purchase*, so a forgotten column is not a gap anybody notices, it is a
+// field quietly withheld from every catalogue search.
+//
+// Issue #132's first step held that with a test in internal/agent, which could
+// only work while a second copy of the fact existed to disagree with. Deleting
+// the copy is what this step is for, so the guard had to become something else,
+// and the compiler is the strongest thing available.
+type registration struct{ field Field }
+
+// term registers a fact that states a term the purchase has to meet — a bound
+// the verifier checks at the moment of sale, and the thing a watch waits for.
+func term(f Field) registration {
+	f.selective = false
+	return registration{field: f}
+}
+
+// selector registers a fact that says what to go looking for — something a
+// merchant's catalogue can answer before any purchase is on the table.
+func selector(f Field) registration {
+	f.selective = true
+	return registration{field: f}
+}
 
 // fields is the closed registry of facts every purchase has.
 //
@@ -134,33 +162,37 @@ const AttributePrefix = "item.attr."
 // kind works on it immediately. That is the whole point of the field-by-
 // operator matrix: generality without a growing list of named constraint types,
 // each of which would need its own parser, evaluator and renderer.
+//
+// One entry, and the wrapper is part of it rather than a second place: term and
+// selector are how the entry states which of the two kinds of fact it is, and
+// there is no way to write the line without saying.
 var fields = buildFields(
-	Field{Name: "amount", Kind: KindMoney, Noun: "the amount",
+	term(Field{Name: "amount", Kind: KindMoney, Noun: "the amount",
 		read: func(s Subject) (value, bool) {
 			return value{kind: KindMoney, money: s.Amount}, s.Amount.Currency != ""
-		}},
-	Field{Name: "at", Kind: KindTime, Noun: "the time of purchase",
+		}}),
+	term(Field{Name: "at", Kind: KindTime, Noun: "the time of purchase",
 		read: func(s Subject) (value, bool) {
 			return value{kind: KindTime, time: s.At}, !s.At.IsZero()
-		}},
-	Field{Name: "quantity", Kind: KindNumber, Noun: "the quantity",
+		}}),
+	term(Field{Name: "quantity", Kind: KindNumber, Noun: "the quantity",
 		read: func(s Subject) (value, bool) {
 			return value{kind: KindNumber, number: int64(s.Quantity)}, s.Quantity > 0
-		}},
-	Field{Name: "item.id", Kind: KindText, Noun: "the item", exact: true, selective: true,
-		read: func(s Subject) (value, bool) { return exactText(s.Item.ID) }},
-	Field{Name: "item.category", Kind: KindText, Noun: "the item category", selective: true,
-		read: func(s Subject) (value, bool) { return text(s.Item.Category) }},
-	Field{Name: "merchant.id", Kind: KindText, Noun: "the merchant", exact: true, selective: true,
-		read: func(s Subject) (value, bool) { return exactText(s.Merchant.ID) }},
-	Field{Name: "merchant.category", Kind: KindText, Noun: "the merchant category", selective: true,
-		read: func(s Subject) (value, bool) { return text(s.Merchant.Category) }},
+		}}),
+	selector(Field{Name: "item.id", Kind: KindText, Noun: "the item", exact: true,
+		read: func(s Subject) (value, bool) { return exactText(s.Item.ID) }}),
+	selector(Field{Name: "item.category", Kind: KindText, Noun: "the item category",
+		read: func(s Subject) (value, bool) { return text(s.Item.Category) }}),
+	selector(Field{Name: "merchant.id", Kind: KindText, Noun: "the merchant", exact: true,
+		read: func(s Subject) (value, bool) { return exactText(s.Merchant.ID) }}),
+	selector(Field{Name: "merchant.category", Kind: KindText, Noun: "the merchant category",
+		read: func(s Subject) (value, bool) { return text(s.Merchant.Category) }}),
 )
 
-func buildFields(in ...Field) map[string]Field {
+func buildFields(in ...registration) map[string]Field {
 	out := make(map[string]Field, len(in))
-	for _, f := range in {
-		out[f.Name] = f
+	for _, r := range in {
+		out[r.field.Name] = r.field
 	}
 	return out
 }
@@ -193,7 +225,7 @@ func lookupField(name string) (Field, error) {
 	if f, ok := fields[name]; ok {
 		return f, nil
 	}
-	if attr, ok := strings.CutPrefix(name, AttributePrefix); ok && attr != "" {
+	if attr, ok := strings.CutPrefix(name, attributePrefix); ok && attr != "" {
 		// Attributes are always text: core does not know what a flight is, so
 		// it cannot know that an origin is an airport code.
 		//
@@ -202,16 +234,21 @@ func lookupField(name string) (Field, error) {
 		// search naming item.attr.route.origin is answerable exactly as one
 		// naming item.id is. It is never enumerated by FieldNames or Vocabulary
 		// — this field is minted per name rather than held in the closed
-		// registry — so no caller outside this package ever reads the bit off
-		// it. What carries the family into a search is internal/agent's
-		// itemFieldPrefix matching "item.", not this column; AttributePrefix is
-		// exported so that a test can hold those two literals together rather
-		// than a comment claiming they agree.
-		return Field{
-			Name:      name,
-			Kind:      KindText,
-			Noun:      "the item's " + strings.ReplaceAll(attr, ".", " "),
-			selective: true,
+		// registry — so a caller that had only a listing to walk could not
+		// classify one at all. Selective asks by name and comes through here,
+		// which is what makes the open half answerable by the code that mints it
+		// rather than by a prefix reproduced somewhere else.
+		//
+		// Classified through selector and then unwrapped, rather than by setting
+		// the column here. This field is minted per call and registered nowhere,
+		// so it never reaches buildFields — but writing selective: true in a
+		// literal is the one habit the registration type exists to make
+		// unavailable, and a second spelling of it in the file that bans the
+		// first is how the ban stops being read as one.
+		return selector(Field{
+			Name: name,
+			Kind: KindText,
+			Noun: "the item's " + strings.ReplaceAll(attr, ".", " "),
 			read: func(s Subject) (value, bool) {
 				raw, ok := s.attribute(attr)
 				if !ok {
@@ -219,7 +256,7 @@ func lookupField(name string) (Field, error) {
 				}
 				return text(raw)
 			},
-		}, nil
+		}).field, nil
 	}
 	return Field{}, fmt.Errorf("%w: field %q", ErrUnknownField, name)
 }
@@ -241,14 +278,19 @@ func FieldNames() []string {
 
 // FieldSpec is one entry of the closed registry as a caller outside this
 // package can see it: how a constraint addresses the fact, the type of its
-// value, the operators that may be applied to it, and whether it is selective.
+// value, and the operators that may be applied to it.
 //
 // It carries no Noun and no reader. The sentence a constraint renders as is
 // Render's job and the value is pulled out of a Subject only during evaluation,
 // so publishing either here would offer a caller a second way to do something
-// this package already does once. Selective is not in that category — it
-// names neither a rendering nor an evaluation, only which of two purposes a
-// field serves — so it is published rather than held back with them.
+// this package already does once.
+//
+// **It carried Selective between #132's first and second steps, and that is the
+// same rule catching up with it.** The bit was put here because a caller walking
+// the vocabulary was the only reader it had. Selective answers by name now, and
+// for the open half of the vocabulary as well, which no walk can reach — so
+// leaving the column would publish the question twice, with the copy on this
+// struct being the one that cannot answer it in full.
 type FieldSpec struct {
 	// Name is how a constraint addresses it: "amount", "item.category".
 	Name string
@@ -261,12 +303,50 @@ type FieldSpec struct {
 	// compare a field and no field accepts one — OperatorNames is where the
 	// whole set including those three is published.
 	Operators []string
+}
 
-	// Selective mirrors Field.selective: true when this field describes what
-	// to go looking for rather than a term the purchase has to meet. See that
-	// field's comment for why internal/agent needs it and cannot read it any
-	// other way.
-	Selective bool
+// Selective reports whether a constraint on this field says *what to go looking
+// for*, rather than stating a term the purchase has to meet.
+//
+// It is the whole of the fact, and issue #132 is why that sentence is worth
+// writing. internal/agent's discovery half needs the bit before it can build a
+// merchant search — a query naming the item or the merchant is answered by a
+// catalogue, while one naming the price is not, because the watch loop exists to
+// wait for exactly that and a search carrying the user's price bound returns
+// nothing at all while the price is still too high. It cannot import this
+// package to ask: a constraint is evaluated by the verifier and never by the
+// party that assembled the purchase, and TestTheAgentCannotReachAConstraintEvaluator
+// holds that against the import graph. So it kept two string prefixes saying the
+// same thing, and a test held the two in step.
+//
+// **Publishing the answer is what let the copy go.** internal/agent/interpret
+// already imports this package, for the reason AGENTS.md's hard rule 4 gives —
+// Validate runs the verifier's own parser rather than keeping a second list of
+// field names, because a copy drifts in the direction that accepts what the
+// verifier cannot read — and internal/agent already imports interpret. So the
+// answer reaches the caller over an edge that was already there, through the one
+// package whose job is exactly this: being the agent's window onto the
+// vocabulary without being a copy of it.
+//
+// # Both halves, and an unknown name
+//
+// It answers for the closed registry and for item.attr.<name> alike, because it
+// resolves through lookupField rather than reading the table. That is the half
+// no listing can reach: attributes are minted per name, so a caller with only
+// Vocabulary to walk had to classify a route by noticing the family's prefix
+// begins with "item." — a coincidence between two literals that no compiler
+// relates.
+//
+// A name this verifier does not know is not selective. It is a constraint that
+// will be refused as constraint_type_unknown at the moment of purchase, and
+// answering true would put it in a merchant's catalogue query, where it can only
+// be refused as malformed or quietly match nothing.
+//
+// Nothing here concerns selective *disclosure*, which is SD-JWT's and is decided
+// per mandate rather than per field — see internal/adapters/ap2/disclose.go.
+func Selective(field string) bool {
+	f, err := lookupField(field)
+	return err == nil && f.selective
 }
 
 // Vocabulary lists the closed part of the constraint vocabulary: every field
@@ -292,7 +372,6 @@ func Vocabulary() []FieldSpec {
 			Name:      f.Name,
 			Kind:      f.Kind,
 			Operators: operatorsFor(f.Kind),
-			Selective: f.selective,
 		})
 	}
 	slices.SortFunc(out, func(a, b FieldSpec) int { return strings.Compare(a.Name, b.Name) })
