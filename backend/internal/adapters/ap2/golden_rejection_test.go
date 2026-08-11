@@ -191,6 +191,39 @@ func chainWithASecondDelegatePayloadElement(t *testing.T, fx *checkoutChainFx) *
 	return again
 }
 
+// chainWithNothingDelegated presents a chain's delegating hop with none of its
+// Disclosures — the zero-element half of sdjwt.ErrDelegatePayloadInvalid, and
+// the other thing draft §6 step 3.2's "exactly one" refuses.
+//
+// Every Disclosure has to go, not only the array Disclosure carrying the
+// delegate payload. That one is the parent: the closed mandate's own claims are
+// blinded *inside* it, so dropping it alone would leave them referenced by
+// nothing and the presentation would be refused as ErrDisclosureUnmatched
+// several steps earlier — a vector passing for a different reason than the one
+// beside it. Dropping the lot leaves delegate_payload processing to an empty
+// array, which is the shape under test.
+//
+// Nothing is re-signed, and that is what makes it the right fixture here where
+// the sibling above re-signs: this is precisely what a party that only relays a
+// chain can do to one, with no cooperation from anybody holding a key. The
+// two-element case needs the agent's own key and this one needs nobody's.
+func chainWithNothingDelegated(t *testing.T, c *sdjwt.Chain) *sdjwt.Chain {
+	t.Helper()
+
+	parts, sep := splitChainAtSeparator(t, c)
+	require.Greater(t, len(parts), sep+2,
+		"the fixture has to start from a delegation that discloses something, or it would be asserting the absence of what was never there")
+
+	// parts[:sep+2] is the root, its Disclosures, the separator and the
+	// delegating JWT; the empty string on the end is the trailing separator the
+	// compact serialisation requires.
+	stripped := append(append([]string{}, parts[:sep+2]...), "")
+
+	again, err := sdjwt.ParseChain(strings.Join(stripped, "~"))
+	require.NoError(t, err, "a delegation that discloses nothing is still a well-formed chain; the refusal under test is a verification one")
+	return again
+}
+
 // rejectionVectors is the suite, as data.
 //
 // A function rather than a package-level var so that each row's closure is built
@@ -385,6 +418,21 @@ func rejectionVectors() []rejectionVector {
 			provoke: func(t *testing.T) error {
 				fx := chainFixture(t, 18900)
 				chain := chainWithASecondDelegatePayloadElement(t, fx)
+
+				_, err := ap2.AuthoriseCheckoutChain(chain, fx.subject, fx.checkoutJWT, fx.opts)
+				return err
+			},
+		},
+		{
+			name:     "a delegation whose delegate_payload discloses nothing at all",
+			code:     generated.ErrorCodeMandateMalformed,
+			sentinel: sdjwt.ErrDelegatePayloadInvalid,
+			reading: "the other half of the same sentinel, and the half whose code is arguable: zero elements is literally a withheld Disclosure, which the vocabulary elsewhere calls disclosure_insufficient — " +
+				"one code serves both because pkg/sdjwt raises one sentinel for both, and mandate_malformed is the safe conflation, since the alternative would invite the two-element presenter to retry a shape no retry may be allowed to fix. " +
+				"This row is what fails if that sentinel is ever split and only one half is re-mapped",
+			provoke: func(t *testing.T) error {
+				fx := chainFixture(t, 18900)
+				chain := chainWithNothingDelegated(t, fx.chain)
 
 				_, err := ap2.AuthoriseCheckoutChain(chain, fx.subject, fx.checkoutJWT, fx.opts)
 				return err
