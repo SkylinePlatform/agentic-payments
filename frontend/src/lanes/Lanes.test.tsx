@@ -41,6 +41,15 @@ function showing(records: readonly EventRecord[]) {
   return render(<Lanes transaction={transaction} />);
 }
 
+/** Whether a `class` attribute takes its element out of the document flow. */
+function outOfFlow(className: string): boolean {
+  return /(^|[\s:])(absolute|fixed)($|\s)/.test(className);
+}
+
+/** The `class` the removed spine rule carried, kept as what {@link outOfFlow} is for. */
+const REMOVED_RULE =
+  "pointer-events-none absolute inset-y-0 left-1/2 hidden w-px -translate-x-1/2 md:block bg-ink";
+
 describe("the three lanes", () => {
   it("names all three parties, in the order the protocol puts them", () => {
     seq = 0;
@@ -200,6 +209,27 @@ describe("the spine", () => {
       "that class was unique to the removed rule's centring; its presence " +
         "would mean the accessory came back",
     ).toBe(false);
+
+    // …and the shape rather than the one class name. A rule down the centre of
+    // the grid has to be taken out of flow, whatever it is centred with — that
+    // is what made the first version paint over the agent's own cards, since a
+    // positioned element paints above in-flow ones whatever the DOM order. A
+    // re-added axis centred some other way would slip past the assertion above
+    // and not past this one.
+    expect(
+      outOfFlow(REMOVED_RULE),
+      "the detector, run against what it is for — without this the assertion " +
+        "below is green whether it works or not",
+    ).toBe(true);
+    expect(outOfFlow("flex flex-col gap-4"), "and it must not flag the layout").toBe(false);
+
+    expect(
+      [...container.querySelectorAll("[class]")]
+        .map((element) => element.getAttribute("class") ?? "")
+        .filter(outOfFlow),
+      "nothing on this screen is taken out of flow; the layout is a grid and " +
+        "the spine is its head",
+    ).toEqual([]);
   });
 });
 
