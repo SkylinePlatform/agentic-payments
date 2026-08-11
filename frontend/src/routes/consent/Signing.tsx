@@ -222,8 +222,8 @@ export function Signing({
         <h2 id="signed" className="font-sans text-sm text-graphite">
           {signedHeading}
         </h2>
-        {previewed.rendered.map((sentence) => (
-          <p key={sentence} className="font-mono text-ink">
+        {previewed.rendered.map((sentence, index) => (
+          <p key={index} className="font-mono text-ink">
             {sentence}
           </p>
         ))}

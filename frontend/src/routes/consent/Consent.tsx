@@ -145,8 +145,8 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
         <h2 id="signing" className="font-sans text-sm text-ink">
           What you are signing
         </h2>
-        {previewed.rendered.map((sentence) => (
-          <p key={sentence} className="font-mono text-ink">
+        {previewed.rendered.map((sentence, index) => (
+          <p key={index} className="font-mono text-ink">
             {sentence}
           </p>
         ))}
