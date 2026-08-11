@@ -72,15 +72,22 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 )
 
-// Watcher is the agent as this console drives it: authorise a prompt now, then
-// spend what was signed.
+// Watcher is the agent this console drives.
 //
-// Two methods because the console calls them at two different moments and on two
-// different goroutines — Authorise inside the request, Watch in the goroutine it
-// leaves behind — which is Service.Start's whole shape. Neither takes a Tracker
-// or returns one: where the mandates stand arrives through agent.Progress, as
-// values.
+// Three methods because the console calls them at three different moments —
+// Propose inside one request, Authorise inside another, Watch in the goroutine
+// that one leaves behind. One port rather than a Proposer beside a Watcher: two
+// fields would allow a Service wired to propose from one agent and watch with
+// another, which is a state nobody wants and nothing would prevent.
 type Watcher interface {
+	// Propose reads the prompt and settles on an offer, signing nothing.
+	Propose(ctx context.Context, prompt, item string) (agent.Proposal, error)
+
+	// Examples lists the sentences this agent's interpreter is scripted for,
+	// empty when it has none. A model-backed interpreter has no menu because
+	// any sentence is admissible.
+	Examples() []string
+
 	// Authorise puts the interpretation of prompt in front of the user and
 	// returns what they signed. item, when set, is an offer the caller has
 	// already chosen; see agent.Intent.Item.
@@ -173,6 +180,12 @@ func (s *Service) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /watches", s.start)
 	mux.HandleFunc("GET /watches", s.list)
 	mux.HandleFunc("GET /watches/{id}", s.read)
+
+	mux.HandleFunc("POST /proposals", s.propose)
+	// A GET, so it sits outside the idempotency middleware by method semantics
+	// rather than by a route exemption — the argument GET /watches/{id}/… above
+	// already makes here. It reads a table fixed at construction.
+	mux.HandleFunc("GET /examples", s.examples)
 
 	// A GET, which is what settles the idempotency question for it: RFC 9110
 	// §9.2.1 safe methods sit outside the middleware by method semantics rather
@@ -382,6 +395,76 @@ func (s *Service) start(w http.ResponseWriter, r *http.Request) {
 	}
 
 	roles.OK(w, http.StatusCreated, run.started())
+}
+
+// propose is POST /proposals.
+//
+// A pure function of the prompt: interpret, search, narrow, answer, remember
+// nothing. r.Context() rather than context.WithoutCancel, unlike start below —
+// a proposal that outlives the request has nobody to answer, because nothing
+// is signed and nothing is registered for a later caller to read.
+//
+// The error mapping is Service.start's, taken as it stands rather than restated:
+// that switch already carries the reasoning, and a second table would be a second
+// truth about the same errors. There is no ErrTooManyWatches arm because nothing
+// is reserved here.
+func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Prompt string `json:"prompt"`
+		Item   string `json:"item"`
+	}
+	if !roles.DecodeJSON(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Prompt) == "" {
+		http.Error(w, "console: a proposal needs the sentence the user typed", http.StatusUnprocessableEntity)
+		return
+	}
+
+	proposal, err := s.Watcher.Propose(r.Context(), req.Prompt, req.Item)
+	switch {
+	case errors.Is(err, interpret.ErrNoScript),
+		errors.Is(err, interpret.ErrNoConstraints),
+		errors.Is(err, agent.ErrNothingToBuy):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	roles.OK(w, http.StatusOK, proposed{
+		Prompt:         req.Prompt,
+		Constraints:    proposal.Constraints,
+		AgentKey:       proposal.AgentKey,
+		Item:           proposal.Item,
+		Offer:          proposal.Offer,
+		WatchSlotsFree: s.free(),
+	})
+}
+
+// examples is GET /examples.
+func (s *Service) examples(w http.ResponseWriter, _ *http.Request) {
+	menu := s.Watcher.Examples()
+	if menu == nil {
+		// A named empty array rather than null, so a caller iterating it needs
+		// no branch for the model-backed case.
+		menu = []string{}
+	}
+	roles.OK(w, http.StatusOK, examples{Examples: menu})
+}
+
+// free is how many more watches this console will hold, counting the ones in
+// flight. It reserves nothing.
+func (s *Service) free() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	limit := s.Limit
+	if limit < 1 {
+		limit = DefaultLimit
+	}
+	return max(0, limit-len(s.order)-s.pending)
 }
 
 // list is GET /watches.

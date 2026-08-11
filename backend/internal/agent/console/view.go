@@ -3,6 +3,7 @@ package console
 import (
 	"time"
 
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 )
 
@@ -38,6 +39,34 @@ type started struct {
 	Quantity      int       `json:"quantity"`
 	Signed        []string  `json:"signed"`
 	ExpiresAt     time.Time `json:"expires_at"`
+}
+
+// proposed is what POST /proposals answers with.
+//
+// It carries no state and names no watch, because nothing was created. offer is
+// the merchant's own description of what item names — see agent.Offer — and is
+// here so a consent screen can say what an identifier refers to.
+type proposed struct {
+	Prompt      string                 `json:"prompt"`
+	Constraints []generated.Constraint `json:"constraints"`
+	AgentKey    generated.PublicKey    `json:"agent_key"`
+	Item        string                 `json:"item"`
+	Offer       agent.Offer            `json:"offer"`
+
+	// WatchSlotsFree is how many more watches this console will hold.
+	//
+	// **Not a reservation.** Nothing is held and nothing expires; it is a fact
+	// at the time of asking. Service.Start reserves a slot before authorising
+	// precisely so a signature is never collected with nowhere to spend it, and
+	// the browser signs before it first contacts this agent — so that guarantee
+	// is gone and this is what replaces it. A console that sees zero refuses to
+	// send anybody to a consent screen. Two tabs racing still end in a 429.
+	WatchSlotsFree int `json:"watch_slots_free"`
+}
+
+// examples is what GET /examples answers with.
+type examples struct {
+	Examples []string `json:"examples"`
 }
 
 // summary is one row of GET /watches: enough for a reloaded console to redraw

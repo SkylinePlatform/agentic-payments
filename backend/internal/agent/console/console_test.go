@@ -65,6 +65,26 @@ func authorised() agent.Authorisation {
 	}
 }
 
+// proposal is the canned agent.Proposal a mocked Propose answers with — its
+// fields deliberately unlike authorised()'s, so a body that mixed the two
+// routes up would fail on sight rather than by coincidence.
+func proposal() agent.Proposal {
+	field := "item.id"
+	return agent.Proposal{
+		Item: item,
+		Offer: agent.Offer{
+			ID:       item,
+			Title:    "Telescopic ladder, 3.8 m",
+			Retailer: "Balkan Hardware",
+			Price:    generated.Amount{Amount: 24999, Currency: "USD"},
+		},
+		Constraints: []generated.Constraint{
+			{Op: "eq", Field: &field, Value: item},
+		},
+		AgentKey: generated.PublicKey{Kty: "EC"},
+	}
+}
+
 // scripted is a console in front of an agent that does what the test says.
 type scripted struct {
 	service *console.Service
@@ -87,6 +107,8 @@ func newConsole(t *testing.T, watch func(agent.Progress) (agent.Watched, error))
 	// whichever goroutine called the mock, and Watch is called from one this
 	// test does not own. Where a count matters it is asserted afterwards, on the
 	// test goroutine.
+	watcher.EXPECT().Propose(mock.Anything, mock.Anything, mock.Anything).
+		Return(proposal(), nil).Maybe()
 	watcher.EXPECT().Authorise(mock.Anything, mock.Anything, mock.Anything).
 		Return(authorised(), nil).Maybe()
 	watcher.EXPECT().Watch(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -104,6 +126,17 @@ func newConsole(t *testing.T, watch func(agent.Progress) (agent.Watched, error))
 	t.Cleanup(server.Close)
 
 	return &scripted{service: service, watcher: watcher, url: server.URL}
+}
+
+// newConsoleWithExamples stands up a console around an agent whose
+// interpreter offers exactly this menu — nil for the model-backed case, which
+// has none.
+func newConsoleWithExamples(t *testing.T, menu []string) *scripted {
+	t.Helper()
+
+	c := newConsole(t, nothing)
+	c.watcher.EXPECT().Examples().Return(menu).Maybe()
+	return c
 }
 
 // authorisations asserts how many times the user was asked for a signature.
@@ -159,6 +192,85 @@ func (s *scripted) get(t *testing.T, path string) (int, object) {
 	defer func() { _ = resp.Body.Close() }()
 
 	return resp.StatusCode, decode(t, resp)
+}
+
+// post, postKeyed, postWithoutKey and get call a route by its whole URL rather
+// than through (*scripted).post above, which is hardcoded to POST /watches.
+// /proposals and /examples are not sub-resources of /watches, so a test about
+// them needs a way in that names wherever they live; the encoding and the
+// header these send are the same ones (*scripted).post already uses.
+
+// post sends body to url under an idempotency key unique to the calling test,
+// decoding the answer into into and returning the status.
+func post(t *testing.T, url string, body, into any) int {
+	t.Helper()
+	return postKeyed(t, t.Name(), url, body, into)
+}
+
+// postWithoutKey is post with no Idempotency-Key header at all, for
+// TestAProposalNeedsAnIdempotencyKey.
+func postWithoutKey(t *testing.T, url string, body, into any) int {
+	t.Helper()
+	return doPost(t, "", url, body, into)
+}
+
+// postKeyed is post under an explicit key, for a test that sends the same key
+// twice and expects the second press answered from the store.
+func postKeyed(t *testing.T, key, url string, body, into any) int {
+	t.Helper()
+	return doPost(t, key, url, body, into)
+}
+
+func doPost(t *testing.T, key, url string, body, into any) int {
+	t.Helper()
+
+	encoded, err := json.Marshal(body)
+	require.NoError(t, err, "encoding the request")
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, bytes.NewReader(encoded))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	if key != "" {
+		req.Header.Set(transport.KeyHeader, key)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err, "reaching the console")
+	defer func() { _ = resp.Body.Close() }()
+
+	if into != nil {
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(into), "decoding the answer")
+	}
+	return resp.StatusCode
+}
+
+// get reads url, decoding the answer into into and returning the status.
+func get(t *testing.T, url string, into any) int {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	require.NoError(t, err)
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err, "reaching the console")
+	defer func() { _ = resp.Body.Close() }()
+
+	if into != nil {
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(into), "decoding the answer")
+	}
+	return resp.StatusCode
+}
+
+// proposedBody is what POST /proposals answers with, decoded as its own type
+// rather than as the package's unexported proposed — view.go's own reasoning
+// that a test asserts the wire, not a Go type that happens to produce it.
+type proposedBody struct {
+	Prompt         string                 `json:"prompt"`
+	Constraints    []generated.Constraint `json:"constraints"`
+	AgentKey       generated.PublicKey    `json:"agent_key"`
+	Item           string                 `json:"item"`
+	Offer          agent.Offer            `json:"offer"`
+	WatchSlotsFree int                    `json:"watch_slots_free"`
 }
 
 // decode reads a JSON body, or an empty map for one that is not JSON.
@@ -353,6 +465,102 @@ func TestASentenceThisAgentCannotReadIsTheCallersMistake(t *testing.T) {
 			assert.Equal(t, tc.want, status, tc.why)
 		})
 	}
+}
+
+// TestAProposalIsNotAWatch is the state this route must not acquire.
+//
+// A proposal is a pure function of the prompt. Nothing is remembered, so a user
+// who refuses or closes the tab leaves nothing behind — no record with an
+// expiry, no slot held, nothing to clean up. The alternative was weighed and
+// rejected in the spec: it does not avoid the mandates travelling back through
+// the browser, it only adds a third kind of bookkeeping beside watches.
+func TestAProposalIsNotAWatch(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil })
+
+	var proposal proposedBody
+	require.Equal(t, http.StatusOK, post(t, c.url+"/proposals", map[string]any{
+		"prompt": "find and buy telescopic ladders, cheapest",
+	}, &proposal))
+
+	var listed struct {
+		Watches []map[string]any `json:"watches"`
+	}
+	require.Equal(t, http.StatusOK, get(t, c.url+"/watches", &listed))
+	assert.Empty(t, listed.Watches,
+		"a proposal is not a watch; an agent that remembered one would have a third kind of bookkeeping to expire")
+}
+
+// TestAProposalNeedsAnIdempotencyKey is the one route where the key is earned
+// rather than inherited.
+//
+// A double-clicked Interpret must not pay for two model calls.
+func TestAProposalNeedsAnIdempotencyKey(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil })
+
+	var out map[string]any
+	assert.Equal(t, http.StatusBadRequest, postWithoutKey(t, c.url+"/proposals", map[string]any{
+		"prompt": "find and buy telescopic ladders, cheapest",
+	}, &out))
+}
+
+// TestARepeatedKeyProposesOnce is the property the key buys.
+func TestARepeatedKeyProposesOnce(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil })
+	key := "the-same-click-twice"
+
+	var first, second proposedBody
+	require.Equal(t, http.StatusOK, postKeyed(t, key, c.url+"/proposals", map[string]any{
+		"prompt": "find and buy telescopic ladders, cheapest",
+	}, &first))
+	require.Equal(t, http.StatusOK, postKeyed(t, key, c.url+"/proposals", map[string]any{
+		"prompt": "find and buy telescopic ladders, cheapest",
+	}, &second))
+
+	assert.Equal(t, first, second, "the replay has to be the first answer, not a second interpretation")
+	// On the test goroutine, after both calls have returned — never as a
+	// .Once() expectation, which fails from whichever goroutine hit the mock.
+	c.watcher.AssertNumberOfCalls(t, "Propose", 1)
+}
+
+// TestTheMenuIsTheInterpretersOwnPrompts keeps one source of truth.
+//
+// Compared against Prompts() rather than against a literal, so a sixth scenario
+// appears in the console without anybody editing this test — and a scenario
+// removed from the table cannot keep being offered.
+func TestTheMenuIsTheInterpretersOwnPrompts(t *testing.T) {
+	t.Parallel()
+
+	c := newConsoleWithExamples(t, interpret.Demo().Prompts())
+
+	var out struct {
+		Examples []string `json:"examples"`
+	}
+	require.Equal(t, http.StatusOK, get(t, c.url+"/examples", &out))
+	assert.Equal(t, interpret.Demo().Prompts(), out.Examples,
+		"the menu is the interpreter's own table; a second list here is one that drifts")
+}
+
+// TestTheMenuIsEmptyWhenTheInterpreterHasNone is the model-backed case.
+//
+// With -interpreter gemini any sentence is admissible, so there is no menu. An
+// empty list is the honest answer and the console shows nothing.
+func TestTheMenuIsEmptyWhenTheInterpreterHasNone(t *testing.T) {
+	t.Parallel()
+
+	c := newConsoleWithExamples(t, nil)
+
+	var out struct {
+		Examples []string `json:"examples"`
+	}
+	require.Equal(t, http.StatusOK, get(t, c.url+"/examples", &out))
+	assert.Empty(t, out.Examples,
+		"a model-backed interpreter has no menu, and inventing one would offer sentences nothing is scripted for")
 }
 
 // TestTheStateNamesTheConsoleServesAreTheOnesTheMachineWrites is the second of
