@@ -1,0 +1,27 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true">
+  <!--
+    Telescopic ladder, 3.8 m, issue #215.
+
+    Hand-drawn line art, not a photograph — see flight-beg-pmi.svg's comment
+    for why, and for why the colours below are literal hex rather than a
+    stylesheet reference: the seven tokens from frontend/src/styles.css
+    (light theme), and no others.
+      wash     #e8dfcc   card background
+      ink      #10243a   the rails and rungs
+      graphite #546375   the chevrons marking where it telescopes
+  -->
+  <title>Line illustration of a telescopic ladder</title>
+  <rect x="6" y="6" width="188" height="188" rx="20" fill="#e8dfcc" stroke="#10243a" stroke-width="3"/>
+
+  <line x1="65" y1="170" x2="65" y2="40" stroke="#10243a" stroke-width="9" stroke-linecap="round"/>
+  <line x1="135" y1="170" x2="135" y2="40" stroke="#10243a" stroke-width="9" stroke-linecap="round"/>
+
+  <line x1="65" y1="55" x2="135" y2="55" stroke="#10243a" stroke-width="7" stroke-linecap="round"/>
+  <line x1="65" y1="80" x2="135" y2="80" stroke="#10243a" stroke-width="7" stroke-linecap="round"/>
+  <line x1="65" y1="105" x2="135" y2="105" stroke="#10243a" stroke-width="7" stroke-linecap="round"/>
+  <line x1="65" y1="130" x2="135" y2="130" stroke="#10243a" stroke-width="7" stroke-linecap="round"/>
+  <line x1="65" y1="155" x2="135" y2="155" stroke="#10243a" stroke-width="7" stroke-linecap="round"/>
+
+  <path d="M100,92 L92,102 L108,102 Z" fill="#546375"/>
+  <path d="M100,118 L92,108 L108,108 Z" fill="#546375"/>
+</svg>

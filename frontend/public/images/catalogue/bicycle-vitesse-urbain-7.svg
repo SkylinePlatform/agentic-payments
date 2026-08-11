@@ -1,0 +1,30 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true">
+  <!--
+    Vitesse Urbain 7, issue #215.
+
+    Hand-drawn line art, not a photograph — see flight-beg-pmi.svg's comment
+    for why, and for why the colours below are literal hex rather than a
+    stylesheet reference: the seven tokens from frontend/src/styles.css
+    (light theme), and no others.
+      wash  #e8dfcc   card background
+      ink   #10243a   linework
+      seal  #1f6b4a   the crank and pedal
+  -->
+  <title>Line illustration of a city bicycle</title>
+  <rect x="6" y="6" width="188" height="188" rx="20" fill="#e8dfcc" stroke="#10243a" stroke-width="3"/>
+
+  <circle cx="65" cy="140" r="30" fill="none" stroke="#10243a" stroke-width="7"/>
+  <circle cx="150" cy="140" r="30" fill="none" stroke="#10243a" stroke-width="7"/>
+
+  <path
+    d="M65,140 L102,140 L78,88 L65,140 M102,140 L150,78 M78,88 L150,78 M150,78 L150,140"
+    fill="none" stroke="#10243a" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <line x1="63" y1="80" x2="93" y2="80" stroke="#10243a" stroke-width="8" stroke-linecap="round"/>
+  <line x1="150" y1="58" x2="150" y2="78" stroke="#10243a" stroke-width="8" stroke-linecap="round"/>
+  <line x1="134" y1="58" x2="166" y2="58" stroke="#10243a" stroke-width="8" stroke-linecap="round"/>
+
+  <circle cx="102" cy="140" r="6" fill="#10243a"/>
+  <line x1="102" y1="140" x2="120" y2="160" stroke="#1f6b4a" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="120" cy="160" r="6" fill="#1f6b4a"/>
+</svg>

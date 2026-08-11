@@ -1,0 +1,28 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true">
+  <!--
+    Vlado Georgijev, Belgrade Arena, issue #215.
+
+    Hand-drawn line art, not a photograph — see flight-beg-pmi.svg's comment
+    for why, and for why the colours below are literal hex rather than a
+    stylesheet reference: the seven tokens from frontend/src/styles.css
+    (light theme), and no others.
+      wash   #e8dfcc   card background
+      paper  #f7f2e8   the ticket
+      ink    #10243a   linework and the note
+      signal #1f5fbf   the spotlight
+  -->
+  <title>Line illustration of a concert ticket with a music note</title>
+  <rect x="6" y="6" width="188" height="188" rx="20" fill="#e8dfcc" stroke="#10243a" stroke-width="3"/>
+
+  <circle cx="53" cy="72" r="5" fill="#1f5fbf"/>
+  <circle cx="46" cy="88" r="3" fill="#1f5fbf"/>
+
+  <rect x="35" y="55" width="130" height="90" rx="10" fill="#f7f2e8" stroke="#10243a" stroke-width="6"/>
+  <circle cx="75" cy="55" r="8" fill="#e8dfcc"/>
+  <circle cx="75" cy="145" r="8" fill="#e8dfcc"/>
+  <line x1="75" y1="64" x2="75" y2="136" stroke="#10243a" stroke-width="3" stroke-dasharray="6 6"/>
+
+  <circle cx="122" cy="122" r="10" fill="#10243a"/>
+  <line x1="132" y1="122" x2="132" y2="70" stroke="#10243a" stroke-width="6" stroke-linecap="round"/>
+  <path d="M132,70 C 150,74 152,90 138,90" fill="none" stroke="#10243a" stroke-width="6" stroke-linecap="round"/>
+</svg>
