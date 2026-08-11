@@ -369,6 +369,72 @@ describe("an attempt's outcome", () => {
   });
 });
 
+describe("the price beside an attempt's outcome — issue #174", () => {
+  it("shows the merchant's own refusal price in the same register a constraint's limit uses", () => {
+    // The demo's own numbers: 210.00 refused against a 200.00 cap, in the
+    // "N.NN CCY" form a constraint sentence like "at most 200.00 USD" already
+    // uses, not formatAmount's "$210.00".
+    seq = 0;
+    showing([
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+      record({
+        kind: "mandate_rejected",
+        role: "mpp",
+        digest: DIGEST,
+        code: "constraint_violated",
+        amount: { amount: 21000, currency: "USD" },
+      }),
+    ]);
+
+    // Twice, and both are wanted, on the digest's own precedent: once as the
+    // figure on the step that carried it, once beside the outcome badge.
+    expect(
+      screen.getAllByText("210.00 USD"),
+      "the merchant's own quoted price, on the refusal it wrote — not $210.00, " +
+        "which is formatAmount's register for a price tag rather than a figure " +
+        "read beside a limit",
+    ).toHaveLength(2);
+  });
+
+  it("shows nothing when no step in the attempt carries a price", () => {
+    seq = 0;
+    showing([record({ kind: "mandate_presented", role: "agent" })]);
+
+    expect(
+      screen.queryByText(/USD/),
+      "an attempt whose only step is one amountKinds does carry a price for, " +
+        "with none supplied, must not show a stray figure",
+    ).toBeNull();
+  });
+
+  it("gives the refused and the bought attempt in one watch their own prices", () => {
+    seq = 0;
+    showing([
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+      record({
+        kind: "mandate_rejected",
+        role: "mpp",
+        digest: DIGEST,
+        code: "constraint_violated",
+        amount: { amount: 21000, currency: "USD" },
+      }),
+      record({ kind: "mandate_constructed", role: "agent" }),
+      record({
+        kind: "mandate_verified",
+        role: "merchant",
+        digest: OTHER,
+        amount: { amount: 18900, currency: "USD" },
+      }),
+      record({ kind: "receipt_issued", role: "merchant", digest: OTHER }),
+      record({ kind: "mandate_verified", role: "mpp", digest: OTHER }),
+      record({ kind: "receipt_issued", role: "mpp", digest: OTHER }),
+    ]);
+
+    expect(screen.getAllByText("210.00 USD")).toHaveLength(2);
+    expect(screen.getAllByText("189.00 USD")).toHaveLength(2);
+  });
+});
+
 describe("a digest a reader wants to compare or copy", () => {
   it("carries its full value even though twelve characters are shown", () => {
     seq = 0;

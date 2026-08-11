@@ -14,6 +14,7 @@
 
 import { DIGEST_SHOWN, shortDigest } from "../digest";
 import type { EventKind, EventRecord } from "../sse";
+import type { Amount } from "../protocol";
 
 export { DIGEST_SHOWN, shortDigest };
 
@@ -93,6 +94,15 @@ export interface Step {
   readonly detail?: string;
   readonly digest?: string;
   readonly code?: string;
+  /**
+   * The price this step is about — what the party that emitted it quoted,
+   * presented, verified or refused. Issue #174's field, read straight through
+   * from `ProtocolEvent.amount` on the same terms `digest` is: absent on a
+   * step that legitimately has none, present and possibly zero on one that
+   * does. See `amountOf` below for how an attempt picks one of these to show
+   * beside its outcome.
+   */
+  readonly amount?: Amount;
 }
 
 /**
@@ -296,6 +306,7 @@ export function group(records: readonly EventRecord[]): readonly Transaction[] {
       detail: record.event.detail,
       digest: record.event.digest,
       code: record.event.code,
+      amount: record.event.amount,
     });
     byCorrelation.set(id, steps);
   }
@@ -381,4 +392,36 @@ function namedDigest(step: Step): string | undefined {
 /** The steps of one attempt that belong in one lane, in order. */
 export function stepsIn(attempt: Attempt, lane: LaneId): readonly Step[] {
   return attempt.steps.filter((step) => step.lane === lane);
+}
+
+/**
+ * The price this attempt is about, for the badge beside its outcome —
+ * issue #174's "each attempt states its price as a figure beside its
+ * outcome."
+ *
+ * Not threaded through {@link split} the way the digest is. The digest is
+ * what *cuts* one correlation's steps into attempts — a different digest
+ * starts a new one — and an amount plays no part in that: two attempts can
+ * legitimately share a price, so there is nothing for it to cut on. This is a
+ * read over an attempt already assembled, not a second axis alongside the
+ * one the digest draws.
+ *
+ * The last step carrying one, scanning backwards, which is deliberately not
+ * "the first" or "an aggregate": every party that states an amount on this
+ * attempt is stating the same purchase's price — the merchant's own
+ * quote and the amount signed into the Payment Mandate agree, or the
+ * merchant refuses the mismatch before either event ships — so which step's
+ * copy is shown is a presentation choice, not a computation. The most recent
+ * one is the most decisive word available: a merchant's `mandate_rejected`
+ * once refused, a settling party's `mandate_verified` once bought, the
+ * agent's own `mandate_presented` while nothing has answered yet. That is
+ * "beside its outcome" read literally — the figure that goes with whichever
+ * state {@link verdictOf} is currently reporting.
+ */
+export function amountOf(attempt: Attempt): Amount | undefined {
+  for (let i = attempt.steps.length - 1; i >= 0; i -= 1) {
+    const amount = attempt.steps[i].amount;
+    if (amount !== undefined) return amount;
+  }
+  return undefined;
 }

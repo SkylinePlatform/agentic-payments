@@ -18,8 +18,9 @@
  * from a purchase without reading a sentence to find out.
  */
 
-import { LANES, shortDigest, stepsIn, titleOf, verdictOf } from "./model";
+import { LANES, amountOf, shortDigest, stepsIn, titleOf, verdictOf } from "./model";
 import type { Attempt, Lane, Step, Transaction, Verdict } from "./model";
+import type { Amount } from "../protocol";
 
 /** What a step's kind says, in words a reader who has not read AP2 can follow. */
 const KIND_WORDS: Readonly<Record<Step["kind"], string>> = {
@@ -48,6 +49,35 @@ function toneOf(step: Step): string {
   return "text-ink";
 }
 
+/**
+ * A price, in the register a constraint's own sentence uses — `"210.00 USD"`
+ * — not `formatAmount`'s `"$210.00"`.
+ *
+ * The choice is deliberate rather than incidental. `formatAmount`, from
+ * `../protocol`, divides through `Intl.NumberFormat` for a price tag a general
+ * reader sees on its own; this screen instead sits a figure next to a
+ * constraint's own limit — the design's example is `240.00 USD today` beside
+ * `at most 200.00 USD` — and the two only read as the same kind of number when
+ * neither borrows a currency symbol the other lacks. `renderMoney` in
+ * `constraint/render.ts` already makes this exact choice for the same reason,
+ * but is not imported here: it is unexported, and that module's own doc scopes
+ * it to two screens with no signature nearby, neither of which this is. Five
+ * lines of string surgery, unchanged from that function's algorithm, cost
+ * less than widening a boundary a different file's tests hold.
+ *
+ * No sign handling, unlike that original: `contracts/instrument/amount.json`
+ * requires `amount >= 0`, and `optionalAmount` in `sse/events.ts` already
+ * refuses a negative one off the wire, so there is nothing here to be wrong
+ * about.
+ */
+function renderPrice(amount: Amount): string {
+  const MINOR_DIGITS = 2;
+  const digits = String(amount.amount).padStart(MINOR_DIGITS + 1, "0");
+  const whole = digits.slice(0, digits.length - MINOR_DIGITS);
+  const fraction = digits.slice(digits.length - MINOR_DIGITS);
+  return `${whole}.${fraction} ${amount.currency}`;
+}
+
 function StepCard({ step }: { readonly step: Step }) {
   return (
     <li className="flex flex-col gap-1 border border-graphite/40 bg-paper px-3 py-2">
@@ -66,6 +96,17 @@ function StepCard({ step }: { readonly step: Step }) {
 
       {step.code !== undefined && step.code !== "" && (
         <code className="font-mono text-xs text-broken">{step.code}</code>
+      )}
+
+      {/*
+        The price this step is about, when it is about one — the four kinds
+        obs.Event's amountKinds permits. A step with none renders nothing here
+        rather than a placeholder: the digest above draws the same distinction
+        for the same reason, and a dash in place of an absent fact would read
+        as a value rather than as "not applicable to this step".
+      */}
+      {step.amount !== undefined && (
+        <span className="font-mono text-xs tabular-nums text-ink">{renderPrice(step.amount)}</span>
       )}
 
       {/*
@@ -285,23 +326,23 @@ function RefusedIcon() {
  * screen exists to show. `Bound` says what is true then; `Bought` waits for a
  * settling party to accept.
  *
- * There is deliberately no figure for "the amount". The event stream this
- * screen reads carries no structured price — `ProtocolEvent.detail` is free
- * text an emitter writes for a person, and `src/sse/events.test.ts`'s own
- * "never parses detail" case pins that no consumer may read a number back out
- * of it. Issue #174 is the honest fix: an amount on the wire, emitted by each
- * party that held one.
+ * **The figure for "the amount" is {@link PriceBadge}, drawn beside this one
+ * rather than folded into it.** Until issue #174 the event stream carried no
+ * structured price — `ProtocolEvent.detail` is free text an emitter writes for
+ * a person, and `src/sse/events.test.ts`'s own "never parses detail" case pins
+ * that no consumer may read a number back out of it — so this comment used to
+ * explain the absence. `obs.Event.amount`, and `model.ts`'s `amountOf`, are
+ * that fix: a price emitted structurally by whichever party held one, the same
+ * precedent `digest` set in #154.
  *
- * The agent's console *does* serve a structured price — `GET /watches/{id}`
- * answers `attempts[].price` as a canonical Amount, and `vite.config.ts`
- * already proxies it for the Inspector. **That route is deliberately not taken
- * here.** It joins on an attempt ordinal the two sides derive differently — the
- * console numbers its own attempts and excludes step changes it never minted,
- * while these are cut on the digest changing — so an extra or missing attempt
- * on either side puts one attempt's money against another's verdict, and a
- * wrong price beside a merchant's refusal is worse than no price at all. It is
- * also the buyer's own bookkeeping about itself, drawn beside verdicts this
- * screen's whole claim is that each party reached independently.
+ * The agent's console *does* also serve a structured price — `GET
+ * /watches/{id}` answers `attempts[].price` as a canonical Amount — and that
+ * route is still deliberately not taken here, for the reason unchanged by
+ * #174: it joins on an attempt ordinal the two sides derive differently, so an
+ * extra or missing attempt on either side would put one attempt's money
+ * against another's verdict. `amountOf` instead reads the same steps this
+ * screen already renders, cut into the same attempts, so a price and the
+ * outcome beside it can never disagree about which attempt they describe.
  */
 function Outcome({ verdict }: { readonly verdict: Verdict }) {
   switch (verdict.state) {
@@ -338,6 +379,27 @@ function Outcome({ verdict }: { readonly verdict: Verdict }) {
   }
 }
 
+/**
+ * The price beside the outcome — issue #174's "each attempt states its price
+ * as a figure beside its outcome," read literally.
+ *
+ * Renders nothing when {@link amountOf} finds none, which is the honest state
+ * for an attempt whose steps so far are all ones amountKinds excludes — the
+ * Trusted Surface's open-mandate steps, before anything is quoted, are the
+ * standing example. A dash in that gap would read as a value; an absent badge
+ * reads as what it is, nothing stated yet.
+ */
+function PriceBadge({ attempt }: { readonly attempt: Attempt }) {
+  const amount = amountOf(attempt);
+  if (amount === undefined) return null;
+
+  return (
+    <span className="font-mono text-xs tabular-nums text-ink" title="the price this attempt is about">
+      {renderPrice(amount)}
+    </span>
+  );
+}
+
 function AttemptView({
   attempt,
   index,
@@ -361,6 +423,7 @@ function AttemptView({
           </span>
         )}
         <Outcome verdict={verdict} />
+        <PriceBadge attempt={attempt} />
       </div>
 
       <Thesis verdict={verdict} />

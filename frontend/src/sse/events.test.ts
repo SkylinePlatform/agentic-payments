@@ -126,7 +126,7 @@ describe("parseRecord", () => {
       "the record is built field by field rather than cast, so a field added " +
         "to obs.Event arrives here as a deliberate change and not as a " +
         "property nothing declared",
-    ).toEqual(["at", "code", "correlation_id", "detail", "digest", "kind", "role"]);
+    ).toEqual(["amount", "at", "code", "correlation_id", "detail", "digest", "kind", "role"]);
   });
 
   it.each([
@@ -172,6 +172,53 @@ describe("parseRecord", () => {
         event: { kind: "receipt_issued", role: "mpp", at: "2026-08-09T10:11:12Z", detail: 12 },
       }),
       "detail is present and is not a string",
+    ],
+    [
+      "an amount that is a bare number rather than {amount, currency}",
+      JSON.stringify({
+        seq: 1,
+        event: { kind: "mandate_verified", role: "merchant", at: "2026-08-09T10:11:12Z", amount: 18900 },
+      }),
+      "amount is present and is not a well-formed {amount, currency} pair",
+    ],
+    [
+      "an amount missing currency",
+      JSON.stringify({
+        seq: 1,
+        event: {
+          kind: "mandate_verified",
+          role: "merchant",
+          at: "2026-08-09T10:11:12Z",
+          amount: { amount: 18900 },
+        },
+      }),
+      "amount is present and is not a well-formed {amount, currency} pair",
+    ],
+    [
+      "an amount whose minor units are not an integer",
+      JSON.stringify({
+        seq: 1,
+        event: {
+          kind: "mandate_verified",
+          role: "merchant",
+          at: "2026-08-09T10:11:12Z",
+          amount: { amount: 189.5, currency: "USD" },
+        },
+      }),
+      "amount is present and is not a well-formed {amount, currency} pair",
+    ],
+    [
+      "a negative amount",
+      JSON.stringify({
+        seq: 1,
+        event: {
+          kind: "mandate_verified",
+          role: "merchant",
+          at: "2026-08-09T10:11:12Z",
+          amount: { amount: -100, currency: "USD" },
+        },
+      }),
+      "amount is present and is not a well-formed {amount, currency} pair",
     ],
   ])("refuses %s", (_case, data, reason) => {
     const parsed = parseRecord(data);
@@ -237,5 +284,66 @@ describe("the digest, which is the three-lane view's spine", () => {
     expect(parsed.ok, "a digest that is not text is a frame this reader cannot use").toBe(false);
     if (parsed.ok) return;
     expect(parsed.reason).toContain("digest");
+  });
+});
+
+describe("the amount, issue #174's price on the wire", () => {
+  // obs.Event carries no structured price before this field, and the demo's
+  // whole argument for adding one is two figures a reader has to be able to
+  // read without parsing a sentence: 210.00 refused against a 200.00 cap,
+  // then 189.00 bought.
+  it("is read through on a kind a purchase price is meaningful for", () => {
+    const parsed = parseRecord(
+      JSON.stringify({
+        seq: 5,
+        event: {
+          kind: "mandate_rejected",
+          role: "merchant",
+          at: "2026-08-04T12:00:00Z",
+          amount: { amount: 21000, currency: "USD" },
+        },
+      }),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.record.event.amount).toEqual({ amount: 21000, currency: "USD" });
+  });
+
+  it("is absent rather than zero on a step with nothing to report", () => {
+    const parsed = parseRecord(
+      JSON.stringify({
+        seq: 1,
+        event: { kind: "mandate_constructed", role: "surface", at: "2026-08-04T12:00:00Z" },
+      }),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(
+      parsed.record.event.amount,
+      "Go writes the field with omitempty, so a reader can tell 'nothing to " +
+        "report' from 'a genuine zero-value authorisation' — the same " +
+        "distinction the digest draws between absent and empty",
+    ).toBeUndefined();
+  });
+
+  it("keeps a genuine zero apart from that absence", () => {
+    const parsed = parseRecord(
+      JSON.stringify({
+        seq: 1,
+        event: {
+          kind: "mandate_verified",
+          role: "credprovider",
+          at: "2026-08-04T12:00:00Z",
+          amount: { amount: 0, currency: "USD" },
+        },
+      }),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(
+      parsed.record.event.amount,
+      "contracts/instrument/amount.json allows a zero-amount authorisation; " +
+        "it must not read the same as no amount at all",
+    ).toEqual({ amount: 0, currency: "USD" });
   });
 });
