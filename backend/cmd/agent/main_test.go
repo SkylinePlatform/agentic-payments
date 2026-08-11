@@ -187,6 +187,17 @@ func TestInterpreterFor(t *testing.T) {
 			says: "scripted",
 			why:  "a typo that silently selected the default is the same unattributable screenshot",
 		},
+		{
+			name: "auto with a key", flag: "auto", key: "AIza-not-a-real-key",
+			says: "gemini",
+			why:  "auto asks for the best available, and with a key present that is the model",
+		},
+		{
+			name: "auto with no key", flag: "auto",
+			says: "scripted",
+			why: "auto never refuses for a missing key — it degrades to exactly the scripted table," +
+				" which is what makes it safe to test without one",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -221,6 +232,32 @@ func TestTheGeminiModelReachesTheBanner(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, reading, "some-other-model",
 		"the banner names the model that will be called, or it is a record of the default")
+}
+
+// TestAutoNamesWhichArmItChose is the half of TestInterpreterFor's auto rows
+// that Contains alone cannot pin: that the banner carries both facts, not just
+// one of them.
+//
+// "gemini" on its own is what -interpreter gemini already prints, and a reader
+// seeing only that would have no way to tell auto resolved to it from gemini
+// having been asked for directly — the two are different decisions even when
+// they land on the same implementation. Likewise "scripted" alone is
+// indistinguishable from the plain scripted default. The banner has to say
+// "auto" was the flag and name the arm it picked, both, for a screenshot taken
+// under auto to be attributable to auto rather than misread as one of the
+// other two flags.
+func TestAutoNamesWhichArmItChose(t *testing.T) {
+	t.Parallel()
+
+	_, withKey, err := interpreterFor("auto", "AIza-not-a-real-key", "", clock.NewFake(time.Unix(0, 0).UTC()))
+	require.NoError(t, err)
+	assert.Contains(t, withKey, "auto", "the banner has to say auto chose this, not only what it chose")
+	assert.Contains(t, withKey, "gemini", "and which arm auto resolved to")
+
+	_, withoutKey, err := interpreterFor("auto", "", "", clock.NewFake(time.Unix(0, 0).UTC()))
+	require.NoError(t, err, "auto never refuses for a missing key — it degrades to the scripted table instead")
+	assert.Contains(t, withoutKey, "auto", "the banner has to say auto chose this, not only what it chose")
+	assert.Contains(t, withoutKey, "scripted", "and which arm auto resolved to")
 }
 
 // TestAfterWatchSaysWhatEndedTheWatch pins the first of the two lines rather

@@ -117,15 +117,19 @@ describe("the shopping console", () => {
     render(<Console />, { wrapper: Router });
 
     expect(await screen.findByText(/buy a flight to Palma under \$200, this summer/)).toBeTruthy();
+    // Said before the box is touched, not learned from a 422 afterwards.
+    expect(await screen.findByText(/only understands the sentences below/i)).toBeTruthy();
   });
 
   it("shows nothing when the interpreter has no menu", async () => {
-    // -interpreter gemini: any sentence is admissible, so there is no menu and
-    // inventing one would offer sentences nothing is scripted for.
+    // -interpreter gemini or -interpreter auto with a key: any sentence is
+    // admissible, so there is no menu and inventing one would offer sentences
+    // nothing is scripted for.
     stubFetch({ "/examples": { examples: [] } });
     render(<Console />, { wrapper: Router });
 
     await waitFor(() => expect(screen.queryByTestId("examples")).toBeNull());
+    expect(await screen.findByText(/reads free text/i)).toBeTruthy();
   });
 
   it("renders the agent's own sentence on a refusal and keeps what was typed", async () => {

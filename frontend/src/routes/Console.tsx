@@ -131,6 +131,20 @@ export function Console() {
         <label htmlFor="console-prompt" className="font-display text-lg text-ink">
           What would you like me to buy?
         </label>
+        {/*
+          The box's two honest states, said before anybody types rather than
+          discovered as a 422 after. GET /examples is the signal: a scripted
+          interpreter publishes its menu, a model-backed one publishes none
+          because with a model any sentence is admissible — see
+          console.Agent.Examples. Gated on the same `examples` state the menu
+          below renders from, so the two can never disagree about which world
+          this is.
+        */}
+        <p className="font-sans text-sm text-ink" data-testid="interpreter-mode">
+          {examples.length > 0
+            ? "This agent only understands the sentences below. Click one, or type it exactly."
+            : "This agent reads free text. Type anything you'd like it to buy."}
+        </p>
         <textarea
           id="console-prompt"
           className="min-h-28 border border-graphite/40 bg-wash px-3 py-2 font-sans text-sm text-ink"
