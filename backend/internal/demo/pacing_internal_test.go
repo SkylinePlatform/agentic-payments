@@ -88,11 +88,25 @@ func startupFloor(m *Manifest, after, before int) time.Duration {
 // at $189, no error anywhere.
 //
 // Under the fixed 30s step this had 27 seconds of slack and nobody had to think
-// about it. Issue #158's 3s floor left roughly half a second, measured at 2.45
-// to 2.49 seconds of merchant clock from its own start to the watch's baseline
-// across eight `make demo` runs. This pins the part of that gap the manifest and
-// the runner can prove between them, so that shortening -step again, or adding a
-// process ahead of agent-watch, fails here rather than in front of an audience.
+// about it. Issue #158's 3s floor left roughly half a second — 2.45 to 2.49
+// seconds of merchant clock across eight runs — nearly all of it the flat
+// stubGrace the runner spends on agent-buy, which stays up and has no health
+// check to wait on. Moving agent-watch above agent-buy took that term out of the
+// window entirely: 0.45 to 0.46 seconds measured the same way, against the same
+// 3s floor, the difference being that grace to within a few milliseconds.
+//
+// # Two assertions, because after that reorder the first one alone proves nothing
+//
+// startupFloor is now zero for the shipped manifest, so requiring -step to
+// exceed it is a statement that three seconds is more than nothing. That is the
+// honest consequence of the fix rather than a hole: what buys the margin is no
+// longer a number clearing another number, it is the *absence* of anything
+// between the merchant and the watch that the runner is provably slow for. So
+// the floor being zero is asserted as the property in its own right. Putting
+// agent-buy back above agent-watch, or adding any other process there that stays
+// up without a health check, fails on that second assertion — which is the
+// regression this test now exists to catch, the first one having become a
+// backstop for a manifest that reintroduces one *and* shortens -step.
 func TestTheMerchantsFirstPriceOutlastsTheStackComingUp(t *testing.T) {
 	t.Parallel()
 
@@ -116,6 +130,13 @@ func TestTheMerchantsFirstPriceOutlastsTheStackComingUp(t *testing.T) {
 			"full stubGrace, and the merchant's schedule is already running throughout. A "+
 			"baseline taken at the $210 is a run with no refusal in it — beat 5 gone, silently, "+
 			"which is exactly what issue #158 asked for a test about")
+
+	assert.Zero(t, floor,
+		"something between the merchant and agent-watch now makes the runner wait on a timer "+
+			"rather than on a health check, and the watch's baseline moves later by that much. "+
+			"agent-buy is the one that used to sit here and cost two seconds of a three second "+
+			"floor; if it or anything like it has moved back above the watch, the margin this "+
+			"order was chosen for is gone whether or not -step still clears the bound above")
 }
 
 // TestThePollStaysUnderTheShortestPriceHold is the rule deploy/demo.json spends
