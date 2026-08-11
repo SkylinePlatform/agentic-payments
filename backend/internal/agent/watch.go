@@ -20,9 +20,9 @@ import (
 // wait for. A watch that returned nil here would look like a completed purchase
 // to every caller that only checks the error.
 //
-// **Unreachable on the demo path, and by two routes rather than one.** The
-// tempting single sentence — "a cycling schedule never reports Final" — is not
-// true as stated, so it is worth having both:
+// **Unreachable on the demo path.** The tempting single sentence — "a cycling
+// schedule never reports Final" — is not true in general, so it is worth
+// stating the actual reason rather than that one:
 //
 //   - An offer with more than one price under
 //     merchant.NewCyclingJitteredSchedule never reports Final: there is always a
@@ -31,10 +31,15 @@ import (
 //     or not — there is nothing to wrap to, so that constructor draws no width
 //     and builds the same held-still schedule a one-shot one would;
 //     merchant's TestCyclingJitteredScheduleRejectsNonsense pins exactly that.
-//     But its step never changes, so no attempt is ever minted and the branch
-//     below is never *reached*. deploy/catalogue.json ships two such offers —
-//     the concert and the ladders — and two of the five prompts
-//     interpret.Scenarios() serves name them.
+//     Its step would then never change either, so no attempt would ever be
+//     minted and the branch below would never be *reached*. Issue #192 is what
+//     that cost deploy/catalogue.json's concert and ladders before they each
+//     gained a second price: a browser starting either from GET /examples took
+//     a baseline that could never step, and could therefore never buy. Every
+//     offer the file ships now has at least two prices, so this second route is
+//     presently unreachable for the simpler reason that nothing here is single
+//     priced — not because the shape stopped existing. A future offer that
+//     shipped with one price would still hit it.
 //
 // Either way the watch polls for as long as the process runs, minting nothing
 // and reporting nothing, rather than reaching this. ErrAuthorisationExpired is
@@ -50,10 +55,10 @@ var ErrScheduleExhausted = errors.New("agent: the merchant has no further price 
 // price holds forever, so a cap nothing ever meets is eventually attempted
 // against Final and refused into ErrScheduleExhausted. Neither shape the
 // demonstration actually runs has that moment — see ErrScheduleExhausted for
-// the two routes by which it does not — so a watch begun against prices the
-// user's cap will never accept, or against an offer whose single price never
-// moves at all, would otherwise poll until the process stops, its row on a
-// console never moving and never saying why.
+// why not — so a watch begun against prices the user's cap will never accept,
+// or (before issue #192) against an offer whose single price never moved at
+// all, would otherwise poll until the process stops, its row on a console
+// never moving and never saying why.
 //
 // This is that watch's own bound instead of a second, invented one: the
 // open mandate pair already carries an expiry — Authorisation.ExpiresAt, read

@@ -46,6 +46,10 @@ const palmaPrompt = "buy a flight to Palma when it drops below $200, this summer
 // and a basket size the constraint model deliberately does not carry.
 const concertPrompt = "two tickets to the Vlado Georgijev concert in November, up to $160 all in"
 
+// ladderPrompt is the scenario where "cheapest" becomes a bound rather than an
+// instruction — see interpret.telescopicLadders.
+const ladderPrompt = "find and buy telescopic ladders, cheapest"
+
 // authorised is a world plus an agent that has been through the discovery half:
 // its own key endorsed by the user, both open mandates in hand, and one item to
 // watch.
@@ -410,11 +414,16 @@ func TestTheCredentialProvidersReceiptDoesNotSpendTheMandate(t *testing.T) {
 // agent.Authorisation.Quantity, and in what the watch built from it actually
 // prices and pays for.
 //
-// The concert's schedule is flat — deploy/catalogue.json prices it once, at
-// $75.00 — so Watch.Run never sees a step change and never attempts anything;
-// see Schedule.at. That is orthogonal to this defect and is why this test
-// drives Delegate and Attempt directly, on TestTheCredentialProvidersReceiptDoesNotSpendTheMandate's
-// own pattern, rather than running the loop to completion.
+// The basket size is orthogonal to whether Watch.Run ever gets as far as an
+// attempt at all — issue #192's defect, fixed since — so this test drives
+// Delegate and Attempt directly, on
+// TestTheCredentialProvidersReceiptDoesNotSpendTheMandate's own pattern,
+// rather than running the loop to completion. It reads the opening price,
+// which is deploy/catalogue.json's first figure for this offer and stays
+// $75.00 regardless of how many prices follow it.
+// TestAWatchOnAnAlwaysAffordableOfferStillWaitsForAStepThenBuys is what runs
+// the concert prompt's watch to completion and is where #192 itself is
+// covered.
 func TestTheConcertPromptBuysTheBasketSizeItAsked(t *testing.T) {
 	t.Parallel()
 
@@ -443,6 +452,87 @@ func TestTheConcertPromptBuysTheBasketSizeItAsked(t *testing.T) {
 	assert.True(t, d.Settled, "the money has to have moved for the basket that was actually presented")
 	assert.Equal(t, 2*merchant.DemoConcertPrice, d.Price.Amount,
 		"what was paid for has to be the two tickets the user asked for, not one")
+}
+
+// TestAWatchOnAnAlwaysAffordableOfferStillWaitsForAStepThenBuys is issue #192,
+// run end to end.
+//
+// The concert and the ladders are affordable at the very first price a search
+// finds them at — Scenario.Found says FoundAlways for both — and that was also
+// the defect: Watch never attempts the baseline, on purpose (see Watch's own
+// doc on why), so a schedule that never stepped left both prompts polling for
+// the life of the process, only ever reaching a terminal state an hour later
+// when the user's open mandate pair expired — a state about the clock, not
+// about the purchase. The fix gives each offer a second price, still inside
+// the cap, so the merchant's own re-commitment to a (still affordable) number
+// is the step change Watch reacts to, and the purchase completes on the first
+// one: no refusal, because nothing here was ever outside the user's limit.
+func TestAWatchOnAnAlwaysAffordableOfferStillWaitsForAStepThenBuys(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		prompt   string
+		item     string
+		quantity int
+		baseline int
+		bought   int
+	}{
+		{
+			name: "concert", prompt: concertPrompt, item: merchant.DemoConcertID, quantity: 2,
+			baseline: 2 * merchant.DemoConcertPrice,
+			bought:   2 * merchant.DemoConcertPriceRepriced,
+		},
+		{
+			name: "ladders", prompt: ladderPrompt, item: merchant.DemoLadderID, quantity: 1,
+			baseline: merchant.DemoLadderPrice,
+			bought:   merchant.DemoLadderPriceRepriced,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newWorld(t)
+			a := authoriseFor(t, w, tc.prompt)
+			require.Equal(t, tc.item, a.auth.Item,
+				"watching the wrong offer would prove nothing about this one")
+
+			watch := a.watch(t)
+			require.Equal(t, tc.quantity, watch.Quantity)
+
+			wait, _ := a.running(t, watch)
+
+			// The baseline poll: read, and — by Watch's own design — never
+			// attempted, however affordable it already is.
+			a.quoted()
+
+			a.step() // the merchant's only other price
+			a.quoted()
+			a.attempted()
+
+			watched, err := wait()
+			require.NoError(t, err,
+				"an offer that was always inside the cap has nothing here to refuse it")
+
+			assert.Equal(t, tc.baseline, watched.Baseline.Price.Amount,
+				"the baseline is what the watch is quoted before anything is attempted")
+			assert.Zero(t, watched.Baseline.Step,
+				"the baseline is the offer in force when the watch began")
+
+			require.Len(t, watched.Attempts, 1,
+				"one step, one attempt — a watch that attempted the baseline would have two")
+			bought := watched.Attempts[0]
+			assert.Equal(t, tc.bought, bought.Quote.Price.Amount)
+			assert.NoError(t, bought.Err,
+				"both prices sit inside the cap, so there is nothing here for a verifier to refuse")
+			assert.Equal(t, authz.StateSpent, bought.Payment, "an accepted attempt spends the mandate")
+			assert.Equal(t, authz.StateSpent, bought.Checkout)
+
+			require.NotNil(t, watched.Bought,
+				"the purchase this offer was always affordable for has to complete, or #192 is not fixed")
+			assert.True(t, watched.Bought.Settled, "the money has to have moved")
+		})
+	}
 }
 
 // TestTheWatchBuysWhenTheMerchantsPriceComesIntoRange is the built scenario,
