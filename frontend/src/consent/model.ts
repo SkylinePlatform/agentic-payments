@@ -151,6 +151,13 @@ export interface Authorised {
  * the screen they signed is the same class of problem as a constraint no
  * verifier reads. So `raw` travels for a reader to see, and {@link canSign}
  * refuses.
+ *
+ * **A trigger that never arrived takes the same arm, and it is the case the
+ * other one stands in for.** `agent.Watch` reads an absent trigger as a watch,
+ * deliberately, because a loop with nobody in front of it is safer not buying;
+ * a screen has a person in front of it and no business picking either
+ * behaviour silently. The two rules are opposite on purpose and this is the
+ * half a reader meets first.
  */
 export type Buying =
   | { readonly sentence: string; readonly raw?: undefined }
@@ -173,11 +180,28 @@ const BUYING: Record<Trigger, Buying> = {
   },
 };
 
-export function whenItBuys(trigger: string): Buying {
-  if ((TRIGGERS as readonly string[]).includes(trigger)) return BUYING[trigger as Trigger];
+/**
+ * Takes `string | undefined` rather than `string`, and that is the parameter
+ * doing the work rather than a concession to a type.
+ *
+ * `Proposal` declares `trigger` required, but `propose` casts the response body
+ * — so an agent console built before issue #198 sends no such key and
+ * `JSON.parse` hands this a value the type says cannot exist. That console is
+ * the *only* deployment the unknown arm was written for, and reading it as
+ * `string` meant `raw` came back `undefined` for it: the screen drew "does not
+ * recognise" and {@link canSign} enabled *Sign* underneath it. Narrowing the
+ * parameter to what the wire can actually deliver is what makes the two agree.
+ */
+export function whenItBuys(trigger: string | undefined): Buying {
+  if (trigger !== undefined && (TRIGGERS as readonly string[]).includes(trigger)) {
+    return BUYING[trigger as Trigger];
+  }
   return {
     sentence: "This console does not recognise what the agent said about when it would buy.",
-    raw: trigger,
+    // Never undefined, because that is what canSign reads as "this build knows
+    // the word". A trigger that never arrived is one this build cannot read,
+    // and it has to reach that function as such.
+    raw: trigger ?? "",
   };
 }
 
@@ -195,8 +219,13 @@ export function whenItBuys(trigger: string): Buying {
  * a value it cannot read stops the signature rather than being drawn as a
  * guess. Both clauses are unreachable in a matched pair of builds —
  * `interpret.Validate` refuses an interpretation that names no trigger, so the
- * agent cannot propose one this set does not contain unless it has grown a
- * third since this bundle was built. See {@link whenItBuys}.
+ * agent cannot propose one this set does not contain.
+ *
+ * **Unmatched builds are what the clause is for, and there are two of them.**
+ * A console that grew a third trigger after this bundle was built sends a word
+ * this set does not hold; a console built before #198 sends no `trigger` key at
+ * all. Both stop the signature, and the second is the one this repository can
+ * actually produce today. See {@link whenItBuys}.
  */
 export function canSign(proposal: Proposal, previewed: Previewed): boolean {
   return (

@@ -241,6 +241,31 @@ describe("the consent screen", () => {
     ).toBe(true);
   });
 
+  it("refuses to sign a proposal from a console that never sent a trigger", async () => {
+    // The other unmatched build, and the only one this repository can actually
+    // produce: an agent console from before #198 sends no `trigger` key at all,
+    // and `propose` casts the response body, so the field arrives `undefined`
+    // where `Proposal` says `string`. The round trip through JSON is how the
+    // fixture reaches that shape, because the type will not let one be written.
+    //
+    // It has to stop the signature on the same terms a word nobody defines
+    // does. It did not: the screen drew *"does not recognise"* and left *Sign*
+    // enabled underneath it, which is the failure this whole zone exists to
+    // prevent wearing the sentence that describes it.
+    const older = JSON.parse(JSON.stringify({ ...aProposal(), trigger: undefined })) as Proposal;
+
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent(older);
+
+    const when = await screen.findByTestId("when");
+    expect(within(when).getByText(/does not recognise/i)).toBeTruthy();
+    const sign = await screen.findByRole("button", { name: /sign/i });
+    expect(
+      (sign as HTMLButtonElement).disabled,
+      "a person cannot consent to a behaviour the screen has just told them it cannot name",
+    ).toBe(true);
+  });
+
   it("disables signing when a constraint did not render", async () => {
     stubFetch({ "/authorise/preview": { body: { ...aPreview(), rendered: ["only one"] } } });
     renderConsent(aProposal()); // three constraints

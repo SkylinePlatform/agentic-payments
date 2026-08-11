@@ -48,6 +48,23 @@ describe("canSign", () => {
     );
   });
 
+  it("refuses a trigger that never arrived, which is the case the empty one stands in for", () => {
+    // The row above is the console that grew a *third* trigger; this is the
+    // console built before there was a first, and it is the one this repository
+    // can actually produce. `Proposal` types the field as required and
+    // `propose` casts the body, so the value is `undefined` at runtime rather
+    // than `""` — a shape TypeScript will not let a fixture write, hence the
+    // parse. Before the parameter was narrowed this signed: the screen drew
+    // "does not recognise" and *Sign* was enabled underneath it.
+    const older = JSON.parse(`{ "quantity": 1 }`) as { trigger: string };
+
+    expect(
+      canSign({ ...proposal(3), trigger: older.trigger }, previewed(3)),
+      "an absent trigger is one this screen cannot read, and it may not be signed under a " +
+        "sentence saying so",
+    ).toBe(false);
+  });
+
   it("allows both of the triggers the agent can actually answer", () => {
     // Or the row above proves only that this function refuses something.
     for (const trigger of TRIGGERS) {
@@ -95,5 +112,17 @@ describe("whenItBuys", () => {
     // is the safe direction for a *loop* with nobody watching; a *screen* has
     // a person in front of it and no business picking one silently.
     expect(whenItBuys("").raw).toBe("");
+  });
+
+  it("reads a trigger that never arrived the same way, and not as a known one", () => {
+    // `raw` is what `canSign` reads as "this build knows the word", so the one
+    // value the wire can actually deliver from an older console has to come
+    // back as a string rather than as the absence that means readable.
+    expect(
+      whenItBuys(undefined).raw,
+      "an absent key and an empty one are the same ignorance, and only one of them was " +
+        "reaching canSign as such",
+    ).toBe("");
+    expect(whenItBuys(undefined).sentence).toMatch(/does not recognise/i);
   });
 });

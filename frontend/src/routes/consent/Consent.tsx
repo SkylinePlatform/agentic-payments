@@ -223,11 +223,16 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
           When the agent will buy
         </h2>
         <p className="font-sans text-ink">{buying.sentence}</p>
-        {buying.raw !== undefined && (
+        {buying.raw !== undefined && buying.raw !== "" && (
           // The wire value, in mono, on #159's rule that monospace is for code
           // — an uninterpreted value is exactly what somebody debugging this
           // would paste into a terminal. `Sign` is disabled while this is
           // showing; see canSign.
+          //
+          // The empty check is the older console, which sends no `trigger` key
+          // at all: there is no word to quote back, the sentence above already
+          // says the console could not read one, and an empty mono line would
+          // be a debugging aid with nothing in it.
           <p className="font-mono text-sm text-broken">{buying.raw}</p>
         )}
         <p className="font-sans text-sm text-graphite">
