@@ -131,6 +131,36 @@ type PaymentVerifierAsOf interface {
 	VerifyPaymentAsOf(at time.Time, sd *sdjwt.SDJWT) (generated.PaymentMandate, error)
 }
 
+// CheckoutChainVerifierAsOf and PaymentChainVerifierAsOf are
+// CheckoutVerifierAsOf's and PaymentVerifierAsOf's question asked of a
+// delegation chain rather than of a single presented mandate — #110, the
+// Human Not Present counterpart of the pair above, needed for exactly the
+// reason CheckoutChainVerifier is a second interface from CheckoutVerifier
+// rather than a parameter grafted onto it: a chain and a presentation are
+// verified through different entry points so that neither can be reached by
+// mistake through the other's.
+//
+// subject and nonce appear here because AuthoriseCheckoutChain cannot do
+// without them and an arbiter cannot derive them: Bundle.Checkout is opaque
+// bytes to ap2.Dispute, so there is nothing for a constraint.Subject to be a
+// pure function of, and a remembered nonce is a fact about one exchange that
+// only the party who issued it holds. Both are supplied by whoever calls
+// Dispute.VerifyChain — see ChainDisputeOptions.
+type CheckoutChainVerifierAsOf interface {
+	AuthoriseCheckoutChainAsOf(
+		at time.Time, c *sdjwt.Chain, subject constraint.Subject, checkoutJWT, nonce string,
+	) (CheckoutAuthorisation, error)
+}
+
+// PaymentChainVerifierAsOf is CheckoutChainVerifierAsOf's counterpart for the
+// Payment Mandate chain. See that interface for why subject and nonce are
+// parameters — payment carries no subject for the same reason
+// AuthorisePaymentChain does not take one: PaymentSubject derives it from the
+// verified closed mandate itself.
+type PaymentChainVerifierAsOf interface {
+	AuthorisePaymentChainAsOf(at time.Time, c *sdjwt.Chain, nonce string) (PaymentAuthorisation, error)
+}
+
 // fixedClock is authz.Clock stopped at one instant.
 //
 // It is what turns "as of then" into something the existing verification path
@@ -336,6 +366,36 @@ func (r MerchantRules) AuthoriseCheckoutChain(
 	})
 }
 
+// AuthoriseCheckoutChainAsOf runs the Merchant's rules against a delegation
+// chain as they stood at a stated moment — AuthoriseCheckoutChain's
+// counterpart for an arbiter hearing a dispute, on VerifyCheckoutAsOf's exact
+// reasoning: at replaces r.Clock outright rather than being compared against
+// it, a zero one is refused rather than defaulted, and everything past that
+// guard is AuthoriseCheckoutChain's own body reached through a clock-pinned
+// copy of this rule set.
+//
+// The copy carries every field forward — Issuer, AgentKey, Audience and
+// RequireConstrained included — so a field AuthoriseCheckoutChain starts
+// reading is not silently dropped here, the same discipline
+// VerifyCheckoutAsOf's own comment argues for and for the same reason: two
+// bodies for one question is how the two quietly stop agreeing.
+func (r MerchantRules) AuthoriseCheckoutChainAsOf(
+	at time.Time,
+	c *sdjwt.Chain,
+	subject constraint.Subject,
+	checkoutJWT, nonce string,
+) (CheckoutAuthorisation, error) {
+	if at.IsZero() {
+		return CheckoutAuthorisation{}, fmt.Errorf(
+			"%w: no instant to judge this delegation chain as of, and a mandate is live or expired only relative to one",
+			ErrMisconfigured)
+	}
+
+	pinned := r
+	pinned.Clock = fixedClock(at)
+	return pinned.AuthoriseCheckoutChain(c, subject, checkoutJWT, nonce)
+}
+
 // CredentialProviderRules is what a Credential Provider — and the Network,
 // which asks the same question — checks before it will fund a purchase.
 type CredentialProviderRules struct {
@@ -487,6 +547,28 @@ func (r CredentialProviderRules) AuthorisePaymentChain(
 	})
 }
 
+// AuthorisePaymentChainAsOf runs the Credential Provider's rules against a
+// delegation chain as they stood at a stated moment. See
+// MerchantRules.AuthoriseCheckoutChainAsOf for why at replaces r.Clock rather
+// than being checked against it, why a zero one is refused rather than
+// defaulted, and why everything past that guard is AuthorisePaymentChain's own
+// body reached through a clock-pinned copy of this rule set.
+func (r CredentialProviderRules) AuthorisePaymentChainAsOf(
+	at time.Time,
+	c *sdjwt.Chain,
+	nonce string,
+) (PaymentAuthorisation, error) {
+	if at.IsZero() {
+		return PaymentAuthorisation{}, fmt.Errorf(
+			"%w: no instant to judge this delegation chain as of, and a mandate is live or expired only relative to one",
+			ErrMisconfigured)
+	}
+
+	pinned := r
+	pinned.Clock = fixedClock(at)
+	return pinned.AuthorisePaymentChain(c, nonce)
+}
+
 // MPPRules is what a Merchant Payment Processor checks before it moves money.
 type MPPRules struct {
 	// Clock decides whether the credential has expired. Required.
@@ -546,12 +628,14 @@ func (r MPPRules) VerifyCredential(
 // behind. Without these a delegating role would only discover a mismatch at the
 // call site that tried to swap an implementation in.
 var (
-	_ CheckoutVerifier      = MerchantRules{}
-	_ CheckoutChainVerifier = MerchantRules{}
-	_ CheckoutVerifierAsOf  = MerchantRules{}
-	_ PaymentVerifier       = CredentialProviderRules{}
-	_ PaymentChainVerifier  = CredentialProviderRules{}
-	_ PaymentVerifierAsOf   = CredentialProviderRules{}
-	_ CredentialVerifier    = MPPRules{}
-	_ authz.Clock           = fixedClock{}
+	_ CheckoutVerifier          = MerchantRules{}
+	_ CheckoutChainVerifier     = MerchantRules{}
+	_ CheckoutVerifierAsOf      = MerchantRules{}
+	_ CheckoutChainVerifierAsOf = MerchantRules{}
+	_ PaymentVerifier           = CredentialProviderRules{}
+	_ PaymentChainVerifier      = CredentialProviderRules{}
+	_ PaymentVerifierAsOf       = CredentialProviderRules{}
+	_ PaymentChainVerifierAsOf  = CredentialProviderRules{}
+	_ CredentialVerifier        = MPPRules{}
+	_ authz.Clock               = fixedClock{}
 )

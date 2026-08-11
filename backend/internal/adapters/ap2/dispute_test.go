@@ -106,7 +106,11 @@ const (
 	paymentKind  = generated.ReceiptMandateTypePayment
 )
 
-// receiptOver signs one party's answer to one presentation.
+// receiptOver signs one party's answer to one presentation — or one delegation
+// chain, since ap2.Presented is the same interface IssueReceipt itself takes,
+// widened from *sdjwt.SDJWT for #110's chain fixtures below without touching any
+// existing call site: every one of them already passes a *sdjwt.SDJWT, and that
+// type satisfies Presented unchanged.
 //
 // verdict is passed through to IssueReceipt unchanged, so a nil one produces the
 // success receipt and any error produces the rejection carrying its code. That
@@ -116,7 +120,7 @@ func receiptOver(
 	t *testing.T,
 	f fixture,
 	issuer string,
-	sd *sdjwt.SDJWT,
+	sd ap2.Presented,
 	kind generated.ReceiptMandateType,
 	verdict error,
 ) string {
