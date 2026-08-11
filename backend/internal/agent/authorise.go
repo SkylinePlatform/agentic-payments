@@ -168,32 +168,39 @@ type Intent struct {
 // from somebody else — the constraints from the interpreter, the mandates and
 // the instrument from the Trusted Surface, the item from the merchant's own
 // catalogue — which is the property that makes the loop below deterministic.
+//
+// It carries JSON tags because it is also a wire shape: console.Watching.
+// Authorisation decodes one from a browser that already collected the user's
+// signature at a Trusted Surface the agent was never on the connection for.
+// Hand-written, on the same terms as every other shape internal/agent/console
+// serialises, and deliberately not in contracts/ — two SD-JWTs and the
+// sentences a surface rendered are presentation, not the canonical model.
 type Authorisation struct {
 	// Item is the catalogue offer the watch will poll, and the one the
 	// constraints were narrowed to.
-	Item string
+	Item string `json:"item"`
 
 	// Constraints are the limits as signed: the interpretation, plus the one
 	// constraint that narrows it to Item.
-	Constraints []generated.Constraint
+	Constraints []generated.Constraint `json:"constraints"`
 
 	// The two open mandates, signed by the user, in SD-JWT compact
 	// serialisation.
-	OpenCheckoutMandate string
-	OpenPaymentMandate  string
+	OpenCheckoutMandate string `json:"open_checkout_mandate"`
+	OpenPaymentMandate  string `json:"open_payment_mandate"`
 
 	// Rendered is what the surface said each constraint means, in the order
 	// they were signed. The agent shows it and never acts on it.
-	Rendered []string
+	Rendered []string `json:"rendered"`
 
 	// ExpiresAt is when the pair stops authorising anything.
-	ExpiresAt time.Time
+	ExpiresAt time.Time `json:"expires_at"`
 
 	// Instrument is the payment instrument the surface pinned into the open
 	// Payment Mandate. The closed one has to reproduce it unchanged or
 	// authz.checkPinned refuses the purchase, and the surface is the only party
 	// that can honestly say what it pinned — see the field on surface.authorised.
-	Instrument generated.PaymentInstrument
+	Instrument generated.PaymentInstrument `json:"payment_instrument"`
 }
 
 // Authorise runs Propose and then collects the user's signature over the

@@ -65,6 +65,21 @@ func authorised() agent.Authorisation {
 	}
 }
 
+// anAuthorisationBody is what a browser sends when the user has already
+// signed at a Trusted Surface the agent was never on the connection for:
+// agent.Authorisation's JSON shape, built as a map rather than the Go type so
+// these tests exercise the wire and not a struct that happens to produce it.
+//
+// Its fields are deliberately unlike authorised()'s, on proposal()'s own
+// reasoning above: a body that mixed the two routes up fails on sight rather
+// than by coincidence.
+func anAuthorisationBody() map[string]any {
+	return map[string]any{
+		"item":     "gtin:05014477390221",
+		"rendered": []string{"the item is gtin:05014477390221"},
+	}
+}
+
 // proposal is the canned agent.Proposal a mocked Propose answers with — its
 // fields deliberately unlike authorised()'s, so a body that mixed the two
 // routes up would fail on sight rather than by coincidence.
@@ -266,6 +281,18 @@ func decodeStrict(t *testing.T, resp *http.Response, into any) int {
 	return resp.StatusCode
 }
 
+// startedBody is what POST /watches answers with, decoded as its own type
+// rather than as the package's unexported started — view.go's own reasoning
+// that a test asserts the wire, not a Go type that happens to produce it.
+type startedBody struct {
+	ID            string    `json:"id"`
+	CorrelationID string    `json:"correlation_id"`
+	Item          string    `json:"item"`
+	Quantity      int       `json:"quantity"`
+	Signed        []string  `json:"signed"`
+	ExpiresAt     time.Time `json:"expires_at"`
+}
+
 // proposedBody is what POST /proposals answers with, decoded as its own type
 // rather than as the package's unexported proposed — view.go's own reasoning
 // that a test asserts the wire, not a Go type that happens to produce it.
@@ -413,6 +440,63 @@ func TestTheResponseCarriesWhatTheUserSigned(t *testing.T) {
 	require.Len(t, body["signed"], len(signed))
 	assert.Equal(t, signed[0], body["signed"].([]any)[0],
 		"what the user signed is the interpretation, and it comes back in the order it was signed in")
+}
+
+// TestASignedAuthorisationStartsAWatchWithoutCallingTheSurface is the browser's
+// path.
+//
+// By the time this request arrives the user has already signed, at a surface the
+// agent was not on the connection for. Asking again would collect a second
+// signature for one decision.
+func TestASignedAuthorisationStartsAWatchWithoutCallingTheSurface(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil })
+
+	var started startedBody
+	require.Equal(t, http.StatusCreated, post(t, c.url+"/watches", map[string]any{
+		"prompt":        "find and buy telescopic ladders, cheapest",
+		"quantity":      1,
+		"authorisation": anAuthorisationBody(),
+	}, &started))
+
+	assert.Equal(t, "gtin:05014477390221", started.Item,
+		"the item comes from what was signed, not from the request's own field")
+	// On the test goroutine, after the response.
+	c.watcher.AssertNumberOfCalls(t, "Authorise", 0)
+}
+
+// TestAWatchStartedFromASignedAuthorisationCarriesTheUsersSentences is what the
+// row on screen is drawn from.
+func TestAWatchStartedFromASignedAuthorisationCarriesTheUsersSentences(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil })
+
+	var started startedBody
+	require.Equal(t, http.StatusCreated, post(t, c.url+"/watches", map[string]any{
+		"prompt":        "find and buy telescopic ladders, cheapest",
+		"quantity":      1,
+		"authorisation": anAuthorisationBody(),
+	}, &started))
+
+	assert.Equal(t, []string{"the item is gtin:05014477390221"}, started.Signed,
+		"the sentences the surface rendered are what the user read; the agent shows them and never re-renders them")
+}
+
+// TestAWatchWithoutAnAuthorisationStillAsksTheSurface is the command line's
+// path, unchanged.
+func TestAWatchWithoutAnAuthorisationStillAsksTheSurface(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil })
+
+	var started startedBody
+	require.Equal(t, http.StatusCreated, post(t, c.url+"/watches", map[string]any{
+		"prompt": "find and buy telescopic ladders, cheapest", "quantity": 1,
+	}, &started))
+
+	c.watcher.AssertNumberOfCalls(t, "Authorise", 1)
 }
 
 // TestASentenceThisAgentCannotReadIsTheCallersMistake is why the two failure

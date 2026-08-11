@@ -23,10 +23,14 @@
 //     TestTheStateNamesTheConsoleServesAreTheOnesTheMachineWrites drives a watch
 //     through all three and reads them back off the wire.
 //   - **No route accepts a state.** The DTO is only ever marshalled; the request
-//     shapes in this file decode a prompt, an item and a quantity, and nothing
-//     else, and the paths carry a watch's name and an attempt's number. An agent
-//     that could be *told* where its mandate stood would be taking somebody
-//     else's word for its own bookkeeping.
+//     shapes in this file decode a prompt, an item, a quantity and — POST
+//     /watches only — a pre-signed agent.Authorisation, and nothing else, and
+//     the paths carry a watch's name and an attempt's number. An agent that
+//     could be *told* where its mandate stood would be taking somebody else's
+//     word for its own bookkeeping. An authorisation is not that: it is two
+//     SD-JWTs signed by the user's key, and this package carries them to
+//     verifiers rather than reading anything out of them — see
+//     Watching.Authorisation.
 //
 // # The agent reports what it presented and what came back, never a verdict
 //
@@ -160,6 +164,24 @@ type Watching struct {
 	Item string
 	// Quantity is how many to buy. Zero means one.
 	Quantity int
+
+	// Authorisation, when set, is what the user already signed, and Start uses
+	// it instead of asking for a signature.
+	//
+	// **This is an artefact, not a state**, and the distinction is thin enough
+	// to be worth writing down before somebody tests it. The package comment's
+	// rule is that no route accepts a state — an agent that could be told where
+	// its mandate stood would be taking somebody else's word for its own
+	// bookkeeping. What arrives here is two SD-JWTs signed by the user's key.
+	// This package does not parse them, evaluate them or believe anything about
+	// them; it carries them to verifiers whose job that is. Where a mandate
+	// stands is still computed by agent.Tracker from what those verifiers
+	// answered, and there is still no route by which an agent can be told.
+	//
+	// The tempting edit — "while we are accepting an authorisation, we may as
+	// well accept its state" — is one line away and reads as symmetry. It is
+	// not.
+	Authorisation *agent.Authorisation
 }
 
 // Handler returns the console's routes, wrapped in the middleware every role
@@ -210,11 +232,14 @@ func (s *Service) Handler() (http.Handler, error) {
 	return roles.Middleware(s.Clock, mux)
 }
 
-// Start authorises a prompt and leaves a watch running against what was signed.
+// Start leaves a watch running against an authorisation: its own, when
+// Watching carries none, or one the caller already collected — see
+// Watching.Authorisation.
 //
 // # Synchronous authorisation, asynchronous watch
 //
-// The signature is collected before this returns, so what comes back names an
+// The signature is collected — by this call, or beforehand by whoever set
+// Watching.Authorisation — before this returns, so what comes back names an
 // authorisation that exists: the two open mandates, the sentences the surface
 // rendered, the item and the expiry. The polling loop is what runs on afterwards.
 //
@@ -226,12 +251,13 @@ func (s *Service) Handler() (http.Handler, error) {
 //
 // # ctx governs both halves
 //
-// Authorise runs under it and so does the watch, so the caller decides how a
-// watch ends. cmd/agent hands the process's signal context to the watch it
-// starts on startup, which is what makes Ctrl-C leave that run reading "stopped";
-// the HTTP handler hands context.WithoutCancel(r.Context()), because a browser
-// navigating away is not a reason to abandon an open mandate the user has just
-// signed, and the request's correlation ID travels either way.
+// Authorise, when it runs at all, runs under it, and so does the watch either
+// way, so the caller decides how a watch ends. cmd/agent hands the process's
+// signal context to the watch it starts on startup, which is what makes
+// Ctrl-C leave that run reading "stopped"; the HTTP handler hands
+// context.WithoutCancel(r.Context()), because a browser navigating away is
+// not a reason to abandon an open mandate the user has just signed, and the
+// request's correlation ID travels either way.
 func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 	if s.Watcher == nil {
 		return nil, errors.New("console: a console needs an agent to start watches with")
@@ -249,10 +275,19 @@ func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 		return nil, err
 	}
 
-	auth, err := s.Watcher.Authorise(ctx, in.Prompt, in.Item)
-	if err != nil {
-		s.release()
-		return nil, err
+	// With an authorisation in hand the slot check above still runs first, and
+	// still against nothing more than a well-formed request — the signature
+	// happened at the Trusted Surface before the browser ever contacted this
+	// agent, so a 429 here spends nothing that was signed. Whether it is rare
+	// depends on watch_slots_free being read first, not on this ordering.
+	auth := in.Authorisation
+	if auth == nil {
+		signed, err := s.Watcher.Authorise(ctx, in.Prompt, in.Item)
+		if err != nil {
+			s.release()
+			return nil, err
+		}
+		auth = &signed
 	}
 
 	id, err := newID()
@@ -281,7 +316,7 @@ func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 
 	go func() {
 		defer close(run.done)
-		watched, err := s.Watcher.Watch(ctx, auth, quantity, run)
+		watched, err := s.Watcher.Watch(ctx, *auth, quantity, run)
 		run.finished(watched, err)
 	}()
 
@@ -343,22 +378,27 @@ func (s *Service) all() []*Run {
 
 // start is POST /watches.
 func (s *Service) start(w http.ResponseWriter, r *http.Request) {
-	// Prompt, item and quantity. **Nothing here reads a state**, and that is the
-	// third of the three arrangements in the package comment: the agent states
-	// where its own mandates stand and nobody may send it an answer.
+	// Prompt, item, quantity and — when the browser already collected one — an
+	// authorisation. **Nothing here reads a state**, and that is the third of
+	// the three arrangements in the package comment: the agent states where its
+	// own mandates stand and nobody may send it an answer. An authorisation is
+	// not that — it is two SD-JWTs, an artefact this handler carries and does
+	// not parse — which is Watching.Authorisation's own distinction.
 	var req struct {
-		Prompt   string `json:"prompt"`
-		Item     string `json:"item"`
-		Quantity int    `json:"quantity"`
+		Prompt        string               `json:"prompt"`
+		Item          string               `json:"item"`
+		Quantity      int                  `json:"quantity"`
+		Authorisation *agent.Authorisation `json:"authorisation"`
 	}
 	if !roles.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	run, err := s.Start(context.WithoutCancel(r.Context()), Watching{
-		Prompt:   req.Prompt,
-		Item:     req.Item,
-		Quantity: req.Quantity,
+		Prompt:        req.Prompt,
+		Item:          req.Item,
+		Quantity:      req.Quantity,
+		Authorisation: req.Authorisation,
 	})
 	switch {
 	case errors.Is(err, ErrTooManyWatches):
