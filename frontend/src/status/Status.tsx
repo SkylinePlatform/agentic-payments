@@ -104,13 +104,14 @@ const ENDING_EDGE: Record<Ending, string> = {
  * One status: at most one pip, at most one ending, and always the word.
  *
  * Every className below is built by **concatenation** rather than in a template
- * literal, and that is load-bearing rather than stylistic — issue #194.
- * `src/test/source.ts` reads a backtick literal as one string from backtick to
- * backtick, so an interpolated `"text-seal"` reaches the palette rules with its
- * quotes still attached and parses as no utility at all. Written this way each
- * class is its own literal, and both the allow-list rule and `declares no token
- * that nothing wears` can see it. `SpineHead` and `EventLog.tsx` already do it
- * for the same reason.
+ * literal, matching `SpineHead` and `EventLog.tsx`. It read as load-bearing
+ * rather than stylistic until #194: `src/test/source.ts` used to take a
+ * backtick literal as one opaque string, so an interpolated `"text-seal"`
+ * reached the palette rules with its quotes still attached and parsed as no
+ * utility at all. `scan` now reads an interpolation's contents with itself,
+ * so both the allow-list rule and `declares no token that nothing wears`
+ * would see a class named that way too — concatenation here is a preference
+ * now, not a requirement.
  *
  * @param word     the machine's own spelling of the state. Required; see above.
  * @param pip      how far along, where the axis has a beginning and an end.

@@ -215,14 +215,15 @@ function SpineHead({ verdict }: { readonly verdict: Verdict }) {
   return (
     <div className="flex justify-center">
       <span
-        // Concatenation rather than a template literal, which is what
-        // `EventLog.tsx` and `routes/MandateInspector.tsx` already do, and it
-        // is load-bearing here rather than stylistic: `src/test/source.ts`
-        // reads a template literal as one string from backtick to backtick, so
-        // an interpolated `"text-signal"` reaches the palette rules with its
-        // quotes still attached and parses as no utility at all. Written this
-        // way each class is its own literal, and both the allow-list rule and
-        // `declares no token that nothing wears` can see it.
+        // Concatenation rather than a template literal, matching
+        // `EventLog.tsx` and `routes/MandateInspector.tsx`. It read as
+        // load-bearing until #194: `src/test/source.ts` used to take a
+        // template literal as one opaque string, so an interpolated
+        // `"text-signal"` reached the palette rules with its quotes still
+        // attached and parsed as no utility at all. `scan` now reads an
+        // interpolation's contents with itself, so either shape is seen —
+        // this stays concatenated because the sibling components already do,
+        // not because the guard requires it.
         className={
           "font-mono text-xl font-semibold tracking-tight sm:text-2xl " +
           (failed(verdict) ? "text-broken" : "text-signal")

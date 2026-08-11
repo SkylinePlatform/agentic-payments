@@ -205,14 +205,16 @@ function offPalette(source: string, allowed: ReadonlySet<string>): string[] {
  * **This can only fail loudly, never pass on a coincidence**, and the
  * direction is worth stating because it is what makes the rule honest. A token
  * named somewhere this scan cannot read reports as unworn and fails; there is
- * no way for an unworn token to be reported as worn. The one place the scan
- * cannot read is inside a template literal's interpolation, because
- * `src/test/source.ts` takes a backtick literal as one string and an
- * interpolated `"text-signal"` arrives with its quotes attached and parses as
- * no utility at all. So a failure here means one of two things — the token
- * genuinely reaches no element, or it reaches one through a template literal —
- * and the fix for the second is to write the class as its own string literal,
- * the way `SpineHead`, `EventLog` and `MandateInspector` all do.
+ * no way for an unworn token to be reported as worn.
+ *
+ * Until #194, the one place the scan could not read was inside a template
+ * literal's interpolation: `src/test/source.ts` took a backtick literal as one
+ * string, so an interpolated `"text-signal"` arrived with its quotes attached
+ * and parsed as no utility at all. `scan` now reads an interpolation's
+ * contents with itself, recursively, so a class named only that way is found —
+ * `SpineHead`, `Status` and `Inspector.tsx`'s `pill` still build their
+ * className by concatenation, and that is a preference now rather than
+ * something this rule depends on.
  */
 function tokensWorn(sources: readonly (readonly [string, string])[]): Set<string> {
   const worn = new Set<string>();
@@ -584,6 +586,21 @@ describe("the frontend's architecture", () => {
       ).toEqual([]);
     });
 
+    it("counts a token worn only inside a template literal's interpolation", () => {
+      // The converse of the fixture above: `tokensWorn` has to see `signal`
+      // even when the only className that names it is behind a ternary
+      // inside `${…}` — the exact shape `SpineHead`, `Status` and
+      // `Inspector.tsx`'s `pill` all avoided with concatenation because this
+      // used to be invisible to it.
+      const fixture: readonly [string, string][] = [
+        ["fixture.tsx", 'const c = `text-sm ${useSignal ? "text-signal" : "text-ink"}`;'],
+      ];
+      expect(
+        tokensWorn(fixture),
+        "a token named only through an interpolation is still worn",
+      ).toEqual(new Set(["signal", "ink"]));
+    });
+
     it.each(APP_SOURCES)("%s uses no colour outside the palette", (_path, source) => {
       expect(
         offPalette(source, allowed),
@@ -628,6 +645,71 @@ describe("the frontend's architecture", () => {
       ]) {
         expect(caught(fine), `these are not colours: ${fine}`).toEqual([]);
       }
+    });
+
+    it("sees a colour class written inside a template literal's interpolation", () => {
+      // #194: a colour class inside `${…}` used to arrive with its quotes
+      // still attached — `scan` read the whole backtick literal as one
+      // opaque string — and parsed as no utility at all. That is precisely
+      // the idiom a developer reaches for the moment a colour becomes
+      // conditional, which is exactly when the guard should be looking.
+      const urgent = 'const c = `text-sm ${urgent ? "text-purple-500" : "text-ink"}`;';
+      expect(
+        offPalette(urgent, allowed),
+        "an off-palette colour behind a ternary inside an interpolation is not " +
+          "a string literal of its own, and the allow-list still has to see it",
+      ).toEqual(["text-purple-500"]);
+
+      // The static text around the interpolation is still read too — the fix
+      // is scanning *inside* the interpolation as well, not scanning only it.
+      const both = 'const c = `${flag ? "text-red-600" : "text-ink"} bg-blue-500`;';
+      expect(
+        offPalette(both, allowed),
+        "a colour inside the interpolation and a colour in the static text " +
+          "after it are both violations",
+      ).toEqual(["text-red-600", "bg-blue-500"]);
+
+      // A nested template literal — the recursive case — is read the same way.
+      const nested = "const c = `outer ${cond ? `inner ${flag ? \"text-red-600\" : \"\"}` : \"\"}`;";
+      expect(
+        offPalette(nested, allowed),
+        "an interpolation may itself hold a template literal with its own " +
+          "interpolation; the fix is a recursive read, not a one-level lookahead",
+      ).toEqual(["text-red-600"]);
+    });
+
+    it("is not fooled by a comment's own brace inside an interpolation", () => {
+      // `endOfInterpolation` finds the `}` that closes `${…}` by counting
+      // braces, and a comment written inside the interpolation is not, on its
+      // own, a place braces stop counting — a `//` or `/* … */` has no
+      // delimiter the counter otherwise recognises. A *lone* `}` in that
+      // prose, with nothing before it in the same comment to balance it —
+      // realistic wherever a comment references `ENDING_EDGE`'s closing
+      // brace, or any object literal, by name — decrements `depth` to zero
+      // right there and closes the interpolation on the spot, silently
+      // dropping every literal after it in the same template literal. No
+      // exception, no failing test: fewer literals, quietly.
+      const strayBraceInLineComment =
+        'const c = `${ // mirrors ENDING_EDGE}\n cond ? "text-red-600" : "text-ink" }`;';
+      expect(
+        offPalette(strayBraceInLineComment, allowed),
+        "the `}` inside the // comment must not be read as the interpolation's " +
+          "own closing brace — both colours after it are still violations",
+      ).toEqual(["text-red-600"]);
+
+      const strayBraceInBlockComment =
+        'const c = `${ /* mirrors ENDING_EDGE} */ cond ? "text-red-600" : "text-ink" }`;';
+      expect(
+        offPalette(strayBraceInBlockComment, allowed),
+        "the same trap in a /* */ comment",
+      ).toEqual(["text-red-600"]);
+
+      // A *balanced* brace in a comment — `{note}` — could not have shown
+      // this: depth returns to where it started either way, so this is a
+      // regression lock on the case that already passed, not new coverage.
+      const balancedBraceInComment =
+        'const c = `${ /* {note} */ cond ? "text-red-600" : "text-ink" }`;';
+      expect(offPalette(balancedBraceInComment, allowed)).toEqual(["text-red-600"]);
     });
   });
 
@@ -741,6 +823,15 @@ describe("the frontend's architecture", () => {
       expect(themeNaming(`matchMedia("(prefers-color-scheme: dark)");`)).toContain(
         "prefers-color-scheme",
       );
+
+      // This rule reads the same `stringLiterals` the palette rule does, so
+      // it shared the palette rule's blind spot before #194: a `dark:` variant
+      // named only inside a template literal's interpolation used to arrive
+      // with its quotes attached and matched neither check below.
+      expect(
+        themeNaming('const c = `text-sm ${theme === "dark" ? "dark:bg-ink" : ""}`;'),
+        "both the literal comparison and the dark: variant, from inside an interpolation",
+      ).toEqual(['"dark"', "dark:bg-ink"]);
     });
   });
 
@@ -935,6 +1026,38 @@ describe("the frontend's architecture", () => {
         renderedSentenceSetInMono(`<code className="font-mono text-xs">{step.digest}</code>`),
         "no .rendered.map( at all, so nothing to flag",
       ).toEqual([]);
+    });
+
+    it("is not blind to font-mono inside a template literal's interpolation", () => {
+      // #194 found the palette rule blind to `` `${cond ? "text-a" : "text-b"}` ``,
+      // because it reads a class as a *token* pulled out of a clean string
+      // literal — and a class inside an interpolation arrives with its quotes
+      // still attached, matching no utility. These three rules take a
+      // different route: they run a plain substring test (`/font-mono/`)
+      // against the tag's raw attribute text, which still contains the word
+      // `font-mono` whether or not it sits inside a template literal's
+      // quotes. So the disguise that defeated the palette rule does not
+      // defeat this one — checked here rather than assumed, the same way the
+      // disguise above (a `>` before the className) is checked and not
+      // assumed.
+      expect(
+        headingsSetInMono(`<h2 className={\`text-sm \${big ? "font-mono" : "font-display"}\`}>Log</h2>`),
+        "a heading whose mono-ness is decided by a ternary inside an interpolation",
+      ).toHaveLength(1);
+      expect(
+        amountsSetInMono(
+          `<span className={\`text-xs \${big ? "font-mono" : "font-sans"}\`}>{renderPrice(a)}</span>`,
+        ),
+        "the same disguise, over an amount",
+      ).toHaveLength(1);
+      expect(
+        renderedSentenceSetInMono(
+          `{previewed.rendered.map((sentence, index) => (\n` +
+            `  <p key={index} className={\`text-ink \${dense ? "font-mono" : "font-sans"}\`}>{sentence}</p>\n` +
+            `))}`,
+        ),
+        "and over a signed sentence",
+      ).toHaveLength(1);
     });
   });
 

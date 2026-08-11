@@ -163,10 +163,12 @@ const RECEPTION_OPTIONS: readonly { readonly id: ReceptionFilter; readonly title
  * One toggle button, in the shape `EventLog.tsx` and `MandateInspector.tsx`'s
  * own filter pills already use.
  *
- * A plain string concatenation rather than a template literal, on purpose: #194
- * found that the palette guard reads a backtick literal as one opaque string,
- * so a colour class written inside `${…}` is invisible to it. Concatenation
- * keeps each class name its own string literal, which is what the guard scans.
+ * A plain string concatenation rather than a template literal, matching those
+ * two. #194 found the palette guard reading a backtick literal as one opaque
+ * string, so a colour class written inside `${…}` was invisible to it; `scan`
+ * now reads an interpolation's contents with itself, so the guard would see
+ * one here too. This stays concatenated because the sibling filter pills are,
+ * not because the guard still needs it to be.
  */
 function pill(active: boolean): string {
   return (
