@@ -247,7 +247,53 @@ type Authorisation struct {
 // of it — so a defect in it fails the authorisation loudly, at the same place
 // and under the same code as a defect in the interpretation.
 func (c *Client) Authorise(ctx context.Context, in Intent) (Authorisation, error) {
-	var out Authorisation
+	proposal, err := c.Propose(ctx, in)
+	if err != nil {
+		return Authorisation{}, err
+	}
+	return c.sign(ctx, in.Prompt, proposal)
+}
+
+// Offer is the merchant's own description of one thing it sells.
+//
+// It exists so a consent screen can say what an identifier refers to. No
+// verifier sees it, no constraint addresses it, and nothing in this package
+// compares any of it — see candidate. It is deliberately not in contracts/:
+// how a shop describes its stock is presentation, and putting it in the
+// canonical model would mean core knew what a flight is.
+type Offer struct {
+	ID          string           `json:"id"`
+	Title       string           `json:"title"`
+	Description string           `json:"description"`
+	ImageURL    string           `json:"image_url"`
+	Retailer    string           `json:"retailer"`
+	Price       generated.Amount `json:"price"`
+}
+
+// Proposal is what the agent puts in front of a person: the limits it read out
+// of their sentence, the offer it narrowed to, and the key it wants endorsed.
+//
+// Nothing in it is signed and nothing about it is remembered. It is the input to
+// a decision, and if the decision is no there is nothing to clean up.
+type Proposal struct {
+	Item        string
+	Offer       Offer
+	Constraints []generated.Constraint
+	AgentKey    generated.PublicKey
+}
+
+// Propose runs the discovery half and stops before the signature.
+//
+// Interpret, search, narrow — the three steps of Authorise that produce what a
+// user is shown, without the one that collects their signature. A consent screen
+// needs exactly this: something to render that does not yet exist as a mandate.
+//
+// The ordering argument, the reason the search is not run with the constraint
+// set the user signs, and the obligation to call interpret.Validate on what an
+// interpreter returned are all Authorise's and are unchanged — they live here
+// now because this is where those three steps live.
+func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
+	var out Proposal
 
 	if in.Interpreter == nil {
 		return out, errors.New("agent: no interpreter to read the prompt with")
@@ -262,19 +308,54 @@ func (c *Client) Authorise(ctx context.Context, in Intent) (Authorisation, error
 			in.Prompt, err)
 	}
 
-	// A caller that already picked one skips the search and nothing else. See
-	// Intent.Item: the narrowing below runs either way, so the user still reads
-	// which offer they are authorising.
-	item := in.Item
-	if item == "" {
-		found, err := c.discover(ctx, constraints)
-		if err != nil {
-			return out, err
-		}
-		item = found
+	item, offer, err := c.settle(ctx, constraints, in.Item)
+	if err != nil {
+		return out, err
 	}
 
-	narrowed := narrow(constraints, item)
+	return Proposal{
+		Item:        item,
+		Offer:       offer,
+		Constraints: narrow(constraints, item),
+		AgentKey:    in.AgentKey,
+	}, nil
+}
+
+// settle picks the offer this proposal is about, and describes it.
+//
+// A caller that already named one skips the search and nothing else; see
+// Intent.Item. The description is fetched either way, because a screen needs it
+// whether the picking happened here or upstream.
+func (c *Client) settle(
+	ctx context.Context, constraints []generated.Constraint, chosen string,
+) (string, Offer, error) {
+	found, err := c.candidates(ctx, constraints, chosen)
+	if err != nil {
+		return "", Offer{}, err
+	}
+	if len(found) == 0 {
+		return "", Offer{}, fmt.Errorf("%w: the search matched no offer", ErrNothingToBuy)
+	}
+
+	// The first result, unchanged: choosing among candidates is a product
+	// decision this demo does not make, and discover's comment carries why.
+	// When a caller named an item, candidates returns that one alone.
+	//
+	// candidate and Offer carry the same fields for the same reason, so the
+	// conversion below is not a shortcut past a copy — it is that copy.
+	c0 := found[0]
+	return c0.ID, Offer(c0), nil
+}
+
+// sign posts the proposal's constraints and key to the Trusted Surface and
+// assembles what the user signed into an Authorisation.
+//
+// The last of Authorise's four steps, held apart from Propose for the reason
+// #22 exists: nothing above this call may have collected a signature, and
+// keeping it in its own function is what makes that true by construction rather
+// than by review.
+func (c *Client) sign(ctx context.Context, prompt string, proposal Proposal) (Authorisation, error) {
+	var out Authorisation
 
 	var answer struct {
 		OpenCheckoutMandate string                      `json:"open_checkout_mandate"`
@@ -284,9 +365,9 @@ func (c *Client) Authorise(ctx context.Context, in Intent) (Authorisation, error
 		PaymentInstrument   generated.PaymentInstrument `json:"payment_instrument"`
 	}
 	body := map[string]any{
-		"prompt":      in.Prompt,
-		"constraints": narrowed,
-		"agent_key":   in.AgentKey,
+		"prompt":      prompt,
+		"constraints": proposal.Constraints,
+		"agent_key":   proposal.AgentKey,
 	}
 	if err := c.call(ctx, http.MethodPost,
 		strings.TrimSuffix(c.Endpoints.Surface, "/")+"/authorise", body, &answer); err != nil {
@@ -294,8 +375,8 @@ func (c *Client) Authorise(ctx context.Context, in Intent) (Authorisation, error
 	}
 
 	return Authorisation{
-		Item:                item,
-		Constraints:         narrowed,
+		Item:                proposal.Item,
+		Constraints:         proposal.Constraints,
 		OpenCheckoutMandate: answer.OpenCheckoutMandate,
 		OpenPaymentMandate:  answer.OpenPaymentMandate,
 		Rendered:            answer.Rendered,
@@ -306,26 +387,47 @@ func (c *Client) Authorise(ctx context.Context, in Intent) (Authorisation, error
 
 // candidate is one offer a search came back with.
 //
-// Only the identifier is read. The rest of what the merchant publishes — title,
-// image, description — is for a person, and the agent is not one; the price is
-// deliberately ignored too, because the agent compares no money anywhere and a
-// field it read here would be the first place that stopped being true.
+// # What discovery reads, and what this type now carries
+//
+// Discovery reads the identifier and nothing else. That has not changed and
+// TestDiscoverStillChoosesOnTheIdentifierAlone is what keeps it true: the agent
+// compares no money anywhere, ranks nothing, and a field it selected on here
+// would be the first place that stopped being so.
+//
+// What changed is that Propose serves a caller that **is** a person. The rest of
+// what the merchant publishes — title, image, description, retailer, and the
+// price today — is for that person to read, and the agent carries it through
+// rather than discarding it. Carrying is not reading. The consent screen needs
+// it because `the item is gtin:05014477390221` is the identifier a constraint
+// carries and is nothing anybody can act on.
 type candidate struct {
-	ID string `json:"id"`
+	ID          string           `json:"id"`
+	Title       string           `json:"title"`
+	Description string           `json:"description"`
+	ImageURL    string           `json:"image_url"`
+	Retailer    string           `json:"retailer"`
+	Price       generated.Amount `json:"price"`
 }
 
-// Discover asks the merchant what it sells that an interpretation describes, in
-// catalogue order.
+// candidates asks the merchant what it sells that a set of constraints
+// describes, keeping everything it published.
 //
-// Exported because it is the only way to see how many candidates a query
-// actually found. Authorise takes the first and discards the rest, so a test
-// driving Authorise cannot tell one candidate from five —
-// TestEveryScriptedPromptFindsOneCandidate calls this instead, and asserts the
-// count as well as the identifier. That was written after the first version of
-// that test was found to assert only the identifier, which stayed green while
-// the claim it was cited for became false.
-func (c *Client) Discover(ctx context.Context, constraints []generated.Constraint) ([]string, error) {
+// The body of what Discover used to be. Discover is now a thin projection of
+// this onto identifiers, so there is one search and one decode rather than two
+// that could come to disagree about what an offer is.
+//
+// chosen, when set, is an offer the caller already picked, and the query becomes
+// that one identifier. The merchant is still asked — the description has to come
+// from the party that publishes it, and inventing one here would put the shop's
+// own words in the buyer's mouth.
+func (c *Client) candidates(
+	ctx context.Context, constraints []generated.Constraint, chosen string,
+) ([]candidate, error) {
 	query := identifying(constraints)
+	if chosen != "" {
+		field := itemIDField
+		query = []generated.Constraint{{Op: "eq", Field: &field, Value: chosen}}
+	}
 	if len(query) == 0 {
 		// The merchant would answer request_malformed for an empty set, which is
 		// the right answer to the wrong question: what is actually wrong is one
@@ -351,40 +453,35 @@ func (c *Client) Discover(ctx context.Context, constraints []generated.Constrain
 		return nil, fmt.Errorf("searching the merchant's catalogue: %w", err)
 	}
 
-	out := make([]string, 0, len(results.Offers))
 	for _, o := range results.Offers {
 		if o.ID == "" {
 			return nil, fmt.Errorf("%w: the merchant returned an offer with no identifier",
 				ErrNothingToBuy)
 		}
+	}
+	return results.Offers, nil
+}
+
+// Discover asks the merchant what it sells that an interpretation describes, in
+// catalogue order.
+//
+// Exported because it is the only way to see how many candidates a query
+// actually found. Authorise takes the first and discards the rest, so a test
+// driving Authorise cannot tell one candidate from five —
+// TestEveryScriptedPromptFindsOneCandidate calls this instead, and asserts the
+// count as well as the identifier. That was written after the first version of
+// that test was found to assert only the identifier, which stayed green while
+// the claim it was cited for became false.
+func (c *Client) Discover(ctx context.Context, constraints []generated.Constraint) ([]string, error) {
+	found, err := c.candidates(ctx, constraints, "")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(found))
+	for _, o := range found {
 		out = append(out, o.ID)
 	}
 	return out, nil
-}
-
-// discover picks the one candidate the watch will follow.
-//
-// **Choosing among candidates is a product decision this demo does not make.**
-// The first result wins, and the merchant returns them in catalogue order, so
-// the choice is stable rather than considered. A real agent ranks, or asks.
-//
-// Every scripted prompt matches exactly one offer once the terms are out of the
-// query, so the demo never reaches a case where the difference shows —
-// TestEveryScriptedPromptFindsOneCandidate is what pins that, by calling
-// Discover for every prompt interpret.Demo() answers and asserting both the
-// count and the identifier. Note which test does *not* pin it:
-// TestTheCatalogueAnswersTheScriptedPrompts, in internal/roles/merchant, searches
-// with the **whole** constraint set, which is the query this path deliberately
-// does not send.
-func (c *Client) discover(ctx context.Context, constraints []generated.Constraint) (string, error) {
-	found, err := c.Discover(ctx, constraints)
-	if err != nil {
-		return "", err
-	}
-	if len(found) == 0 {
-		return "", fmt.Errorf("%w: the search matched no offer", ErrNothingToBuy)
-	}
-	return found[0], nil
 }
 
 // identifying returns the constraints that say what to go looking for.
