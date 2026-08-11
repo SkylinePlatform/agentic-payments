@@ -29,6 +29,19 @@
  * spaces and one deleted it, so a line number meant something different
  * depending on which rule reported it.
  *
+ * # Template literals are read from the inside, not skipped over
+ *
+ * A backtick literal is not one opaque run of characters between two
+ * backticks: an interpolation — `${…}` — is expression code, and it is where
+ * a conditional class name actually lives (`` `text-sm ${cond ? "a-b" : "c-d"}` ``
+ * is the shape #194 was filed over). `scan` reads the interpolation's
+ * contents with itself, recursively, so a quoted string inside `${…}` — or
+ * inside a template literal nested inside it — is found exactly the way one
+ * at the top level is: with its quotes stripped, as its own entry in
+ * `literals`. The static text of the template is still scanned as one literal
+ * too, the way it always was, so a class written outside any interpolation is
+ * unaffected.
+ *
  * # The single blind spot, stated rather than left to be found
  *
  * A regular-expression literal containing a quote — `/['"]/` — opens a string
@@ -51,6 +64,52 @@ export interface Scan {
    * a block comment precedes it.
    */
   readonly code: string;
+}
+
+/**
+ * Where a quoted string starting at `at` ends: one past its closing quote,
+ * with the same backslash-escaping the main walk in `scan` uses.
+ *
+ * Shared by `scan` itself and by `endOfInterpolation` below, which has to
+ * step over a nested string — including a nested template literal — without
+ * being fooled by a `}` inside it.
+ */
+function endOfQuoted(source: string, at: number): number {
+  const quote = source[at];
+  let i = at + 1;
+  while (i < source.length && source[i] !== quote) {
+    i += source[i] === "\\" ? 2 : 1;
+  }
+  return Math.min(i + 1, source.length);
+}
+
+/**
+ * Where a template literal's `${` interpolation closes: the matching `}`.
+ *
+ * `at` is the index right after `${`. Braces are counted rather than the
+ * first `}` taken, and a quoted string met along the way — single, double or
+ * a nested template literal — is skipped whole via `endOfQuoted` rather than
+ * walked character by character, so a `}` that belongs to *it* cannot be
+ * mistaken for the one that closes the interpolation. The same reasoning as
+ * `endOfOpeningTag` in `architecture.test.ts`, one grammar over.
+ */
+function endOfInterpolation(source: string, at: number): number {
+  let depth = 1;
+  let i = at;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === '"' || c === "'" || c === "`") {
+      i = endOfQuoted(source, i);
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+    i++;
+  }
+  return source.length;
 }
 
 /**
@@ -91,6 +150,23 @@ export function scan(source: string): Scan {
       i++;
       const start = i;
       while (i < source.length && source[i] !== c) {
+        // Only a template literal has interpolations, and this is the one
+        // read that is not opaque: the content between `${` and its `}` is
+        // expression code, not string text, so it is handed back to `scan`
+        // itself rather than swallowed as characters of the literal. A
+        // quoted string in there — `text-purple-500` in
+        // `` `text-sm ${cond ? "text-purple-500" : "text-ink"}` `` — comes
+        // back as its own entry in `literals`, with its quotes already gone,
+        // the same shape a top-level string produces. Recursion is what
+        // makes a template literal nested inside the interpolation work too:
+        // it opens its own `scan`, which opens its own interpolations.
+        if (c === "`" && source[i] === "$" && source[i + 1] === "{") {
+          const exprFrom = i + 2;
+          const exprTo = endOfInterpolation(source, exprFrom);
+          literals.push(...scan(source.slice(exprFrom, exprTo)).literals);
+          i = exprTo + 1;
+          continue;
+        }
         i += source[i] === "\\" ? 2 : 1;
       }
       literals.push(source.slice(start, i));

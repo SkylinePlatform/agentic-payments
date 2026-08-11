@@ -389,6 +389,22 @@ describe("the indicator vocabulary is one vocabulary", () => {
       expect(wearsSeal(`const s = "the seal is reserved";`), "prose naming the token").toEqual([]);
       expect(wearsSeal(`const c = "text-ink border-graphite/40";`)).toEqual([]);
     });
+
+    it("is not blind to text-seal inside a template literal's interpolation", () => {
+      // Unlike the palette rule in src/architecture.test.ts (#194), this one
+      // was never fully blind to `` `${cond ? "text-seal" : "text-ink"}` ``:
+      // it tests a word with `\b(?:…)-seal\b`, a regex search rather than an
+      // exact-token match, and a quote is a non-word character — so `\b`
+      // still lands at the boundary between it and `text-seal` even with the
+      // quote attached. Checked here rather than assumed, and kept as a
+      // regression lock now that `src/test/source.ts` also hands back the
+      // interpolated class as its own clean literal alongside the quoted one.
+      expect(
+        wearsSeal('<span className={`text-sm ${ok ? "text-seal" : "text-ink"}`}>'),
+        "found twice — once through the substring match this rule always had, " +
+          "and once as its own literal now that scan reads inside the interpolation",
+      ).toEqual(["text-seal", '"text-seal"']);
+    });
   });
 
   describe("every character the app prints is in the font it ships", () => {
