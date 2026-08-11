@@ -234,7 +234,7 @@ func (w *Watch) Delegate(ctx context.Context, q Quote) (*Delegated, error) {
 	if err != nil {
 		return nil, fmt.Errorf("signing the closed Checkout Mandate for the merchant: %w", err)
 	}
-	w.Client.Events.Emit(ctx, obs.KindMandateConstructed,
+	w.Client.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.CheckoutDigestOf(checkoutChain.String()))), obs.KindMandateConstructed,
 		"closed Checkout Mandate signed by the agent, under the open mandate the user signed")
 
 	// One per verifier. The audience and the nonce are the only things that
@@ -254,7 +254,11 @@ func (w *Watch) Delegate(ctx context.Context, q Quote) (*Delegated, error) {
 	if err != nil {
 		return nil, err
 	}
-	w.Client.Events.Emit(ctx, obs.KindMandateConstructed,
+	// Any one of the three carries the same digest — the same q.Checkout, the
+	// same payment claims, the audience and the nonce are the only things that
+	// differ between them — so the first one minted is as representative of
+	// this attempt's Payment Mandate as the other two.
+	w.Client.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.PaymentDigestOf(credentialChain))), obs.KindMandateConstructed,
 		"closed Payment Mandate signed by the agent, once for each of the three verifiers that reads it")
 
 	d := &Delegated{
@@ -364,7 +368,7 @@ func (w *Watch) Fund(ctx context.Context, d *Delegated) error {
 	// Before the call rather than after it, on Client.Fund's reasoning: a log
 	// showing a presentation with no verdict under it is the true shape of a hop
 	// that never landed, and emitting afterwards would show nothing at all.
-	w.Client.Events.Emit(ctx, obs.KindMandatePresented,
+	w.Client.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.PaymentDigestOf(d.CredentialChain))), obs.KindMandatePresented,
 		"delegated Payment Mandate presented to the Credential Provider")
 
 	body := map[string]any{"chain": d.CredentialChain, "nonce": d.CredProviderNonce}
@@ -414,7 +418,7 @@ func (w *Watch) Settle(ctx context.Context, d *Delegated) error {
 	// payment side too, and emits its own presentation when it passes the third
 	// chain to the processor — every verdict in this flow is emitted by whoever
 	// reached it, and the agent emits only what it presented.
-	w.Client.Events.Emit(ctx, obs.KindMandatePresented,
+	w.Client.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.CheckoutDigestOf(d.CheckoutChain))), obs.KindMandatePresented,
 		"delegated Checkout Mandate presented to the merchant")
 
 	body := map[string]any{

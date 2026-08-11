@@ -359,6 +359,53 @@ func TestTheHumanPresentFlowRunsEndToEnd(t *testing.T) {
 		"and the money must be scoped to it")
 }
 
+// TestTheHumanPresentFlowsMandateEventsNameTheCheckoutToo is issue #156's
+// first "Done when" box, on the flow the demo shows first.
+//
+// #156 was written against the Human Not Present watch loop and fixed
+// internal/agent/chain.go's four events; Client.Fund and Client.Settle here
+// emit the same two kinds and carried no digest either, on a *bare* closed
+// mandate rather than a chain — ap2.CheckoutDigestOfMandate and
+// ap2.PaymentDigestOfMandate are that shape's accessor. It matters which flow
+// this is: deploy/demo.json starts agent-buy, this flow, before agent-watch,
+// deliberately, so this is the very first agent lane a viewer of the
+// three-lane view sees, and until this test the agent's column there floated
+// free of the spine from the first frame.
+func TestTheHumanPresentFlowsMandateEventsNameTheCheckoutToo(t *testing.T) {
+	t.Parallel()
+
+	recorded := newRecorder()
+	emitting := allEmitting(t, recorded)
+	w := newWorldEmitting(t, emitting)
+	c := w.client()
+
+	bought, err := c.Buy(t.Context(), "BEG", "PMI",
+		paymentContent(quotedPrice(t, c, "BEG", "PMI")))
+	require.NoError(t, err, "a purchase nobody objected to was refused")
+
+	// Closed first, on TestTheWatchBuysWhenTheMerchantsPriceComesIntoRange's
+	// own reasoning: the emitter delivers from its own goroutine and Close
+	// drains, so reading the recorder before that races the flush.
+	require.NoError(t, emitting.agent.Close(context.Background()), "draining the agent's events")
+
+	checkoutSD, err := sdjwt.Parse(bought.CheckoutMandate)
+	require.NoError(t, err, "the mandate the user signed has to at least parse")
+	checkout, err := ap2.VerifyCheckout(checkoutSD, ap2.CheckoutOptions{
+		Issuer: w.user.verifier, Clock: w.clock, Checkout: bought.Offer,
+	})
+	require.NoError(t, err, "the mandate has to verify for its CheckoutHash to be the ground truth this test compares against")
+
+	agentEvents := recorded.eventsOf("agent")
+	require.Len(t, agentEvents, 2,
+		"Human Present's agent lane emits exactly the two mandate_presented events Fund and Settle produce, and nothing else is the agent's own to say in this flow")
+	for i, e := range agentEvents {
+		assert.Equal(t, obs.KindMandatePresented, e.Kind,
+			"event %d has to be one of Fund's or Settle's two presentations", i)
+		assert.Equal(t, checkout.CheckoutHash, e.Digest,
+			"event %d has to name the checkout its own artefact is bound to, the same digest a verifier independently confirms", i)
+	}
+}
+
 // TestEveryRejectionPointAnswersWithAReceipt is issue #10's second box.
 //
 // Each case breaks the flow at one place and asserts the same two things: the
