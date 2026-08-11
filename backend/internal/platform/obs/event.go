@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 )
 
 // Kind is what happened. The set is closed at exactly the six moments ADR 0003
@@ -136,6 +138,52 @@ type Event struct {
 	// model and should not drag the generated one into every role's import
 	// graph for a field nothing branches on.
 	Code string `json:"code,omitempty"`
+
+	// Amount is the price this event is about — what a party quoted, presented,
+	// verified or refused — carried in the same {amount, currency} shape
+	// generated.Amount already uses. Unlike Code and Digest, this field does
+	// drag the canonical model into this package's import graph, on purpose:
+	// issue #174 is explicit that a second money representation must not exist,
+	// and amounts here are never branched on either — the same "a label on a
+	// screenshot" standing Digest's own comment states.
+	//
+	// A pointer, not a value, because a zero amount and an absent one are
+	// different facts. generated.Amount{Amount: 0, Currency: "USD"} is a
+	// genuine zero-value authorisation — contracts/instrument/amount.json
+	// allows one, "how an instrument is verified without charging it" — while
+	// nil says this step has nothing to report, on the same terms Digest's ""
+	// does for a step before any mandate has been read.
+	//
+	// There is deliberately no "failed to read" state for this field the way
+	// there is for the digest — see internal/agent/digest.go's reportDigest.
+	// checkout_hash is recomputed by the adapter each time a mandate is
+	// issued, so the only way to state the value actually signed is to decode
+	// it back out afterwards, and that decode can fail. An amount is never
+	// recomputed: every call site that attaches one is passing through a
+	// value it already holds as a typed Go field — the price it quoted, the
+	// price it is about to sign into a mandate, the price a mandate it just
+	// verified declared — so there is no parse step here to fail.
+	Amount *generated.Amount `json:"amount,omitempty"`
+}
+
+// amountKinds is the closed set of moments a structured price is meaningful
+// for, enforced by Validate below rather than left optional everywhere.
+//
+// All four are a statement about one specific mandate for one specific
+// purchase: constructing it, presenting it, accepting it or refusing it.
+// KindReceiptIssued is excluded on purpose — the receipt that event announces
+// already carries the canonical amount as signed evidence, and restating it on
+// the event about writing it would be a second, unauthoritative echo of a fact
+// that already has a home, the same "never copied" rule the digest follows
+// (see digest.go). KindAuthorisationRefused is excluded for the reason an open
+// mandate carries no digest either: a refusal there is a person declining an
+// *interpretation* — a set of limits — before any checkout has been quoted, so
+// there is no purchase price yet for anybody to state.
+var amountKinds = []Kind{
+	KindMandateConstructed,
+	KindMandatePresented,
+	KindMandateVerified,
+	KindMandateRejected,
 }
 
 // ErrInvalidEvent is returned by Validate. It is a single sentinel with the
@@ -163,6 +211,9 @@ func (e Event) Validate() error {
 		return fmt.Errorf("%w: correlation_id %q is not a valid identifier", ErrInvalidEvent, e.CorrelationID)
 	case e.Code != "" && e.Kind != KindMandateRejected:
 		return fmt.Errorf("%w: code is set on %s, which is not a rejection", ErrInvalidEvent, e.Kind)
+	case e.Amount != nil && !slices.Contains(amountKinds, e.Kind):
+		return fmt.Errorf("%w: amount is set on %s, which is not one of the kinds a purchase price is meaningful for",
+			ErrInvalidEvent, e.Kind)
 	}
 	return nil
 }

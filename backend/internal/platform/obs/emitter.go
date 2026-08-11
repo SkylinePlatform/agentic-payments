@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 )
 
 // Buffer and batch sizes.
@@ -142,6 +143,30 @@ func NewEmitter(clk authz.Clock, role string, opts ...EmitterOption) (*Emitter, 
 	return e, nil
 }
 
+// EventOpt sets an optional field on an event Emit or EmitRejection is about
+// to send.
+//
+// A parameter at the call that needs it, not a context rebind like WithDigest.
+// The digest applies to every event a handler emits from the moment it learns
+// one, which is what makes rebinding the context once the right shape; an
+// amount belongs to the one call that is constructing, presenting, verifying
+// or refusing a specific mandate. Rebinding it onto the context the way the
+// digest is would leak it onto the next, unrelated event the same handler
+// emits with the same context — a receipt_issued right after a
+// mandate_verified, say — and Validate would then silently drop that whole
+// event for carrying an amount on a kind that does not accept one, rather than
+// the caller ever having asked for that.
+type EventOpt func(*Event)
+
+// WithAmount attaches the price an event is about. Only KindMandateConstructed,
+// KindMandatePresented, KindMandateVerified and KindMandateRejected accept
+// one — see amountKinds in event.go — so passing this to Emit or EmitRejection
+// with any other kind makes Validate refuse the whole event, counted under
+// Stats().Rejected, rather than silently drop just the amount.
+func WithAmount(amount generated.Amount) EventOpt {
+	return func(e *Event) { e.Amount = &amount }
+}
+
 // Emit records that something happened. It never blocks and never fails.
 //
 // # A nil *Emitter is a working no-op
@@ -172,13 +197,17 @@ func NewEmitter(clk authz.Clock, role string, opts ...EmitterOption) (*Emitter, 
 // to, and the two events either side of the one that forgot would then show a
 // spine with a hole in it. WithDigest is what a handler calls once, when it
 // learns which checkout it is looking at.
-func (e *Emitter) Emit(ctx context.Context, kind Kind, detail string) {
-	e.EmitEvent(Event{
+func (e *Emitter) Emit(ctx context.Context, kind Kind, detail string, opts ...EventOpt) {
+	ev := Event{
 		Kind:          kind,
 		CorrelationID: CorrelationID(ctx),
 		Digest:        Digest(ctx),
 		Detail:        detail,
-	})
+	}
+	for _, opt := range opts {
+		opt(&ev)
+	}
+	e.EmitEvent(ev)
 }
 
 // EmitRejection records a refusal, carrying the canonical error code so the log
@@ -189,14 +218,18 @@ func (e *Emitter) Emit(ctx context.Context, kind Kind, detail string) {
 // at the party that noticed", which it can only do if the refusal names the
 // checkout it refused. A rejection emitted before the mandate parsed carries
 // none, which is the honest answer — nothing was refused *about* a checkout.
-func (e *Emitter) EmitRejection(ctx context.Context, code, detail string) {
-	e.EmitEvent(Event{
+func (e *Emitter) EmitRejection(ctx context.Context, code, detail string, opts ...EventOpt) {
+	ev := Event{
 		Kind:          KindMandateRejected,
 		CorrelationID: CorrelationID(ctx),
 		Digest:        Digest(ctx),
 		Detail:        detail,
 		Code:          code,
-	})
+	}
+	for _, opt := range opts {
+		opt(&ev)
+	}
+	e.EmitEvent(ev)
 }
 
 // EmitEvent records a fully-formed event, filling in Role and At if unset. It

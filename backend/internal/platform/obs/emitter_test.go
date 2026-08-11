@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 )
@@ -115,6 +116,61 @@ func TestEmitRejectionCarriesTheCode(t *testing.T) {
 	batch := <-sent
 	assert.Equal(t, obs.KindMandateRejected, batch[0].Kind, "EmitRejection produced some other kind")
 	assert.Equal(t, "constraint_violated", batch[0].Code)
+}
+
+// TestEmitAttachesAnAmount proves WithAmount reaches the sink on a kind that
+// accepts one, the way a call site like the merchant's settle handler needs.
+func TestEmitAttachesAnAmount(t *testing.T) {
+	t.Parallel()
+
+	sink, sent := recording(t, nil)
+	e := newEmitter(t, obs.WithSink(sink))
+
+	price := generated.Amount{Amount: 18900, Currency: "USD"}
+	e.Emit(context.Background(), obs.KindMandateVerified, "verified", obs.WithAmount(price))
+
+	batch := <-sent
+	require.NotNil(t, batch[0].Amount, "WithAmount did not reach the event")
+	assert.Equal(t, price, *batch[0].Amount)
+}
+
+// TestEmitRejectionAttachesAnAmount is TestEmitAttachesAnAmount's counterpart
+// for the other helper: the merchant's own quoted price on the refusal it
+// wrote, the example issue #174 opens with — 210.00 refused against a 200.00
+// cap.
+func TestEmitRejectionAttachesAnAmount(t *testing.T) {
+	t.Parallel()
+
+	sink, sent := recording(t, nil)
+	e := newEmitter(t, obs.WithSink(sink))
+
+	quoted := generated.Amount{Amount: 21000, Currency: "USD"}
+	e.EmitRejection(context.Background(), "constraint_violated", "amount above the cap", obs.WithAmount(quoted))
+
+	batch := <-sent
+	assert.Equal(t, obs.KindMandateRejected, batch[0].Kind)
+	require.NotNil(t, batch[0].Amount, "WithAmount did not reach the rejection")
+	assert.Equal(t, quoted, *batch[0].Amount)
+}
+
+// TestWithAmountOnADisallowedKindDropsTheWholeEvent pins the failure mode a
+// caller gets wrong: WithAmount does not strip itself off a kind Validate
+// refuses it on, it fails the whole event, the same way a stray Code would.
+// EventOpt's own comment on the context-versus-parameter choice is what this
+// pins — an amount that leaked from the wrong call would be caught here rather
+// than silently rendering nothing.
+func TestWithAmountOnADisallowedKindDropsTheWholeEvent(t *testing.T) {
+	t.Parallel()
+
+	sink, _ := recording(t, nil)
+	e := newEmitter(t, obs.WithSink(sink))
+
+	e.Emit(context.Background(), obs.KindReceiptIssued, "receipt issued",
+		obs.WithAmount(generated.Amount{Amount: 100, Currency: "USD"}))
+
+	assert.Equal(t, 1, e.Stats().Rejected,
+		"an amount on receipt_issued must fail Validate, not render as an event with no price")
+	assert.Equal(t, 0, e.Stats().Emitted)
 }
 
 // TestEmitNeverBlocks is the constraint ADR 0003 states outright: a collector
