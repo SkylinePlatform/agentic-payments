@@ -155,11 +155,18 @@ describe("the consent path renders nothing of its own", () => {
   });
 
   it("has no path from a consent route to the renderer", () => {
-    // Zero consent routes exist today, so this loop is currently empty and
-    // proves nothing on its own. That is what the fixture below is for: it runs
-    // the same walk over a graph that does contain the violation, so the rule
-    // fails when it should rather than only when there is something to fail on.
     const routes = APP_SOURCES.filter(([path]) => path.startsWith(CONSENT));
+
+    // The loop below is a negative assertion over `routes`. An empty set makes
+    // it pass without looking at anything, which is what it did while no
+    // consent route existed — the fixtures below were the only thing keeping
+    // the walker honest. Now that the routes are here, their absence is a
+    // failure rather than a vacuum: renaming the directory must break this
+    // test rather than quietly disarm it.
+    expect(
+      routes.map(([path]) => path),
+      "the consent routes this rule governs; an empty set would make every assertion below vacuous",
+    ).toEqual(expect.arrayContaining(["routes/consent/Consent.tsx"]));
 
     for (const [path] of routes) {
       const reached = [...reachedFrom(SOURCES, path)].filter((p) => p.startsWith(RENDERER));
