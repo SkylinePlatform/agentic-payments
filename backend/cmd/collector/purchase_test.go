@@ -299,10 +299,17 @@ func TestAPurchaseArrivesOnTheStream(t *testing.T) {
 		// the least authority in the protocol, and the stream says so.
 		"agent":        {obs.KindMandatePresented, obs.KindMandatePresented},
 		"credprovider": {obs.KindMandateVerified, obs.KindReceiptIssued},
-		// The merchant verifies, answers, and then presents the payment side to
-		// its processor — the one leg the agent has no part in.
+		// The merchant verifies, presents the payment side to its processor —
+		// the one leg the agent has no part in — and answers last.
+		//
+		// The receipt comes after the presentation and not before it, which is
+		// issue #224's fix visible from outside the merchant. It used to be
+		// announced the moment it was signed, which is one network call before
+		// the buyer is handed it: a processor that could not be reached answered
+		// 503 and dropped a receipt this stream had already said existed. What a
+		// receipt_issued now means is that somebody holds one.
 		"merchant": {
-			obs.KindMandateVerified, obs.KindReceiptIssued, obs.KindMandatePresented,
+			obs.KindMandateVerified, obs.KindMandatePresented, obs.KindReceiptIssued,
 		},
 		"mpp": {obs.KindMandateVerified, obs.KindReceiptIssued},
 	}, seen.byRole,
@@ -327,9 +334,10 @@ func TestAPurchaseArrivesOnTheStream(t *testing.T) {
 		"agent":        {price, price},
 		"credprovider": {price},
 		// Two of the merchant's three events: the verdict, and the presentation
-		// to the processor. The receipt between them states none — it announces
+		// to the processor. The receipt after them states none — it announces
 		// an artefact that already carries the amount as signed evidence, and a
-		// second copy on the event about writing it could only ever disagree.
+		// second copy on the event about handing it over could only ever
+		// disagree.
 		"merchant": {price, price},
 		"mpp":      {price},
 	}, seen.prices,

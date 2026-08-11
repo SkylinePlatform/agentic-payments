@@ -258,6 +258,14 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("issuing the receipt: %v", err))
 		return
 	}
+	// Announced where it is signed, and here that is also where it is handed
+	// over: nothing below this line can fail, so a caller that reaches it is a
+	// caller that gets the receipt. The merchant and the Credential Provider
+	// both had a step left that could answer 5xx — presenting to a processor,
+	// minting a credential — which is why issue #224 gave each of them a
+	// deliver that announces and answers in one step, and why this role needs
+	// none. The property is the same in all three: the log never names a receipt
+	// nobody holds.
 	s.Events.Emit(r.Context(), obs.KindReceiptIssued, "receipt issued for the payment")
 
 	status := http.StatusOK

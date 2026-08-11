@@ -904,8 +904,6 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("issuing the receipt: %v", err))
 		return
 	}
-	s.Events.Emit(r.Context(), obs.KindReceiptIssued,
-		"receipt issued for the "+string(answered.kind)+" mandate")
 
 	if answered.err != nil {
 		// The receipt is the answer either way, so the status says only whether
@@ -918,7 +916,8 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 		// rather than after this branch — a refusal on either has to stop the
 		// money for the same reason a refusal on the mandate does, and has to be
 		// evidence in the same way.
-		roles.OK(w, http.StatusUnprocessableEntity, answer{Receipt: receipt})
+		s.deliver(w, r, http.StatusUnprocessableEntity, answered.kind,
+			answer{Receipt: receipt})
 		return
 	}
 
@@ -936,6 +935,15 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	// has confirmed that the payment it is forwarding pays exactly what its own
 	// offer asked for. The figure beside this step is the same one either
 	// document would give.
+	//
+	// This one is emitted *before* the call it describes, where deliver's is
+	// emitted after — an asymmetry worth naming, because the reasoning that
+	// moved the receipt does not reach here. A presentation names an action this
+	// merchant took, and the action is taken by making the call; the processor's
+	// own verdict lands on the same spine moments later, so a presentation
+	// emitted afterwards would show the answer before the question. A receipt
+	// names an artefact, and an artefact either exists in somebody's hands or
+	// does not. Issue #224 is about artefacts.
 	s.Events.Emit(r.Context(), obs.KindMandatePresented,
 		"Payment Mandate presented to the Merchant Payment Processor",
 		obs.WithAmount(quoted.Price),
@@ -956,9 +964,59 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 		// which is what lets a dispute tell them apart.
 		status = http.StatusUnprocessableEntity
 	}
-	roles.OK(w, status, answer{
+	s.deliver(w, r, status, answered.kind, answer{
 		Receipt: receipt, PaymentReceipt: paymentReceipt, Settled: settled,
 	})
+}
+
+// deliver hands the receipt to the caller and announces it in the same step.
+//
+// # Why the two are one step
+//
+// They used to be two, and the announcement came first: settle emitted
+// KindReceiptIssued the moment ap2.IssueReceipt returned and then called
+// initiate, which is a network call to the processor on the caller's own
+// context. A processor that could not be reached — or a buyer that closed its
+// connection, which fails the same call — answered 503 and dropped the receipt,
+// having already told the log it existed. transport.Idempotency deliberately
+// does not remember a 5xx, so the retry ran settle again and announced a second
+// one: two receipts on the three-lane view for one purchase, where nobody ever
+// held either. Issue #224.
+//
+// ADR 0003 is why that is worth a function rather than a moved line. The event
+// log is observability and never evidence, so a wrong entry in it cannot be
+// appealed to — and is read by everybody watching. A false line there is cheap
+// to fix and expensive to leave.
+//
+// # What this is not
+//
+// #212 fixed the same shape at the Trusted Surface by making a pair of
+// signatures one unit of work that does not take the caller's cancellation.
+// Neither half transfers. There is no pair here. And detaching initiate would
+// put a network call with no deadline outside the lifetime of the request that
+// asked for it — a hazard issueOpenPair could rule out only because the region
+// it detached contains no I/O at all, which its own doc states as the
+// precondition. Detaching would also buy nothing, because the leg worth
+// protecting is already protected: HTTPProcessor.present derives its
+// Idempotency-Key from the URL and body, so a retry re-presents the identical
+// settlement under the identical key and the processor replays rather than
+// settling twice.
+//
+// # What it still does not promise
+//
+// That one purchase announces at most one receipt across retries. It cannot:
+// the guarantee rests on the middleware remembering the answer, and a response
+// over transport.Idempotency's cap is forgotten rather than refused, which
+// hands the key back and runs settle again. That is issue #223's shape rather
+// than this one's — the receipt announced there is one the buyer was actually
+// handed, so the log is true both times.
+func (s *Service) deliver(
+	w http.ResponseWriter, r *http.Request, status int,
+	kind generated.ReceiptMandateType, body answer,
+) {
+	s.Events.Emit(r.Context(), obs.KindReceiptIssued,
+		"receipt issued for the "+string(kind)+" mandate")
+	roles.OK(w, status, body)
 }
 
 // initiate presents the payment side to the processor, in whichever form this
