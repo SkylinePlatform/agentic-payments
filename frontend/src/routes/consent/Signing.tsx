@@ -67,10 +67,17 @@ const NOT_RETRYABLE = "request_malformed";
  * decided once, and a second signature would both fail to undo the first
  * pair of mandates and collect consent for a decision already made.
  *
- * That invariant is about a *successful* `authorise` — one that produced a
- * mandate. A `failed` `authorise` produced none, so `failed`'s own retry
- * (`sign` again, see below) is not the same act repeated; it is the first
- * attempt finishing on a second try.
+ * **`failed`'s own retry calls `authorise` again, and that is safe for a
+ * different reason than "a failed call produced no mandate" might suggest.**
+ * That premise is false in general — a response can be lost *after* the
+ * surface already signed, which is exactly what a bare network failure
+ * cannot be told apart from — so it is not what makes the retry safe. What
+ * makes it safe is that the retry reuses the **same** idempotency key
+ * `signatureKey` below mints once for the whole decision to sign: the
+ * surface's own idempotency middleware is what turns a repeated key into
+ * "answer with what I already signed" rather than "sign again", regardless
+ * of what the first attempt actually did on the surface. See `signatureKey`'s
+ * own comment, and `authorise`'s in `client.ts`, for the mechanism.
  */
 export function Signing({
   proposal,
@@ -114,19 +121,40 @@ export function Signing({
   /**
    * Runs `signing`: collects the signature, then hands it to `attemptWatch`.
    * Reachable twice — once automatically on mount, and again from
-   * `onTryAgain`'s `failed` branch — and both are the *first* signature
-   * attempt in every case that matters: a failed `authorise` produced no
-   * mandate, so calling it again is not calling it a second time for one
-   * decision, it is finishing the first call that never landed.
+   * `onTryAgain`'s `failed` branch. **Not because a failed `authorise`
+   * proved no mandate exists** — a lost response means it cannot prove
+   * that — but because every call here carries `signatureKey`, the one key
+   * minted for this whole decision, so the surface's idempotency middleware
+   * is what keeps a retry from ever becoming a second signature. See
+   * `signatureKey`'s own comment above.
    *
-   * `isCancelled` is checked before every `setState` so the mount effect's
-   * own run can be torn down cleanly under `StrictMode`'s double-invoke in
-   * development — the same contract `src/sse/stream.ts` documents, and for
-   * the same reason: signing a person's consent must happen once. A manual
-   * retry passes a predicate that is never true, because nothing tears a
-   * click handler down mid-flight.
+   * `isCancelled` gates the request itself, not only the `setState` calls
+   * that follow it — see the `await Promise.resolve()` below for why that
+   * distinction is load-bearing. A manual retry passes a predicate that is
+   * never true, because nothing tears a click handler down mid-flight.
    */
   async function sign(isCancelled: () => boolean) {
+    // Yields one microtask before anything reaches the network. Calling an
+    // async function runs its body synchronously up to its own first
+    // `await` — so `authorise` -> `post` -> `fetch` dispatches the request
+    // *before* `sign` itself ever suspends, which means a cancellation
+    // check placed only around the eventual `setState` calls (as an earlier
+    // version of this function did) can stop the *result* from being
+    // applied but never stops the *request* from going out.
+    //
+    // Under `StrictMode`'s double-invoked mount effect, React runs this
+    // effect, its cleanup, and the effect again, all synchronously in one
+    // commit — the same contract `src/sse/stream.ts` documents. The
+    // phantom first run's cleanup sets `cancelled` in that same synchronous
+    // stretch, before either run's `sign` resumes past this line, so
+    // checking here — after a real yield to the microtask queue — is what
+    // lets exactly one of the two invocations dispatch. Without it, both
+    // invocations reach `fetch` under the *same* idempotency key (see
+    // `client.ts`), and the second collides with the first's still-in-flight
+    // claim instead of the request never having been sent.
+    await Promise.resolve();
+    if (isCancelled()) return;
+
     setState({ kind: "signing" });
     let authorised: Authorised;
     try {

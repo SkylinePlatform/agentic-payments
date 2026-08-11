@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -268,6 +269,11 @@ describe("signing", () => {
     const keys = authoriseCalls.map(
       (c) => (c.init?.headers as Record<string, string>)["Idempotency-Key"],
     );
+    // `toBeTruthy` on the value itself first: `expect(keys[0]).toBe(keys[1])`
+    // alone would pass vacuously if the header stopped being sent at all
+    // (`undefined === undefined`), and this test should not have to rely on
+    // `client.test.ts` elsewhere to rule that out.
+    expect(keys[0]).toBeTruthy();
     expect(keys[0]).toBe(keys[1]);
   });
 
@@ -277,4 +283,32 @@ describe("signing", () => {
   // about retrying it can produce a second signature. Keeping both
   // assertions live — same key for `authorise`, different for `startWatch`
   // — is what stops a later edit from quietly making the two rules agree.
+
+  it("dispatches authorise exactly once under StrictMode's double-invoked mount effect", async () => {
+    // StrictMode intentionally double-invokes a mount effect in development
+    // — run, clean up, run again — specifically to surface a bug like this
+    // one. `renderSigning` above does not wrap in `StrictMode`, which is
+    // exactly why the previous round's fix shipped this gap unseen: nothing
+    // in this suite reached it. `make demo` runs `npm run dev`, which is
+    // StrictMode's own home, so this is the code path the investor-facing
+    // consent screen hits on every real signature — not a corner case.
+    const calls = stubFetch({
+      "/authorise": { body: anAuthorised() },
+      "/watches": { status: 201, body: { id: "w", correlation_id: "c5" } },
+    });
+    render(
+      <StrictMode>
+        <Signing proposal={aProposal()} previewed={aPreviewed()} />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(navigations).toEqual([{ to: "/lanes?run=c5" }]));
+
+    // Two calls here would mean the phantom, cancelled invocation of the
+    // mount effect still reached the network before its cleanup could stop
+    // it — which, under the previous round's fix, collided with the real
+    // invocation on the same idempotency key and produced a 409 rather than
+    // a clean navigation.
+    expect(calls.filter((c) => c.url === "/authorise")).toHaveLength(1);
+  });
 });
