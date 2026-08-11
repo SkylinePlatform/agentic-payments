@@ -868,12 +868,20 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	// one value was copied along the chain.
 	r = r.WithContext(obs.WithDigest(r.Context(), answered.digest))
 
+	// quoted.Price rather than anything read off either mandate: it is the price
+	// this merchant itself committed to in the offer it signed, established by
+	// ownOffer before either mandate was examined, so it is available and
+	// trustworthy on both branches — a refusal names the price that was refused
+	// exactly as readily as an acceptance names the price that was paid. This is
+	// "each party emits the amount it held" for the merchant: its own quote,
+	// never a value read out of what the agent presented.
 	if answered.err != nil {
 		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(answered.err)),
-			"the purchase was refused: "+answered.err.Error())
+			"the purchase was refused: "+answered.err.Error(), obs.WithAmount(quoted.Price))
 	} else {
 		s.Events.Emit(r.Context(), obs.KindMandateVerified,
-			"Checkout Mandate verified, and the payment is for this checkout at the price quoted")
+			"Checkout Mandate verified, and the payment is for this checkout at the price quoted",
+			obs.WithAmount(quoted.Price))
 	}
 
 	receipt, err := ap2.IssueReceipt(r.Context(), answered.subject, answered.err, ap2.ReceiptOptions{
