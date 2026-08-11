@@ -1011,17 +1011,18 @@ func renderedSize(sentences []string) int {
 // # Why the rendering, and not the number of limits
 //
 // The obvious bound is on how many constraints the list holds, and it does not
-// work. Each of these is a *single* top-level constraint whose sentence runs
-// past a megabyte, or whose answer does:
+// work. Each of these is a *single* top-level constraint, and each answered past
+// a megabyte on its own before there was any bound at all:
 //
 //	one limit whose text value is 300 KB          1.10 MB
 //	one `all` group of six thousand children      1.22 MB
 //	one `in` list of twenty thousand operands     1.23 MB
 //
 // A count would have closed the shape the issue measured and left three open.
-// The rendering moves with all four dimensions — how many limits, how deeply
-// nested, how many operands, how long a value — because every one of them has to
-// be said in a sentence somebody reads.
+// This bound closes all four, because each of them also has to be *said*: the
+// rendering moves with all four dimensions — how many limits, how deeply nested,
+// how many operands, how long a value — and every one of them ends up in a
+// sentence somebody reads.
 //
 // # Why four kilobytes
 //
