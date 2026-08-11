@@ -10,7 +10,6 @@ import (
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
-	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 )
 
 // Model is one provider's completion endpoint, and nothing about a provider
@@ -147,22 +146,40 @@ func NewModel(model Model, clk authz.Clock) (*ModelInterpreter, error) {
 // The alternative is a demonstration where the model said something wrong and
 // nobody can see what, and the answer is a proposal that has reached no screen
 // and been signed by nobody, so there is nothing in it to keep back.
-func (m *ModelInterpreter) Interpret(ctx context.Context, prompt string) ([]generated.Constraint, error) {
+//
+// # envelope, and why decode still reads the constraints half
+//
+// The answer is one JSON object, not the bare array this used to be, but the
+// constraints inside it go through the very same decode ScriptedInterpreter's
+// Interpret does: envelope.Constraints is held as a json.RawMessage rather than
+// unmarshalled directly, precisely so that both implementations of
+// IntentInterpreter still decode a constraint list through one function. What
+// changed is the shape one level up, not how a leaf becomes a generated.Constraint.
+func (m *ModelInterpreter) Interpret(ctx context.Context, prompt string) (Interpretation, error) {
 	if strings.TrimSpace(prompt) == "" {
 		// The same refusal ScriptedInterpreter makes for an unscripted prompt,
 		// one step earlier. An empty sentence has no limits in it, so anything
 		// that came back would be the model's invention rather than a reading.
-		return nil, errors.New("interpret: there is no sentence to read")
+		return Interpretation{}, errors.New("interpret: there is no sentence to read")
 	}
 
 	answer, err := m.model.Complete(ctx, m.instruction(), prompt, m.schema)
 	if err != nil {
-		return nil, fmt.Errorf("interpret: asking the model to read %q: %w", prompt, err)
+		return Interpretation{}, fmt.Errorf("interpret: asking the model to read %q: %w", prompt, err)
 	}
 
-	constraints, err := decode(string(answer))
+	var envelope struct {
+		Constraints json.RawMessage `json:"constraints"`
+		Quantity    int             `json:"quantity"`
+	}
+	if err := json.Unmarshal(answer, &envelope); err != nil {
+		return Interpretation{}, fmt.Errorf("interpret: the model's answer to %q %w; it said: %s",
+			prompt, err, excerpt(answer))
+	}
+
+	constraints, err := decode(string(envelope.Constraints))
 	if err != nil {
-		return nil, fmt.Errorf("interpret: the model's answer to %q %w; it said: %s",
+		return Interpretation{}, fmt.Errorf("interpret: the model's answer to %q %w; it said: %s",
 			prompt, err, excerpt(answer))
 	}
 
@@ -171,10 +188,10 @@ func (m *ModelInterpreter) Interpret(ctx context.Context, prompt string) ([]gene
 	// can predict, so it is the one that must be run past the verifier's parser
 	// before a user is shown it.
 	if err := Validate(constraints); err != nil {
-		return nil, fmt.Errorf("interpret: the model's reading of %q is not something a verifier could read: %w; it said: %s",
+		return Interpretation{}, fmt.Errorf("interpret: the model's reading of %q is not something a verifier could read: %w; it said: %s",
 			prompt, err, excerpt(answer))
 	}
-	return constraints, nil
+	return Interpretation{Constraints: constraints, Quantity: envelope.Quantity}, nil
 }
 
 // instruction is what the model is told: the job, the vocabulary and the shapes,
@@ -240,12 +257,16 @@ func vocabulary() string {
 	var b strings.Builder
 
 	b.WriteString(`You read one sentence a person typed into a shopping agent and turn it into the
-limits a payment verifier will enforce. You are proposing limits, never deciding
-a purchase: what you answer is shown to the person, signed by them, and then
-enforced by software that never sees this sentence.
+limits a payment verifier will enforce, and the basket size the sentence asked
+for. You are proposing limits, never deciding a purchase: what you answer is
+shown to the person, signed by them, and then enforced by software that never
+sees this sentence.
 
-Answer with a flat JSON array of leaf constraints and nothing else. Every element
-is an object with exactly three keys — "op", "field" and "value".
+Answer with one JSON object and nothing else, with exactly two keys —
+"constraints" and "quantity".
+
+"constraints" is a flat JSON array of leaf constraints. Every element is an
+object with exactly three keys — "op", "field" and "value".
 
 These are the facts a constraint may name. Nothing outside this list can be
 enforced, and naming anything else means the whole answer is refused:
@@ -280,10 +301,23 @@ and then the operator decides how many of them:
 `)
 
 	fmt.Fprintf(&b, `This verifier also implements operators that combine constraints — %s — and you
-must not use any of them. Answer with a flat list: every constraint in it has to
-hold.
+must not use any of them. "constraints" is a flat list: every constraint in it
+has to hold.
 
-Two things decide whether this is a good reading.
+"quantity" is a whole number: how many of the item the sentence asks for. Say 1
+when nothing in the sentence names a count — that is the ordinary case, true of
+almost every sentence you will read — and say the number itself when it does,
+such as "two tickets" or "three of these". Do not fold it into a constraint:
+"how many to buy" is not a limit a verifier checks at the moment of purchase,
+it is the size of the basket the person is about to be shown and asked to
+approve, and a bound such as quantity lte 2 says at most two — it does not say
+how many to put in the basket. Both can appear in the same sentence and mean
+different things: "two tickets... up to $160 all in" is a quantity of 2 and,
+separately, a constraint capping the count at 2 as well, because the cap
+protects the person if this answer is ever read back and re-priced, while the
+quantity is what actually gets bought today.
+
+Two things decide whether a constraint is a good reading.
 
 Say only what can be checked at the moment of purchase. "Cheapest", "best" and
 "fastest" are not refutable — no merchant can establish what the whole market was
@@ -359,10 +393,20 @@ func textOperators() []string {
 	return nil
 }
 
-// answerSchema describes the answer as JSON Schema: an array of leaf
-// constraints.
+// answerSchema describes the answer as JSON Schema: an object carrying the
+// leaf constraints and the basket size, side by side.
 //
-// # Why it is not contracts/authz/constraint.json
+// # Why an object and not the bare array this used to be
+//
+// Interpretation carries two facts a model has no other way to answer both
+// of in one call: the limits, and how many of the item the sentence asked
+// for. quantity is required in the schema for the same reason the vocabulary
+// tells the model to say 1 rather than say nothing — an omitted field reads
+// as "the model had no opinion", and the honest default for almost every
+// sentence is a stated 1, not a silent absence Interpretation.Quantity's zero
+// value would have to stand in for either way.
+//
+// # Why "constraints" is not contracts/authz/constraint.json
 //
 // That schema is the canonical model's, and it is the one recursive type in it —
 // `of` $refs the file itself. Structured-output modes will not take a
@@ -439,7 +483,7 @@ func answerSchema() ([]byte, error) {
 		ops = append(ops, op)
 	}
 
-	return json.Marshal(map[string]any{
+	constraints := map[string]any{
 		"type":     "array",
 		"minItems": 1,
 		"items": map[string]any{
@@ -452,5 +496,19 @@ func answerSchema() ([]byte, error) {
 			"required":             []any{"op", "field", "value"},
 			"additionalProperties": false,
 		},
+	}
+
+	return json.Marshal(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"constraints": constraints,
+			"quantity": map[string]any{
+				"type":        "integer",
+				"minimum":     1,
+				"description": "how many of the item the sentence asks for; 1 when nothing in the sentence names a count",
+			},
+		},
+		"required":             []any{"constraints", "quantity"},
+		"additionalProperties": false,
 	})
 }

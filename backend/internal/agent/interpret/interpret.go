@@ -23,7 +23,36 @@ import (
 // The scripted one ignores it, and that difference between the two is the point
 // of having the scripted one at all.
 type IntentInterpreter interface {
-	Interpret(ctx context.Context, prompt string) ([]generated.Constraint, error)
+	Interpret(ctx context.Context, prompt string) (Interpretation, error)
+}
+
+// Interpretation is what one call to Interpret answers with: the limits a
+// verifier will enforce, and the basket size the sentence asked for.
+//
+// The two are kept apart on purpose, and issue #133 is the failure that
+// happens when they are not. "Two tickets... up to $160 all in" places a bound
+// — quantity lte 2 — that a verifier evaluates, and that bound is satisfied by
+// a purchase of one ticket as readily as by two: it says at most, not exactly.
+// Reading a bound as an instruction would be this package deciding what the
+// user meant from a limit they set, which is the same move AGENTS.md forbids
+// the agent making when it evaluates a constraint. "How many to buy" is not a
+// fact about the purchase being offered — it cannot be refuted at the point of
+// sale the way a price or a date can — so it does not belong in Constraints,
+// which the registry closes on exactly that criterion.
+//
+// Quantity is that second fact, carried beside the constraints rather than
+// folded into one of them. Zero means one, on the convention every other
+// quantity in this repository already uses — Watch.Quantity and
+// console.Watching.Quantity both read the same way — so a sentence naming no
+// count, which is every scripted prompt but the concert, needs nothing written
+// down to mean the ordinary case.
+type Interpretation struct {
+	// Constraints are the limits a verifier will enforce.
+	Constraints []generated.Constraint
+
+	// Quantity is how many of the item the sentence asked for. Zero means
+	// one: the ordinary case, where nothing in the sentence names a count.
+	Quantity int
 }
 
 // ErrNoConstraints means the interpretation placed no limits at all.
@@ -60,6 +89,11 @@ var ErrNoConstraints = errors.New("interpret: the interpretation placed no limit
 // constraint that parses can be said in a sentence — constraint.Render is total
 // on parsed expressions, and an operator added without a phrase panics at
 // initialisation rather than producing an approval screen with a gap in it.
+//
+// It takes Constraints alone rather than the whole Interpretation, because
+// Quantity is not a thing a verifier reads: no mandate carries it and no
+// receipt is refused over it, so there is nothing here for the verifier's
+// parser to have an opinion about. Every caller passes interp.Constraints.
 func Validate(constraints []generated.Constraint) error {
 	if len(constraints) == 0 {
 		return ErrNoConstraints

@@ -46,7 +46,7 @@ var demoScenarios = []Script{
 	{Prompt: "buy a flight to Palma under $200, this summer", Constraints: flightToPalma},
 
 	{Prompt: "buy me this bicycle when it drops below $400", Constraints: thisBicycle},
-	{Prompt: "two tickets to the Vlado Georgijev concert in November, up to $160 all in", Constraints: concertTickets},
+	{Prompt: "two tickets to the Vlado Georgijev concert in November, up to $160 all in", Constraints: concertTickets, Quantity: 2},
 	{Prompt: "find and buy telescopic ladders, cheapest", Constraints: telescopicLadders},
 }
 
@@ -131,16 +131,14 @@ const thisBicycle = `[
 // both, and the quantity is part of what was approved rather than a detail of
 // how it gets filled.
 //
-// **What the quantity is not is an instruction, and the agent currently buys
-// one.** `quantity lte 2` says at most two; nothing here says how many to put in
-// the basket, and internal/agent takes that from its own -quantity flag, which
-// defaults to one. So this prompt authorises two tickets and purchases one.
-// Nothing is violated — one satisfies the bound, and the verifiers authorise
-// what they are shown — but the sentence asked for two. Reading a bound as the
-// number to buy would be the agent deciding what the user meant from a limit
-// they set, which is the same move as evaluating a constraint; carrying an
-// intended basket size properly means IntentInterpreter returning one and the
-// surface rendering it. Issue #133.
+// **What the quantity is not is an instruction.** `quantity lte 2` says at most
+// two; it does not say how many to put in the basket, and reading a bound as
+// the number to buy would be the agent deciding what the user meant from a
+// limit they set — the same move as evaluating a constraint. So the basket size
+// travels beside the constraints rather than inside one of them: this entry's
+// Quantity is 2, interpret.Interpretation carries it, the Trusted Surface
+// renders it before anybody signs, and the watch spends exactly that many.
+// Issue #133.
 const concertTickets = `[
 	{"op":"eq","field":"item.id","value":"event:vlado-georgijev-2026-11-14"},
 	{"op":"lte","field":"quantity","value":2},

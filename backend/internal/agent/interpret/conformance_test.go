@@ -73,13 +73,20 @@ var implementations = []implementation{
 		// The fake clock's instant is scripted_test.go's insideWindow, and any
 		// other would do: the interpreter reads the clock only to tell the model
 		// what "today" means, and MockModel reads nothing it is told.
+		//
+		// raw is a bare constraint array, on the terms the suite's own rows are
+		// written — the scripted rig above takes the same text unwrapped, into
+		// Script.Constraints. This rig is where the difference between the two
+		// wire shapes is allowed to live: the model's answer is an envelope
+		// object, so raw is wrapped in one here rather than the suite's rows
+		// carrying two spellings of every case.
 		rig: func(t *testing.T, raw string) (interpret.IntentInterpreter, error) {
 			t.Helper()
 
 			model := interpret.NewMockModel(t)
 			model.EXPECT().
 				Complete(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-				Return([]byte(raw), nil).
+				Return([]byte(`{"constraints":`+raw+`,"quantity":1}`), nil).
 				Maybe()
 
 			return interpret.NewModel(model, clock.NewFake(insideWindow))
@@ -197,7 +204,7 @@ func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 				}
 
 				require.NoError(t, err, tc.why)
-				assert.Equal(t, decodeConstraints(t, tc.raw), got, tc.why)
+				assert.Equal(t, decodeConstraints(t, tc.raw), got.Constraints, tc.why)
 			})
 		}
 	}

@@ -95,7 +95,7 @@ func TestTheModelIsAskedExactlyOnce(t *testing.T) {
 	model := interpret.NewMockModel(t)
 	model.EXPECT().
 		Complete(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return([]byte(`[{"op":"lte","field":"price","value":1}]`), nil)
+		Return([]byte(`{"constraints":[{"op":"lte","field":"price","value":1}],"quantity":1}`), nil)
 
 	interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))
 	require.NoError(t, err)
@@ -128,18 +128,22 @@ func TestTheSchemaDescribesLeafConstraintsOnly(t *testing.T) {
 	t.Parallel()
 
 	var schema struct {
-		Items struct {
-			Properties struct {
-				Op struct {
-					Enum []string `json:"enum"`
-				} `json:"op"`
-			} `json:"properties"`
-		} `json:"items"`
+		Properties struct {
+			Constraints struct {
+				Items struct {
+					Properties struct {
+						Op struct {
+							Enum []string `json:"enum"`
+						} `json:"op"`
+					} `json:"properties"`
+				} `json:"items"`
+			} `json:"constraints"`
+		} `json:"properties"`
 	}
 	require.NoError(t, json.Unmarshal(schemaHandedToTheModel(t), &schema),
 		"the schema this package builds is not JSON")
 
-	ops := schema.Items.Properties.Op.Enum
+	ops := schema.Properties.Constraints.Items.Properties.Op.Enum
 	require.NotEmpty(t, ops, "a schema with no operators would let the model answer anything")
 
 	for _, group := range []string{"all", "any", "not"} {
@@ -174,7 +178,8 @@ func TestAModelAnswerNobodyCanReadIsQuotedBack(t *testing.T) {
 				" and an error saying only \"invalid character\" points at nothing",
 		},
 		{
-			name: "a field nobody can read", raw: `[{"op":"lte","field":"price","value":1}]`, quote: "price",
+			name: "a field nobody can read",
+			raw:  `{"constraints":[{"op":"lte","field":"price","value":1}],"quantity":1}`, quote: "price",
 			why: "which word the model got wrong is the whole diagnosis",
 		},
 	} {
@@ -194,6 +199,26 @@ func TestAModelAnswerNobodyCanReadIsQuotedBack(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.quote, tc.why)
 		})
 	}
+}
+
+// TestTheModelsQuantityReachesTheInterpretation is issue #133 at this
+// implementation: the basket size is the other half of the envelope, decoded
+// beside the constraints rather than folded into one of them.
+func TestTheModelsQuantityReachesTheInterpretation(t *testing.T) {
+	t.Parallel()
+
+	model := interpret.NewMockModel(t)
+	model.EXPECT().
+		Complete(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]byte(`{"constraints":[{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}],"quantity":2}`), nil)
+
+	interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))
+	require.NoError(t, err)
+
+	interpretation, err := interpreter.Interpret(t.Context(), builtScenarioPrompt)
+	require.NoError(t, err)
+	assert.Equal(t, 2, interpretation.Quantity,
+		"the model named a count and this is the one field it has to reach the caller through")
 }
 
 // TestTheProvidersFailureReachesTheCaller covers the other direction: the model
@@ -288,7 +313,9 @@ func completionArguments(t *testing.T) (string, []byte) {
 		Complete(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, gotInstruction, _ string, gotSchema []byte) ([]byte, error) {
 			instruction, schema = gotInstruction, gotSchema
-			return []byte(interpret.Scenarios()[0].Constraints), nil
+			// The built scenario's bare constraint array, wrapped in the
+			// envelope this package's answer shape now is.
+			return []byte(`{"constraints":` + interpret.Scenarios()[0].Constraints + `,"quantity":1}`), nil
 		})
 
 	interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))
