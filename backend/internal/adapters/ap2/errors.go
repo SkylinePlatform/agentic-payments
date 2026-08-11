@@ -350,7 +350,14 @@ func sdjwtCodeOf(err error) generated.ErrorCode {
 	case is(err, sdjwt.ErrUnsupportedHashAlg), is(err, sdjwt.ErrUnsupportedAlgorithm):
 		return generated.ErrorCodeAlgorithmUnsupported
 	case is(err, sdjwt.ErrMalformedSDJWT), is(err, sdjwt.ErrMalformedDisclosure),
-		is(err, sdjwt.ErrReservedClaim):
+		is(err, sdjwt.ErrReservedClaim), is(err, sdjwt.ErrMalformedChain):
+		// ErrMalformedChain reads as a broken token if it is left to fall through
+		// to the default arm below, and it is usually the opposite: a
+		// well-formed token of the wrong shape — an SD-JWT presented where a
+		// delegation was required, most often. See its own comment in
+		// pkg/sdjwt/errors.go. #147: this arm was missing, so a malformed chain
+		// answered verifier_unavailable — blaming this verifier for a shape only
+		// the presenter controlled.
 		return generated.ErrorCodeMandateMalformed
 	default:
 		return ""

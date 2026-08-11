@@ -39,7 +39,7 @@
 
     "mandate_malformed": {
       "status": "vectored",
-      "note": "A closed Checkout Mandate carrying no checkout_hash. The most-produced code in the adapter - ErrMandateMalformed, ErrReceiptMismatch, four constraint parse failures and three of pkg/sdjwt's own sentinels all land here - and the vector takes the shortest honest route to it: a required claim that is not there."
+      "note": "A closed Checkout Mandate carrying no checkout_hash. The most-produced code in the adapter - ErrMandateMalformed, ErrReceiptMismatch, four constraint parse failures and four of pkg/sdjwt's own sentinels (including ErrMalformedChain, #147: a well-formed token of the wrong shape, not a broken one, is still a malformed mandate from this verifier's side) all land here - and the vector takes the shortest honest route to it: a required claim that is not there."
     },
     "signature_invalid": {
       "status": "vectored",

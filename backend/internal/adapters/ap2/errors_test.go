@@ -88,6 +88,11 @@ func TestTheSecuringFormatsFailuresAreNameableToo(t *testing.T) {
 		{sdjwt.ErrKeyBindingInvalid, generated.ErrorCodeKeyBindingInvalid},
 		{sdjwt.ErrUnsupportedHashAlg, generated.ErrorCodeAlgorithmUnsupported},
 		{sdjwt.ErrMalformedSDJWT, generated.ErrorCodeMandateMalformed},
+		// A well-formed token of the wrong shape, not a broken one — see
+		// ErrMalformedChain's own comment in pkg/sdjwt. It used to fall through
+		// sdjwtCodeOf's default arm and answer verifier_unavailable, blaming this
+		// verifier for a presentation that was simply not a chain. #147.
+		{sdjwt.ErrMalformedChain, generated.ErrorCodeMandateMalformed},
 		{sdjwt.ErrInvalidOptions, generated.ErrorCodeVerifierUnavailable},
 		{sdjwt.ErrUnexpectedType, generated.ErrorCodeRequestMalformed},
 	} {
