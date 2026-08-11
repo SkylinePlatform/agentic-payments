@@ -735,5 +735,7 @@ func TestGoldenTheCodesNothingProducesAndWhatArrivesInstead(t *testing.T) {
 		require.Error(t, err, "a single-hop presentation is not a delegation and must not read as one")
 		assert.ErrorIs(t, err, sdjwt.ErrMalformedChain,
 			"the refusal is structural, which is why no verifier in this implementation is ever in a position to answer open_mandate_required")
+		assert.Equal(t, generated.ErrorCodeMandateMalformed, ap2.CodeOf(err),
+			"#147: the same structural refusal that keeps this from open_mandate_required is what CodeOf owes a name, and verifier_unavailable would blame this verifier for a shape only the presenter controlled")
 	})
 }
