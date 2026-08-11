@@ -131,6 +131,48 @@ func TestEventValidate(t *testing.T) {
 			e.Amount = &amount
 			return e
 		}},
+		// mandateKinds, closed the same way. A receipt already carries
+		// mandate_type as signed evidence, so naming one on the event that
+		// announces the receipt would be an unauthoritative copy of a fact with
+		// a home — the argument that excludes the amount from this kind too.
+		{"mandate on a receipt", func(e obs.Event) obs.Event {
+			e.Kind = obs.KindReceiptIssued
+			e.Mandate = &obs.Mandate{Type: obs.MandatePayment, State: obs.MandateClosed}
+			return e
+		}},
+		// And a person declining an interpretation refused before any mandate
+		// existed, so there is no artefact for this field to name.
+		{"mandate on an authorisation refusal", func(e obs.Event) obs.Event {
+			e.Kind = obs.KindAuthorisationRefused
+			e.Mandate = &obs.Mandate{Type: obs.MandateCheckout, State: obs.MandateOpen}
+			return e
+		}},
+		// Half a mandate is the third state the pointer exists to rule out, on
+		// the zero Amount's own reasoning: not an artefact and not the absence
+		// of one. The frontend refuses the whole record for it, so it would
+		// cost a step on screen and surface as a sequence gap a frame later,
+		// roles away from its cause. Refused here, where Stats().Rejected
+		// counts it at the emitter.
+		{"mandate naming no type", func(e obs.Event) obs.Event {
+			e.Mandate = &obs.Mandate{State: obs.MandateClosed}
+			return e
+		}},
+		{"mandate naming no state", func(e obs.Event) obs.Event {
+			e.Mandate = &obs.Mandate{Type: obs.MandateCheckout}
+			return e
+		}},
+		// The v0.1 vocabulary this repository's own documentation warns about,
+		// arriving through the one field that could carry it. AP2 v0.2 defines
+		// two mandates; an emitter that has read a blog post rather than the
+		// spec has its event thrown away rather than drawn.
+		{"a mandate type from AP2 v0.1", func(e obs.Event) obs.Event {
+			e.Mandate = &obs.Mandate{Type: "cart", State: obs.MandateClosed}
+			return e
+		}},
+		{"a state that is neither open nor closed", func(e obs.Event) obs.Event {
+			e.Mandate = &obs.Mandate{Type: obs.MandateCheckout, State: "delegated"}
+			return e
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -170,6 +212,61 @@ func TestAmountIsPermittedOnTheFourMandateKinds(t *testing.T) {
 		e := anEvent(kind)
 		e.Amount = &price
 		assert.NoError(t, e.Validate(), "%s is one of the four kinds a purchase price is meaningful for", kind)
+	}
+}
+
+// TestAMandateIsPermittedOnTheFourMandateKinds is mandateKinds pinned
+// positively, the way its neighbour above pins amountKinds. TestEventValidate's
+// table already covers the two kinds that must not carry one.
+//
+// All four combinations on every permitted kind, rather than one sample: the
+// two axes are independent, and a rule that happened to accept only the three
+// pairs the demonstration produces would pass a narrower test.
+func TestAMandateIsPermittedOnTheFourMandateKinds(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range []obs.Kind{
+		obs.KindMandateConstructed,
+		obs.KindMandatePresented,
+		obs.KindMandateVerified,
+		obs.KindMandateRejected,
+	} {
+		for _, mandate := range obs.MandateTypes() {
+			for _, state := range obs.MandateStates() {
+				e := anEvent(kind)
+				e.Mandate = &obs.Mandate{Type: mandate, State: state}
+				assert.NoError(t, e.Validate(),
+					"%s is one of the four kinds that is about one specific mandate, and %s/%s is "+
+						"one of the four artefacts AP2 v0.2 has", kind, mandate, state)
+			}
+		}
+	}
+}
+
+// TestTheTwoMandateAxesAreIndependent is the design decision made testable.
+//
+// AGENTS.md: "The 'intent' dimension is not a third mandate. It is handled by
+// the open / closed distinction." A single enum flattening the two axes into
+// four members would put four mandate *types* on the wire where the protocol
+// has two, and the check that catches that is not a value comparison — it is
+// that neither set has grown to hold the other's members.
+func TestTheTwoMandateAxesAreIndependent(t *testing.T) {
+	t.Parallel()
+
+	assert.Len(t, obs.MandateTypes(), 2,
+		"AP2 v0.2 defines a Checkout Mandate and a Payment Mandate and nothing else; a third "+
+			"member here is the Intent/Cart model this repository's documentation exists to correct")
+	assert.Len(t, obs.MandateStates(), 2,
+		"a mandate is bound to a transaction or it is not, and there is no third answer")
+
+	for _, state := range obs.MandateStates() {
+		assert.False(t, obs.MandateType(state).Valid(),
+			"%q is a state and must never be readable as a mandate type — the moment one set "+
+				"accepts the other's members, the four artefacts have collapsed into four types", state)
+	}
+	for _, mandate := range obs.MandateTypes() {
+		assert.False(t, obs.MandateState(mandate).Valid(),
+			"and %q is a type rather than a state, for the same reason", mandate)
 	}
 }
 

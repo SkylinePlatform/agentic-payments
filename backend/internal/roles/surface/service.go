@@ -322,8 +322,14 @@ func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 	// same purchase's price in the request it decoded, before either mandate
 	// is signed. That is "the amount it held" for a party whose own artefact
 	// carries none, on the same footing quoted.Price is for the merchant.
+	//
+	// Closed, and this is the one place a *user* signs a closed mandate: under
+	// Human Present there is a transaction in front of them, so what they
+	// approve is bound to it. The open pair below, in authorise, is the other
+	// mode and the other state.
 	s.Events.Emit(r.Context(), obs.KindMandateConstructed, "Checkout Mandate signed by the user",
-		obs.WithAmount(req.Payment.PaymentAmount))
+		obs.WithAmount(req.Payment.PaymentAmount),
+		obs.WithMandate(obs.MandateCheckout, obs.MandateClosed))
 
 	payment := req.Payment
 	stamp(s.Clock, &payment.IssuedAt, &payment.ExpiresAt)
@@ -334,7 +340,8 @@ func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Events.Emit(r.Context(), obs.KindMandateConstructed, "Payment Mandate signed by the user",
-		obs.WithAmount(payment.PaymentAmount))
+		obs.WithAmount(payment.PaymentAmount),
+		obs.WithMandate(obs.MandatePayment, obs.MandateClosed))
 
 	roles.OK(w, http.StatusOK, approved{
 		CheckoutMandate: signedCheckout.String(),
@@ -422,8 +429,13 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 		reject(w, "signing the open Checkout Mandate", err)
 		return
 	}
+	// Open: it carries constraints and endorses the agent's key, and it is not
+	// bound to any transaction — there is no purchase yet for it to be bound
+	// to. That is also why no amount goes with it, and why these two steps are
+	// the only ones in the whole flow that say open.
 	s.Events.Emit(r.Context(), obs.KindMandateConstructed,
-		fmt.Sprintf("open Checkout Mandate signed by the user, who typed %q", req.Prompt))
+		fmt.Sprintf("open Checkout Mandate signed by the user, who typed %q", req.Prompt),
+		obs.WithMandate(obs.MandateCheckout, obs.MandateOpen))
 
 	// A copy rather than &s.Instrument, so nothing downstream holds a pointer
 	// into this Service's configuration.
@@ -448,7 +460,8 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Events.Emit(r.Context(), obs.KindMandateConstructed,
-		fmt.Sprintf("open Payment Mandate signed by the user, who typed %q", req.Prompt))
+		fmt.Sprintf("open Payment Mandate signed by the user, who typed %q", req.Prompt),
+		obs.WithMandate(obs.MandatePayment, obs.MandateOpen))
 
 	roles.OK(w, http.StatusOK, authorised{
 		OpenCheckoutMandate: signedCheckout.String(),

@@ -60,6 +60,58 @@ export function isEventKind(value: unknown): value is EventKind {
 }
 
 /**
+ * The two mandates AP2 v0.2 defines, and **the frontend's only copy of them**.
+ *
+ * Two, on protocol grounds. AGENTS.md names the trap: almost everything written
+ * about AP2 describes an Intent Mandate, a Cart Mandate and a Payment Mandate,
+ * and that was v0.1. The authority is `MandateTypes()` in
+ * `backend/internal/platform/obs/event.go`, and
+ * `TestTheFrontendKnowsEveryMandateValue` beside it reads this array and fails
+ * when the two disagree — the mechanism `EVENT_KINDS` above already uses, for
+ * the same reason.
+ */
+export const MANDATE_TYPES = ["checkout", "payment"] as const;
+
+/** One of the two. */
+export type MandateType = (typeof MANDATE_TYPES)[number];
+
+/**
+ * Whether a mandate is bound to a transaction yet, and **a second fact rather
+ * than a second pair of mandate types**.
+ *
+ * AGENTS.md is emphatic: "The 'intent' dimension is not a third mandate. It is
+ * handled by the open / closed distinction." A single four-member enum would
+ * put four mandate types on the wire where the protocol has two, which is the
+ * exact misreading that document exists to prevent — so the two axes travel as
+ * two members of {@link MandateRef}, neither derivable from the other.
+ *
+ * An **open** mandate is signed by the user, carries constraints and endorses
+ * the agent's key; a **closed** one is bound to one transaction. Verifiers
+ * always receive closed mandates in both modes, which is why every verifier's
+ * step on this screen says closed and only the Trusted Surface ever says open.
+ */
+export const MANDATE_STATES = ["open", "closed"] as const;
+
+/** One of the two states. */
+export type MandateState = (typeof MANDATE_STATES)[number];
+
+/** Which artefact a step is about: which of the two mandates, open or closed. */
+export interface MandateRef {
+  readonly type: MandateType;
+  readonly state: MandateState;
+}
+
+/** Whether a value is one of the two mandate types. */
+export function isMandateType(value: unknown): value is MandateType {
+  return typeof value === "string" && (MANDATE_TYPES as readonly string[]).includes(value);
+}
+
+/** Whether a value is one of the two mandate states. */
+export function isMandateState(value: unknown): value is MandateState {
+  return typeof value === "string" && (MANDATE_STATES as readonly string[]).includes(value);
+}
+
+/**
  * Every field `obs.Event` may carry, in Go's own struct order, and **the
  * frontend's only copy of that list**.
  *
@@ -92,6 +144,7 @@ export const PROTOCOL_EVENT_FIELDS = [
   "digest",
   "code",
   "amount",
+  "mandate",
 ] as const;
 
 /** One of the field names an event may carry. */
@@ -203,6 +256,37 @@ export interface ProtocolEvent {
 
   /** The canonical error code, set only when the kind is a rejection. */
   readonly code?: string;
+
+  /**
+   * Which of AP2's two mandates this step is about, and whether that mandate
+   * is open or closed.
+   *
+   * Issue #201's field. #200 deleted the sentence each step card used to carry,
+   * correctly — it restated the mark, the word and the party — but fifteen of
+   * the sixteen emit sites on the Human Not Present path also named a mandate
+   * in that prose, and nothing structural held it. The demonstration's opening
+   * then drew the open pair and the closed pair as four cards separable only by
+   * a sequence number.
+   *
+   * **The digest cannot do this job and never will.** A Payment Mandate's
+   * `transaction_id` *is* the checkout hash, so the Checkout and Payment cards
+   * of one attempt agree about their twelve characters by design — that
+   * agreement is the binding this screen exists to prove, which is exactly why
+   * it cannot also be the label.
+   *
+   * Set only on the four kinds a step is about one specific mandate —
+   * `mandate_constructed`, `mandate_presented`, `mandate_verified`,
+   * `mandate_rejected` — which `obs.Event`'s own `mandateKinds` enforces on the
+   * way in, not this type. Absent on `receipt_issued`, whose receipt already
+   * carries `mandate_type` as signed evidence, and on `authorisation_refused`,
+   * where a person declined before any mandate existed.
+   *
+   * It says which mandate the emitting role was **acting on**, not what the
+   * bytes turned out to be: a verifier that refuses `wrong_mandate_type` still
+   * names the hop it was answering, and the mark and the code are what say the
+   * artefact was not one. Nothing here is evidence.
+   */
+  readonly mandate?: MandateRef;
 }
 
 /**
@@ -268,6 +352,30 @@ function optionalAmount(value: unknown): value is Amount | undefined {
 }
 
 /**
+ * Whether an optional wire field is absent or a fully-named mandate.
+ *
+ * **Both members or neither.** A record naming a type with no state, or a state
+ * with no type, is refused rather than half-carried — the two facts are never
+ * independently absent at any emitter, because both come from which artefact
+ * the role was acting on rather than from anything read out of it, so a half
+ * one is a malformed record and not a partial truth. Refusing it here is
+ * `optionalAmount`'s own trade, made for the same reason: the alternative is a
+ * card that renders "undefined Checkout Mandate" and a reader who cannot tell
+ * that from a state the protocol has.
+ *
+ * The members are checked against the closed sets rather than for being
+ * strings, unlike `code` and `digest` above. Those two carry open vocabularies
+ * whose growth is somebody else's business; these two are closed at two by AP2
+ * v0.2 itself, and a third value arriving is a protocol change that should
+ * reach a person rather than a label nobody wrote.
+ */
+function optionalMandate(value: unknown): value is MandateRef | undefined {
+  if (value === undefined) return true;
+  if (!isObject(value)) return false;
+  return isMandateType(value.type) && isMandateState(value.state);
+}
+
+/**
  * Reads one `data:` line into a record.
  *
  * Every field is checked rather than asserted with a cast. A cast would make
@@ -321,6 +429,12 @@ export function parseRecord(data: string): ParsedRecord {
   if (!optionalAmount(event.amount)) {
     return { ok: false, reason: "amount is present and is not a well-formed {amount, currency} pair" };
   }
+  if (!optionalMandate(event.mandate)) {
+    return {
+      ok: false,
+      reason: "mandate is present and does not name one of the two mandates as open or closed",
+    };
+  }
 
   return {
     ok: true,
@@ -335,6 +449,7 @@ export function parseRecord(data: string): ParsedRecord {
         digest: event.digest,
         code: event.code,
         amount: event.amount,
+        mandate: event.mandate,
       },
     },
   };

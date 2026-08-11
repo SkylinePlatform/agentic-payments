@@ -252,7 +252,16 @@ func (s *Service) fund(w http.ResponseWriter, r *http.Request) {
 	// see examined.amount — and amountOpt turns that into no option at all
 	// rather than a zero-value Amount that reads as neither a price nor an
 	// absence.
-	opts := amountOpt(got.amount)
+	// The mandate is unconditional where the amount is gated, and the contrast
+	// is the whole of why both exist. amountOpt attaches a price only once the
+	// decode that produced one has finished — a refusal reached on a bad
+	// audience or a bad signature states no number, because there is none this
+	// role established. Which mandate it was acting on needs no decode at all:
+	// POST /credential is the Payment Mandate hop by definition, and AP2 hands
+	// a verifier a closed mandate in both modes. So it is stated on the refusal
+	// exactly as readily as on the acceptance, which is what makes a refused
+	// card placeable on a screen.
+	opts := append(amountOpt(got.amount), obs.WithMandate(obs.MandatePayment, obs.MandateClosed))
 	if got.verdict != nil {
 		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(got.verdict)),
 			"Payment Mandate refused: "+got.verdict.Error(), opts...)

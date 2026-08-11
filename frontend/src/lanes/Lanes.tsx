@@ -37,6 +37,7 @@ import {
   LANES,
   STEP_META,
   amountOf,
+  mandateLabel,
   shortDigest,
   stepsIn,
   titleOf,
@@ -86,7 +87,23 @@ function StepCard({ step }: { readonly step: Step }) {
         <span className="font-sans text-xs tabular-nums text-graphite">#{step.seq}</span>
       </div>
 
-      <span className="font-sans text-xs text-graphite">{titleOf(step.role)}</span>
+      {/*
+        The party, and beside it the artefact — issue #201. Two elements in one
+        row rather than one string, and in the same register `titleOf` already
+        renders: a mandate type is a label, never a lane and never a mark. The
+        step axis has no pip by design — the value is the mark — and which
+        mandate a step is about is not a verdict, so it takes neither.
+
+        A step about no mandate renders nothing here, the way an absent price
+        and an absent digest do. `receipt_issued` and `authorisation_refused`
+        are the two kinds that reach this branch, and both are honestly about no
+        mandate: the receipt names one as signed evidence of its own, and a
+        person declining an interpretation refused before any existed.
+      */}
+      <div className="flex flex-wrap items-baseline gap-x-2 font-sans text-xs text-graphite">
+        <span>{titleOf(step.role)}</span>
+        {step.mandate !== undefined && <span>{mandateLabel(step.mandate)}</span>}
+      </div>
 
       {step.code !== undefined && step.code !== "" && (
         <code className="font-mono text-xs text-broken">{step.code}</code>

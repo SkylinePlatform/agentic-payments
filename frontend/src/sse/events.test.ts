@@ -126,7 +126,17 @@ describe("parseRecord", () => {
       "the record is built field by field rather than cast, so a field added " +
         "to obs.Event arrives here as a deliberate change and not as a " +
         "property nothing declared",
-    ).toEqual(["amount", "at", "code", "correlation_id", "detail", "digest", "kind", "role"]);
+    ).toEqual([
+      "amount",
+      "at",
+      "code",
+      "correlation_id",
+      "detail",
+      "digest",
+      "kind",
+      "mandate",
+      "role",
+    ]);
   });
 
   it.each([
@@ -172,6 +182,62 @@ describe("parseRecord", () => {
         event: { kind: "receipt_issued", role: "mpp", at: "2026-08-09T10:11:12Z", detail: 12 },
       }),
       "detail is present and is not a string",
+    ],
+    [
+      "a mandate naming a state but no type",
+      JSON.stringify({
+        seq: 1,
+        event: {
+          kind: "mandate_verified",
+          role: "merchant",
+          at: "2026-08-09T10:11:12Z",
+          mandate: { state: "closed" },
+        },
+      }),
+      "mandate is present and does not name one of the two mandates as open or closed",
+    ],
+    [
+      "a mandate naming a type but no state",
+      JSON.stringify({
+        seq: 1,
+        event: {
+          kind: "mandate_verified",
+          role: "merchant",
+          at: "2026-08-09T10:11:12Z",
+          mandate: { type: "checkout" },
+        },
+      }),
+      "mandate is present and does not name one of the two mandates as open or closed",
+    ],
+    [
+      // AP2 v0.1's vocabulary, which almost everything written about the
+      // protocol still uses. It is refused rather than drawn: a card reading
+      // "open Cart Mandate" would teach the model this repository exists to
+      // correct, and would do it on the screen built to teach.
+      "a mandate type from AP2 v0.1",
+      JSON.stringify({
+        seq: 1,
+        event: {
+          kind: "mandate_verified",
+          role: "merchant",
+          at: "2026-08-09T10:11:12Z",
+          mandate: { type: "cart", state: "closed" },
+        },
+      }),
+      "mandate is present and does not name one of the two mandates as open or closed",
+    ],
+    [
+      "a mandate in a state that is neither open nor closed",
+      JSON.stringify({
+        seq: 1,
+        event: {
+          kind: "mandate_verified",
+          role: "merchant",
+          at: "2026-08-09T10:11:12Z",
+          mandate: { type: "payment", state: "delegated" },
+        },
+      }),
+      "mandate is present and does not name one of the two mandates as open or closed",
     ],
     [
       "an amount that is a bare number rather than {amount, currency}",
@@ -345,5 +411,74 @@ describe("the amount, issue #174's price on the wire", () => {
       "contracts/instrument/amount.json allows a zero-amount authorisation; " +
         "it must not read the same as no amount at all",
     ).toEqual({ amount: 0, currency: "USD" });
+  });
+});
+
+describe("the mandate, issue #201's artefact on the wire", () => {
+  // Four of AP2's artefacts reach the three-lane view under one correlation —
+  // the open pair the user signs and the closed pair the agent binds — and
+  // before this field the screen drew them as two pairs of identical cards.
+  it("reads both facts through, as two members rather than one flattened name", () => {
+    const parsed = parseRecord(
+      JSON.stringify({
+        seq: 1,
+        event: {
+          kind: "mandate_constructed",
+          role: "surface",
+          at: "2026-08-04T12:00:00Z",
+          mandate: { type: "checkout", state: "open" },
+        },
+      }),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(
+      parsed.record.event.mandate,
+      "AP2 v0.2 has two mandate types and the open/closed distinction is a " +
+        "second axis rather than a second pair of them — a single field spelling " +
+        "'checkout_open' would put four types on the wire where the protocol has two",
+    ).toEqual({ type: "checkout", state: "open" });
+  });
+
+  it("is absent on a step that is about no mandate", () => {
+    const parsed = parseRecord(
+      JSON.stringify({
+        seq: 1,
+        event: { kind: "authorisation_refused", role: "surface", at: "2026-08-04T12:00:00Z" },
+      }),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(
+      parsed.record.event.mandate,
+      "a person declining an interpretation refused before any mandate existed; " +
+        "Go writes the field with omitempty and a reader must see the absence " +
+        "rather than a default",
+    ).toBeUndefined();
+  });
+
+  it("never reads a mandate back out of detail, whatever that says", () => {
+    // The rule that made #201 a typed field rather than a restored sentence.
+    // `detail` here names a mandate in prose exactly as the emitters used to,
+    // and the parsed record must still say it is about none.
+    const parsed = parseRecord(
+      JSON.stringify({
+        seq: 1,
+        event: {
+          kind: "mandate_constructed",
+          role: "surface",
+          at: "2026-08-04T12:00:00Z",
+          detail: "open Checkout Mandate signed by the user",
+        },
+      }),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(
+      parsed.record.event.mandate,
+      "free text is for a person and nothing branches on it. A reader that " +
+        "recovered the mandate from this sentence would disagree with the wire " +
+        "the first time an emitter reworded one",
+    ).toBeUndefined();
   });
 });

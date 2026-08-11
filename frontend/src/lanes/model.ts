@@ -14,7 +14,7 @@
 
 import { DIGEST_SHOWN, shortDigest } from "../digest";
 import type { StatusMeta } from "../status/model";
-import type { EventKind, EventRecord } from "../sse";
+import type { EventKind, EventRecord, MandateRef } from "../sse";
 import type { Amount } from "../protocol";
 
 export { DIGEST_SHOWN, shortDigest };
@@ -103,6 +103,42 @@ export interface Step {
    * beside its outcome.
    */
   readonly amount?: Amount;
+  /**
+   * Which of AP2's two mandates this step is about, open or closed. Issue
+   * #201's field, read straight through from `ProtocolEvent.mandate` on the
+   * same terms `digest` and `amount` are: absent on a step that is about no
+   * mandate, and never defaulted.
+   */
+  readonly mandate?: MandateRef;
+}
+
+/**
+ * How a mandate is written on a card: `"open Checkout Mandate"`.
+ *
+ * The wire carries two facts and the screen composes the phrase, rather than an
+ * emitter sending a sentence — `src/sse/events.test.ts` pins that no consumer
+ * parses `detail`, and that rule is the reason #201 is a typed field at all. A
+ * label built here from two closed vocabularies cannot disagree with the wire
+ * the way a reworded sentence would.
+ *
+ * The words are AP2's own, and the state goes in front because that is how the
+ * protocol documentation says it — "open Checkout Mandate", "closed Payment
+ * Mandate" — which is also, not by coincidence, how `adapters/ap2/vct.go`
+ * spells each of the four in its own `what` field. The reader who goes looking
+ * for what a card means finds the same phrase there.
+ *
+ * `state` is rendered verbatim rather than through a table of its own: the wire
+ * value **is** the English word, and a lookup would be a second place for
+ * `open` to be spelled. `type` needs one, because `checkout` on its own does
+ * not say it is a mandate.
+ */
+export const MANDATE_TITLES: Readonly<Record<MandateRef["type"], string>> = {
+  checkout: "Checkout Mandate",
+  payment: "Payment Mandate",
+};
+
+export function mandateLabel(mandate: MandateRef): string {
+  return `${mandate.state} ${MANDATE_TITLES[mandate.type]}`;
 }
 
 /**
@@ -136,24 +172,22 @@ export interface Step {
  * `obs.KindAuthorisationRefused` exists to make on the wire. The screen has to respect a difference the event
  * vocabulary already draws, or it contradicts what it is drawn from.
  *
- * # What this table cannot say, and #183 made visible by saying less
+ * # What this table does not say, and what says it instead
  *
- * **A card cannot say which of AP2's two mandates it is about**, and on the
- * demonstration's own transaction that leaves four pairs of identical cards:
- * the open Checkout and open Payment Mandates in the user's lane, the two
- * closed ones in the agent's. The digest cannot separate them and never will —
- * a Payment Mandate's `transaction_id` *is* the checkout hash, so
- * `CheckoutDigestOf` and `PaymentDigestOf` answer the same twelve characters,
- * which is the binding this screen exists to demonstrate rather than a defect.
+ * **Nothing here names which of AP2's two mandates a step is about**, and it is
+ * not this table's job: the word is what *happened* — signed, presented,
+ * verified — and it is the same word whichever artefact it happened to. The
+ * artefact is {@link Step.mandate}, rendered as its own label beside the party.
  *
- * The sentence that used to separate them was `ProtocolEvent.detail`, printed
- * beneath the word. Deleting that paragraph is right — it is free text an
- * emitter writes for a person, `src/sse/events.test.ts` pins that no consumer
- * may parse it, and a structural fact carried by prose disagrees with the wire
- * the first time somebody rewords a sentence. What it is not is free: **#201 is
- * the typed field that answers it**, on the precedent #174 set for the price,
- * and this comment exists so that the gap is a known one rather than something
- * the next reader has to rediscover from a screenshot.
+ * That separation is what #201 fixed. #183 took the card down to the mark, the
+ * word, the party, the code, the price and the digest, which was right — the
+ * sentence beneath restated most of them. What it also took, unaccounted for,
+ * was the only thing naming the mandate, and the demonstration's own opening
+ * then drew four cards separable by nothing but a sequence number. **The digest
+ * could never have separated them**: a Payment Mandate's `transaction_id` *is*
+ * the checkout hash, so `CheckoutDigestOf` and `PaymentDigestOf` answer the
+ * same twelve characters, and the two cards agreeing is the binding this screen
+ * exists to demonstrate rather than a defect.
  */
 export const STEP_META: Record<EventKind, StatusMeta> = {
   mandate_constructed: { label: "signed", pip: null, ending: null },
@@ -397,6 +431,7 @@ export function group(records: readonly EventRecord[]): readonly Transaction[] {
       digest: record.event.digest,
       code: record.event.code,
       amount: record.event.amount,
+      mandate: record.event.mandate,
     });
     byCorrelation.set(id, steps);
   }
