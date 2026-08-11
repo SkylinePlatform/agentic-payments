@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -139,6 +139,10 @@ describe("signing", () => {
     // `/authorise` call is still in flight, genuinely unresolved, when this
     // runs.
     expect(screen.getByText("the item is gtin:05014477390221")).toBeTruthy();
+    // A screen reader has to be told the same thing a sighted reader sees
+    // without having to be focused on this exact node: `role="status"` is a
+    // polite live region, so the in-flight line announces itself.
+    expect(screen.getByRole("status").textContent).toMatch(/collecting your signature/i);
   });
 
   it("says the signature exists when the watch did not start", async () => {
@@ -155,6 +159,13 @@ describe("signing", () => {
     expect(screen.getByText(/expire in 1 hour/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
     expect(navigations).toEqual([]);
+    // This is the state that tells a person something irreversible happened
+    // — a signature exists, unattached to any running watch. `role="alert"`
+    // is what makes a screen-reader user hear that the moment it renders,
+    // rather than only if they happen to be focused on this node.
+    expect(
+      within(screen.getByRole("alert")).getByText(/signed, and the watch did not start/i),
+    ).toBeTruthy();
   });
 
   it("retries with the same authorisation under a fresh key", async () => {
@@ -184,11 +195,40 @@ describe("signing", () => {
 
   it("does not retry a digest mismatch", async () => {
     // This one is our defect, not the user's: the browser mutated the set
-    // between preview and sign. Shown plainly, with nothing to click.
-    stubFetch({ "/authorise": { status: 400, body: '{"code":"request_malformed"}' } });
+    // between preview and sign. Shown plainly, with nothing to click. The
+    // `code` field — not a substring match on the human sentence, which in
+    // production never repeats the code — is what tells this apart from a
+    // failure worth offering a retry for.
+    stubFetch({
+      "/authorise": {
+        status: 400,
+        body: { type: "urn:x", title: "y", status: 400, detail: "request_malformed", code: "request_malformed" },
+      },
+    });
     renderSigning();
 
     expect(await screen.findByText(/request_malformed/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+    // Announced all the same, even with nothing to click.
+    expect(within(screen.getByRole("alert")).getByText(/request_malformed/)).toBeTruthy();
+  });
+
+  it("offers a retry when authorise fails for a reason other than a digest mismatch, and it can succeed", async () => {
+    // A 502 is nothing the browser did: the constraint set was never
+    // touched, nothing was signed, and retrying might simply work. Unlike
+    // the stranded retry, this one calls authorise again — correctly,
+    // because a *failed* authorise produced no mandate, so this is the
+    // first successful signature rather than a second one.
+    const calls = stubFetch({
+      "/authorise": [{ status: 502, body: "the surface did not answer" }, { body: anAuthorised() }],
+      "/watches": { status: 201, body: { id: "w", correlation_id: "c2" } },
+    });
+    renderSigning();
+
+    expect(await screen.findByText(/the surface did not answer/)).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: /try again/i }));
+
+    await waitFor(() => expect(navigations).toEqual([{ to: "/lanes?run=c2" }]));
+    expect(calls.filter((c) => c.url === "/authorise")).toHaveLength(2);
   });
 });

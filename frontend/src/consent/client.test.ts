@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { propose, refuse, startWatch } from "./client";
+import { propose, refuse, RequestFailed, startWatch } from "./client";
 import type { Authorised, Proposal } from "./model";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -125,5 +125,44 @@ describe("the client", () => {
       ),
     );
     await expect(propose("buy a boat")).rejects.toThrow(/no script for this prompt/);
+  });
+
+  it("carries the Problem Details code alongside its sentence", async () => {
+    // `internal/platform/problem.Problem` always sends `code`, and `detail`
+    // is free text an operator writes — it does not repeat the code, so a
+    // caller that needs to know *which* failure this was (a digest mismatch
+    // versus a transient outage, say) cannot get that from the message
+    // alone. This is the field that lets one.
+    capture(
+      {
+        type: "urn:agentic-payments:error:request_malformed",
+        title: "The request could not be read",
+        status: 400,
+        detail: "these constraints are not the ones that digest was issued for",
+        code: "request_malformed",
+      },
+      400,
+    );
+    const failure: unknown = await propose("buy a boat").catch((err: unknown) => err);
+    expect(failure).toBeInstanceOf(RequestFailed);
+    expect((failure as RequestFailed).message).toBe(
+      "these constraints are not the ones that digest was issued for",
+    );
+    expect((failure as RequestFailed).code).toBe("request_malformed");
+  });
+
+  it("carries no code for the agent's plain-text errors", async () => {
+    // The agent's own 422 is `http.Error`'s plain text, not a Problem
+    // Details document — there is no `code` field to read, and a caller
+    // asking "was this specifically X" should get `undefined` rather than a
+    // guess, so it defaults to treating the failure as unclassified.
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve(
+        new Response('interpret: no script for this prompt: "buy a boat"\n', { status: 422 }),
+      ),
+    );
+    const failure: unknown = await propose("buy a boat").catch((err: unknown) => err);
+    expect(failure).toBeInstanceOf(RequestFailed);
+    expect((failure as RequestFailed).code).toBeUndefined();
   });
 });

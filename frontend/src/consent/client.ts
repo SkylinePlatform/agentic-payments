@@ -64,16 +64,62 @@ function messageOf(text: string): string {
 }
 
 /**
+ * Picks the canonical code a Problem Details response carries, or
+ * `undefined` for anything else — the agent's plain text has none.
+ *
+ * `detail` is free text an operator wrote and never repeats the code
+ * (`internal/platform/problem`'s own doc comment says nothing may branch on
+ * it), so a caller that needs to tell one failure from another — a digest
+ * mismatch from a transient 502, say — cannot get that from `messageOf`
+ * alone. This is the field that lets it, without inventing a second parser:
+ * the same `JSON.parse` `messageOf` already runs, read for a different key.
+ */
+function codeOf(text: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      typeof (parsed as { code?: unknown }).code === "string"
+    ) {
+      return (parsed as { code: string }).code;
+    }
+  } catch {
+    // Not JSON at all — no code to read, same as messageOf's own catch.
+  }
+  return undefined;
+}
+
+/**
+ * A non-2xx response's own account of why: the sentence a person should
+ * read, and — when the body was a Problem Details document — the canonical
+ * code a caller can branch on. `code` is `undefined` for the agent's
+ * plain-text errors, which carry no such thing; a caller deciding whether a
+ * failure is worth retrying should treat a missing code as unclassified,
+ * never as a specific one.
+ */
+export class RequestFailed extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "RequestFailed";
+  }
+}
+
+/**
  * Reads a response into `T`, or throws.
  *
- * A non-2xx throws an `Error` carrying the server's own sentence rather than
- * one invented here: only the agent knows which interpreter is wired, and only
- * the surface knows why a constraint was refused, so this module has no
- * sentence of its own to offer instead.
+ * A non-2xx throws a `RequestFailed` carrying the server's own sentence
+ * rather than one invented here: only the agent knows which interpreter is
+ * wired, and only the surface knows why a constraint was refused, so this
+ * module has no sentence of its own to offer instead.
  */
 async function unwrap<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    throw new Error(messageOf((await response.text()).trim()));
+    const text = (await response.text()).trim();
+    throw new RequestFailed(messageOf(text), codeOf(text));
   }
   return (await response.json()) as T;
 }

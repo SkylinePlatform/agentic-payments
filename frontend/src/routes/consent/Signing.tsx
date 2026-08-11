@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { Button } from "../../components/ui/button";
-import { authorise, startWatch } from "../../consent/client";
+import { authorise, RequestFailed, startWatch } from "../../consent/client";
 import type { Authorised, Previewed, Proposal } from "../../consent/model";
 import { lifetime } from "./format";
 
@@ -24,18 +24,21 @@ const QUANTITY = 1;
  *   `stranded` resends.
  * - `stranded` — the watch did not start, and the signature is not
  *   un-collectable. See below.
- * - `failed` — `authorise` itself failed. No retry: on `request_malformed`
- *   this is the browser having mutated the constraint set between preview
- *   and signature, which is this app's defect and not the user's, and
- *   retrying would only repeat it. Any other `authorise` failure lands here
- *   too, for the same reason — nothing was signed, so there is nothing this
- *   screen can offer to resend.
+ * - `failed` — `authorise` itself failed, so **nothing was signed**.
+ *   `retryable` is `false` only for `request_malformed`: that one means the
+ *   browser mutated the constraint set between preview and signature, which
+ *   is this app's defect, and retrying would only repeat it. Anything
+ *   else — a 502, a network burp — touched nothing the user or the browser
+ *   did, and a retry might simply work; the reviewed gap this state closes.
  */
 type State =
   | { readonly kind: "signing" }
   | { readonly kind: "starting"; readonly authorised: Authorised }
   | { readonly kind: "stranded"; readonly authorised: Authorised }
-  | { readonly kind: "failed"; readonly message: string };
+  | { readonly kind: "failed"; readonly message: string; readonly retryable: boolean };
+
+/** The one `authorise` failure that retrying would only repeat. */
+const NOT_RETRYABLE = "request_malformed";
 
 /**
  * The signing screen — Task 10, #22's last slice.
@@ -63,6 +66,11 @@ type State =
  * a fresh idempotency key. It never calls `authorise` again: the user
  * decided once, and a second signature would both fail to undo the first
  * pair of mandates and collect consent for a decision already made.
+ *
+ * That invariant is about a *successful* `authorise` — one that produced a
+ * mandate. A `failed` `authorise` produced none, so `failed`'s own retry
+ * (`sign` again, see below) is not the same act repeated; it is the first
+ * attempt finishing on a second try.
  */
 export function Signing({
   proposal,
@@ -76,9 +84,9 @@ export function Signing({
 
   /**
    * Runs `starting`: hands `authorised` to the agent, and resolves to
-   * `navigate` on success or `stranded` on failure. Shared between the
-   * mount effect below, which reaches it once after `authorise` succeeds,
-   * and `onTryAgain`, which reaches it again with the same `Authorised` and
+   * `navigate` on success or `stranded` on failure. Shared between `sign`
+   * below, which reaches it once `authorise` succeeds, and `onTryAgain`'s
+   * `stranded` branch, which reaches it again with the same `Authorised` and
    * nothing else — `startWatch` mints its own fresh idempotency key per
    * call, so a retry needs no key of its own to thread through.
    */
@@ -92,38 +100,64 @@ export function Signing({
     }
   }
 
-  useEffect(() => {
-    // `cancelled` rather than an empty dependency array on its own: under
-    // `StrictMode` in development this effect runs, is torn down, and runs
-    // again for the same mount, and the first run's `authorise` must not be
-    // allowed to act once it resolves after its own cleanup — the same
-    // contract `src/sse/stream.ts` documents for the same reason. Signing a
-    // person's consent is exactly the kind of act that must happen once.
-    let cancelled = false;
-
-    authorise(proposal, previewed.constraints_digest)
-      .then((authorised) => {
-        if (!cancelled) void attemptWatch(authorised);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setState({ kind: "failed", message: err instanceof Error ? err.message : String(err) });
-        }
+  /**
+   * Runs `signing`: collects the signature, then hands it to `attemptWatch`.
+   * Reachable twice — once automatically on mount, and again from
+   * `onTryAgain`'s `failed` branch — and both are the *first* signature
+   * attempt in every case that matters: a failed `authorise` produced no
+   * mandate, so calling it again is not calling it a second time for one
+   * decision, it is finishing the first call that never landed.
+   *
+   * `isCancelled` is checked before every `setState` so the mount effect's
+   * own run can be torn down cleanly under `StrictMode`'s double-invoke in
+   * development — the same contract `src/sse/stream.ts` documents, and for
+   * the same reason: signing a person's consent must happen once. A manual
+   * retry passes a predicate that is never true, because nothing tears a
+   * click handler down mid-flight.
+   */
+  async function sign(isCancelled: () => boolean) {
+    setState({ kind: "signing" });
+    let authorised: Authorised;
+    try {
+      authorised = await authorise(proposal, previewed.constraints_digest);
+    } catch (err) {
+      if (isCancelled()) return;
+      setState({
+        kind: "failed",
+        message: err instanceof Error ? err.message : String(err),
+        // `RequestFailed.code` is the Problem Details code, not a substring
+        // of the human sentence — `detail` never repeats it in production,
+        // so this is the only reliable signal for which failure this was.
+        // A code this screen does not recognise, or no code at all (the
+        // agent's plain-text errors, or a `fetch` that never reached a
+        // response), defaults to retryable: only one specific code is known
+        // to make retrying pointless.
+        retryable: !(err instanceof RequestFailed) || err.code !== NOT_RETRYABLE,
       });
+      return;
+    }
+    if (isCancelled()) return;
+    await attemptWatch(authorised);
+  }
 
+  useEffect(() => {
+    let cancelled = false;
+    void sign(() => cancelled);
     return () => {
       cancelled = true;
     };
-    // Deliberately empty: signing is a decision this component makes once
-    // per mount, on the proposal and preview it was handed, never again on
-    // a re-render — `proposal` and `previewed` are read once, at the moment
-    // this effect first runs, and are not expected to change under a
-    // `Signing` that stays mounted.
+    // Deliberately empty: this is the automatic, once-per-mount attempt.
+    // `proposal` and `previewed` are read once, at the moment this effect
+    // first runs, and are not expected to change under a `Signing` that
+    // stays mounted.
   }, []);
 
   function onTryAgain() {
-    if (state.kind !== "stranded") return;
-    void attemptWatch(state.authorised);
+    if (state.kind === "stranded") {
+      void attemptWatch(state.authorised);
+    } else if (state.kind === "failed" && state.retryable) {
+      void sign(() => false);
+    }
   }
 
   return (
@@ -145,23 +179,47 @@ export function Signing({
         ))}
       </section>
 
+      {/*
+        `role="status"` — a polite live region — announces the in-flight
+        line itself, so a screen-reader user is told the state changed
+        without needing to be focused on this node when it does.
+      */}
       {state.kind === "signing" && (
-        <p className="font-sans text-sm text-graphite">Collecting your signature…</p>
+        <p role="status" className="font-sans text-sm text-graphite">
+          Collecting your signature…
+        </p>
       )}
 
       {state.kind === "starting" && (
-        <p className="font-sans text-sm text-graphite">Starting the watch…</p>
+        <p role="status" className="font-sans text-sm text-graphite">
+          Starting the watch…
+        </p>
       )}
 
       {state.kind === "failed" && (
-        // The Trusted Surface's own sentence, verbatim — the same choice
-        // Consent makes for a failed preview, and for the same reason: only
-        // it knows why authorise refused.
-        <p className="font-sans text-sm text-broken">{state.message}</p>
+        // `role="alert"` — assertive — because this is the outcome of the
+        // one action this screen exists to collect, not routine progress.
+        <section role="alert" className="flex flex-col gap-2">
+          {/* The Trusted Surface's own sentence, verbatim — the same choice
+              Consent makes for a failed preview, and for the same reason:
+              only it knows why authorise refused. */}
+          <p className="font-sans text-sm text-broken">{state.message}</p>
+          {state.retryable && (
+            <div>
+              <Button type="button" onClick={onTryAgain}>
+                Try again
+              </Button>
+            </div>
+          )}
+        </section>
       )}
 
       {state.kind === "stranded" && (
-        <section className="flex flex-col gap-3" aria-labelledby="stranded">
+        // `role="alert"`, for the same reason as `failed` and more so: this
+        // is the state that tells a person something irreversible happened
+        // — a signature exists, unattached to any running watch, expiring
+        // in an hour.
+        <section role="alert" className="flex flex-col gap-3" aria-labelledby="stranded">
           <h2 id="stranded" className="font-sans text-lg text-broken">
             Signed, and the watch did not start
           </h2>
