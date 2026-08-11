@@ -1,17 +1,21 @@
 package roles_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/credprovider"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/mpp"
@@ -115,9 +119,74 @@ func (d delegation) chainFor(t *testing.T, audience, nonce string, amountMinor i
 	return chain.String()
 }
 
+// collected is a stand-in collector: a real HTTP endpoint that obs.HTTPSink
+// really posts to, holding what arrived.
+//
+// A server rather than a Sink implementation, and that is the rule in AGENTS.md
+// being followed rather than sidestepped. A double that records a call belongs
+// in .mockery.yml, and obs.MockSink exists — but mockery writes it into package
+// obs as mocks_test.go, so no other package's tests can name it. What is left
+// is the transport the emitter actually uses in production, which is not a
+// double of anything.
+type collected struct {
+	mu     sync.Mutex
+	events []obs.Event
+}
+
+// took returns every event of one kind, in arrival order.
+func (c *collected) took(kind obs.Kind) []obs.Event {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var of []obs.Event
+	for _, e := range c.events {
+		if e.Kind == kind {
+			of = append(of, e)
+		}
+	}
+	return of
+}
+
+// recording returns an emitter for role and the events it delivers.
+//
+// Read them only after emitting has finished — the returned closer drains the
+// emitter and returns once its sender has stopped, which is what keeps every
+// assertion on the test goroutine. The handler below is not the test goroutine
+// and uses assert for that reason.
+func recording(t *testing.T, clk authz.Clock, role string) (*obs.Emitter, *collected, func()) {
+	t.Helper()
+
+	got := &collected{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var batch []obs.Event
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&batch), "the emitter posted something that is not a batch")
+
+		got.mu.Lock()
+		got.events = append(got.events, batch...)
+		got.mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(srv.Close)
+
+	emitter, err := obs.NewEmitter(clk, role, obs.WithSink(obs.NewHTTPSink(srv.URL)))
+	require.NoError(t, err, "building the %s emitter", role)
+
+	return emitter, got, func() {
+		require.NoError(t, emitter.Close(context.Background()), "draining the %s emitter", role)
+	}
+}
+
 // theCredentialProvider stands up a provider serving both modes, wired the way
 // cmd/credprovider wires one: a single rule set held behind two interfaces.
 func theCredentialProvider(t *testing.T, user, provider party) *httptest.Server {
+	t.Helper()
+	return theCredentialProviderEmitting(t, user, provider, nil)
+}
+
+// theCredentialProviderEmitting is the same provider with somewhere for its
+// events to go. A nil emitter is a working no-op, which is what every test that
+// is not about the log wants.
+func theCredentialProviderEmitting(t *testing.T, user, provider party, events *obs.Emitter) *httptest.Server {
 	t.Helper()
 
 	challenge, err := crypto.NewChallenger(provider.clock, roles.ChallengeTTL)
@@ -140,6 +209,7 @@ func theCredentialProvider(t *testing.T, user, provider party) *httptest.Server 
 		Keys:      provider.keys,
 		Clock:     provider.clock,
 		Challenge: challenge,
+		Events:    events,
 	}
 	handler, err := svc.Handler()
 	return serve(t, handler, err)
@@ -148,6 +218,13 @@ func theCredentialProvider(t *testing.T, user, provider party) *httptest.Server 
 // theProcessor stands up an MPP serving both modes, wired the way cmd/mpp wires
 // one. Its audience is its own, never the provider's.
 func theProcessor(t *testing.T, user, processor party) *httptest.Server {
+	t.Helper()
+	return theProcessorEmitting(t, user, processor, nil)
+}
+
+// theProcessorEmitting is the same processor with somewhere for its events to
+// go, on theCredentialProviderEmitting's terms.
+func theProcessorEmitting(t *testing.T, user, processor party, events *obs.Emitter) *httptest.Server {
 	t.Helper()
 
 	challenge, err := crypto.NewChallenger(processor.clock, roles.ChallengeTTL)
@@ -169,6 +246,7 @@ func theProcessor(t *testing.T, user, processor party) *httptest.Server {
 		Keys:          processor.keys,
 		Clock:         processor.clock,
 		Challenge:     challenge,
+		Events:        events,
 	}
 	handler, err := svc.Handler()
 	return serve(t, handler, err)
@@ -382,6 +460,118 @@ func TestAPaymentChainOverTheUsersCapIsRefusedWithAReceipt(t *testing.T) {
 	require.NotNil(t, receipt.Error)
 	assert.Equal(t, generated.ErrorCodeConstraintViolated, *receipt.Error,
 		"a broken limit has to be named as one, because that is what the agent acts on when it comes back with a lower price")
+}
+
+// TestARefusalOverTheCapStatesThePriceItRefused is issue #174's rule applied to
+// the one refusal the demonstration is built around.
+//
+// The three-lane view's whole argument is two figures — a price refused against
+// a cap, then a lower one bought — and beat 5, the moment a verifier says no, is
+// **this** role saying it. A rejection that named no price would leave the
+// number the refusal was about to be inferred from the step before it.
+//
+// It is also the case that makes "a rejection here is never about the amount"
+// wrong as a general claim. ap2.AuthorisePaymentChain evaluates the user's
+// constraints against ap2.PaymentSubject, whose amount is the closed mandate's
+// own — so this verdict is a verdict about this figure, reached by a role that
+// verified the signature over it before comparing anything.
+func TestARefusalOverTheCapStatesThePriceItRefused(t *testing.T) {
+	t.Parallel()
+
+	provider := newParty(t, "credprovider")
+	d := newDelegation(t, capOnAmount, pinOnPayee)
+	events, got, drain := recording(t, provider.clock, "credprovider")
+	srv := theCredentialProviderEmitting(t, d.user, provider, events)
+
+	nonce := nonceFrom(t, srv)
+
+	var out funded
+	require.Equal(t, http.StatusUnprocessableEntity, post(t, srv.URL+"/credential", map[string]any{
+		"chain": d.chainFor(t, credProviderID, nonce, 21000), // 210.00 against a 200.00 cap
+		"nonce": nonce,
+	}, &out), "a chain over the user's cap has to be refused for this test to be about a refusal")
+
+	drain()
+
+	refusals := got.took(obs.KindMandateRejected)
+	require.Len(t, refusals, 1, "one refusal, one rejection event")
+	assert.Equal(t, string(generated.ErrorCodeConstraintViolated), refusals[0].Code)
+	require.NotNil(t, refusals[0].Amount,
+		"the price a constraint refused is the figure the screen has to show beside the refusal, "+
+			"and this role decoded it under a signature before comparing it to the cap")
+	assert.Equal(t, generated.Amount{Amount: 21000, Currency: "USD"}, *refusals[0].Amount,
+		"the amount stated is the one this role read out of the mandate it verified, "+
+			"never one recomputed or copied beside the event")
+}
+
+// TestARefusalBeforeTheMandateReadStatesNoPrice is the other half of the same
+// rule, and it is the half that keeps the first honest.
+//
+// A chain addressed to somebody else is refused on its key binding, before any
+// closed mandate has been decoded — so this role holds no price, and the honest
+// answer is to state none. Filling the field from a mandate that never decoded
+// would put generated.Amount's zero value on the log, which obs.Event.Validate
+// refuses precisely because it reads as neither a price nor an absence.
+func TestARefusalBeforeTheMandateReadStatesNoPrice(t *testing.T) {
+	t.Parallel()
+
+	provider := newParty(t, "credprovider")
+	d := newDelegation(t, capOnAmount, pinOnPayee)
+	events, got, drain := recording(t, provider.clock, "credprovider")
+	srv := theCredentialProviderEmitting(t, d.user, provider, events)
+
+	nonce := nonceFrom(t, srv)
+
+	var out funded
+	require.Equal(t, http.StatusUnprocessableEntity, post(t, srv.URL+"/credential", map[string]any{
+		// Addressed to the merchant, presented here: refused on the audience,
+		// which sdjwt.VerifyChain checks before anything inside is read.
+		"chain": d.chainFor(t, payeeID, nonce, 21000),
+		"nonce": nonce,
+	}, &out))
+
+	drain()
+
+	refusals := got.took(obs.KindMandateRejected)
+	require.Len(t, refusals, 1, "one refusal, one rejection event")
+	assert.Equal(t, string(generated.ErrorCodeKeyBindingInvalid), refusals[0].Code)
+	assert.Nil(t, refusals[0].Amount,
+		"nothing inside this chain was ever read, so there is no price this role held to state")
+}
+
+// TestTheProcessorStatesThePriceItRefusedToo is the same rule one party along.
+//
+// The processor runs the same ap2.AuthorisePaymentChain over the same open
+// mandate, so the same argument applies unchanged: a chain over the user's cap
+// is refused *about* a figure this role decoded under a signature, and the log
+// has to name it. The two roles are separate because they are separate roles —
+// the "no internal/common" rule keeps their examine paths apart — so the
+// property is asserted of each rather than inferred from the other.
+func TestTheProcessorStatesThePriceItRefusedToo(t *testing.T) {
+	t.Parallel()
+
+	processor := newParty(t, "mpp")
+	d := newDelegation(t, capOnAmount, pinOnPayee)
+	events, got, drain := recording(t, processor.clock, "mpp")
+	srv := theProcessorEmitting(t, d.user, processor, events)
+
+	nonce := nonceFrom(t, srv)
+
+	var out settledOutcome
+	require.Equal(t, http.StatusUnprocessableEntity, post(t, srv.URL+"/payment", map[string]any{
+		"chain":      d.chainFor(t, processorID, nonce, 21000),
+		"nonce":      nonce,
+		"credential": mintCredential(t, d),
+	}, &out), "a chain over the user's cap has to be refused for this test to be about a refusal")
+
+	drain()
+
+	refusals := got.took(obs.KindMandateRejected)
+	require.Len(t, refusals, 1, "one refusal, one rejection event")
+	assert.Equal(t, string(generated.ErrorCodeConstraintViolated), refusals[0].Code)
+	require.NotNil(t, refusals[0].Amount, "the price this processor refused")
+	assert.Equal(t, generated.Amount{Amount: 21000, Currency: "USD"}, *refusals[0].Amount,
+		"the amount stated is the one this role read out of the chain it verified")
 }
 
 // TestTheTwoWaysANonceIsWrongAreAnsweredDifferently is the split #116 left half

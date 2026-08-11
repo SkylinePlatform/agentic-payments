@@ -156,16 +156,53 @@ type examined struct {
 	// checkoutHash is read only when verdict is nil; a refused presentation
 	// scopes no credential.
 	checkoutHash string
-	// amount is the payment amount the verified mandate declared, set only
-	// alongside checkoutHash — when verdict is nil and the decode this role's
-	// own VerifyPayment/AuthorisePaymentChain performed is complete enough to
-	// trust. A rejection here is a signature, a vct or an expiry failing, never
-	// an amount check — this role runs no ap2.AmountMatches — so there is
-	// nothing this role reliably holds to report on that branch, and it stays
-	// nil rather than risk a zero-value Amount off a mandate that never fully
-	// decoded reading as a genuine zero.
+	// amount is the payment amount the closed mandate declared, for the event
+	// this role emits about it and for nothing else — never for the verdict,
+	// which this role reaches without consulting it.
+	//
+	// Set exactly when this role's own verification decoded the closed mandate,
+	// which is a wider condition than "and accepted it" and deliberately so.
+	// Under Human Not Present the check that refuses a purchase over the user's
+	// cap is an amount check — ap2.AuthorisePaymentChain evaluates the open
+	// mandate's constraints against ap2.PaymentSubject, whose amount is this
+	// very field — so a refusal there is not merely *able* to name the price,
+	// it is a verdict about that price, and the demonstration's one refusal is
+	// that case. Leaving it absent would be the log declining to state the
+	// number the refusal was about.
+	//
+	// What it must not do is state a price off a decode that never finished, in
+	// which case generated.Amount is its zero value and reads as neither a
+	// price nor an absence — obs.Event.Validate refuses one. The invariant that
+	// tells the two apart is CheckoutHash: decodePayment refuses a mandate
+	// carrying no transaction_id, so a non-empty hash is exactly the state in
+	// which every other claim in the mandate has been read, and both examine
+	// paths gate on it.
 	amount  *generated.Amount
 	verdict error
+}
+
+// amountFrom returns the mandate's amount when this role decoded the mandate,
+// and nil when it did not.
+//
+// One function for both modes, because the invariant is the same in both: see
+// examined.amount, whose comment is what this is derived from rather than a
+// second statement of.
+func amountFrom(mandate generated.PaymentMandate) *generated.Amount {
+	if mandate.CheckoutHash == "" {
+		return nil
+	}
+	amount := mandate.PaymentAmount
+	return &amount
+}
+
+// amountOpt turns a possibly-nil amount into the EventOpt slice Emit and
+// EmitRejection take, so a call site with nothing to report attaches nothing
+// rather than a zero-value generated.Amount.
+func amountOpt(amount *generated.Amount) []obs.EventOpt {
+	if amount == nil {
+		return nil
+	}
+	return []obs.EventOpt{obs.WithAmount(*amount)}
 }
 
 // fund verifies a Payment Mandate and mints a credential scoped to its checkout.
@@ -181,17 +218,6 @@ type examined struct {
 // delegation and it arrives inside a chain whose root is the open mandate the
 // user signed. What the credential is scoped to is the same claim either way,
 // which is why the mode is settled in examine and forgotten immediately after.
-// amountOpt turns a possibly-nil amount into the EventOpt slice Emit and
-// EmitRejection take, so a call site with nothing reliable to report — see
-// examined's own comment on amount — attaches nothing rather than a zero-value
-// generated.Amount that would read as a genuine zero on the log.
-func amountOpt(amount *generated.Amount) []obs.EventOpt {
-	if amount == nil {
-		return nil
-	}
-	return []obs.EventOpt{obs.WithAmount(*amount)}
-}
-
 func (s *Service) fund(w http.ResponseWriter, r *http.Request) {
 	var req request
 	if !roles.DecodeJSON(w, r, &req) {
@@ -220,11 +246,12 @@ func (s *Service) fund(w http.ResponseWriter, r *http.Request) {
 	// code in the log and the code in the signed answer cannot disagree — which
 	// matters because a reader comparing them would have no way to tell which
 	// one was wrong.
-	// got.amount is nil on a rejection — this role's own verdict is never about
-	// the amount, so a refusal here has nothing reliable to report; see
-	// examined's own comment. Emit takes the zero value of an *unset* option
-	// gracefully because WithAmount is only ever applied when got.amount is
-	// non-nil, below.
+	// The same option on both branches, because the question the amount answers
+	// is the same one either way: what was the price this role read out of the
+	// mandate it verified. It is nil exactly when the mandate never decoded —
+	// see examined.amount — and amountOpt turns that into no option at all
+	// rather than a zero-value Amount that reads as neither a price nor an
+	// absence.
 	opts := amountOpt(got.amount)
 	if got.verdict != nil {
 		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(got.verdict)),
@@ -301,12 +328,12 @@ func (s *Service) examineMandate(w http.ResponseWriter, req request) (examined, 
 	}
 
 	mandate, verdict := s.Rules.VerifyPayment(presented)
-	result := examined{presented: presented, checkoutHash: mandate.CheckoutHash, verdict: verdict}
-	if verdict == nil {
-		amount := mandate.PaymentAmount
-		result.amount = &amount
-	}
-	return result, true
+	return examined{
+		presented:    presented,
+		checkoutHash: mandate.CheckoutHash,
+		amount:       amountFrom(mandate),
+		verdict:      verdict,
+	}, true
 }
 
 // examineChain is the Human Not Present path: a delegation chain, authorised
@@ -362,16 +389,12 @@ func (s *Service) examineChain(w http.ResponseWriter, req request) (examined, bo
 	}
 
 	authorised, verdict := s.Chains.AuthorisePaymentChain(chain, req.Nonce)
-	result := examined{
+	return examined{
 		presented:    chain,
 		checkoutHash: authorised.Closed.CheckoutHash,
+		amount:       amountFrom(authorised.Closed),
 		verdict:      verdict,
-	}
-	if verdict == nil {
-		amount := authorised.Closed.PaymentAmount
-		result.amount = &amount
-	}
-	return result, true
+	}, true
 }
 
 // mint produces a credential good for one checkout and nothing else.

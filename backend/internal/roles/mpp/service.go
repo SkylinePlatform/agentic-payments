@@ -123,14 +123,22 @@ type examined struct {
 	// which is the honest value: this role has confirmed no checkout to put a
 	// verdict against.
 	checkoutHash string
-	// amount is the payment amount the verified mandate declared, set on the
-	// same terms checkoutHash is: once the mandate's own signature has
-	// established it, even if the credential-scope check that runs afterwards
-	// then refuses. Neither of this role's two questions is about the amount —
-	// it runs no ap2.AmountMatches — so a rejection of the mandate itself,
-	// rather than of the credential over it, leaves this nil rather than risk a
-	// zero-value Amount off a mandate that never fully decoded reading as a
-	// genuine zero.
+	// amount is the payment amount the closed mandate declared, for the event
+	// this role emits about it and for nothing else — never for either of the
+	// two verdicts, which are reached without consulting it.
+	//
+	// Set exactly when this role's own verification decoded the closed mandate,
+	// which is wider than "and accepted it" in both directions and deliberately
+	// so. A credential scoped to another purchase refuses a mandate this role
+	// read in full, and under Human Not Present the constraint evaluation
+	// inside ap2.AuthorisePaymentChain can refuse a price this role decoded and
+	// compared. credprovider.examined.amount sets the reasoning out in full;
+	// nothing about it differs here.
+	//
+	// CheckoutHash is the invariant that says the decode finished — decodePayment
+	// refuses a mandate carrying no transaction_id — so a stated amount is
+	// never one read off a half-decoded mandate, which obs.Event.Validate would
+	// refuse as neither a price nor an absence.
 	amount  *generated.Amount
 	verdict error
 }
@@ -159,12 +167,21 @@ func (s *Service) Handler() (http.Handler, error) {
 	return roles.Middleware(s.Clock, mux)
 }
 
+// amountFrom returns the mandate's amount when this role decoded the mandate,
+// and nil when it did not. See examined.amount for the invariant.
+func amountFrom(mandate generated.PaymentMandate) *generated.Amount {
+	if mandate.CheckoutHash == "" {
+		return nil
+	}
+	amount := mandate.PaymentAmount
+	return &amount
+}
+
 // amountOpt turns a possibly-nil amount into the EventOpt slice Emit and
-// EmitRejection take, so a call site with nothing reliable to report — see
-// examined's own comment on amount — attaches nothing rather than a zero-value
-// generated.Amount that would read as a genuine zero on the log.
+// EmitRejection take, so a call site with nothing to report attaches nothing
+// rather than a zero-value generated.Amount.
 //
-// Duplicated from credprovider's identical helper rather than shared: the two
+// Duplicated from credprovider's identical pair rather than shared: the two
 // packages already duplicate the whole examined/examine shape on the "no
 // internal/common" rule, and a third protocol is what is meant to reveal
 // whether this particular seam is real.
@@ -211,9 +228,10 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	// scoped to it — and one verdict comes back, so one event says so. The code
 	// is what distinguishes them, and it is the same code the receipt carries.
 	//
-	// got.amount is nil whenever the mandate itself never verified — see
-	// examined's own comment — and amountOpt turns that absence into no option
-	// at all rather than a zero-value Amount that would read as a genuine one.
+	// The same option on both branches: the amount is what this role read out
+	// of the mandate, which is a fact about the presentation rather than about
+	// the verdict. It is nil exactly when the mandate never decoded — see
+	// examined.amount — and amountOpt turns that absence into no option at all.
 	opts := amountOpt(got.amount)
 	if got.verdict != nil {
 		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(got.verdict)),
@@ -283,13 +301,12 @@ func (s *Service) examineMandate(w http.ResponseWriter, req settlement) (examine
 
 	mandate, verdict := s.Payments.VerifyPayment(presented)
 	if verdict != nil {
-		return examined{presented: presented, verdict: verdict}, true
+		return examined{presented: presented, amount: amountFrom(mandate), verdict: verdict}, true
 	}
-	amount := mandate.PaymentAmount
 	return examined{
 		presented:    presented,
 		checkoutHash: mandate.CheckoutHash,
-		amount:       &amount,
+		amount:       amountFrom(mandate),
 		verdict:      s.Rules.VerifyCredential(req.Credential, mandate.CheckoutHash),
 	}, true
 }
@@ -327,13 +344,12 @@ func (s *Service) examineChain(w http.ResponseWriter, req settlement) (examined,
 
 	authorised, verdict := s.PaymentChains.AuthorisePaymentChain(chain, req.Nonce)
 	if verdict != nil {
-		return examined{presented: chain, verdict: verdict}, true
+		return examined{presented: chain, amount: amountFrom(authorised.Closed), verdict: verdict}, true
 	}
-	amount := authorised.Closed.PaymentAmount
 	return examined{
 		presented:    chain,
 		checkoutHash: authorised.Closed.CheckoutHash,
-		amount:       &amount,
+		amount:       amountFrom(authorised.Closed),
 		verdict:      s.Rules.VerifyCredential(req.Credential, authorised.Closed.CheckoutHash),
 	}, true
 }
