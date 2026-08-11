@@ -143,6 +143,39 @@ func TestAChallengeOutsideItsWindowIsRefused(t *testing.T) {
 		"a symmetric window is the same rule pkg/sdjwt applies to a key binding's iat, and for the same reason")
 }
 
+// TestAStampCenturiesAheadIsRefusedNotAcceptedAsFresh demonstrates the hole
+// this package's own comment used to only note: time.Duration is an int64 of
+// nanoseconds, so Time.Sub does not overflow when two instants are more than
+// ~292 years apart, it saturates — and negating a saturated minimum is a
+// no-op under two's complement. Before the fix, that made the "if age < 0 {
+// age = -age }" fold in Check a no-op on exactly this input, leaving age
+// negative and the window comparison false: a challenge stamped centuries in
+// the future compared as fresher than one issued a second ago, and Check
+// returned nil.
+//
+// The stamp is minted honestly, by moving the fake clock forward and calling
+// Issue there, rather than assembled by hand — Issue is what a caller
+// actually gets a challenge from, and the point is that a value this
+// Challenger itself produced, read back on a saner clock, must not verify.
+func TestAStampCenturiesAheadIsRefusedNotAcceptedAsFresh(t *testing.T) {
+	t.Parallel()
+
+	c, clk := newChallenger(t)
+
+	// 400 years comfortably clears time.Duration's ~292-year range in either
+	// direction, which is what the table in issue #112 measured.
+	clk.Set(base.AddDate(400, 0, 0))
+	farFuture, err := c.Issue()
+	require.NoError(t, err, "issuing the challenge every case below is a corruption of")
+
+	clk.Set(base)
+	err = c.Check(farFuture)
+	assert.ErrorIs(t, err, crypto.ErrChallengeInvalid,
+		"a stamp Sub cannot represent the true age of is not a fact this verifier can honestly age at all, and a window is a security control that must fail closed on a value it cannot measure")
+	assert.NotErrorIs(t, err, crypto.ErrChallengeExpired,
+		"this verifier really did stamp it, on a clock it no longer agrees with — 'ask me for another one' is the wrong answer to a value that was never a sensible instant")
+}
+
 // TestTwoChallengesIssuedInOneInstantDiffer is the salt itself, asserted beside
 // the four paragraphs in challenge.go that argue for it.
 //
