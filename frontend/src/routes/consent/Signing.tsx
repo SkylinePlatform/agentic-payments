@@ -121,7 +121,7 @@ export function Signing({
 
   // One idempotency key for the whole decision to sign, minted once and
   // reused by every attempt of `authorise` — including a retry from
-  // `failed`. `authorise`'s own doc comment in client.ts says why: if the
+  // `unresolved`. `authorise`'s own doc comment in client.ts says why: if the
   // surface already signed and only the response was lost — a dropped
   // connection, a proxy timeout, a backgrounded tab — a fresh key on retry
   // would ask it to sign a second, independent pair of open mandates for one
@@ -155,12 +155,13 @@ export function Signing({
   /**
    * Runs `signing`: collects the signature, then hands it to `attemptWatch`.
    * Reachable twice — once automatically on mount, and again from
-   * `onTryAgain`'s `failed` branch. **Not because a failed `authorise`
+   * `onTryAgain`'s `unresolved` branch. **Not because a failed `authorise`
    * proved no mandate exists** — a lost response means it cannot prove
-   * that — but because every call here carries `signatureKey`, the one key
-   * minted for this whole decision, so the surface's idempotency middleware
-   * is what keeps a retry from ever becoming a second signature. See
-   * `signatureKey`'s own comment above.
+   * that, and `unresolved` is now the state that says so — but because every
+   * call here carries `signatureKey`, the one key minted for this whole
+   * decision, so the surface's idempotency middleware is what keeps a retry
+   * from ever becoming a second signature. See `signatureKey`'s own comment
+   * above.
    *
    * `isCancelled` gates the request itself, not only the `setState` calls
    * that follow it — see the `await Promise.resolve()` below for why that
@@ -406,10 +407,12 @@ export function Signing({
       )}
 
       {state.kind === "stranded" && (
-        // `role="alert"`, for the same reason as `failed` and more so: this
-        // is the state that tells a person something irreversible happened
-        // — a signature exists, unattached to any running watch, expiring
-        // in an hour.
+        // `role="alert"`, for the same reason as the two failure states above
+        // and more so: this is the state that tells a person something
+        // irreversible happened — a signature exists, unattached to any
+        // running watch, expiring in an hour. It is also the one state that
+        // knows a signature exists rather than suspecting it, which is why the
+        // expiry is stated here and nowhere else.
         <section role="alert" className="flex flex-col gap-3" aria-labelledby="stranded">
           <h2 id="stranded" className="font-sans text-lg text-broken">
             Signed, and the watch did not start
