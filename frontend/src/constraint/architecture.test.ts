@@ -8,12 +8,28 @@ import { codeOf } from "../test/source";
  * Three of them, and all three exist because the mistake they prevent compiles,
  * renders and looks right on a screenshot:
  *
- * 1. **No consent route may reach this module, by any path.** The Trusted
- *    Surface exposes `/authorise/preview` precisely so that the sentences a user
- *    reads before signing come from its own `Render()`. A second renderer there
- *    would mean the sentence the user read is not the one the signature covers —
- *    the failure `roles/surface`'s package doc claims is unexpressible, walked
- *    back in across a language boundary.
+ * 1. **No module that can render on the Buying screen may reach this module, by
+ *    any path.** The Trusted Surface exposes `/authorise/preview` precisely so
+ *    that the sentences a user reads before signing come from its own
+ *    `Render()`. A second renderer there would mean the sentence the user read
+ *    is not the one the signature covers — the failure `roles/surface`'s package
+ *    doc claims is unexpressible, walked back in across a language boundary.
+ *
+ *    **The set this is asserted over grew with #216**, and checking that is the
+ *    point rather than a formality. The rule used to key on `routes/consent/`
+ *    alone, and that was the whole screen while the consent screen was a route
+ *    of its own: nothing else was on the page. It is not any more — the shopping
+ *    console and the surface's zone are two stages of one screen — so
+ *    `routes/buying/` is governed too. Without the second prefix, a sentence the
+ *    console rendered with this module could sit on the same page as the signed
+ *    box, above a signature that does not cover it, and this file would have
+ *    gone on reporting success. Widening a rule when its subject moves is what
+ *    keeps it from quietly narrowing to nothing.
+ *
+ *    It also closes a line `constraint/render.ts`'s own header still carries:
+ *    that "the agent console shows what a prompt would authorise before
+ *    anything is signed" is a legitimate second use. It was, on a screen where
+ *    nothing was about to be signed. That screen no longer exists.
  * 2. **This module may not reach `formatAmount`.** It divides and hands the
  *    result to `Intl`, which is right for a price tag and disagrees with Go
  *    already: `1000.00 USD` against `$1,000.00`, and `1.89 JPY` against `¥189`.
@@ -74,8 +90,26 @@ const APP_SOURCES = [...SOURCES].filter(
   ([path]) => !/\.test\.tsx?$/.test(path) && !path.startsWith("test/"),
 );
 
-const CONSENT = "routes/consent/";
+/**
+ * The directories whose modules can render on the screen where a signature is
+ * collected.
+ *
+ * Two since #216, and both are load-bearing. `routes/consent/` is the Trusted
+ * Surface's own zone — the signed box itself. `routes/buying/` is the screen
+ * that zone appears inside, and the console that proposed to it: the console is
+ * unmounted while the surface asks, but it is the same route, the same file
+ * tree and one edit away from being on screen beside it.
+ *
+ * A prefix rather than a list of files, so a module added to either directory
+ * is governed on the day it arrives rather than on the day somebody remembers
+ * this list.
+ */
+const CONSENT_SCREEN: readonly string[] = ["routes/consent/", "routes/buying/"];
 const RENDERER = "constraint/";
+
+function onTheConsentScreen(path: string): boolean {
+  return CONSENT_SCREEN.some((directory) => path.startsWith(directory));
+}
 
 // --- the import graph ------------------------------------------------------
 
@@ -154,28 +188,40 @@ describe("the consent path renders nothing of its own", () => {
     expect(paths.length).toBeGreaterThan(10);
   });
 
-  it("has no path from a consent route to the renderer", () => {
-    const routes = APP_SOURCES.filter(([path]) => path.startsWith(CONSENT));
+  it("has no path from the Buying screen to the renderer", () => {
+    const routes = APP_SOURCES.filter(([path]) => onTheConsentScreen(path));
 
     // The loop below is a negative assertion over `routes`. An empty set makes
     // it pass without looking at anything, which is what it did while no
     // consent route existed — the fixtures below were the only thing keeping
     // the walker honest. Now that the routes are here, their absence is a
-    // failure rather than a vacuum: renaming the directory must break this
+    // failure rather than a vacuum: renaming either directory must break this
     // test rather than quietly disarm it.
+    //
+    // **One name from each prefix**, so a rename that emptied one of the two
+    // fails here rather than halving the governed set in silence. `Buying.tsx`
+    // is the screen, `Console.tsx` is the agent's half of it, and `Consent.tsx`
+    // is the surface's zone: the three files that are on the page around a
+    // signature.
     expect(
       routes.map(([path]) => path),
-      "the consent routes this rule governs; an empty set would make every assertion below vacuous",
-    ).toEqual(expect.arrayContaining(["routes/consent/Consent.tsx"]));
+      "the modules this rule governs; an empty set would make every assertion below vacuous",
+    ).toEqual(
+      expect.arrayContaining([
+        "routes/consent/Consent.tsx",
+        "routes/buying/Buying.tsx",
+        "routes/buying/Console.tsx",
+      ]),
+    );
 
     for (const [path] of routes) {
       const reached = [...reachedFrom(SOURCES, path)].filter((p) => p.startsWith(RENDERER));
       expect(
         reached,
-        `${path} reaches the constraint renderer. The consent screen must show the ` +
+        `${path} reaches the constraint renderer. The Buying screen must show the ` +
           `sentences the Trusted Surface's own Render produced, through ` +
-          `/authorise/preview — a second renderer here means the sentence the user ` +
-          `read is not the one their signature covers`,
+          `/authorise/preview — a second renderer anywhere on that screen means a ` +
+          `sentence the user read is not one their signature covers`,
       ).toEqual([]);
     }
   });

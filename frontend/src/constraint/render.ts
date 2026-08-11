@@ -8,19 +8,23 @@
  *
  * # Why a second renderer exists at all, and where it may not go
  *
- * Two screens render a constraint with no signature anywhere near them. The
- * Mandate Inspector decodes a mandate signed some time ago and shows what it
- * says, with no live Trusted Surface to ask. The agent console shows what a
- * prompt would authorise before anything is signed. Both are reading, and a
+ * One screen renders a constraint with no signature anywhere near it: the
+ * Mandate Inspector, which decodes a mandate signed some time ago and shows
+ * what it says, with no live Trusted Surface to ask. It is reading, and a
  * reader that had to round-trip through a role to put a sentence on the screen
- * would be reachable only while that role is up.
+ * would be reachable only while that role is up. `src/inspector/model.ts` is
+ * the one module in this package that imports this one.
  *
- * Neither screen is built yet — both routes are still Placeholder components,
- * and nothing in this package imports this module. That is stated rather than
- * left to be found: what is above is what the module is for, not a list of its
- * callers.
+ * **It used to be two, and #216 took the second away.** The sentence here read
+ * "the agent console shows what a prompt would authorise before anything is
+ * signed", which was true while the console was a route of its own and nothing
+ * on it was about to be signed. The console and the Trusted Surface's zone are
+ * two stages of one screen now, so a sentence rendered here would be one a
+ * person read on the way to a signature that does not cover it.
+ * `architecture.test.ts` beside this file is where that stopped being a matter
+ * of intent: it governs `routes/buying/` as well as `routes/consent/`.
  *
- * The consent screen is the opposite case and this module is forbidden there.
+ * The Buying screen is the opposite case and this module is forbidden there.
  * The surface exposes `/authorise/preview` precisely so that the sentences a
  * user reads come from its own `Render()` — the same code that will be inside
  * the thing they sign. A second renderer on that path would mean the sentence

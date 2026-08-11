@@ -1,20 +1,16 @@
-import { useId } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 
 import { cn } from "../lib/utils";
-import { hrefOf, SURFACE_GROUPS, type SurfaceGroup } from "../surfaces";
+import { hrefOf, SURFACES } from "../surfaces";
 import { ThemeToggle } from "../theme/ThemeToggle";
 
 /**
- * Shell is the frame every surface renders inside: a sidebar naming the project
- * and listing the surfaces under headings, and a main column the routed surface
- * fills.
+ * Shell is the frame every screen renders inside: a sidebar naming the project
+ * and listing the two screens, and a main column the routed screen fills.
  *
  * **It fetches nothing and holds no data of its own.** A shell with opinions
- * about a transaction would be one each surface had to work around, and that
- * sentence is the reason this file has no `useState` in it. What it does hold
- * is one `useId` per nav heading, so that the list under a heading can be
- * labelled by it.
+ * about a transaction would be one each screen had to work around, and that
+ * sentence is the reason this file has no `useState` in it.
  *
  * The theme is the exception worth naming rather than glossing, because the
  * toggle lives here and looks like state. It is not this component's: it
@@ -26,12 +22,20 @@ import { ThemeToggle } from "../theme/ThemeToggle";
  * The nav is built from the same list App builds its routes from, so a link
  * here cannot point at a route that does not exist.
  *
- * **No icons.** Four labelled surfaces under two headings are already
- * distinguishable by the thing a reader is actually reading, and the palette is
- * closed at seven colours with a type hierarchy that gives each face a job — a
- * set of four glyphs would be four more shapes nobody approved, carrying no
- * information the label does not. An icon set is also appearance by definition,
- * and appearance is the half of shadcn this project declined.
+ * **No headings over the list any more, because the headings became the
+ * screens.** *Buying* and *The protocol* used to be `<h2>`s with two links
+ * under each; #216 made each of them a screen, and a heading with exactly one
+ * item beneath it sorts nothing. What went with them is `useId` — there is no
+ * group to label a list by — and the list is now named by the `<nav>` itself.
+ *
+ * **No icons, and no line under either label.** Two labelled screens are
+ * already distinguishable by the thing a reader is actually reading, and the
+ * palette is closed at seven colours with a type hierarchy that gives each face
+ * a job — a pair of glyphs would be two more shapes nobody approved, carrying
+ * no information the label does not. An icon set is also appearance by
+ * definition, and appearance is the half of shadcn this project declined. Who
+ * each screen is *for* is a sentence, and it belongs on the screen a person
+ * lands on rather than in a sidebar they read once.
  */
 export function Shell() {
   return (
@@ -46,10 +50,29 @@ export function Shell() {
           </span>
         </div>
 
-        <nav className="flex flex-col gap-5">
-          {SURFACE_GROUPS.map((group) => (
-            <NavGroup key={group.group} group={group.group} surfaces={group.surfaces} />
-          ))}
+        <nav aria-label="Screens">
+          <ul className="flex flex-col gap-0.5">
+            {SURFACES.map((surface) => (
+              <li key={surface.path}>
+                <NavLink
+                  to={hrefOf(surface)}
+                  // Without this the index route stays highlighted everywhere,
+                  // because "/" is a prefix of every other path.
+                  end={surface.path === ""}
+                  className={({ isActive }) =>
+                    cn(
+                      "block rounded-sm px-2.5 py-1.5 font-sans text-sm no-underline transition-colors",
+                      isActive
+                        ? "bg-paper text-ink"
+                        : "text-graphite hover:bg-paper/60 hover:text-ink",
+                    )
+                  }
+                >
+                  {surface.label}
+                </NavLink>
+              </li>
+            ))}
+          </ul>
         </nav>
 
         {/*
@@ -90,48 +113,6 @@ export function Shell() {
       <main className="mx-auto w-full min-w-0 max-w-5xl flex-1 px-6 py-8">
         <Outlet />
       </main>
-    </div>
-  );
-}
-
-/**
- * One heading and the links under it.
- *
- * A component rather than an inline map so that `useId` can be called once per
- * group — hooks cannot be called in a loop — and the `<ul>` can be named by its
- * own heading rather than by a hand-built id that two groups could collide on.
- */
-function NavGroup({ group, surfaces }: SurfaceGroup) {
-  const heading = useId();
-
-  return (
-    <div>
-      <h2
-        id={heading}
-        className="mb-1.5 font-sans text-xs font-semibold tracking-wide text-graphite uppercase"
-      >
-        {group}
-      </h2>
-      <ul aria-labelledby={heading} className="flex flex-col gap-0.5">
-        {surfaces.map((surface) => (
-          <li key={surface.path}>
-            <NavLink
-              to={hrefOf(surface)}
-              // Without this the index route stays highlighted everywhere,
-              // because "/" is a prefix of every other path.
-              end={surface.path === ""}
-              className={({ isActive }) =>
-                cn(
-                  "block rounded-sm px-2.5 py-1.5 font-sans text-sm no-underline transition-colors",
-                  isActive ? "bg-paper text-ink" : "text-graphite hover:bg-paper/60 hover:text-ink",
-                )
-              }
-            >
-              {surface.label}
-            </NavLink>
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }

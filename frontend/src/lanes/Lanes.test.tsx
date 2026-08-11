@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import type { EventRecord, ProtocolEvent } from "../sse";
@@ -708,5 +709,97 @@ describe("a digest a reader wants to compare or copy", () => {
           "somebody looking at a digest wants to do with it",
       ).toBe(DIGEST);
     }
+  });
+});
+
+/**
+ * Issue #216: the Mandate Inspector stopped being a tab and became a panel an
+ * attempt opens.
+ *
+ * `Lanes` learns nothing about a console here — the panel arrives as a node and
+ * the screen above decides what is in it, which is the same split that already
+ * lets this file drive a transaction instead of a connection. What is asserted
+ * is the two things the split leaves this component responsible for: which
+ * attempt asked, and where the answer is drawn.
+ */
+describe("opening what each reader saw", () => {
+  /** The demo's own shape: one watch, two attempts at two checkouts. */
+  function twoAttempts() {
+    seq = 0;
+    return [
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+      record({ kind: "mandate_rejected", role: "mpp", digest: DIGEST, code: "constraint_violated" }),
+      record({ kind: "mandate_verified", role: "merchant", digest: OTHER }),
+      record({ kind: "mandate_verified", role: "mpp", digest: OTHER }),
+    ];
+  }
+
+  function showingWith(open: number | null, onToggle: (attempt: number) => void = () => {}) {
+    const [transaction] = group(twoAttempts());
+    return render(
+      <Lanes
+        transaction={transaction}
+        inspecting={{ open, onToggle, panel: <p data-testid="panel">what each reader saw</p> }}
+      />,
+    );
+  }
+
+  it("offers every attempt a control, and asks for the one that was clicked", async () => {
+    const asked: number[] = [];
+    showingWith(null, (attempt) => {
+      asked.push(attempt);
+    });
+
+    const controls = screen.getAllByRole("button", { name: /what each reader saw/i });
+    expect(
+      controls,
+      "one per attempt: a reader compares two attempts by opening each, and a " +
+        "single control at the foot of the screen would make them choose from a " +
+        "list instead of from what is in front of them",
+    ).toHaveLength(2);
+
+    await userEvent.click(controls[1]);
+    expect(
+      asked,
+      "counted from 1, the way the agent's console counts its own attempts",
+    ).toEqual([2]);
+  });
+
+  it("draws the panel beneath the attempt that opened it, and nowhere else", () => {
+    showingWith(2);
+
+    const panel = screen.getByTestId("panel");
+    const attempt = panel.closest("section");
+    expect(attempt, "the panel is inside an attempt rather than loose on the page").not.toBeNull();
+    expect(
+      within(attempt as HTMLElement).getByText("Attempt 2 of 2"),
+      "beneath the attempt whose steps it explains — the only place the digest " +
+        "it names can be checked against the spine head above it",
+    ).toBeTruthy();
+    expect(screen.getAllByTestId("panel"), "one panel, not one per attempt").toHaveLength(1);
+  });
+
+  it("draws no panel while none is open, and says so on the control", () => {
+    showingWith(null);
+
+    expect(screen.queryByTestId("panel")).toBeNull();
+    const controls = screen.getAllByRole("button", { name: /what each reader saw/i });
+    // `aria-expanded` rather than a mark: `src/status/` owns every `<svg>` in
+    // this application, and this is a control rather than a state anyway.
+    expect(controls.map((control) => control.getAttribute("aria-expanded"))).toEqual([
+      "false",
+      "false",
+    ]);
+  });
+
+  it("draws nothing new when no caller offers a panel", () => {
+    seq = 0;
+    const [transaction] = group(twoAttempts());
+    render(<Lanes transaction={transaction} />);
+
+    expect(
+      screen.queryByRole("button", { name: /what each reader saw/i }),
+      "the prop is optional, and a caller with nothing to open gets the screen as it was",
+    ).toBeNull();
   });
 });

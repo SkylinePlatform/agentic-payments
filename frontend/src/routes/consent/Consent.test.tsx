@@ -1,29 +1,23 @@
-import type { ReactNode } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Previewed, Proposal } from "../../consent/model";
 import { Consent } from "./Consent";
 
 /**
- * Records every `navigate(to, options)` call without touching routing.
+ * Records every `navigate(to)` call without touching routing.
  *
- * The same seam `Console.test.tsx` draws, for the same reason: `vi.hoisted`
- * because the array has to exist before `vi.mock`'s factory closes over it,
- * and `vi.mock` calls are hoisted above every import in this file.
+ * The seam `Console.test.tsx` used to draw, kept here because `Signing` — which
+ * one test below mounts through a click on *Sign* — is still what ends a
+ * purchase by navigating to `/protocol?run=`. `vi.hoisted`, because the array
+ * has to exist before `vi.mock`'s factory closes over it and `vi.mock` is
+ * hoisted above every import in this file.
  */
 const { navigations } = vi.hoisted(() => ({
   navigations: [] as { to: string; state?: unknown }[],
 }));
 
-/**
- * Only `useNavigate` is replaced. `MemoryRouter` and `useLocation` come from
- * the real package, which is what lets `renderConsent` below hand a proposal
- * to `Consent` the same way `Console` does — through router state, on a real
- * `MemoryRouter` rather than a second fake.
- */
 vi.mock("react-router-dom", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react-router-dom")>();
   return {
@@ -34,16 +28,29 @@ vi.mock("react-router-dom", async (importOriginal) => {
   };
 });
 
-/** Mounts `Consent` with `proposal` as the router state `useLocation` reads. */
-function renderConsent(proposal: Proposal | undefined) {
-  function Router({ children }: { children: ReactNode }) {
-    return (
-      <MemoryRouter initialEntries={[{ pathname: "/consent", state: proposal }]}>
-        {children}
-      </MemoryRouter>
-    );
-  }
-  return render(<Consent />, { wrapper: Router });
+/**
+ * What this zone handed back when the person refused: one entry per call, each
+ * being `recorded`.
+ *
+ * **This is the whole of what a refusal does now**, and #216 is why it is a
+ * callback rather than a `navigate` to `/`: the console and the surface are two
+ * stages of one screen, so `Buying` takes this zone off the screen and puts the
+ * acknowledgement up. The two facts that used to travel in router state are one
+ * boolean and a prompt `Buying` already holds — see `Consent`'s own comment on
+ * why the prompt stopped being copied.
+ */
+const refusals: boolean[] = [];
+
+/** Mounts the consent zone with a proposal, the way `Buying` does. */
+function renderConsent(proposal: Proposal) {
+  return render(
+    <Consent
+      proposal={proposal}
+      onRefused={(recorded) => {
+        refusals.push(recorded);
+      }}
+    />,
+  );
 }
 
 /**
@@ -118,6 +125,7 @@ function aPreview(): Previewed {
 
 beforeEach(() => {
   navigations.length = 0;
+  refusals.length = 0;
 });
 
 afterEach(() => {
@@ -313,9 +321,10 @@ describe("the consent screen", () => {
     await userEvent.click(await screen.findByRole("button", { name: /refuse/i }));
 
     await waitFor(() =>
-      expect(navigations).toEqual([
-        { to: "/", state: { refused: true, recorded: true, prompt: aProposal().prompt } },
-      ]),
+      expect(
+        refusals,
+        "recorded, and the zone hands the decision back rather than navigating",
+      ).toEqual([true]),
     );
     expect(calls.map((c) => c.url)).not.toContain("/authorise");
   });
@@ -338,9 +347,7 @@ describe("the consent screen", () => {
     await userEvent.click(await screen.findByRole("button", { name: /refuse/i }));
 
     await waitFor(() =>
-      expect(navigations).toEqual([
-        { to: "/", state: { refused: true, recorded: false, prompt: aProposal().prompt } },
-      ]),
+      expect(refusals, "the `no` holds; only the record of it did not").toEqual([false]),
     );
   });
 
@@ -381,13 +388,6 @@ describe("the consent screen", () => {
     expect(screen.queryByTestId("signed-box")).toBeTruthy();
 
     resolveRefuse(new Response(JSON.stringify({ constraints_digest: "d" }), { status: 200 }));
-    await waitFor(() => expect(navigations).toHaveLength(1));
-  });
-
-  it("rests when there is no proposal to approve", () => {
-    renderConsent(undefined);
-    // A reload loses router state, and that is correct: it means nothing was
-    // signed and the proposal no longer exists.
-    expect(screen.getByText(/nothing is waiting for approval/i)).toBeTruthy();
+    await waitFor(() => expect(refusals).toHaveLength(1));
   });
 });

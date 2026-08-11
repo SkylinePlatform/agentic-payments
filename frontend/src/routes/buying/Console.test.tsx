@@ -1,54 +1,43 @@
-import type { ReactNode } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Proposal } from "../consent/model";
+import type { Proposal } from "../../consent/model";
 import { Console } from "./Console";
+import type { Refusal } from "./Console";
 
 /**
- * Records every `navigate(to, options)` call without touching routing.
+ * Every proposal the console handed on, in order.
  *
- * `vi.hoisted` rather than a bare module-level `let`: the array has to exist
- * before `vi.mock`'s factory below closes over it, and `vi.mock` calls are
- * hoisted above every import in this file — a plain `const` here would be read
- * before its own initialiser ran.
+ * An array rather than a navigation spy, and that is #216 rather than a
+ * simplification: this component does not navigate anywhere any more. The
+ * console and the Trusted Surface are two stages of one screen — `Buying`
+ * holds which of them is showing — so the whole of what the console does at the
+ * end of its part is call `onBuy` with the proposal the chosen quantity was
+ * signed into. No router is involved, and this file no longer mounts one.
+ *
+ * The negative assertions below are what it is really for. *Nothing was handed
+ * on* is the claim that matters when the agent is full or when a proposal has
+ * only been fetched, and that claim used to be `navigations` staying empty.
  */
-const { navigations } = vi.hoisted(() => ({
-  navigations: [] as { to: string; state?: unknown }[],
-}));
+const bought: Proposal[] = [];
 
 /**
- * Only `useNavigate` is replaced. `MemoryRouter` and everything else this
- * screen might reach for come from the real package, so `Router` below is a
- * router a component can actually mount inside.
+ * Mounts the console the way `Buying` does.
+ *
+ * `refusal` is what `Buying` hands back when a person refused on the surface —
+ * a prop, where it used to be router state on the entry the `navigate` from
+ * `/consent` created.
  */
-vi.mock("react-router-dom", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react-router-dom")>();
-  return {
-    ...actual,
-    useNavigate: () => (to: string, options?: { state?: unknown }) => {
-      navigations.push({ to, state: options?.state });
-    },
-  };
-});
-
-/** The wrapper every test needs: a component under test that calls `useNavigate` still needs a router to mount inside. */
-function Router({ children }: { children: ReactNode }) {
-  return <MemoryRouter>{children}</MemoryRouter>;
-}
-
-/**
- * Mounts `Console` the way a browser landing back from `/consent` would: with
- * router state already on the entry, the same shape `Consent.test.tsx`'s
- * `renderConsent` uses for the trip the other way.
- */
-function renderConsoleAt(state: unknown) {
-  function RouterWithState({ children }: { children: ReactNode }) {
-    return <MemoryRouter initialEntries={[{ pathname: "/", state }]}>{children}</MemoryRouter>;
-  }
-  return render(<Console />, { wrapper: RouterWithState });
+function renderConsole(refusal: Refusal | null = null) {
+  return render(
+    <Console
+      refusal={refusal}
+      onBuy={(proposal) => {
+        bought.push(proposal);
+      }}
+    />,
+  );
 }
 
 /**
@@ -109,7 +98,7 @@ function aProposal(): Proposal {
 }
 
 beforeEach(() => {
-  navigations.length = 0;
+  bought.length = 0;
 });
 
 afterEach(() => {
@@ -119,7 +108,7 @@ afterEach(() => {
 describe("the shopping console", () => {
   it("offers the sentences the agent is scripted for, before anybody is refused", async () => {
     stubFetch({ "/examples": { examples: ["buy a flight to Palma under $200, this summer"] } });
-    render(<Console />, { wrapper: Router });
+    renderConsole();
 
     expect(await screen.findByText(/buy a flight to Palma under \$200, this summer/)).toBeTruthy();
     // Said before the box is touched, not learned from a 422 afterwards.
@@ -131,7 +120,7 @@ describe("the shopping console", () => {
     // admissible, so there is no menu and inventing one would offer sentences
     // nothing is scripted for.
     stubFetch({ "/examples": { examples: [] } });
-    render(<Console />, { wrapper: Router });
+    renderConsole();
 
     await waitFor(() => expect(screen.queryByTestId("examples")).toBeNull());
     expect(await screen.findByText(/reads free text/i)).toBeTruthy();
@@ -147,7 +136,7 @@ describe("the shopping console", () => {
         ? new Promise(() => {})
         : Promise.resolve(new Response(JSON.stringify({ watches: [] }))),
     );
-    render(<Console />, { wrapper: Router });
+    renderConsole();
 
     await screen.findByRole("textbox");
     expect(
@@ -165,7 +154,7 @@ describe("the shopping console", () => {
       "/examples": { status: 500, body: "the agent is not up" },
       "/proposals": { status: 422, body: 'interpret: no script for this prompt: "buy a boat"' },
     });
-    render(<Console />, { wrapper: Router });
+    renderConsole();
 
     // Driving a whole interpretation is what makes this deterministic: by the
     // time the agent's own refusal is on screen, the failed /examples has long
@@ -185,7 +174,7 @@ describe("the shopping console", () => {
       "/examples": { examples: [] },
       "/proposals": { status: 422, body: 'interpret: no script for this prompt: "buy a boat"' },
     });
-    render(<Console />, { wrapper: Router });
+    renderConsole();
 
     const box = screen.getByRole("textbox");
     await userEvent.type(box, "buy a boat");
@@ -202,29 +191,29 @@ describe("the shopping console", () => {
       "/examples": { examples: [] },
       "/proposals": { body: { ...aProposal(), watch_slots_free: 0 } },
     });
-    render(<Console />, { wrapper: Router });
+    renderConsole();
 
     await userEvent.type(screen.getByRole("textbox"), "find and buy telescopic ladders, cheapest");
     await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
 
     expect(await screen.findByText(/already watching as many/i)).toBeTruthy();
-    expect(navigations).toEqual([]);
+    expect(bought, "the surface is never asked for a signature nothing could spend").toEqual([]);
   });
 
   it("shows the product table instead of navigating straight away — #109 replaces the immediate hand-off", async () => {
     stubFetch({ "/examples": { examples: [] }, "/proposals": { body: aProposal() } });
-    render(<Console />, { wrapper: Router });
+    renderConsole();
 
     await userEvent.type(screen.getByRole("textbox"), "find and buy telescopic ladders, cheapest");
     await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
 
     expect(await screen.findByText("Telescopic ladder")).toBeTruthy();
-    expect(navigations, "nothing is signed by fetching a proposal — only a row's own Buy does that").toEqual([]);
+    expect(bought, "nothing is signed by fetching a proposal — only a row's own Buy does that").toEqual([]);
   });
 
-  it("carries the proposal to the consent screen only once a row is bought, with the chosen quantity signed as a constraint", async () => {
+  it("hands the proposal to the Trusted Surface only once a row is bought, with the chosen quantity signed as a constraint", async () => {
     stubFetch({ "/examples": { examples: [] }, "/proposals": { body: aProposal() } });
-    render(<Console />, { wrapper: Router });
+    renderConsole();
 
     await userEvent.type(screen.getByRole("textbox"), "find and buy telescopic ladders, cheapest");
     await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
@@ -235,9 +224,8 @@ describe("the shopping console", () => {
     await userEvent.type(quantityBox, "2");
     await userEvent.click(screen.getByRole("button", { name: /^buy$/i }));
 
-    await waitFor(() => expect(navigations).toHaveLength(1));
-    expect(navigations[0].to).toBe("/consent");
-    const sent = navigations[0].state as Proposal;
+    await waitFor(() => expect(bought).toHaveLength(1));
+    const sent = bought[0];
     expect(sent.quantity, "the count typed into the row, not the default").toBe(2);
     expect(sent.constraints).toEqual([
       ...aProposal().constraints,
@@ -247,7 +235,7 @@ describe("the shopping console", () => {
 
   it("acknowledges a recorded refusal and carries the prompt back into the box", async () => {
     stubFetch({ "/examples": { examples: [] } });
-    renderConsoleAt({ refused: true, recorded: true, prompt: "buy a boat" });
+    renderConsole({ recorded: true, prompt: "buy a boat" });
 
     expect(await screen.findByText(/your refusal was recorded/i)).toBeTruthy();
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("buy a boat");
@@ -268,7 +256,7 @@ describe("the shopping console", () => {
     // acknowledgement and into some other box, which is exactly the failure
     // mode this screen's own review has flagged before.
     stubFetch({ "/examples": { examples: [] } });
-    renderConsoleAt({ refused: true, recorded: false, prompt: "buy a boat" });
+    renderConsole({ recorded: false, prompt: "buy a boat" });
 
     const acknowledgement = await screen.findByTestId("refusal-acknowledgement");
     expect(
@@ -281,7 +269,7 @@ describe("the shopping console", () => {
 
   it("shows no acknowledgement on a fresh visit", async () => {
     stubFetch({ "/examples": { examples: [] } });
-    render(<Console />, { wrapper: Router });
+    renderConsole();
 
     await screen.findByRole("textbox");
     expect(screen.queryByTestId("refusal-acknowledgement")).toBeNull();

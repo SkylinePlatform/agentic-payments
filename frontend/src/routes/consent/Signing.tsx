@@ -97,11 +97,14 @@ type State =
 const REFUSED_BEFORE_SIGNING = "request_malformed";
 
 /**
- * The signing screen — Task 10, #22's last slice.
+ * The signing step of the Trusted Surface's zone — Task 10, #22's last slice,
+ * and since #216 the last stage of the Buying screen rather than a screen of
+ * its own. It renders inside the same frame `Buying` draws around `Consent`, so
+ * the party collecting the signature is still visibly the one that signs.
  *
  * **The signed box's enclosure is the decision axis's only carrier, #193.**
  * `Consent.tsx` draws the same box as a plain outline in every state, and that
- * is already right — nothing is ever signed on `/consent`. This is the screen
+ * is already right — nothing is ever signed in that zone. This is the step
  * where the box has a transition to make: an outline while nothing is signed,
  * filled `wash` with an `ink` border once `POST /authorise` has answered. See
  * `isSigned` below for why heading and enclosure are computed from the one
@@ -217,7 +220,7 @@ export function Signing({
       // model.ts. startWatch no longer takes a quantity of its own to fall
       // back to; there is no caller-supplied number left to prefer over it.
       const { correlation_id } = await startWatch(proposal, authorised);
-      navigate(`/lanes?run=${correlation_id}`);
+      navigate(`/protocol?run=${correlation_id}`);
     } catch {
       setState({ kind: "stranded", authorised });
     }
@@ -355,16 +358,16 @@ export function Signing({
 
   return (
     <section className="flex flex-col gap-8">
-      <h1 className="font-display text-3xl tracking-tight text-ink">Signing</h1>
+      <h2 className="font-display text-xl tracking-tight text-ink">Signing</h2>
 
       <section
         className={"flex flex-col gap-2 px-4 py-3 " + enclosure}
         data-testid="signed-box"
         aria-labelledby="signed"
       >
-        <h2 id="signed" className="font-sans text-sm text-graphite">
+        <h3 id="signed" className="font-sans text-sm text-graphite">
           {signedHeading}
-        </h2>
+        </h3>
         {previewed.rendered.map((sentence, index) => (
           <p key={index} className="font-sans text-ink">
             {sentence}
@@ -386,9 +389,9 @@ export function Signing({
         is to read while `POST /watches` is in flight.
       */}
       <section className="flex flex-col gap-1" data-testid="when" aria-labelledby="when">
-        <h2 id="when" className="font-sans text-sm text-graphite">
+        <h3 id="when" className="font-sans text-sm text-graphite">
           When the agent will buy
-        </h2>
+        </h3>
         <p className="font-sans text-ink">{whenItBuys(proposal.trigger).sentence}</p>
         <p className="font-sans text-sm text-graphite">
           Not part of your signature. Whenever the agent buys, it is still held to the limits above.
@@ -396,9 +399,9 @@ export function Signing({
       </section>
 
       <section className="flex flex-col gap-1" data-testid="basket" aria-labelledby="basket">
-        <h2 id="basket" className="font-sans text-sm text-graphite">
+        <h3 id="basket" className="font-sans text-sm text-graphite">
           How many the agent will buy
-        </h2>
+        </h3>
         <p className="font-sans text-ink">Quantity {proposal.quantity}</p>
         <p className="font-sans text-sm text-graphite">
           Not part of your signature. Whatever the agent puts in the basket is still held to the
@@ -503,9 +506,9 @@ export function Signing({
         // knows a signature exists rather than suspecting it, which is why the
         // expiry is stated here and nowhere else.
         <section role="alert" className="flex flex-col gap-3" aria-labelledby="stranded">
-          <h2 id="stranded" className="font-sans text-lg text-broken">
+          <h3 id="stranded" className="font-sans text-lg text-broken">
             Signed, and the watch did not start
-          </h2>
+          </h3>
           <p className="font-sans text-graphite">
             The signature exists. Two open mandates carry the key you approved, and the agent never
             received them. There is no way to revoke a mandate in this model, so this is the whole

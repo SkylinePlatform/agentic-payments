@@ -1,19 +1,29 @@
 # Frontend
 
-React + Vite + TypeScript. The app shell: a sidebar, a theme toggle and four
-routed surfaces, each of which is somebody else's issue to fill in.
+React + Vite + TypeScript. The app shell: a sidebar, a theme toggle and **two**
+routed screens, paired by who each one is for.
 
-| Surface | Route | Sidebar heading | Owned by |
+| Screen | Route | Holds | Serves |
 |---|---|---|---|
-| Shopping console — what was asked for, what is for sale, where each mandate stands | `/` | Buying | #109 |
-| Trusted Surface — the consent screen | `/consent` | Buying | #22 |
-| Three lanes — User, Agent, Merchant, with the event log between them | `/lanes` | The protocol | #20 |
-| Mandate Inspector — what each party saw, and what was withheld | `/inspector` | The protocol | #21 |
+| Buying | `/` | the shopping console (#109), then the Trusted Surface's consent zone (#22) | a person making a purchase |
+| The protocol | `/protocol` | the three lanes and the event log (#20), and the Mandate Inspector opened from an attempt (#21) | a person asking what just happened |
 
-The console is the index route because it is where a buyer starts; everything
-else either follows from something bought there or explains it. The two headings
-are the difference between a surface a person *uses* and one that explains what
-using it produced.
+Two rather than four, which is #216. The four used to be separate routes under
+two sidebar headings that already said this, and following one purchase meant
+visiting all four in order and losing your place at each one. Each heading is a
+screen now.
+
+**Buying is sequential, and that is the trust boundary rather than a layout
+choice.** The console proposes; then it is unmounted and the Trusted Surface's
+zone appears in its place, inside a frame naming it as a different party. Two
+live panels side by side is exactly the arrangement in which a person cannot
+tell which of them is asking for a signature, and a Trusted Surface exists
+precisely so that the party collecting one is not the party that assembled the
+basket.
+
+**The protocol screen keeps a place.** `/protocol?run=<correlation id>` is where
+signing lands, and the screen honours it — a run the stream has not delivered
+yet is named and waited for rather than silently replaced by the newest one.
 
 This package is the frame, not the pictures. It gives each surface a route, a
 layout, the design system and the generated protocol types, and fetches nothing
@@ -27,8 +37,8 @@ the shell never does.
 It does hold two things, and both are the document's rather than any surface's:
 the *theme*, which is an attribute on `<html>` set before React exists — see
 [The theme](#the-theme) — and opinions about *colour and type*, which are
-[The design system](#the-design-system). Four surfaces sharing a palette that a
-deck's worth of screenshots have to look like one product in is not something
+[The design system](#the-design-system). Two screens sharing a palette that a
+deck’s worth of screenshots have to look like one product in is not something
 each of them can decide separately.
 
 ## Running it
