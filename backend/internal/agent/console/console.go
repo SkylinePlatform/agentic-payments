@@ -163,17 +163,16 @@ type Watching struct {
 	// agent.Intent.Item for why naming one skips the search and nothing else.
 	Item string
 
-	// Quantity is a fallback, used only when Authorisation carries none. Zero
-	// means one.
+	// Quantity is a fallback, used only when the sentence named no count of
+	// its own. Zero means one.
 	//
-	// It is not the number this watch buys when there is an authorisation to
-	// read one off — see Start. A signed Authorisation's own Quantity is the
-	// basket size a person actually read on a consent screen, or the one
-	// interpret.Interpretation proposed for a caller that asked this console
-	// to authorise on its own; either is what was actually approved, and this
-	// field is an operator's unaudited number by comparison. What it still
-	// covers honestly is a caller on an older wire shape whose Authorisation
-	// carries no Quantity of its own.
+	// It is not the number this watch buys when there is one to read off the
+	// authorisation — see Start. A basket size the interpretation proposed is
+	// the count the user actually said out loud, and on the browser's path it
+	// is also the number the consent screen displayed; this field is a
+	// caller's own by comparison, and loses to both. What it still covers, and
+	// covers on every scripted sentence but the concert, is the ordinary case
+	// where nobody said a count and somebody has to pick one.
 	Quantity int
 
 	// Authorisation, when set, is what the user already signed, and Start uses
@@ -297,10 +296,10 @@ func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 	}
 
 	// auth.Quantity first, and only then in.Quantity — see Watching.Quantity
-	// for why the order matters: the authorisation's own number is what a
-	// person actually read and approved, or what the interpretation proposed
-	// on a caller's behalf, and in.Quantity is an operator's unaudited number
-	// by comparison. Issue #133 is what happens when the second one wins.
+	// for why the order matters: the authorisation's own number is one the
+	// sentence named, and in.Quantity is a caller's own by comparison. Issue
+	// #133 is what happens when the second one wins. Both fall through to one
+	// when neither named anything, which is the ordinary case.
 	quantity := auth.Quantity
 	if quantity < 1 {
 		quantity = in.Quantity
@@ -512,6 +511,15 @@ func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Zero means one, resolved at this edge and nowhere earlier — see
+	// proposed.Quantity and agent.Proposal.Quantity. The caller on the other
+	// side of this response is a browser, which has no number of its own to
+	// fall back to and will send this one straight back on POST /watches.
+	quantity := proposal.Quantity
+	if quantity < 1 {
+		quantity = 1
+	}
+
 	roles.OK(w, http.StatusOK, proposed{
 		Prompt:         req.Prompt,
 		Constraints:    proposal.Constraints,
@@ -519,6 +527,7 @@ func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
 		Item:           proposal.Item,
 		Offer:          proposal.Offer,
 		Offers:         proposal.Offers,
+		Quantity:       quantity,
 		WatchSlotsFree: s.free(),
 	})
 }

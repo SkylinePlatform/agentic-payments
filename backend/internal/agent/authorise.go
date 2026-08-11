@@ -230,16 +230,24 @@ type Authorisation struct {
 	Instrument generated.PaymentInstrument `json:"payment_instrument"`
 
 	// Quantity is the basket size the interpretation proposed: how many of
-	// Item the watch is to buy. Zero means one, on Interpretation.Quantity's
-	// own convention.
+	// Item the watch is to buy. Zero carries Proposal.Quantity's meaning —
+	// the sentence named no count — and leaves the number to whoever holds
+	// one.
 	//
 	// This is issue #133's field, and the reason it exists here rather than
 	// being read off Constraints is Interpretation's own: "how many to buy" is
 	// not a fact a verifier evaluates, so it is not a constraint, and reading
 	// a quantity bound as an instruction would be this package deciding what
-	// the user meant from a limit they set. The Trusted Surface renders it
-	// before anybody signs — see Propose and console/agent.go's Watch — so
-	// what the watch spends is the number the user actually read.
+	// the user meant from a limit they set.
+	//
+	// **Nothing signs it, and this is the field to be careful about for that
+	// reason.** The Trusted Surface never sees a basket size: it signs the
+	// constraints, and `quantity lte 2` — a limit a verifier does check — is
+	// the only thing about a count that a mandate carries. So this number is
+	// the agent's stated intent, bounded by what was signed rather than part
+	// of it, and a screen that shows it has to say which of the two it is.
+	// frontend/src/routes/consent/Consent.tsx puts it outside the signed box
+	// on exactly that ground.
 	Quantity int `json:"quantity"`
 }
 
@@ -311,12 +319,24 @@ type Proposal struct {
 	Constraints []generated.Constraint
 	AgentKey    generated.PublicKey
 
-	// Quantity is how many of Item the interpretation proposes to buy, always
-	// one or more — see Propose for where the "zero means one" normalisation
-	// happens. A consent screen renders it beside the constraints so a person
-	// approves the basket size along with the limits, on issue #133's own
-	// argument: a quantity the user did not see is a quantity they did not
-	// approve.
+	// Quantity is how many of Item the interpretation proposed to buy, and
+	// **zero means the sentence named no count at all** — not "one".
+	//
+	// The distinction is the whole of what this field is for, and collapsing it
+	// here is how it gets lost. Four of the five scripted sentences say nothing
+	// about how many, and for those the interpreter has no opinion to offer; a
+	// caller that has one — cmd/agent's -quantity, POST /watches's own quantity
+	// — is then the next place to look, which is the precedence
+	// console.Service.Start and cmd/agent's watchOnce both write down. Resolve
+	// the zero any earlier and that precedence can never fire: every
+	// authorisation arrives naming a number, an operator's own is silently
+	// discarded, and a flag documented as a fallback has no path that reaches
+	// it.
+	//
+	// The one caller with nothing to fall back to is a browser, and
+	// console.Service.propose is where the zero becomes a one for it — at the
+	// wire, once, because a consent screen has to display the number that will
+	// actually be spent. Issue #133.
 	Quantity int
 }
 
@@ -401,22 +421,17 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 		return out, err
 	}
 
-	// Zero means one, on Interpretation.Quantity's convention — normalised
-	// here rather than left for every caller downstream to remember, so the
-	// wire and the watch see a concrete number rather than an absence that
-	// happens to render as 1.
-	quantity := interpretation.Quantity
-	if quantity < 1 {
-		quantity = 1
-	}
-
 	return Proposal{
 		Item:        item,
 		Offer:       offer,
 		Offers:      offers,
 		Constraints: narrow(interpretation.Constraints, item),
 		AgentKey:    in.AgentKey,
-		Quantity:    quantity,
+		// Carried exactly as the interpreter answered it, zero included: a
+		// sentence that named no count has to still look like one here, or
+		// every caller holding a number of its own loses it. See
+		// Proposal.Quantity.
+		Quantity: interpretation.Quantity,
 	}, nil
 }
 
@@ -510,11 +525,12 @@ func (c *Client) sign(ctx context.Context, prompt string, proposal Proposal) (Au
 		Instrument:          answer.PaymentInstrument,
 		// The proposal's own, not asked of the surface: the Trusted Surface
 		// signs constraints, and a basket size is deliberately not one — see
-		// Authorisation.Quantity. What the user approved on a consent screen
-		// is proposal.Quantity, rendered from the same Proposal this function
-		// was handed, so this is that number surviving the signing step
-		// unchanged rather than being re-derived from anything the surface
-		// said.
+		// Authorisation.Quantity. So this is the number the interpretation
+		// proposed surviving the signing step unchanged, zero included, rather
+		// than being re-derived from anything the surface said. This path has
+		// no consent screen on it at all — the browser collects its own
+		// signature and posts the result to POST /watches — which is another
+		// way of saying that nothing here has been read by a person.
 		Quantity: proposal.Quantity,
 	}, nil
 }

@@ -137,13 +137,15 @@ func run() error {
 	// package's whole character.
 	prompt := flag.String("prompt", "buy a flight to Palma when it drops below $200, this summer",
 		"what the user typed, for the interpreter to read")
-	// A fallback rather than the source: the interpretation proposes a basket
-	// size of its own — 2 for the concert prompt, 1 for the other four — and
-	// that is what watchOnce and serveConsole actually buy once an
-	// authorisation exists. This is what covers the gap before one does, and
-	// what an authorisation that somehow named no quantity of its own would
-	// fall back to. See agent.Authorisation.Quantity and issue #133.
-	quantity := flag.Int("quantity", 1, "how many of the item to buy, when the authorisation names no basket size of its own")
+	// A fallback rather than the source, and it still has a path that reaches
+	// it. The interpretation proposes a basket size only when the sentence
+	// named one — 2 for the concert prompt, and nothing at all for the other
+	// four — so this is what those four are bought by, and `-quantity 3` on
+	// the bicycle prompt still buys three. What it can no longer do is
+	// override a count the user actually said out loud, which is the whole of
+	// issue #133. See agent.Proposal.Quantity for why the interpreter's
+	// silence stays a silence all the way here.
+	quantity := flag.Int("quantity", 1, "how many of the item to buy, when the sentence named no count of its own")
 	poll := flag.Duration("poll", agent.DefaultPoll, "how often the watch re-quotes the merchant")
 
 	// The four identifiers are each verifier's own, as it sets Audience on its
@@ -568,11 +570,10 @@ func watchOnce(
 	}
 
 	// authorised.Quantity first — the basket size the interpretation proposed
-	// — and cfg.quantity only when that named none. See -quantity's own flag
-	// text and agent.Authorisation.Quantity: Client.Authorise always reaches
-	// Propose, which normalises to at least one, so this fallback covers no
-	// path through this function today and is here for the same reason the
-	// flag itself still is — an authorisation built some other way.
+	// — and cfg.quantity only when the sentence named none, which is four of
+	// the five scripted prompts. See -quantity's own flag text and
+	// agent.Proposal.Quantity: what makes this fallback reachable is that a
+	// silence stays a zero all the way from the interpreter to here.
 	quantity := authorised.Quantity
 	if quantity < 1 {
 		quantity = cfg.quantity

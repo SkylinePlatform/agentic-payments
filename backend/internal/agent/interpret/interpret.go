@@ -41,17 +41,21 @@ type IntentInterpreter interface {
 // which the registry closes on exactly that criterion.
 //
 // Quantity is that second fact, carried beside the constraints rather than
-// folded into one of them. Zero means one, on the convention every other
-// quantity in this repository already uses — Watch.Quantity and
-// console.Watching.Quantity both read the same way — so a sentence naming no
-// count, which is every scripted prompt but the concert, needs nothing written
-// down to mean the ordinary case.
+// folded into one of them. Zero is the sentence naming no count at all, which
+// is every scripted prompt but the concert — read as one wherever a concrete
+// number is finally needed, on the convention Watch.Quantity and
+// console.Watching.Quantity already state, but **not resolved here and not by
+// anything between here and them**. An interpreter that answered 1 for silence
+// would be indistinguishable from one reading "one ticket" out of the
+// sentence, and every caller holding a count of its own — cmd/agent's
+// -quantity, POST /watches's own field — would lose to a number nobody said.
+// agent.Proposal.Quantity carries the same distinction one hop further on.
 type Interpretation struct {
 	// Constraints are the limits a verifier will enforce.
 	Constraints []generated.Constraint
 
-	// Quantity is how many of the item the sentence asked for. Zero means
-	// one: the ordinary case, where nothing in the sentence names a count.
+	// Quantity is how many of the item the sentence asked for, and zero is
+	// the ordinary case: nothing in the sentence named a count.
 	Quantity int
 }
 

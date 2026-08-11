@@ -179,11 +179,12 @@ func TestTheConcertPromptsBasketSizeIsTwo(t *testing.T) {
 		"the sentence asked for two tickets, and quantity lte 2 alone cannot tell that from one")
 }
 
-// TestASentenceNamingNoCountHasABasketSizeOfOne is the other four scenarios,
+// TestASentenceNamingNoCountProposesNoBasketSize is the other four scenarios,
 // walked rather than named one by one — the flight, the bicycle and the
-// ladders are all single-unit purchases, and Zero means one is the convention
-// that lets their scripts say nothing about it.
-func TestASentenceNamingNoCountHasABasketSizeOfOne(t *testing.T) {
+// ladders are all single-unit purchases, and the zero is what says the
+// sentence chose nothing rather than that it chose one. Interpretation.Quantity
+// records why the difference has to survive this far.
+func TestASentenceNamingNoCountProposesNoBasketSize(t *testing.T) {
 	t.Parallel()
 
 	for _, script := range interpret.Scenarios() {
@@ -196,7 +197,7 @@ func TestASentenceNamingNoCountHasABasketSizeOfOne(t *testing.T) {
 			interpretation, err := interpret.Demo().Interpret(t.Context(), script.Prompt)
 			require.NoError(t, err, "a scenario this package publishes is not in its own script")
 			assert.Zero(t, interpretation.Quantity,
-				"nothing in this sentence names a count, so the basket size has to be the ordinary default")
+				"nothing in this sentence names a count, and answering one anyway would outrank every caller that has a number of its own")
 		})
 	}
 }

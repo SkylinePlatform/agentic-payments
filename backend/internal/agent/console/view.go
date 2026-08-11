@@ -61,6 +61,22 @@ type proposed struct {
 	// decision is identifying's, made once, in internal/agent.
 	Offers []agent.Offer `json:"offers"`
 
+	// Quantity is how many of Item the interpretation proposes to buy, always
+	// one or more.
+	//
+	// **Resolved here rather than left as agent.Proposal's own number**, which
+	// is zero for the four scripted sentences that name no count. A browser has
+	// no fallback to apply — it holds no operator's flag and no request of its
+	// own to fall back to — and the number it is shown is the number it sends
+	// back on POST /watches, so an absence answered here would be a consent
+	// screen displaying a count nobody chose. See Service.propose.
+	//
+	// Issue #133: the field existed on agent.Proposal for a release without
+	// existing on this response, so the consent screen read `undefined` and the
+	// two-ticket prompt still bought one through the browser — the exact defect
+	// #133 is about, one hop further along than where it was fixed.
+	Quantity int `json:"quantity"`
+
 	// WatchSlotsFree is how many more watches this console will hold.
 	//
 	// **Not a reservation.** Nothing is held and nothing expires; it is a fact

@@ -86,6 +86,57 @@ func TestProposeDoesNotCallTheSurface(t *testing.T) {
 		"the ladders are what that sentence narrows to in the demo catalogue")
 }
 
+// TestTheProposalKeepsTheDifferenceBetweenTwoAndNoAnswer is the half of issue
+// #133 that is easy to close by accident.
+//
+// Both rows go through the same call. The concert sentence names a count and
+// that number has to arrive, because a `quantity lte 2` bound cannot be read
+// as an instruction — that is the defect #133 is about. The ladders name none,
+// and answering 1 for them would be just as wrong in the other direction: it
+// looks harmless, it renders identically, and it makes every caller holding a
+// number of its own — cmd/agent's -quantity, POST /watches's own field —
+// unreachable, because an authorisation that always names a count can never
+// fall through to one. The zero is what keeps "nobody said" and "somebody said
+// one" different facts.
+func TestTheProposalKeepsTheDifferenceBetweenTwoAndNoAnswer(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		prompt string
+		want   int
+		why    string
+	}{
+		{
+			name: "the sentence named a count", prompt: concertPrompt, want: 2,
+			why: "two tickets is what was typed, and quantity lte 2 alone cannot tell that from one",
+		},
+		{
+			name: "the sentence named none", prompt: "find and buy telescopic ladders, cheapest", want: 0,
+			why: "the interpreter had no opinion, and a proposal that invented one would silently outrank every caller that does",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newWorld(t)
+			w.endpoints.Surface = unreachableSurface(t)
+
+			key := newParty(t, "agent", w.clock)
+			agentKey, err := roles.PublicKey(t.Context(), key.keys)
+			require.NoError(t, err, "reading the key the open mandates will endorse")
+
+			got, err := w.client().Propose(t.Context(), agent.Intent{
+				Prompt:      tc.prompt,
+				Interpreter: interpret.Demo(),
+				AgentKey:    agentKey,
+			})
+			require.NoError(t, err, "a scripted sentence has to produce a proposal")
+			assert.Equal(t, tc.want, got.Quantity, tc.why)
+		})
+	}
+}
+
 // TestTheProposalCarriesTheOfferTheMerchantPublished is why the consent screen
 // can name what the identifier refers to.
 //

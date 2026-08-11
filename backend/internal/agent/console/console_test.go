@@ -309,6 +309,7 @@ type proposedBody struct {
 	Item           string                 `json:"item"`
 	Offer          agent.Offer            `json:"offer"`
 	Offers         []agent.Offer          `json:"offers"`
+	Quantity       int                    `json:"quantity"`
 	WatchSlotsFree int                    `json:"watch_slots_free"`
 }
 
@@ -649,6 +650,60 @@ func TestAProposalCarriesTheSameArmAsAWatch(t *testing.T) {
 	status := post(t, server.URL+"/proposals", map[string]any{"prompt": "buy something"}, nil)
 	assert.Equal(t, http.StatusBadGateway, status,
 		"without its own arm for ErrMerchantAnsweredDifferently, propose's switch would fall into the ErrNothingToBuy case and answer 422")
+}
+
+// TestTheProposalNamesTheBasketSizeOnTheWire is issue #133 at the one hop it
+// was missing.
+//
+// agent.Proposal grew a Quantity and every screen fixture was written with one,
+// so nothing on either side of this boundary noticed that the response itself
+// carried no such field — the consent screen read `undefined`, sent it back,
+// and the two-ticket prompt still bought one through the browser. A test over
+// the wire rather than over the Go type is what catches that class of miss,
+// which is view.go's standing reason for decoding into a type of its own.
+//
+// The second row is the other half: a browser has no operator's flag and no
+// request of its own to fall back to, so an absence has to be resolved before
+// it reaches one. A screen cannot display "the interpreter had no opinion".
+func TestTheProposalNamesTheBasketSizeOnTheWire(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		proposed int
+		want     int
+		why      string
+	}{
+		{
+			name: "the sentence named a count", proposed: 2, want: 2,
+			why: "two tickets is what the person typed, and this response is the only place the consent screen can learn it",
+		},
+		{
+			name: "the sentence named none", proposed: 0, want: 1,
+			why: "a browser has nothing of its own to fall back to, so the absence is resolved here or displayed as a zero",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := proposal()
+			p.Quantity = tc.proposed
+
+			watcher := console.NewMockWatcher(t)
+			watcher.EXPECT().Propose(mock.Anything, mock.Anything, mock.Anything).Return(p, nil).Maybe()
+
+			service := &console.Service{Watcher: watcher, Clock: clock.New()}
+			handler, err := service.Handler()
+			require.NoError(t, err)
+			server := httptest.NewServer(handler)
+			t.Cleanup(server.Close)
+
+			var body proposedBody
+			require.Equal(t, http.StatusOK, post(t, server.URL+"/proposals",
+				map[string]any{"prompt": "two tickets to the concert"}, &body))
+			assert.Equal(t, tc.want, body.Quantity, tc.why)
+		})
+	}
 }
 
 // TestAProposalIsNotAWatch is the state this route must not acquire.
