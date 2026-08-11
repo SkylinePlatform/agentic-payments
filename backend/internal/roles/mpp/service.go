@@ -232,7 +232,13 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	// of the mandate, which is a fact about the presentation rather than about
 	// the verdict. It is nil exactly when the mandate never decoded — see
 	// examined.amount — and amountOpt turns that absence into no option at all.
-	opts := amountOpt(got.amount)
+	// Unconditional, where the amount beside it is gated on the decode having
+	// finished — see credprovider's identical pair for the whole of that
+	// argument. This processor is asked about a Payment Mandate by the route it
+	// answers on, and a verifier receives a closed one in both modes, so a
+	// refusal reached before anything was read still says which mandate it was
+	// about.
+	opts := append(amountOpt(got.amount), obs.WithMandate(obs.MandatePayment, obs.MandateClosed))
 	if got.verdict != nil {
 		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(got.verdict)),
 			"payment refused: "+got.verdict.Error(), opts...)

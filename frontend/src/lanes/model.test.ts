@@ -2,7 +2,19 @@ import { describe, expect, it } from "vitest";
 
 import type { EventRecord, ProtocolEvent } from "../sse";
 
-import { amountOf, group, laneOf, LANES, shortDigest, stepsIn, titleOf, verdictOf } from "./model";
+import { MANDATE_STATES, MANDATE_TYPES } from "../sse";
+
+import {
+  amountOf,
+  group,
+  laneOf,
+  LANES,
+  mandateLabel,
+  shortDigest,
+  stepsIn,
+  titleOf,
+  verdictOf,
+} from "./model";
 
 /**
  * The screen's argument, as assertions.
@@ -368,6 +380,69 @@ describe("the verdict, which is what one attempt's spine draws", () => {
         "the user set is the protocol working, and colouring the two the same " +
         "would teach a viewer the opposite of the truth",
     ).toBe(true);
+  });
+});
+
+describe("which mandate a step is about — issue #201", () => {
+  it("carries both facts from the wire onto the step", () => {
+    fresh();
+    const [transaction] = group([
+      record({
+        kind: "mandate_constructed",
+        role: "agent",
+        digest: DIGEST,
+        mandate: { type: "payment", state: "closed" },
+      }),
+    ]);
+
+    expect(
+      transaction.steps[0].mandate,
+      "read straight through, on the same terms the digest and the amount are — " +
+        "the grouping decides nothing about which artefact a step names",
+    ).toEqual({ type: "payment", state: "closed" });
+  });
+
+  it("leaves a step about no mandate saying nothing", () => {
+    fresh();
+    const [transaction] = group([record({ kind: "receipt_issued", role: "mpp", digest: DIGEST })]);
+
+    expect(
+      transaction.steps[0].mandate,
+      "the receipt names a mandate_type as signed evidence of its own; an echo " +
+        "on the event announcing it would be a copy of a fact that has a home",
+    ).toBeUndefined();
+  });
+
+  it("writes each of the four artefacts as the phrase AP2 uses for it", () => {
+    // Both axes, all four combinations, and the words are the protocol's own —
+    // `adapters/ap2/vct.go` spells the same four in its `what` field. The
+    // state goes in front because that is how the documentation says it.
+    expect(mandateLabel({ type: "checkout", state: "open" })).toBe("open Checkout Mandate");
+    expect(mandateLabel({ type: "checkout", state: "closed" })).toBe("closed Checkout Mandate");
+    expect(mandateLabel({ type: "payment", state: "open" })).toBe("open Payment Mandate");
+    expect(mandateLabel({ type: "payment", state: "closed" })).toBe("closed Payment Mandate");
+  });
+
+  it("gives every artefact the wire can name a reading of its own", () => {
+    // The property behind the four lines above, over the closed sets rather
+    // than over a list this file keeps. A value added to either vocabulary
+    // with no title beside it would render `undefined` here rather than in a
+    // screenshot somebody notices later.
+    const labels = MANDATE_TYPES.flatMap((type) =>
+      MANDATE_STATES.map((state) => mandateLabel({ type, state })),
+    );
+
+    expect(
+      new Set(labels).size,
+      "two mandates times two states is four distinct artefacts, and the label " +
+        "is the only thing on a card that separates them — the digest cannot, " +
+        "because a Payment Mandate's transaction_id is the checkout hash",
+    ).toBe(labels.length);
+    for (const label of labels) {
+      expect(label, "a vocabulary member with no title reads as `undefined`").not.toMatch(
+        /undefined/,
+      );
+    }
   });
 });
 

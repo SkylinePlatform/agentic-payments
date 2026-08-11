@@ -87,6 +87,121 @@ func Kinds() []Kind { return slices.Clone(kinds) }
 // Valid reports whether k is one of the six.
 func (k Kind) Valid() bool { return slices.Contains(kinds, k) }
 
+// MandateType is which of AP2's **two** mandates a step is about.
+//
+// Two, and the set is closed at two on protocol grounds rather than on ours.
+// AGENTS.md is blunt about the trap: almost everything written about AP2
+// describes an Intent Mandate, a Cart Mandate and a Payment Mandate, and that
+// was v0.1. v0.2 defines a Checkout Mandate and a Payment Mandate, and nothing
+// else. A third member arriving here would be a protocol change, not a screen
+// change.
+//
+// The two spellings are the ones contracts/evidence/receipt.json already uses
+// for its own mandate_type, so a rejection reads the same word in the event log
+// and on the receipt that answers it — TestTheEventLogSpellsAMandateTheWayA
+// ReceiptDoes is what keeps that true. The type is declared here rather than
+// taken from generated.ReceiptMandateType for two reasons. The receipt's
+// enumeration is documented as "which kind of *closed* mandate this receipt
+// answers", and this field names open mandates too; and Code above already
+// carries a canonical vocabulary as this package's own value rather than the
+// generated type, for the reason its comment gives.
+type MandateType string
+
+// The two mandates AP2 v0.2 defines.
+const (
+	// MandateCheckout proves the Shopping Agent is authorised to purchase the
+	// checkout it assembled. Verified by the merchant.
+	MandateCheckout MandateType = "checkout"
+	// MandatePayment proves the agent is authorised to pay for that specific
+	// checkout. Verified by the Credential Provider, the network and the
+	// Merchant Payment Processor.
+	MandatePayment MandateType = "payment"
+)
+
+var mandateTypes = []MandateType{MandateCheckout, MandatePayment}
+
+// MandateTypes returns the two. It exists so a test can check its coverage
+// against the set rather than repeating it, the way Kinds does.
+func MandateTypes() []MandateType { return slices.Clone(mandateTypes) }
+
+// Valid reports whether t is one of the two.
+func (t MandateType) Valid() bool { return slices.Contains(mandateTypes, t) }
+
+// MandateState is whether that mandate is bound to a transaction yet.
+//
+// **This is a second, independent fact and not a second pair of mandate
+// types.** AGENTS.md: "The 'intent' dimension is not a third mandate. It is
+// handled by the open / closed distinction." A single enum flattening the two
+// axes into checkout_open, checkout_closed, payment_open and payment_closed
+// would put four mandate types on the wire where the protocol has two, which is
+// the exact misreading that document exists to prevent. They travel together in
+// one Mandate below instead — one field, two members, neither derivable from
+// the other.
+//
+// # It shares a name with authz.MandateState and is a different axis
+//
+// authz.MandateState is ready, awaiting_receipt and spent — where one open
+// mandate stands in the rejection-receipt rule, which is bookkeeping this
+// package never sees. This one is open against closed: whether the artefact a
+// step was about is bound to a transaction.
+//
+// **They are not even about the same artefact**, which is the part worth being
+// exact about. That type tracks an *open* mandate for its whole life; a closed
+// mandate has no state there at all. So an event here reading `closed` sits
+// alongside an open mandate that is `awaiting_receipt` over there — two
+// artefacts, two axes, no correspondence to look for.
+//
+// The name is kept because open/closed is AP2's own word for this and a
+// paraphrase would cost more than the collision does; the collision is
+// contained because the two types live in packages that do not import each
+// other, so no call site can be handed the wrong one. What was left to a reader
+// is this paragraph. internal/agent/console/run.go sets the precedent from the
+// other side — it names a third axis and says it is "a different axis from
+// authz.MandateState and deliberately not the same words".
+type MandateState string
+
+// The two states a mandate can be in.
+const (
+	// MandateOpen is signed by the user, carries constraints and endorses the
+	// agent's key in cnf, and is not yet bound to a transaction.
+	MandateOpen MandateState = "open"
+	// MandateClosed is bound to one specific transaction. Under Human Present
+	// the user signs it; under Human Not Present the agent binds it beneath the
+	// open one the user signed. **Verifiers always receive closed mandates in
+	// both modes**, which is why every verifier's event here says closed and
+	// only the Trusted Surface ever says open.
+	MandateClosed MandateState = "closed"
+)
+
+var mandateStates = []MandateState{MandateOpen, MandateClosed}
+
+// MandateStates returns the two.
+func MandateStates() []MandateState { return slices.Clone(mandateStates) }
+
+// Valid reports whether s is one of the two.
+func (s MandateState) Valid() bool { return slices.Contains(mandateStates, s) }
+
+// Mandate names the artefact a step is about: which of the two mandates, and
+// whether it is open or closed.
+//
+// One field carrying two members rather than two fields, and that is the shape
+// rather than a convenience. The two facts are never independently absent — a
+// call site that knows which mandate it is acting on knows whether that mandate
+// is bound, because both come from *which artefact this role was asked about*
+// rather than from anything read out of it. Two flat optional fields would
+// therefore admit two states that cannot occur — a state with no type, a type
+// with no state — which Validate would then have to forbid and the frontend
+// would have to render around. Nested, they are unrepresentable.
+//
+// generated.Amount is the precedent, one field down: a pointer to a two-member
+// struct, absent when there is nothing to say.
+type Mandate struct {
+	// Type is which of the two AP2 defines.
+	Type MandateType `json:"type"`
+	// State is whether it is bound to a transaction yet.
+	State MandateState `json:"state"`
+}
+
 // Event is one thing that happened, as the event log records it.
 //
 // It is a plain Go type and not generated from contracts/. ADR 0003 is explicit
@@ -171,6 +286,56 @@ type Event struct {
 	// complete, which is why credprovider and mpp both gate this field on the
 	// invariant that names one — see their examined.amount.
 	Amount *generated.Amount `json:"amount,omitempty"`
+
+	// Mandate is which artefact this step is about — see Mandate above.
+	//
+	// Issue #201's field, on the precedent #174 set for the amount: a fact the
+	// screen needs in order to make a true claim, carried structurally rather
+	// than left in Detail for a reader to find. Fifteen of the sixteen emit
+	// sites on the Human Not Present path named a mandate in prose; nothing on
+	// this struct held it, so deleting that prose from the step card left the
+	// demonstration's opening drawn as two pairs of identical cards.
+	//
+	// # The gate, and why it is not the amount's
+	//
+	// nil says this step is about no mandate, and it is nil on exactly two of
+	// the six kinds — see mandateKinds — which Validate enforces rather than
+	// leaving to a caller's care.
+	//
+	// Within the four it is permitted on, **every call site in the flow
+	// attaches one, unconditionally, including every refusal.** That is the
+	// opposite of the amount's rule one field up, and the difference is the
+	// whole reason this comment exists. An amount is a value *read out of* a
+	// mandate, so credprovider and mpp gate theirs on the invariant that says
+	// the decode finished; stating one off a decode that did not complete would
+	// be asserting a price nobody established. Which mandate a step is about is
+	// never read out of the artefact. It is fixed before the artefact is opened,
+	// by which endpoint is running and which branch reached the emission —
+	// POST /credential is a Payment Mandate hop whatever arrives on it, and a
+	// verifier only ever receives a closed mandate. So there is no failed-read
+	// state for this field, and gating it on one would blank the label on
+	// precisely the refusals a reader most needs to place.
+	//
+	// It follows that this field says which mandate the role was **acting on**,
+	// not what the bytes turned out to be. A Credential Provider handed a
+	// Checkout Mandate still says payment, because the step is the payment hop.
+	// Reading it as a claim about the payload would be reading it as evidence,
+	// which nothing here is.
+	//
+	// **What the card does not recover in that case is worth stating exactly,
+	// because the obvious sentence overstates it.** The Go sentinel is
+	// ap2.ErrWrongMandateType, but there is no wrong_mandate_type canonical
+	// code: it maps to mandate_version_unsupported, which it shares with
+	// ErrUnsupportedVersion. So the card reads "closed Payment Mandate" beside
+	// mandate_version_unsupported, and a reader recovers that this hop refused
+	// the credential type it was sent — not which mandate actually arrived. The
+	// sharpest case is the one testdata/rejections.json calls the most useful
+	// one, an open Checkout Mandate where a closed one belongs: the state member
+	// is then counterfactual too, and the code says nothing about open against
+	// closed either. That is the accepted cost of a label fixed by the hop, and
+	// it is bounded by the same rule as everything else here — the receipt is
+	// what names the artefact as evidence, and this is a screen.
+	Mandate *Mandate `json:"mandate,omitempty"`
 }
 
 // amountKinds is the closed set of moments a structured price is meaningful
@@ -187,6 +352,32 @@ type Event struct {
 // *interpretation* — a set of limits — before any checkout has been quoted, so
 // there is no purchase price yet for anybody to state.
 var amountKinds = []Kind{
+	KindMandateConstructed,
+	KindMandatePresented,
+	KindMandateVerified,
+	KindMandateRejected,
+}
+
+// mandateKinds is the closed set of moments a step is about one specific
+// mandate, enforced by Validate below.
+//
+// The same four amountKinds names, and coinciding rather than shared: a
+// separate list because the two questions are separate ones, and a single
+// variable would make a future divergence look like a mistake. The membership
+// agrees because the reason does — constructing a mandate, presenting it,
+// accepting it and refusing it are the four moments that are *about* one
+// artefact.
+//
+// The two exclusions are the same two and the arguments carry over intact.
+// KindReceiptIssued is excluded because the receipt that event announces
+// already carries mandate_type as signed evidence — contracts/evidence/
+// receipt.json requires it — and restating it here would be the unauthoritative
+// copy of a fact that already has a home, which is what the amount refused for
+// the same kind. KindAuthorisationRefused is excluded because it is a person
+// declining an interpretation before any mandate has been made; there is no
+// artefact for this field to name, which is also why that kind carries no
+// digest and no code.
+var mandateKinds = []Kind{
 	KindMandateConstructed,
 	KindMandatePresented,
 	KindMandateVerified,
@@ -247,6 +438,20 @@ func (e Event) Validate() error {
 	case e.Amount != nil && !wellFormed(*e.Amount):
 		return fmt.Errorf("%w: amount %+v names no currency or no money, which is neither a price nor the absence of one",
 			ErrInvalidEvent, *e.Amount)
+	case e.Mandate != nil && !slices.Contains(mandateKinds, e.Kind):
+		return fmt.Errorf("%w: mandate is set on %s, which is not one of the kinds that is about one specific mandate",
+			ErrInvalidEvent, e.Kind)
+	case e.Mandate != nil && !e.Mandate.Type.Valid():
+		// Refused rather than shrugged off, on wellFormed's own reasoning: the
+		// frontend refuses the whole record for a half-named mandate, so an
+		// unnamed one would cost an entire step on screen and surface as a
+		// sequence gap one frame later, roles away from its cause. Here it is a
+		// Stats().Rejected at the role that emitted it.
+		return fmt.Errorf("%w: mandate type %q is neither of the two AP2 defines",
+			ErrInvalidEvent, e.Mandate.Type)
+	case e.Mandate != nil && !e.Mandate.State.Valid():
+		return fmt.Errorf("%w: mandate state %q is neither open nor closed",
+			ErrInvalidEvent, e.Mandate.State)
 	}
 	return nil
 }

@@ -167,6 +167,24 @@ func WithAmount(amount generated.Amount) EventOpt {
 	return func(e *Event) { e.Amount = &amount }
 }
 
+// WithMandate names which of AP2's two mandates an event is about, and whether
+// that mandate is open or closed. Only the four kinds mandateKinds names accept
+// one, so passing this with any other makes Validate refuse the whole event.
+//
+// **Two arguments rather than one, and that is the point of the signature.**
+// The alternative — four predeclared values, or one enum with four members —
+// reads as four mandate types, and AP2 v0.2 has two. Spelling both facts at
+// every call site keeps them visibly independent exactly where somebody is
+// deciding what is true, which is the emission rather than the struct.
+//
+// A call site attaches this whenever it knows which mandate it is acting on,
+// which on the four permitted kinds is always: the fact comes from the route
+// and the branch, never from reading the artefact. See Event.Mandate for why
+// that makes its gate the opposite of WithAmount's.
+func WithMandate(mandate MandateType, state MandateState) EventOpt {
+	return func(e *Event) { e.Mandate = &Mandate{Type: mandate, State: state} }
+}
+
 // Emit records that something happened. It never blocks and never fails.
 //
 // # A nil *Emitter is a working no-op

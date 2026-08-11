@@ -875,13 +875,22 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	// exactly as readily as an acceptance names the price that was paid. This is
 	// "each party emits the amount it held" for the merchant: its own quote,
 	// never a value read out of what the agent presented.
+	//
+	// answered.mandate rather than a constant, and it is the same value this
+	// handler is about to put on the receipt. A merchant refusing the Checkout
+	// Mandate and a merchant refusing the payment's binding are the same word,
+	// the same party, the same price and the same digest on screen; which
+	// mandate failed is the whole of the difference, and it is a difference
+	// already established by the time decide returned. Closed either way —
+	// verifiers receive closed mandates in both modes.
+	mandate := obs.WithMandate(answered.mandate, obs.MandateClosed)
 	if answered.err != nil {
 		s.Events.EmitRejection(r.Context(), string(ap2.CodeOf(answered.err)),
-			"the purchase was refused: "+answered.err.Error(), obs.WithAmount(quoted.Price))
+			"the purchase was refused: "+answered.err.Error(), obs.WithAmount(quoted.Price), mandate)
 	} else {
 		s.Events.Emit(r.Context(), obs.KindMandateVerified,
 			"Checkout Mandate verified, and the payment is for this checkout at the price quoted",
-			obs.WithAmount(quoted.Price))
+			obs.WithAmount(quoted.Price), mandate)
 	}
 
 	receipt, err := ap2.IssueReceipt(r.Context(), answered.subject, answered.err, ap2.ReceiptOptions{
@@ -929,7 +938,8 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 	// document would give.
 	s.Events.Emit(r.Context(), obs.KindMandatePresented,
 		"Payment Mandate presented to the Merchant Payment Processor",
-		obs.WithAmount(quoted.Price))
+		obs.WithAmount(quoted.Price),
+		obs.WithMandate(obs.MandatePayment, obs.MandateClosed))
 
 	paymentReceipt, settled, err := s.initiate(r.Context(), mode, req)
 	if err != nil {
@@ -1017,6 +1027,12 @@ type answered struct {
 	// subject is the mandate the receipt references, and kind is what it is.
 	subject ap2.Presented
 	kind    generated.ReceiptMandateType
+	// mandate is the same fact in the event log's vocabulary, so the card on
+	// the three-lane view and the receipt in a dispute name the same artefact.
+	// This merchant is the one role whose answer can be about either mandate —
+	// it verifies the Checkout Mandate and refuses on the payment's binding or
+	// amount — so unlike every other emit site this one cannot be a constant.
+	mandate obs.MandateType
 	// err is the verdict: nil when the purchase may proceed.
 	err error
 
@@ -1038,12 +1054,21 @@ func (a answered) about(digest string) answered { a.digest = digest; return a }
 // aboutCheckout and aboutPayment are the only ways to make an answered, which
 // is what pairs each kind with the mandate it can name. Both take either shape,
 // so the chain path cannot reach a receipt by a route that skips the pairing.
+//
+// They set the event log's spelling alongside the receipt's, rather than a
+// conversion at the emission site working one out from the other. The two are
+// separate closed vocabularies that happen to agree on both members today —
+// generated.ReceiptMandateType is documented as which kind of *closed* mandate
+// a receipt answers, and obs.MandateType names open ones too — and a cast
+// between them would carry a new member from one into the other unexamined. Set
+// here, the pairing is structural and there is no unreachable default branch
+// for a reader to wonder about.
 func aboutCheckout(sd ap2.Presented) answered {
-	return answered{subject: sd, kind: generated.ReceiptMandateTypeCheckout}
+	return answered{subject: sd, kind: generated.ReceiptMandateTypeCheckout, mandate: obs.MandateCheckout}
 }
 
 func aboutPayment(sd ap2.Presented) answered {
-	return answered{subject: sd, kind: generated.ReceiptMandateTypePayment}
+	return answered{subject: sd, kind: generated.ReceiptMandateTypePayment, mandate: obs.MandatePayment}
 }
 
 // refusing returns this answer with a verdict attached.

@@ -530,6 +530,170 @@ describe("the price beside an attempt's outcome — issue #174", () => {
   });
 });
 
+describe("which of AP2's two mandates a step is about — issue #201", () => {
+  /**
+   * The demonstration's own opening four beats, on the Human Not Present path.
+   *
+   * `#1` and `#2` are the **open** Checkout and Payment Mandates, signed by the
+   * user at the Trusted Surface; `#3` and `#4` are the **closed** pair the agent
+   * binds under them. Four separate signatures over four separate artefacts,
+   * and until #201 the screen drew them as two pairs of identical cards.
+   *
+   * **The digest cannot be what separates them and never will.** A Payment
+   * Mandate's `transaction_id` *is* the checkout hash — that is the binding this
+   * whole screen exists to demonstrate — so the two closed cards agree about
+   * their twelve characters on purpose. The thesis working is precisely why the
+   * spine cannot also be the label.
+   */
+  function headline(): readonly EventRecord[] {
+    return [
+      record({
+        kind: "mandate_constructed",
+        role: "surface",
+        mandate: { type: "checkout", state: "open" },
+      }),
+      record({
+        kind: "mandate_constructed",
+        role: "surface",
+        mandate: { type: "payment", state: "open" },
+      }),
+      record({
+        kind: "mandate_constructed",
+        role: "agent",
+        digest: DIGEST,
+        amount: { amount: 21000, currency: "USD" },
+        mandate: { type: "checkout", state: "closed" },
+      }),
+      record({
+        kind: "mandate_constructed",
+        role: "agent",
+        digest: DIGEST,
+        amount: { amount: 21000, currency: "USD" },
+        mandate: { type: "payment", state: "closed" },
+      }),
+    ];
+  }
+
+  /** Every step card's text, with the sequence number taken out. */
+  function readings(container: HTMLElement): string[] {
+    return [...container.querySelectorAll("li")].map((card) =>
+      (card.textContent ?? "").replace(/#\d+/, "").trim(),
+    );
+  }
+
+  it("gives the headline sequence's four cards four different readings", () => {
+    // The regression stated as the property rather than as four strings. #200
+    // deleted `Step.detail`, correctly — it restated the mark, the word and the
+    // party on most emit sites — but fifteen of the sixteen sentences on this
+    // path also named *which mandate*, and nothing on `ProtocolEvent` held that.
+    // The sequence number is deliberately stripped: the issue's own complaint is
+    // that it was the only thing left telling these cards apart, and a card
+    // separable only by its ordinal is not separable to a reader.
+    seq = 0;
+    const { container } = showing(headline());
+
+    const cards = readings(container);
+    expect(cards, "the demonstration's opening is four signatures").toHaveLength(4);
+    expect(
+      new Set(cards).size,
+      "four artefacts, four readings. Two cards reading alike is the reader " +
+        "being asked to count rows to find out what was signed",
+    ).toBe(4);
+  });
+
+  it("names the mandate on each card, in the lane whose party signed it", () => {
+    seq = 0;
+    showing(headline());
+
+    // `within` each region rather than `screen`: the whole point is *which*
+    // lane says what, and an unscoped query would stay green after a card moved
+    // columns — which for this screen would be the protocol drawn wrong.
+    const user = screen.getByRole("region", { name: "User" });
+    expect(
+      within(user).queryByText("open Checkout Mandate"),
+      "the user signs the open pair on this path, and an open mandate is not " +
+        "yet bound to any transaction — the card has to say so or it reads as a " +
+        "second issuance of the same artefact the agent signs below",
+    ).not.toBeNull();
+    expect(within(user).queryByText("open Payment Mandate")).not.toBeNull();
+
+    const agent = screen.getByRole("region", { name: "Agent" });
+    expect(
+      within(agent).queryByText("closed Checkout Mandate"),
+      "and the agent binds the closed pair beneath the user's own signature, " +
+        "which is the delegation this screen is drawn to teach",
+    ).not.toBeNull();
+    expect(within(agent).queryByText("closed Payment Mandate")).not.toBeNull();
+  });
+
+  it("keeps the mandate a label rather than a mark or a verdict", () => {
+    // Issue #201: "It is a label, never a lane and never a mark." The step axis
+    // has no pip by design — the value is the mark — and which mandate a step is
+    // about is not a verdict, so it takes neither.
+    seq = 0;
+    const { container } = showing(headline());
+
+    expect(
+      marks(container),
+      "`half` for the attempt, because a checkout is on the spine and nobody " +
+        "has answered — and nothing at all on the four cards",
+    ).toEqual(["half"]);
+  });
+
+  it("says nothing about a mandate on the steps that are about none", () => {
+    // The gate, rendered. `receipt_issued` carries no mandate on the wire —
+    // the receipt itself names one as signed evidence, and restating it on the
+    // event announcing it would be the copy #182 refused for the amount — and
+    // `authorisation_refused` is a person declining before any mandate exists.
+    // Both must read as absent rather than as a default.
+    seq = 0;
+    const { container } = showing([
+      record({ kind: "authorisation_refused", role: "surface" }),
+      record({ kind: "receipt_issued", role: "credprovider", digest: DIGEST }),
+    ]);
+
+    for (const card of readings(container)) {
+      expect(
+        card,
+        "a step with no mandate must show no mandate — a placeholder there " +
+          "would read as a value, the same reason an absent price draws nothing",
+      ).not.toMatch(/Mandate/);
+    }
+  });
+
+  it("separates the merchant's two answers, which differ in nothing else", () => {
+    // The other pair the label earns, and the one no lane separates: a merchant
+    // refusing the Checkout Mandate and a merchant refusing the Payment Mandate
+    // are the same word, the same party, the same price and the same digest.
+    // `answered.kind` is the value the merchant already puts on its receipt.
+    seq = 0;
+    const { container } = showing([
+      record({
+        kind: "mandate_rejected",
+        role: "merchant",
+        digest: DIGEST,
+        code: "payment_amount_mismatch",
+        amount: { amount: 21000, currency: "USD" },
+        mandate: { type: "payment", state: "closed" },
+      }),
+      record({
+        kind: "mandate_rejected",
+        role: "merchant",
+        digest: DIGEST,
+        code: "payment_amount_mismatch",
+        amount: { amount: 21000, currency: "USD" },
+        mandate: { type: "checkout", state: "closed" },
+      }),
+    ]);
+
+    expect(
+      new Set(readings(container)).size,
+      "which mandate a verifier refused is the difference between the agent " +
+        "having assembled the wrong basket and having paid the wrong amount",
+    ).toBe(2);
+  });
+});
+
 describe("a digest a reader wants to compare or copy", () => {
   it("carries its full value even though twelve characters are shown", () => {
     seq = 0;

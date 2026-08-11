@@ -224,7 +224,10 @@ func (c *Client) Fund(ctx context.Context, p *Purchase) error {
 	// shortcut.
 	c.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.PaymentDigestOfMandate(p.PaymentMandate))),
 		obs.KindMandatePresented, "Payment Mandate presented to the Credential Provider",
-		obs.WithAmount(p.Price))
+		obs.WithAmount(p.Price),
+		// Closed. Under Human Present the user signed a mandate naming this
+		// exact transaction, and a verifier is never handed anything else.
+		obs.WithMandate(obs.MandatePayment, obs.MandateClosed))
 
 	body := map[string]any{"mandate": p.PaymentMandate}
 	err := c.call(ctx, http.MethodPost,
@@ -278,7 +281,8 @@ func (c *Client) Settle(ctx context.Context, p *Purchase) error {
 	// agent quoted and is presenting, held unchanged since Client.Quote.
 	c.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.CheckoutDigestOfMandate(p.CheckoutMandate))),
 		obs.KindMandatePresented, "Checkout Mandate presented to the merchant",
-		obs.WithAmount(p.Price))
+		obs.WithAmount(p.Price),
+		obs.WithMandate(obs.MandateCheckout, obs.MandateClosed))
 
 	body := map[string]any{
 		"mandate":    p.CheckoutMandate,

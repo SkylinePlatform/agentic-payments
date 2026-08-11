@@ -242,7 +242,13 @@ func (w *Watch) Delegate(ctx context.Context, q Quote) (*Delegated, error) {
 	// that is the amount it held.
 	w.Client.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.CheckoutDigestOf(checkoutChain.String()))), obs.KindMandateConstructed,
 		"closed Checkout Mandate signed by the agent, under the open mandate the user signed",
-		obs.WithAmount(q.Price))
+		obs.WithAmount(q.Price),
+		// Closed, and "signed by the agent" is not a second issuance: this is a
+		// Key Binding JWT over the open Checkout Mandate, made with the key that
+		// mandate already endorsed in cnf. The label is what lets a reader see
+		// the user's open card and this one as two ends of one delegation
+		// rather than as the same artefact signed twice.
+		obs.WithMandate(obs.MandateCheckout, obs.MandateClosed))
 
 	// One per verifier. The audience and the nonce are the only things that
 	// differ between the three, and they are the whole reason there are three.
@@ -270,7 +276,8 @@ func (w *Watch) Delegate(ctx context.Context, q Quote) (*Delegated, error) {
 	// no drift risk in using it directly rather than reading it back.
 	w.Client.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.PaymentDigestOf(credentialChain))), obs.KindMandateConstructed,
 		"closed Payment Mandate signed by the agent, once for each of the three verifiers that reads it",
-		obs.WithAmount(q.Price))
+		obs.WithAmount(q.Price),
+		obs.WithMandate(obs.MandatePayment, obs.MandateClosed))
 
 	d := &Delegated{
 		Offer:             q.Checkout,
@@ -383,7 +390,8 @@ func (w *Watch) Fund(ctx context.Context, d *Delegated) error {
 	// attempt was minted for, unchanged.
 	w.Client.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.PaymentDigestOf(d.CredentialChain))), obs.KindMandatePresented,
 		"delegated Payment Mandate presented to the Credential Provider",
-		obs.WithAmount(d.Price))
+		obs.WithAmount(d.Price),
+		obs.WithMandate(obs.MandatePayment, obs.MandateClosed))
 
 	body := map[string]any{"chain": d.CredentialChain, "nonce": d.CredProviderNonce}
 	err := w.Client.call(ctx, http.MethodPost,
@@ -435,7 +443,8 @@ func (w *Watch) Settle(ctx context.Context, d *Delegated) error {
 	// d.Price, on Fund's own footing.
 	w.Client.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.CheckoutDigestOf(d.CheckoutChain))), obs.KindMandatePresented,
 		"delegated Checkout Mandate presented to the merchant",
-		obs.WithAmount(d.Price))
+		obs.WithAmount(d.Price),
+		obs.WithMandate(obs.MandateCheckout, obs.MandateClosed))
 
 	body := map[string]any{
 		"mandate_chain":           d.CheckoutChain,

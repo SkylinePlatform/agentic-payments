@@ -22,12 +22,21 @@
  * `open`, `half`, `full` — drawn beside the spine and never across it, because
  * where the two compete the agreement wins. What went is the sentence each step
  * card used to carry beneath its own word: `ProtocolEvent.detail` is free text
- * an emitter writes for a person, and on this card it restated the mark, the
- * word and the party that are already there. It has not left the page — the
+ * an emitter writes for a person, and on this card it mostly restated the mark,
+ * the word and the party that are already there. It has not left the page — the
  * event log below prints every one of them verbatim, which is the log's job.
  * The four categories `docs/specs/2026-08-06-three-lane-view-design.md` protects
  * are untouched: {@link Thesis} is category 2 and says *why* a verdict was
  * reached, which no mark in the vocabulary can.
+ *
+ * **"Mostly" is #201, and it is the one thing that deletion cost.** Fifteen of
+ * the sixteen sentences on the Human Not Present path also named *which of
+ * AP2's two mandates* the step was about, and that is not a restatement of
+ * anything else on the card — the open pair and the closed pair then drew as
+ * four cards separable only by a sequence number. It came back as
+ * {@link Step.mandate}, a typed field rendered beside the party by
+ * {@link mandateLabel}: a label, never a lane and never a mark. Prose was still
+ * the wrong carrier for it, which is why the fix is a field and not a revert.
  */
 
 import { Status } from "../status/Status";
@@ -37,6 +46,7 @@ import {
   LANES,
   STEP_META,
   amountOf,
+  mandateLabel,
   shortDigest,
   stepsIn,
   titleOf,
@@ -86,7 +96,23 @@ function StepCard({ step }: { readonly step: Step }) {
         <span className="font-sans text-xs tabular-nums text-graphite">#{step.seq}</span>
       </div>
 
-      <span className="font-sans text-xs text-graphite">{titleOf(step.role)}</span>
+      {/*
+        The party, and beside it the artefact — issue #201. Two elements in one
+        row rather than one string, and in the same register `titleOf` already
+        renders: a mandate type is a label, never a lane and never a mark. The
+        step axis has no pip by design — the value is the mark — and which
+        mandate a step is about is not a verdict, so it takes neither.
+
+        A step about no mandate renders nothing here, the way an absent price
+        and an absent digest do. `receipt_issued` and `authorisation_refused`
+        are the two kinds that reach this branch, and both are honestly about no
+        mandate: the receipt names one as signed evidence of its own, and a
+        person declining an interpretation refused before any existed.
+      */}
+      <div className="flex flex-wrap items-baseline gap-x-2 font-sans text-xs text-graphite">
+        <span>{titleOf(step.role)}</span>
+        {step.mandate !== undefined && <span>{mandateLabel(step.mandate)}</span>}
+      </div>
 
       {step.code !== undefined && step.code !== "" && (
         <code className="font-mono text-xs text-broken">{step.code}</code>
