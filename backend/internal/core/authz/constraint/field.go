@@ -74,6 +74,26 @@ type Field struct {
 	// the user did not approve as one.
 	exact bool
 
+	// Selective marks a field as describing *what to go looking for*, rather
+	// than a term the purchase has to meet at the point of sale.
+	//
+	// internal/agent's discovery half needs exactly this bit before it builds a
+	// merchant search: a query naming the item or the merchant is answered by a
+	// catalogue search, while a query naming the price, the time or the
+	// quantity is not — the watch loop exists to wait for exactly those to be
+	// satisfied, and a search carrying the user's price bound back to the
+	// merchant would return nothing at all while the price is still too high.
+	//
+	// internal/agent may not import this package — a constraint is evaluated
+	// by the verifier, never by the party that assembled the purchase, and
+	// TestTheAgentCannotReachAConstraintEvaluator holds that against the import
+	// graph — so it cannot read this column here either. It reads Selective off
+	// the FieldSpec values Vocabulary returns instead, and
+	// TestTheAgentsPrefixesAgreeWithFieldSelectivity in internal/agent holds the
+	// two string prefixes authorise.go still carries against this column, in
+	// both directions. See issue #132.
+	Selective bool
+
 	// read pulls the value out of a subject. The second result is false when
 	// the purchase does not state this fact at all, which is never the same as
 	// stating an empty one.
@@ -103,13 +123,13 @@ var fields = buildFields(
 		read: func(s Subject) (value, bool) {
 			return value{kind: KindNumber, number: int64(s.Quantity)}, s.Quantity > 0
 		}},
-	Field{Name: "item.id", Kind: KindText, Noun: "the item", exact: true,
+	Field{Name: "item.id", Kind: KindText, Noun: "the item", exact: true, Selective: true,
 		read: func(s Subject) (value, bool) { return exactText(s.Item.ID) }},
-	Field{Name: "item.category", Kind: KindText, Noun: "the item category",
+	Field{Name: "item.category", Kind: KindText, Noun: "the item category", Selective: true,
 		read: func(s Subject) (value, bool) { return text(s.Item.Category) }},
-	Field{Name: "merchant.id", Kind: KindText, Noun: "the merchant", exact: true,
+	Field{Name: "merchant.id", Kind: KindText, Noun: "the merchant", exact: true, Selective: true,
 		read: func(s Subject) (value, bool) { return exactText(s.Merchant.ID) }},
-	Field{Name: "merchant.category", Kind: KindText, Noun: "the merchant category",
+	Field{Name: "merchant.category", Kind: KindText, Noun: "the merchant category", Selective: true,
 		read: func(s Subject) (value, bool) { return text(s.Merchant.Category) }},
 )
 
@@ -152,10 +172,21 @@ func lookupField(name string) (Field, error) {
 	if attr, ok := strings.CutPrefix(name, attributePrefix); ok && attr != "" {
 		// Attributes are always text: core does not know what a flight is, so
 		// it cannot know that an origin is an airport code.
+		//
+		// Selective, and deliberately so: Catalogue.Subject fills Item.Attributes
+		// from the same offer it fills Item.ID and Item.Category from, so a
+		// search naming item.attr.route.origin is answerable exactly as one
+		// naming item.id is. It is never enumerated by FieldNames or Vocabulary
+		// — this field is minted per name rather than held in the closed
+		// registry — so no caller outside this package ever reads this bit off
+		// it; internal/agent's itemFieldPrefix catches item.attr.* as a
+		// consequence of also being "item.", not by asking this column, and
+		// this comment is what keeps the two readings honest with each other.
 		return Field{
-			Name: name,
-			Kind: KindText,
-			Noun: "the item's " + strings.ReplaceAll(attr, ".", " "),
+			Name:      name,
+			Kind:      KindText,
+			Noun:      "the item's " + strings.ReplaceAll(attr, ".", " "),
+			Selective: true,
 			read: func(s Subject) (value, bool) {
 				raw, ok := s.attribute(attr)
 				if !ok {
@@ -185,12 +216,14 @@ func FieldNames() []string {
 
 // FieldSpec is one entry of the closed registry as a caller outside this
 // package can see it: how a constraint addresses the fact, the type of its
-// value, and the operators that may be applied to it.
+// value, the operators that may be applied to it, and whether it is selective.
 //
 // It carries no Noun and no reader. The sentence a constraint renders as is
 // Render's job and the value is pulled out of a Subject only during evaluation,
 // so publishing either here would offer a caller a second way to do something
-// this package already does once.
+// this package already does once. Selective is not in that category — it
+// names neither a rendering nor an evaluation, only which of two purposes a
+// field serves — so it is published rather than held back with them.
 type FieldSpec struct {
 	// Name is how a constraint addresses it: "amount", "item.category".
 	Name string
@@ -203,6 +236,12 @@ type FieldSpec struct {
 	// compare a field and no field accepts one — OperatorNames is where the
 	// whole set including those three is published.
 	Operators []string
+
+	// Selective mirrors Field.Selective: true when this field describes what
+	// to go looking for rather than a term the purchase has to meet. See that
+	// field's comment for why internal/agent needs it and cannot read it any
+	// other way.
+	Selective bool
 }
 
 // Vocabulary lists the closed part of the constraint vocabulary: every field
@@ -224,7 +263,12 @@ type FieldSpec struct {
 func Vocabulary() []FieldSpec {
 	out := make([]FieldSpec, 0, len(fields))
 	for _, f := range fields {
-		out = append(out, FieldSpec{Name: f.Name, Kind: f.Kind, Operators: operatorsFor(f.Kind)})
+		out = append(out, FieldSpec{
+			Name:      f.Name,
+			Kind:      f.Kind,
+			Operators: operatorsFor(f.Kind),
+			Selective: f.Selective,
+		})
 	}
 	slices.SortFunc(out, func(a, b FieldSpec) int { return strings.Compare(a.Name, b.Name) })
 	return out
