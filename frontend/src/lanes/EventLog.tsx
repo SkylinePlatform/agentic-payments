@@ -133,18 +133,39 @@ const ORDERS: readonly { readonly id: Order; readonly title: string }[] = [
 ];
 
 /**
- * The time, to the second, in the zone the timestamp was written with.
+ * The time, to the second, in the zone the reader's own machine keeps.
  *
- * Read out of the RFC 3339 string's own digits rather than through `Date`, for
- * the reason `src/constraint/render.ts` gives at length: `Date` renders the
- * *reader's* clock, so two people watching the same demonstration would see
- * different times against the same event. Here that would be a cosmetic
- * annoyance rather than a wrong limit, but the log sits under a screen whose
- * whole subject is that everybody is looking at the same thing.
+ * This used to read the wall-clock digits straight out of the RFC 3339
+ * string, on `src/constraint/render.ts`'s own reasoning against `Date`: that
+ * module renders a sentence the user signed, so every reader has to see the
+ * same words, and `Date` would show each of them their own zone instead of
+ * the one on the signature. That argument does not carry over here — issue
+ * #214, reported off a live run: this column carries no signature, the
+ * module doc above already says so in as many words — "a courtesy, not
+ * evidence" — and a courtesy that reads two hours from the reader's own
+ * clock, with nothing on screen saying whose zone it is, is worse than none.
+ * It invites the reader to reconcile it against when they clicked, and fails
+ * at that silently.
+ *
+ * `Date` is exactly the right tool once the goal flips. It reads the offset
+ * `at` carries correctly whatever that offset is, and what it renders back is
+ * always the *reader's* zone — which is what a log meant to be followed as it
+ * happens needs to agree with, and is also why no zone abbreviation needs to
+ * appear on screen: it is whichever one the reader's own clock already reads.
+ *
+ * The instant this reads is not the only place it survives. {@link Time}
+ * carries the original whole, offset included, as the cell's `title` — for
+ * whoever is checking a row against a server's own log, which keeps the zone
+ * it was written in and not the reader's.
  */
 function timeOf(at: string): string {
-  const match = /T(\d{2}:\d{2}:\d{2})/.exec(at);
-  return match === null ? at : match[1];
+  const date = new Date(at);
+  // `parseRecord` only ever hands this an `at` the wire produced, so this
+  // should not be reachable — but the raw string is a safer fallback than a
+  // blank cell or a thrown render, on a malformed value neither should trust.
+  if (Number.isNaN(date.getTime())) return at;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 /**
@@ -181,7 +202,14 @@ function Seq({ seq }: { readonly seq: number }) {
 }
 
 function Time({ at }: { readonly at: string }) {
-  return <span className="font-mono text-xs tabular-nums text-graphite">{timeOf(at)}</span>;
+  // `title` is the wire's own string, untouched — offset included, and never
+  // the reformatted output `timeOf` renders — so a reader checking this row
+  // against a server's own log has the exact instant that log carries too.
+  return (
+    <span className="font-mono text-xs tabular-nums text-graphite" title={at}>
+      {timeOf(at)}
+    </span>
+  );
 }
 
 /**
