@@ -1,11 +1,14 @@
 /*
  * The design system, and the whole of it.
  *
- * `docs/specs/2026-08-06-three-lane-view-design.md` fixes six colours and
- * inverts the type hierarchy so that monospace is the protagonist rather than
- * the caption face. This file is where that becomes something a machine can
- * check: every colour the app is allowed to use is declared once, in one block,
- * and `src/architecture.test.ts` reads that block back out.
+ * `docs/specs/2026-08-06-three-lane-view-design.md` fixes seven colours — six
+ * carried forward and `signal` added by #159, which moved the palette to navy
+ * and cream. The same revision retires the monospace-as-protagonist inversion
+ * this comment used to describe; that half is a `className` change on
+ * components and lands on a separate branch, so the font faces below are
+ * unchanged. This file is where the colours become something a machine can
+ * check: every colour the app is allowed to use is declared once, in one
+ * block, and `src/architecture.test.ts` reads that block back out.
  *
  * Tailwind v4, configured here rather than in a `tailwind.config.js` — v4 has
  * no such file, and every v3 tutorial that says otherwise will send you looking
@@ -109,11 +112,11 @@
 /*
  * `static` rather than a bare `@theme`: Tailwind emits only the variables some
  * utility used, and with `seal` and `broken` reserved for a verdict that no
- * screen has reached yet, a built stylesheet would carry four of the six in the
- * light theme and all six in the dark one. The palette is a closed set that was
- * approved as a set, so it is emitted as one — and the dark block below, which
- * is ordinary CSS and therefore always emitted, cannot end up overriding a
- * variable that the light theme never declared.
+ * screen has reached yet, a built stylesheet would carry five of the seven in
+ * the light theme and all seven in the dark one. The palette is a closed set
+ * that was approved as a set, so it is emitted as one — and the dark block
+ * below, which is ordinary CSS and therefore always emitted, cannot end up
+ * overriding a variable that the light theme never declared.
  */
 @theme static {
   /*
@@ -128,12 +131,13 @@
    */
   --color-*: initial;
 
-  --color-ink: #12100e;
-  --color-paper: #fbf9f5;
-  --color-graphite: #5e5a52;
-  --color-seal: #1e4d3f;
-  --color-broken: #8c2f1e;
-  --color-wash: #ede8df;
+  --color-paper: #f7f2e8;
+  --color-wash: #e8dfcc;
+  --color-ink: #10243a;
+  --color-graphite: #546375;
+  --color-signal: #1f5fbf;
+  --color-seal: #1f6b4a;
+  --color-broken: #a14917;
 
   /*
    * Three faces, and no fourth. The serif Tailwind ships by default is deleted
@@ -154,41 +158,26 @@
 }
 
 /*
- * The dark theme, derived rather than picked.
+ * The dark theme, chosen — not derived.
  *
- * A second palette is two palettes that drift, so these are not new colours.
- * Every value below is the light value's OKLCH with the lightness moved and the
- * hue held; the comment beside each is the OKLCH it was computed from, and the
- * hex is what that OKLCH resolves to in sRGB. `frontend/src/palette.test.ts`
- * recomputes the contrast of every pair the design uses, from these literals.
+ * The bond-paper palette this file used to carry got its dark values by
+ * transform: four of six colours were computed from their light counterpart's
+ * OKLCH, and the comment beside each hex recorded the formula. #159 replaced
+ * the colours and retired that method along with them. Navy and cream were
+ * picked as a pair — "navy in dark, cream in light", one direction per theme —
+ * and the two themes' literals were checked against `palette.test.ts` before
+ * either was written, rather than one theme being computed from the other
+ * afterward. There is nothing to recompute below because nothing here was
+ * derived; the light theme's values are in `@theme static` above, in the same
+ * token order, and a change to either theme is a new pair to check rather than
+ * a formula to rerun.
  *
- * Two of the six are chosen and four are derived:
- *
- *   paper   chosen. `ink`'s hue and chroma at L 0.19 rather than ink's own
- *           0.1747, so that the ground is not literally the stroke drawn on it.
- *   ink     chosen. `paper`'s hue and chroma at L 0.95 rather than 0.9825, so
- *           the brightest thing on a dark screen is no brighter than the light
- *           theme's ground.
- *   wash    derived. The lightness at which `wash` sits the same distance off
- *           `paper` as it does in the light theme solves to L 0.2516; 0.25 is
- *           that rounded to something a reader can hold, and it lands at
- *           1.158:1 against the light theme's 1.161:1. In light a lane sits
- *           into the page; in dark it lifts off it; in both it is one step, and
- *           `palette.test.ts` asserts the two steps agree.
- *   graphite, seal, broken
- *           derived. Hue and chroma held, lightness raised by bisection until
- *           the contrast against `wash` — the lighter of the two dark grounds,
- *           and therefore the harder one — reaches 4.5:1, then rounded up to
- *           the next 0.01 in L. `seal #1e4d3f` on `ink #12100e` is 1.98:1,
- *           which is why none of this is optional.
- *
- * Literals rather than `color-mix()`, `light-dark()` or an `oklch()` value, and
- * the trade is deliberate. Those three would put the derivation in the file and
- * keep it honest, but a test cannot assert a contrast ratio it would have to
- * get out of a browser's computed style — and jsdom computes none. A hex a Node
- * test can read is what makes the guard cost nothing to run. The derivation
- * survives as the comment beside each value; recompute with the numbers below
- * if you need to move one.
+ * Literals rather than `color-mix()`, `light-dark()` or an `oklch()` value,
+ * for the same reason as before the method changed: a test cannot assert a
+ * contrast ratio it would have to get out of a browser's computed style, and
+ * jsdom computes none. A hex a Node test can read is what makes the guard
+ * cost nothing to run. `frontend/src/palette.test.ts` recomputes the contrast
+ * of every pair the design uses, from these literals.
  *
  * `data-theme` rather than `prefers-color-scheme`, because the toggle has three
  * states and a media query has two. Resolving *system* to one of these two
@@ -202,12 +191,13 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --color-ink: #f0eeea; /* oklch(0.9500 0.0057 84.57) */
-  --color-paper: #151311; /* oklch(0.1900 0.0052 67.47) */
-  --color-graphite: #8d8980; /* oklch(0.6300 0.0136 84.59) */
-  --color-seal: #629281; /* oklch(0.6200 0.0570 170.93) */
-  --color-broken: #d26e5a; /* oklch(0.6500 0.1299 32.55) */
-  --color-wash: #25211b; /* oklch(0.2500 0.0132 82.40) */
+  --color-paper: #0d1b2a;
+  --color-wash: #17293d;
+  --color-ink: #eef3f8;
+  --color-graphite: #93a7bf;
+  --color-signal: #6fa8ff;
+  --color-seal: #4ed89b;
+  --color-broken: #ff9a5c;
 }
 
 @layer base {

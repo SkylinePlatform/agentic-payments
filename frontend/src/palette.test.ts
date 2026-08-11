@@ -69,7 +69,7 @@ function contrast(a: string, b: string): number {
 const GROUNDS = ["paper", "wash"] as const satisfies readonly Token[];
 
 /** Tokens drawn on a surface: text, rules, strokes. */
-const MARKS = ["ink", "graphite", "seal", "broken"] as const satisfies readonly Token[];
+const MARKS = ["ink", "graphite", "signal", "seal", "broken"] as const satisfies readonly Token[];
 
 /**
  * Tokens used as a filled block — a stamp, a tooltip chip, a solid button —
@@ -97,6 +97,16 @@ const PAIRS: readonly Pair[] = [
   { foreground: "ink", background: "wash", use: "body text inside a lane" },
   { foreground: "graphite", background: "paper", use: "secondary text and lane rules on the page" },
   { foreground: "graphite", background: "wash", use: "secondary text and lane rules inside a lane" },
+  {
+    foreground: "signal",
+    background: "paper",
+    use: "a value the protocol computed — a digest, a cnf, a correlation id — on the page",
+  },
+  {
+    foreground: "signal",
+    background: "wash",
+    use: "a value the protocol computed inside a lane",
+  },
   { foreground: "seal", background: "paper", use: "a verified artefact on the page" },
   { foreground: "seal", background: "wash", use: "a verified artefact inside a lane" },
   { foreground: "broken", background: "paper", use: "the spine failing, on the page" },
@@ -117,15 +127,16 @@ describe("the palette", () => {
     // approved value to make, rather than a nudge in a stylesheet.
     expect(
       themes.light,
-      "these six hexes are what the design review approved; changing one is a " +
-        "design decision and belongs in the spec before it belongs here",
+      "these seven hexes are what the design review approved; changing one is " +
+        "a design decision and belongs in the spec before it belongs here",
     ).toEqual({
-      ink: "#12100e",
-      paper: "#fbf9f5",
-      graphite: "#5e5a52",
-      seal: "#1e4d3f",
-      broken: "#8c2f1e",
-      wash: "#ede8df",
+      paper: "#f7f2e8",
+      wash: "#e8dfcc",
+      ink: "#10243a",
+      graphite: "#546375",
+      signal: "#1f5fbf",
+      seal: "#1f6b4a",
+      broken: "#a14917",
     });
   });
 
@@ -135,8 +146,8 @@ describe("the palette", () => {
       expect(
         contrast(values[pair.foreground], values[pair.background]),
         `${key(pair)} — ${pair.use}. Below ${MIN_TEXT_CONTRAST}:1 this is a ` +
-          `screenshot a reader cannot read, and the dark values are derived ` +
-          `rather than picked precisely so that this cannot drift`,
+          `screenshot a reader cannot read, and both themes were checked ` +
+          `against this exact formula before either hex was written`,
       ).toBeGreaterThanOrEqual(MIN_TEXT_CONTRAST);
     }
   });
@@ -174,9 +185,9 @@ describe("the palette", () => {
 
     expect(
       Math.abs(light - dark),
-      "wash is derived from the light theme's own step off paper; if the two " +
-        "themes disagree about how far a lane sits from the page, one of them " +
-        "was hand-picked",
+      "wash was chosen to sit the same distance off paper in both themes; if " +
+        "they disagree about how far a lane sits from the page, one of them " +
+        "was picked without checking the other",
     ).toBeLessThan(0.05);
 
     for (const step of steps) {
