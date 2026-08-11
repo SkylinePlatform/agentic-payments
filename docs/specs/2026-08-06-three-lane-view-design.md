@@ -471,6 +471,8 @@ Every state, what carries it besides colour, and where it is drawn.
 | step | `authorisation_refused` | — | `bar` | `declined` | — |
 | decision | proposed | — | — | *What you are signing* | the signed box, outlined |
 | decision | signed | — | — | *What you signed* | the signed box, filled |
+| decision | approved, refused before signing | — | — | *What you are signing* | **a sentence stating nothing was signed**, `graphite` |
+| decision | approved, outcome unknown | — | — | *What you are signing* | **a sentence about what this browser was not told**, `graphite` |
 | decision | refused | — | `bar` | `declined` | — |
 | decision | refused, not recorded | — | `bar` | `declined` | **a sentence about the record**, `broken` |
 | disclosure | disclosed | — | — | `read` | — |
@@ -568,7 +570,35 @@ already has it. **This is not an oversight to be tidied up by a later issue**:
 specifying a glyph here to satisfy the pattern would say something untrue in
 order to look consistent, which is the opposite of what a vocabulary is for.
 
-### What this changes about what is on screen today
+**The two `approved, …` rows are that same argument on the other side of the
+decision, and #206 is where it arrived.** `Signing.tsx` splits a failed `POST
+/authorise` into two states, because only one of them can be told apart from a
+signature: `request_malformed` is the surface's own answer, refusing before it
+signed, and everything else — a 502, a dropped connection, a backgrounded tab —
+leaves the browser holding no answer at all. Both draw exactly as `proposed`:
+the box outlined, the heading *What you are signing*. Neither takes a mark,
+neither takes a third enclosure, and the difference between them is a sentence.
+
+They earn rows all the same, for the reason this axis has rows at all. **The
+decision axis has no machine enum**, which is why the paragraph above says the
+decision and the disclosure are enumerated by this document rather than by a
+`String()` somewhere; so a state that is on screen and absent from this table is
+absent from the vocabulary altogether, which is the gap #193 was opened about
+one row further down. And each carries prose from a protected category —
+*what a signature covers* for the first, *what a screen cannot see* for the
+second — so the `Also carried by` column has something to record, which is
+exactly what distinguishes them from the in-flight `signing` moment. That one
+draws as `proposed` too and rightly has no row: it is the same box, the same
+heading and nothing else, so a row for it would record nothing.
+
+**Why the heading stays present-continuous in both**, including the one where a
+signature may exist: the enclosure and the heading are computed from a single
+boolean on purpose — #193's fix, so that two carriers cannot drift — and that
+boolean means *this browser holds a signature*, which is false in both rows. A
+heading reading *What you signed* over a mandate that may not exist is the
+overclaim this whole axis exists to prevent, and the under-claim is the only
+other reading the vocabulary has. The residue goes to the sentence, which is
+where an unknown has gone every other time this document has met one.
 
 Two dialects, three wrong colours and one carrier that was never built, all of
 which this section resolves. They are listed because an implementing issue needs
