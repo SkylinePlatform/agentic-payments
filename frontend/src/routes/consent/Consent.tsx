@@ -13,7 +13,7 @@ import { Signing } from "./Signing";
 /**
  * The Trusted Surface consent screen — #22's central decision made visible.
  *
- * Three zones, and the third is not decoration:
+ * Four zones, and only one of them is what the signature covers:
  *
  * 1. **What you asked for** — the user's own words. This is the one screen
  *    where that is literally true, because they were typed into the box on
@@ -25,13 +25,29 @@ import { Signing } from "./Signing";
  *    forbids anything under `routes/consent/` from reaching `../../constraint`,
  *    because the sentence a signature covers has to be the one this screen
  *    showed.
- * 3. **What the identifier refers to** — the merchant's own words, outside the
+ * 3. **How many the agent will buy** — `proposal.quantity`, the basket size
+ *    the interpretation proposed. Outside the signed box, because nothing
+ *    signs it: the surface never sees a count, no mandate carries one, and the
+ *    only thing about a quantity a signature covers is a bound such as `the
+ *    quantity is at most 2` — a limit, which appears in zone 2 where limits
+ *    belong. For the concert prompt both are on this screen at once; they are
+ *    different kinds of fact and so they are in different boxes.
+ * 4. **What the identifier refers to** — the merchant's own words, outside the
  *    signed box. `Render()` produces `the item is gtin:05014477390221`, which
  *    is the identifier the constraint carries and the merchant evaluates, so
  *    the sentence is right — and it is nothing a person can act on. That
  *    cannot be fixed by rendering the sentence differently, only by showing
  *    what the identifier names beside it, labelled as not part of what was
  *    signed.
+ *
+ * **Zone 2 is the only one the signature covers, and keeping it that way is
+ * this screen's whole standard.** `POST /authorise/preview` exists so that its
+ * sentences come from the party that signs. A line placed in it from anywhere
+ * else — the browser's own proposal, most temptingly, since it is right there
+ * and reads like part of the decision — makes the box state something untrue
+ * about itself, which is the same defect as a heading reading "What you
+ * signed" over sentences nobody had signed yet. `Signing.tsx` had to fix that
+ * one; zone 3 is the same rule applied to a row rather than to a title.
  *
  * The offer card's price does real teaching here: `240.00 USD today` next to
  * a constraint reading `at most 200.00 USD` lets a reader who has never heard
@@ -40,8 +56,8 @@ import { Signing } from "./Signing";
  *
  * Nothing renders here until `preview` answers. `previewed === null` is a
  * loading state rather than a set of fields the JSX has to guard one by one,
- * and it is what keeps the three zones — all built from `previewed` — from
- * ever appearing half-populated.
+ * and it is what keeps the zones built from `previewed` from ever appearing
+ * half-populated.
  */
 export function Consent() {
   const proposal = useLocation().state as Proposal | undefined;
@@ -160,6 +176,28 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
         <p className="font-sans text-ink">Pays {instrumentName(previewed.payment_instrument)}</p>
         <p className="font-sans text-ink">
           Valid {lifetime(previewed.open_mandate_lifetime_seconds)} from signing
+        </p>
+      </section>
+
+      {/*
+        Issue #133, and outside the box on purpose. `quantity lte 2` is a bound
+        a verifier evaluates and is inside the box because the signature covers
+        it; this is the agent's stated intent about how many to actually buy,
+        and **nothing signs it** — the Trusted Surface never sees a basket size,
+        no mandate carries one, and no verifier is ever asked about it. Putting
+        it above the rule would have made the box's own claim false for one of
+        its lines, which is the defect Signing.tsx's heading already had to fix
+        one screen along. So it sits here, with the same device the typed
+        prompt and the offer card use: a label saying which kind of fact it is.
+      */}
+      <section className="flex flex-col gap-1" data-testid="basket" aria-labelledby="basket">
+        <h2 id="basket" className="font-sans text-sm text-graphite">
+          How many the agent will buy
+        </h2>
+        <p className="font-sans text-ink">Quantity {proposal.quantity}</p>
+        <p className="font-sans text-sm text-graphite">
+          The agent&rsquo;s reading of your sentence, and not part of what you sign. Whatever it
+          puts in the basket is still held to the limits above.
         </p>
       </section>
 

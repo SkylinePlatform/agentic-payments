@@ -41,9 +41,9 @@ const flightToPalmaPrompt = "buy a flight to Palma when it drops below $200, thi
 
 func demoConstraints(t *testing.T) []generated.Constraint {
 	t.Helper()
-	cs, err := interpret.Demo().Interpret(t.Context(), flightToPalmaPrompt)
+	interpretation, err := interpret.Demo().Interpret(t.Context(), flightToPalmaPrompt)
 	require.NoError(t, err, "the built scenario is one of interpret.Demo's own scripts")
-	return cs
+	return interpretation.Constraints
 }
 
 // agentJWK is a fixed EC public key standing in for an agent's. Nothing in

@@ -42,6 +42,10 @@ import (
 // refused rather than guessed at.
 const palmaPrompt = "buy a flight to Palma when it drops below $200, this summer"
 
+// concertPrompt is the scenario issue #133 is about: two tickets, a total cap,
+// and a basket size the constraint model deliberately does not carry.
+const concertPrompt = "two tickets to the Vlado Georgijev concert in November, up to $160 all in"
+
 // authorised is a world plus an agent that has been through the discovery half:
 // its own key endorsed by the user, both open mandates in hand, and one item to
 // watch.
@@ -97,12 +101,22 @@ func (a *authorisedAgent) beat() {
 	}
 }
 
-// authorise runs the discovery half against a standing world.
+// authorise runs the discovery half against a standing world, for the built
+// scenario's own prompt. See authoriseFor for a caller that needs a different
+// one.
 //
 // It uses interpret.Demo(), the scripted table, because hard rule 4 forbids a
 // test from depending on a live model — and because the scripted interpreter is
 // what the demo runs too, so this is the same path a screenshot comes from.
 func authorise(t *testing.T, w *world) *authorisedAgent {
+	t.Helper()
+	return authoriseFor(t, w, palmaPrompt)
+}
+
+// authoriseFor is authorise against a caller-named prompt, for a test that
+// needs a scenario other than the built one — the concert prompt's basket
+// size, say.
+func authoriseFor(t *testing.T, w *world, prompt string) *authorisedAgent {
 	t.Helper()
 
 	key := newParty(t, "agent", w.clock)
@@ -130,7 +144,7 @@ func authorise(t *testing.T, w *world) *authorisedAgent {
 	}
 
 	auth, err := a.client.Authorise(t.Context(), agent.Intent{
-		Prompt:      palmaPrompt,
+		Prompt:      prompt,
 		Interpreter: interpret.Demo(),
 		AgentKey:    agentKey,
 	})
@@ -140,11 +154,22 @@ func authorise(t *testing.T, w *world) *authorisedAgent {
 }
 
 // watch builds the loop this agent's authorisation licenses.
+//
+// Quantity comes from the authorisation rather than being fixed here — the
+// same precedence console.Service.Start and cmd/agent's watchOnce apply: what
+// the interpretation proposed and the user read on the consent screen is what
+// the watch buys, and an operator's own number is a fallback for an
+// authorisation that named none. See agent.Authorisation.Quantity.
 func (a *authorisedAgent) watch(t *testing.T) *agent.Watch {
 	t.Helper()
 
 	blinder, err := sdjwt.NewBlinder()
 	require.NoError(t, err, "building the agent's blinder")
+
+	quantity := a.auth.Quantity
+	if quantity < 1 {
+		quantity = 1
+	}
 
 	return &agent.Watch{
 		Client:         a.client,
@@ -153,7 +178,7 @@ func (a *authorisedAgent) watch(t *testing.T) *agent.Watch {
 		Blinder:        blinder,
 		Clock:          a.world.clock,
 		Tick:           a.tick,
-		Quantity:       1,
+		Quantity:       quantity,
 		Merchant:       generated.Merchant{ID: merchantID, Name: "Air Serbia"},
 		CredProviderID: credProviderID,
 		ProcessorID:    processorID,
@@ -369,6 +394,55 @@ func TestTheCredentialProvidersReceiptDoesNotSpendTheMandate(t *testing.T) {
 		assert.Equal(t, authz.StateSpent, tracker.Payment(),
 			"and only the merchant's answer ends it")
 	})
+}
+
+// TestTheConcertPromptBuysTheBasketSizeItAsked is issue #133, demonstrated
+// rather than described.
+//
+// "Two tickets... up to $160 all in" interprets to three constraints — one of
+// them `quantity lte 2` — and every one of them is satisfied by a purchase of
+// a single ticket at $75.00. Nothing about authorisation is wrong: the bound
+// is a limit, not an instruction, and reading it as "buy two" would be the
+// agent deciding what the user meant from a cap it set — the same move as the
+// agent evaluating a constraint. What the sentence actually asked for is a
+// fact interpret.Interpretation carries beside the constraints, and this is
+// where it has to still be standing once the watch spends it: in
+// agent.Authorisation.Quantity, and in what the watch built from it actually
+// prices and pays for.
+//
+// The concert's schedule is flat — deploy/catalogue.json prices it once, at
+// $75.00 — so Watch.Run never sees a step change and never attempts anything;
+// see Schedule.at. That is orthogonal to this defect and is why this test
+// drives Delegate and Attempt directly, on TestTheCredentialProvidersReceiptDoesNotSpendTheMandate's
+// own pattern, rather than running the loop to completion.
+func TestTheConcertPromptBuysTheBasketSizeItAsked(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	a := authoriseFor(t, w, concertPrompt)
+
+	require.Equal(t, 2, a.auth.Quantity,
+		"the sentence asked for two tickets; a watch that cannot see that number has nowhere honest to get it from")
+
+	watch := a.watch(t)
+	require.Equal(t, 2, watch.Quantity,
+		"the watch a console or cmd/agent would build takes its quantity from what was authorised, not from an operator's own default")
+
+	quoted, err := a.client.QuoteItem(t.Context(), a.auth.Item, watch.Quantity)
+	require.NoError(t, err, "the merchant has to price the basket the watch is actually about to buy")
+	assert.Equal(t, 2*merchant.DemoConcertPrice, quoted.Price.Amount,
+		"two tickets at $75.00 each is $150.00 — one ticket's worth is the bug this test exists to catch")
+
+	d, err := watch.Delegate(t.Context(), quoted)
+	require.NoError(t, err, "minting the four closed mandates for the basket the watch is buying")
+
+	var tracker agent.Tracker
+	require.NoError(t, watch.Attempt(t.Context(), &tracker, d, quoted, 1),
+		"two tickets for $150.00 is well inside the $160.00 cap the user signed")
+
+	assert.True(t, d.Settled, "the money has to have moved for the basket that was actually presented")
+	assert.Equal(t, 2*merchant.DemoConcertPrice, d.Price.Amount,
+		"what was paid for has to be the two tickets the user asked for, not one")
 }
 
 // TestTheWatchBuysWhenTheMerchantsPriceComesIntoRange is the built scenario,
@@ -726,13 +800,13 @@ func TestTheAgentValidatesWhatItsInterpreterReturned(t *testing.T) {
 // double returning canned values would delete what this test proves.
 type drifted struct{}
 
-func (drifted) Interpret(context.Context, string) ([]generated.Constraint, error) {
+func (drifted) Interpret(context.Context, string) (interpret.Interpretation, error) {
 	item, price := "item.id", "price"
-	return []generated.Constraint{
+	return interpret.Interpretation{Constraints: []generated.Constraint{
 		{Op: "eq", Field: &item, Value: merchant.DemoBicycleID},
 		// "price" is what a model reaches for; the registry says "amount".
 		{Op: "lte", Field: &price, Value: map[string]any{"amount": 40000, "currency": "USD"}},
-	}, nil
+	}}, nil
 }
 
 // TestAWatchRefusesToStartWithoutWhatItNeedsToFinish covers the wiring failures,
@@ -910,10 +984,10 @@ func TestEveryScriptedPromptFindsOneCandidate(t *testing.T) {
 			// says nothing about how many there were — add a second offer in
 			// category "ladders" and the first still wins and the old assertion
 			// still passed, while the sentence it was cited for became false.
-			constraints, err := interpret.Demo().Interpret(t.Context(), prompt)
+			interpretation, err := interpret.Demo().Interpret(t.Context(), prompt)
 			require.NoError(t, err, "the scripted interpreter has to answer its own prompt")
 
-			found, err := w.client().Discover(t.Context(), constraints)
+			found, err := w.client().Discover(t.Context(), interpretation.Constraints)
 			require.NoError(t, err, "every scripted prompt has to find something to watch")
 			assert.Equal(t, []string{want}, found,
 				"the prompt has to match exactly one offer: the agent takes the first and asks nobody, which is only defensible while there is only one")

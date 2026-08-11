@@ -119,8 +119,8 @@ func TestValidateRefusesAnInterpretationWithNoLimits(t *testing.T) {
 func TestValidateAcceptsTheBuiltScenario(t *testing.T) {
 	t.Parallel()
 
-	constraints, err := interpret.Demo().Interpret(t.Context(), builtScenarioPrompt)
+	interpretation, err := interpret.Demo().Interpret(t.Context(), builtScenarioPrompt)
 	require.NoError(t, err, "the built scenario is what every other test here builds on")
-	assert.NoError(t, interpret.Validate(constraints),
+	assert.NoError(t, interpret.Validate(interpretation.Constraints),
 		"the interpreter's own output failed the check it is supposed to have applied")
 }

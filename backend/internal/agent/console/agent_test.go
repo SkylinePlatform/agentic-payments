@@ -8,7 +8,6 @@ import (
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/console"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
-	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 )
 
 // TestAnAgentWithAScriptedInterpreterHasAMenu covers the optional-interface
@@ -30,6 +29,6 @@ func TestAnAgentWithAScriptedInterpreterHasAMenu(t *testing.T) {
 // of a method, and mockery cannot express that.
 type interpreterWithoutPrompts struct{}
 
-func (interpreterWithoutPrompts) Interpret(context.Context, string) ([]generated.Constraint, error) {
-	return nil, nil
+func (interpreterWithoutPrompts) Interpret(context.Context, string) (interpret.Interpretation, error) {
+	return interpret.Interpretation{}, nil
 }

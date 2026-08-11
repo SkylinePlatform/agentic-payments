@@ -137,7 +137,15 @@ func run() error {
 	// package's whole character.
 	prompt := flag.String("prompt", "buy a flight to Palma when it drops below $200, this summer",
 		"what the user typed, for the interpreter to read")
-	quantity := flag.Int("quantity", 1, "how many of the item to buy")
+	// A fallback rather than the source, and it still has a path that reaches
+	// it. The interpretation proposes a basket size only when the sentence
+	// named one — 2 for the concert prompt, and nothing at all for the other
+	// four — so this is what those four are bought by, and `-quantity 3` on
+	// the bicycle prompt still buys three. What it can no longer do is
+	// override a count the user actually said out loud, which is the whole of
+	// issue #133. See agent.Proposal.Quantity for why the interpreter's
+	// silence stays a silence all the way here.
+	quantity := flag.Int("quantity", 1, "how many of the item to buy, when the sentence named no count of its own")
 	poll := flag.Duration("poll", agent.DefaultPoll, "how often the watch re-quotes the merchant")
 
 	// The four identifiers are each verifier's own, as it sets Audience on its
@@ -561,12 +569,22 @@ func watchOnce(
 		return err
 	}
 
+	// authorised.Quantity first — the basket size the interpretation proposed
+	// — and cfg.quantity only when the sentence named none, which is four of
+	// the five scripted prompts. See -quantity's own flag text and
+	// agent.Proposal.Quantity: what makes this fallback reachable is that a
+	// silence stays a zero all the way from the interpreter to here.
+	quantity := authorised.Quantity
+	if quantity < 1 {
+		quantity = cfg.quantity
+	}
+
 	fmt.Printf("  typed      %q\n", cfg.prompt)
 	for _, sentence := range authorised.Rendered {
 		fmt.Printf("  signed     %s\n", sentence)
 	}
 	fmt.Printf("  watching   %s ×%d, until %s\n",
-		authorised.Item, cfg.quantity, authorised.ExpiresAt.Format(time.RFC3339))
+		authorised.Item, quantity, authorised.ExpiresAt.Format(time.RFC3339))
 
 	watch := &agent.Watch{
 		Client:         client,
@@ -575,7 +593,7 @@ func watchOnce(
 		Blinder:        blinder,
 		Clock:          identity.Clock,
 		Interval:       cfg.poll,
-		Quantity:       cfg.quantity,
+		Quantity:       quantity,
 		Merchant:       cfg.merchant,
 		CredProviderID: cfg.credProviderID,
 		ProcessorID:    cfg.processorID,

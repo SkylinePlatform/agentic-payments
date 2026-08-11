@@ -74,6 +74,7 @@ describe("the client", () => {
         price: { amount: 1, currency: "USD" },
       },
       watch_slots_free: 8,
+      quantity: 3,
     };
     const authorised: Authorised = {
       open_checkout_mandate: "checkout.jwt",
@@ -83,7 +84,7 @@ describe("the client", () => {
       payment_instrument: { id: "card-9999", type: "CARD" },
     };
 
-    await startWatch(proposal, authorised, 3);
+    await startWatch(proposal, authorised);
 
     const body = JSON.parse(calls[0].init.body as string) as {
       prompt: string;
@@ -91,6 +92,7 @@ describe("the client", () => {
       authorisation: {
         item: string;
         constraints: unknown;
+        quantity: number;
         open_checkout_mandate: string;
         open_payment_mandate: string;
         rendered: string[];
@@ -100,13 +102,16 @@ describe("the client", () => {
     };
 
     // Top level: the prompt and the quantity, neither of which lives on
-    // either input object under this name.
+    // either input object under this name — quantity is proposal.quantity,
+    // not a number this function was handed.
     expect(body.prompt).toBe("buy a ladder");
     expect(body.quantity).toBe(3);
 
-    // The proposal's half: what was narrowed and signed.
+    // The proposal's half: what was narrowed, signed and — issue #133 —
+    // sized.
     expect(body.authorisation.item).toBe("gtin:proposal-item");
     expect(body.authorisation.constraints).toEqual(proposal.constraints);
+    expect(body.authorisation.quantity).toBe(3);
 
     // The surface's half: its own account of what it signed.
     expect(body.authorisation.open_checkout_mandate).toBe("checkout.jwt");

@@ -18,6 +18,7 @@ function aProposal(): Proposal {
       price: { amount: 45000, currency: "USD" },
     },
     watch_slots_free: 8,
+    quantity: 1,
   };
 }
 

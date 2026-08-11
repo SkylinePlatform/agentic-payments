@@ -228,6 +228,27 @@ type Authorisation struct {
 	// authz.checkPinned refuses the purchase, and the surface is the only party
 	// that can honestly say what it pinned — see the field on surface.authorised.
 	Instrument generated.PaymentInstrument `json:"payment_instrument"`
+
+	// Quantity is the basket size the interpretation proposed: how many of
+	// Item the watch is to buy. Zero carries Proposal.Quantity's meaning —
+	// the sentence named no count — and leaves the number to whoever holds
+	// one.
+	//
+	// This is issue #133's field, and the reason it exists here rather than
+	// being read off Constraints is Interpretation's own: "how many to buy" is
+	// not a fact a verifier evaluates, so it is not a constraint, and reading
+	// a quantity bound as an instruction would be this package deciding what
+	// the user meant from a limit they set.
+	//
+	// **Nothing signs it, and this is the field to be careful about for that
+	// reason.** The Trusted Surface never sees a basket size: it signs the
+	// constraints, and `quantity lte 2` — a limit a verifier does check — is
+	// the only thing about a count that a mandate carries. So this number is
+	// the agent's stated intent, bounded by what was signed rather than part
+	// of it, and a screen that shows it has to say which of the two it is.
+	// frontend/src/routes/consent/Consent.tsx puts it outside the signed box
+	// on exactly that ground.
+	Quantity int `json:"quantity"`
 }
 
 // Authorise runs Propose and then collects the user's signature over the
@@ -268,7 +289,8 @@ type Offer struct {
 }
 
 // Proposal is what the agent puts in front of a person: the limits it read out
-// of their sentence, the offer it narrowed to, and the key it wants endorsed.
+// of their sentence, the offer it narrowed to, the key it wants endorsed, and
+// the basket size the sentence asked for.
 //
 // Nothing in it is signed and nothing about it is remembered. It is the input to
 // a decision, and if the decision is no there is nothing to clean up.
@@ -296,6 +318,26 @@ type Proposal struct {
 	Offers      []Offer
 	Constraints []generated.Constraint
 	AgentKey    generated.PublicKey
+
+	// Quantity is how many of Item the interpretation proposed to buy, and
+	// **zero means the sentence named no count at all** — not "one".
+	//
+	// The distinction is the whole of what this field is for, and collapsing it
+	// here is how it gets lost. Four of the five scripted sentences say nothing
+	// about how many, and for those the interpreter has no opinion to offer; a
+	// caller that has one — cmd/agent's -quantity, POST /watches's own quantity
+	// — is then the next place to look, which is the precedence
+	// console.Service.Start and cmd/agent's watchOnce both write down. Resolve
+	// the zero any earlier and that precedence can never fire: every
+	// authorisation arrives naming a number, an operator's own is silently
+	// discarded, and a flag documented as a fallback has no path that reaches
+	// it.
+	//
+	// The one caller with nothing to fall back to is a browser, and
+	// console.Service.propose is where the zero becomes a one for it — at the
+	// wire, once, because a consent screen has to display the number that will
+	// actually be spent. Issue #133.
+	Quantity int
 }
 
 // Propose runs the discovery half: interpret, search, narrow — everything
@@ -365,16 +407,16 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 		return out, errors.New("agent: no interpreter to read the prompt with")
 	}
 
-	constraints, err := in.Interpreter.Interpret(ctx, in.Prompt)
+	interpretation, err := in.Interpreter.Interpret(ctx, in.Prompt)
 	if err != nil {
 		return out, fmt.Errorf("interpreting %q: %w", in.Prompt, err)
 	}
-	if err := interpret.Validate(constraints); err != nil {
+	if err := interpret.Validate(interpretation.Constraints); err != nil {
 		return out, fmt.Errorf("the interpretation of %q is not something a verifier could read: %w",
 			in.Prompt, err)
 	}
 
-	item, offer, offers, err := c.settle(ctx, constraints, in.Item)
+	item, offer, offers, err := c.settle(ctx, interpretation.Constraints, in.Item)
 	if err != nil {
 		return out, err
 	}
@@ -383,8 +425,13 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 		Item:        item,
 		Offer:       offer,
 		Offers:      offers,
-		Constraints: narrow(constraints, item),
+		Constraints: narrow(interpretation.Constraints, item),
 		AgentKey:    in.AgentKey,
+		// Carried exactly as the interpreter answered it, zero included: a
+		// sentence that named no count has to still look like one here, or
+		// every caller holding a number of its own loses it. See
+		// Proposal.Quantity.
+		Quantity: interpretation.Quantity,
 	}, nil
 }
 
@@ -476,6 +523,15 @@ func (c *Client) sign(ctx context.Context, prompt string, proposal Proposal) (Au
 		Rendered:            answer.Rendered,
 		ExpiresAt:           answer.ExpiresAt,
 		Instrument:          answer.PaymentInstrument,
+		// The proposal's own, not asked of the surface: the Trusted Surface
+		// signs constraints, and a basket size is deliberately not one — see
+		// Authorisation.Quantity. So this is the number the interpretation
+		// proposed surviving the signing step unchanged, zero included, rather
+		// than being re-derived from anything the surface said. This path has
+		// no consent screen on it at all — the browser collects its own
+		// signature and posts the result to POST /watches — which is another
+		// way of saying that nothing here has been read by a person.
+		Quantity: proposal.Quantity,
 	}, nil
 }
 

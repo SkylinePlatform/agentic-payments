@@ -105,11 +105,11 @@ export function Signing({
   async function attemptWatch(authorised: Authorised) {
     setState({ kind: "starting", authorised });
     try {
-      // proposal.quantity is #109's product table: a count chosen on a row,
-      // carried here by catalogue/quantity.ts's withQuantity. Absent for a
-      // proposal built the way #22 always built one — one purchase per watch —
-      // so the fallback keeps that behaviour rather than silently changing it.
-      const { correlation_id } = await startWatch(proposal, authorised, proposal.quantity ?? 1);
+      // proposal.quantity is #133's: the interpretation's own basket size,
+      // required on Proposal and always sent by POST /proposals — see
+      // model.ts. startWatch no longer takes a quantity of its own to fall
+      // back to; there is no caller-supplied number left to prefer over it.
+      const { correlation_id } = await startWatch(proposal, authorised);
       navigate(`/lanes?run=${correlation_id}`);
     } catch {
       setState({ kind: "stranded", authorised });
@@ -225,6 +225,25 @@ export function Signing({
             {sentence}
           </p>
         ))}
+      </section>
+
+      {/*
+        Carried over from Consent's zone 3, and outside the box for the reason
+        the heading above is computed rather than fixed: in `starting` and
+        `stranded` that heading reads "What you signed", and a basket size is
+        the one line here no signature covers. The surface never saw it. So it
+        stays beside the box, labelled, rather than acquiring a claim by
+        sitting inside one — the same defect as the heading, one row down.
+      */}
+      <section className="flex flex-col gap-1" data-testid="basket" aria-labelledby="basket">
+        <h2 id="basket" className="font-sans text-sm text-graphite">
+          How many the agent will buy
+        </h2>
+        <p className="font-sans text-ink">Quantity {proposal.quantity}</p>
+        <p className="font-sans text-sm text-graphite">
+          Not part of your signature. Whatever the agent puts in the basket is still held to the
+          limits above.
+        </p>
       </section>
 
       {/*

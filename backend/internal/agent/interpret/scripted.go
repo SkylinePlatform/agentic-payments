@@ -33,6 +33,17 @@ type Script struct {
 	// Constraints is a JSON array of constraint nodes — the same vocabulary
 	// documented in internal/core/authz/constraint.
 	Constraints string
+
+	// Quantity is the basket size this prompt asks for. Zero means one, on
+	// the convention Interpretation.Quantity states.
+	//
+	// A Go field rather than folded into Constraints: flightToPalma's own
+	// comment records that this table's constraint text is kept character
+	// for character with internal/core/authz's mandate fixture, so that beats
+	// 2, 5 and 6 of the built scenario are provably about the same four
+	// limits. Wrapping the array in an envelope to carry a fifth, unrelated
+	// fact would break that comparison for every entry to add it to one.
+	Quantity int
 }
 
 // ScriptedInterpreter answers from a fixed table and never calls a model.
@@ -117,10 +128,10 @@ func NewScripted(scripts ...Script) (*ScriptedInterpreter, error) {
 // there is nothing to cancel because nothing leaves the process. An
 // implementation that called a model would use it, and a test that used *that*
 // would depend on a live model, which hard rule 4 forbids.
-func (s *ScriptedInterpreter) Interpret(_ context.Context, prompt string) ([]generated.Constraint, error) {
+func (s *ScriptedInterpreter) Interpret(_ context.Context, prompt string) (Interpretation, error) {
 	i, ok := s.byPrompt[normalise(prompt)]
 	if !ok {
-		return nil, fmt.Errorf("%w: %q; this interpreter is scripted for %d prompts, which Prompts lists",
+		return Interpretation{}, fmt.Errorf("%w: %q; this interpreter is scripted for %d prompts, which Prompts lists",
 			ErrNoScript, prompt, len(s.scripts))
 	}
 
@@ -137,16 +148,16 @@ func (s *ScriptedInterpreter) Interpret(_ context.Context, prompt string) ([]gen
 		// swallowed, because the only other option is returning no constraints
 		// and no error, and that reads as "the user placed no limits" at every
 		// call site.
-		return nil, fmt.Errorf("interpret: the script for %q: %w", s.scripts[i].Prompt, err)
+		return Interpretation{}, fmt.Errorf("interpret: the script for %q: %w", s.scripts[i].Prompt, err)
 	}
 
 	// The interface's contract, not a repeat of the constructor's check: this is
 	// the tree about to be returned, and the promise belongs to
 	// IntentInterpreter rather than to one way of building one.
 	if err := Validate(constraints); err != nil {
-		return nil, err
+		return Interpretation{}, err
 	}
-	return constraints, nil
+	return Interpretation{Constraints: constraints, Quantity: s.scripts[i].Quantity}, nil
 }
 
 // Prompts lists the sentences this interpreter answers, as they were written.

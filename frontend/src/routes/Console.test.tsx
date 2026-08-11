@@ -100,6 +100,7 @@ function aProposal(): Proposal {
     offer,
     offers: [offer],
     watch_slots_free: 8,
+    quantity: 1,
   };
 }
 

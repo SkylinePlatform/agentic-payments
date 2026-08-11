@@ -79,7 +79,7 @@ func ladders(merchant string, price int) constraint.Subject {
 func TestTheBuiltScenarioIsInterpretedIntoTheMandateBeats5And6Judge(t *testing.T) {
 	t.Parallel()
 
-	constraints, err := interpret.Demo().Interpret(t.Context(), builtScenarioPrompt)
+	interpretation, err := interpret.Demo().Interpret(t.Context(), builtScenarioPrompt)
 	require.NoError(t, err, "beat 1 of the built scenario is not interpretable")
 
 	for _, tc := range []struct {
@@ -94,7 +94,7 @@ func TestTheBuiltScenarioIsInterpretedIntoTheMandateBeats5And6Judge(t *testing.T
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			report, err := constraint.Evaluate(constraints, flight(tc.price))
+			report, err := constraint.Evaluate(interpretation.Constraints, flight(tc.price))
 			require.NoError(t, err, "the verifier could not read the interpreter's own output")
 			assert.Equal(t, tc.want, report.Satisfied(),
 				"the interpretation does not carry the authority the built scenario is about: %+v",
@@ -146,10 +146,10 @@ func TestEachScenarioAuthorisesWhatItsSentenceSaid(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			constraints, err := interpret.Demo().Interpret(t.Context(), tc.prompt)
+			interpretation, err := interpret.Demo().Interpret(t.Context(), tc.prompt)
 			require.NoError(t, err, "a documented scenario is not in the script")
 
-			report, err := constraint.Evaluate(constraints, tc.subject)
+			report, err := constraint.Evaluate(interpretation.Constraints, tc.subject)
 			require.NoError(t, err, "the verifier could not read the interpreter's own output")
 			assert.Equal(t, tc.want, report.Satisfied(),
 				"the interpretation does not mean what its sentence said: %+v", report.Violations())
@@ -161,6 +161,46 @@ const (
 	concertPrompt = "two tickets to the Vlado Georgijev concert in November, up to $160 all in"
 	ladderPrompt  = "find and buy telescopic ladders, cheapest"
 )
+
+// TestTheConcertPromptsBasketSizeIsTwo is issue #133's own scenario, at the
+// interpreter — before any of it has reached an agent, a surface or a watch.
+//
+// "Two tickets... up to $160 all in" places a bound, `quantity lte 2`, that a
+// purchase of one ticket satisfies as readily as two. What tells the two apart
+// is Quantity, carried beside the constraints rather than folded into one of
+// them — and this is the one scripted sentence where it is not the ordinary
+// default.
+func TestTheConcertPromptsBasketSizeIsTwo(t *testing.T) {
+	t.Parallel()
+
+	interpretation, err := interpret.Demo().Interpret(t.Context(), concertPrompt)
+	require.NoError(t, err, "the concert scenario is not in the script")
+	assert.Equal(t, 2, interpretation.Quantity,
+		"the sentence asked for two tickets, and quantity lte 2 alone cannot tell that from one")
+}
+
+// TestASentenceNamingNoCountProposesNoBasketSize is the other four scenarios,
+// walked rather than named one by one — the flight, the bicycle and the
+// ladders are all single-unit purchases, and the zero is what says the
+// sentence chose nothing rather than that it chose one. Interpretation.Quantity
+// records why the difference has to survive this far.
+func TestASentenceNamingNoCountProposesNoBasketSize(t *testing.T) {
+	t.Parallel()
+
+	for _, script := range interpret.Scenarios() {
+		if script.Prompt == concertPrompt {
+			continue
+		}
+		t.Run(script.Prompt, func(t *testing.T) {
+			t.Parallel()
+
+			interpretation, err := interpret.Demo().Interpret(t.Context(), script.Prompt)
+			require.NoError(t, err, "a scenario this package publishes is not in its own script")
+			assert.Zero(t, interpretation.Quantity,
+				"nothing in this sentence names a count, and answering one anyway would outrank every caller that has a number of its own")
+		})
+	}
+}
 
 func elsewhere() constraint.Subject {
 	s := flight(18900)
@@ -188,10 +228,10 @@ func TestEveryScenarioCanBeSaidToTheUser(t *testing.T) {
 		t.Run(script.Prompt, func(t *testing.T) {
 			t.Parallel()
 
-			constraints, err := interpret.Demo().Interpret(t.Context(), script.Prompt)
+			interpretation, err := interpret.Demo().Interpret(t.Context(), script.Prompt)
 			require.NoError(t, err, "a scenario this package publishes is not in its own script")
 
-			for _, c := range constraints {
+			for _, c := range interpretation.Constraints {
 				parsed, err := constraint.Parse(c)
 				require.NoError(t, err, "Interpret returned a constraint that does not parse")
 				assert.NotEmpty(t, parsed.Render(),
@@ -217,7 +257,7 @@ func TestAnUnscriptedPromptIsRefusedRatherThanAnswered(t *testing.T) {
 	got, err := interpret.Demo().Interpret(t.Context(), "buy me a house in Palma")
 
 	require.ErrorIs(t, err, interpret.ErrNoScript, "a prompt nobody scripted was answered anyway")
-	assert.Nil(t, got, "an unbounded mandate would have been built from this")
+	assert.Empty(t, got.Constraints, "an unbounded mandate would have been built from this")
 }
 
 // TestMatchingIgnoresCaseAndSpacingAndNothing tells the two halves apart.
@@ -292,15 +332,15 @@ func TestInterpretingTwiceReturnsIndependentTrees(t *testing.T) {
 	first, err := interpreter.Interpret(t.Context(), builtScenarioPrompt)
 	require.NoError(t, err, "the built scenario")
 
-	first[0].Op = "gte"
-	amount, ok := first[0].Value.(map[string]any)
+	first.Constraints[0].Op = "gte"
+	amount, ok := first.Constraints[0].Value.(map[string]any)
 	require.True(t, ok, "the amount bound is the first constraint and carries an object")
 	amount["amount"] = float64(1)
 
 	second, err := interpreter.Interpret(t.Context(), builtScenarioPrompt)
 	require.NoError(t, err, "the built scenario, a second time")
 
-	report, err := constraint.Evaluate(second, flight(21000))
+	report, err := constraint.Evaluate(second.Constraints, flight(21000))
 	require.NoError(t, err, "the second interpretation could not be read")
 	assert.False(t, report.Satisfied(),
 		"editing one caller's constraints changed what the next caller was authorised to do")
