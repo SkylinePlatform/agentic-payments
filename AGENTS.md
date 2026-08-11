@@ -274,6 +274,9 @@ contracts/              JSON Schema — single source of truth → Go + TS types
   codegen.mk
 tools/
   mockery/              mockery, in a second tool-only module. No Go source
+  catalogue/            deploy/catalogue.json and its images, derived from a CC0
+                        snapshot. A third tool-only module; `make catalogue`,
+                        run by a person and by nothing in CI or `make demo`
 backend/                ⬅ the Go module root. go.mod lives here, not at the top
   cmd/                  agent, merchant, credprovider, mpp, surface, registry, proxy
                         collector — an eighth binary, and NOT an AP2 role
@@ -413,6 +416,21 @@ mockery upgrade move the versions the schema generator compiles against.
 `make workspace` does not list it — it holds no Go source, and a workspace
 unifying its build list with `backend/` is exactly what the separate module
 prevents.
+
+**`tools/catalogue` is the third**, and it is where the same rule stops looking
+like a rule about generators and starts looking like a rule about *data*. It
+writes `deploy/catalogue.json` and the picture beside every row of it from a CC0
+snapshot of Wikidata committed inside the module — issue #160 — and `make
+catalogue` is the only thing that runs it. Not `generate`, not `check`, not
+`demo`: a build that reached the network would break hard rule 4, and a
+catalogue that filled differently between runs would make every `scenario` block
+in it a claim that happened to hold when it was written. What holds the
+committed file to the program instead is a test,
+`TestTheCommittedCatalogueIsWhatThisProgramProduces`, which re-derives it under
+`make test` — so a hand edit fails the gate without the gate ever generating
+anything. `make workspace` *does* list this one: it holds Go source an editor
+has to resolve, and it requires nothing but testify, which `backend/` already
+builds against.
 
 ---
 
@@ -639,6 +657,7 @@ make generate         # regenerate Go and TS types from contracts/, and the mock
 make generate-mocks   # the mockery half on its own
 make generate-ts      # the TypeScript half on its own              ⟵ needs Node
 make generate-verify  # prove generation is reproducible and touches nothing tracked ⟵ needs Node
+make catalogue        # re-derive deploy/catalogue.json and its images; run by a person
 make diagrams         # export inline mermaid from docs/ to SVG     ⟵ needs Node
 make demo             # bring the whole stack up, one Ctrl-C stops it ⟵ needs Node
 make demo-live        # the same stack, with -interpreter auto on the watch ⟵ needs Node

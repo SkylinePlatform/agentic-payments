@@ -1,7 +1,22 @@
 {
   "$comment": [
-    "What the mock Merchant sells. `cmd/merchant -catalogue` reads it, and a fifth product is an",
-    "edit here rather than a source change, a pull request and a review.",
+    "What the mock Merchant sells. `cmd/merchant -catalogue` reads it, and a product is an edit",
+    "here rather than a source change, a pull request and a review.",
+    "",
+    "**Most of it is derived rather than typed**, which is issue #160. Everything after the first",
+    "four offers is written by tools/catalogue from a CC0 snapshot of Wikidata committed beside",
+    "that program — see tools/catalogue/data/PROVENANCE.md for what was asked for and when. The",
+    "generator reaches no network, `make catalogue` runs it, and a person runs that: nothing in CI",
+    "and nothing in `make demo` regenerates this file. What keeps it honest instead is a test —",
+    "TestTheCommittedCatalogueIsWhatThisProgramProduces re-derives the whole thing under `make",
+    "test` and compares — so a hand-edited derived row fails the gate rather than drifting away",
+    "from the program that owns it.",
+    "",
+    "The first four are the demonstration's own and are copied through character for character.",
+    "Their prices, caps and scenario blocks are the beats every diagram of a real transaction",
+    "reuses, and the generator carries them out of this file rather than restating them, so a",
+    "re-run cannot move one. Everything else exists so that a search narrows rather than exhausts,",
+    "a table has rows, and a shop looks like a shop.",
     "",
     "Nothing above this file was ever the obstacle. `item.attr.<name>` is open by construction —",
     "AGENTS.md: 'core does not know what a flight is and should not have to' — the field registry",
@@ -25,27 +40,51 @@
     "miscellaneous general merchandise, which is what a shop selling flights, bicycles, concert",
     "tickets and ladders from one counter would trade under.",
     "",
-    "The offer carrying `route.origin` and `route.destination` is the flight, and the inventory the",
+    "An offer carrying `route.origin` and `route.destination` is a flight, and the inventory the",
     "Human Present flow buys through — GET /checkout?from=BEG&to=PMI — quotes that route on that",
-    "offer's own prices. Exactly one offer may carry them; none and two are both refused at load.",
-    "The rule is the attributes rather than the category, because 'flights' is a string whoever",
-    "wrote this file picked, while those two attribute names are already load-bearing: the scripted",
-    "prompt that goes looking for the flight constrains on both by name.",
+    "offer's own prices. **No two offers may describe the same route**, and a file describing none",
+    "at all is refused too.",
+    "",
+    "That rule used to be 'exactly one offer may carry them', on the ground that the inventory",
+    "quotes one route so two offers would mean choosing, and choosing by iteration order is not a",
+    "choice. The premise held and the conclusion was too strong: what the checkout needs is one",
+    "answer for the route it names, which a shop selling a dozen departures gives perfectly well as",
+    "long as no two of them are the same departure. Issue #160 replaced it, and the ambiguity is",
+    "now refused exactly where it is an ambiguity.",
+    "",
+    "The rule is the attributes rather than the category, and that has not moved: 'flights' is a",
+    "string whoever wrote this file picked, while those two attribute names are already",
+    "load-bearing — the scripted prompt that goes looking for the demonstration's own flight",
+    "constrains on both by name. A second offer in category 'flights' is stock; a second offer",
+    "describing BEG→PMI is a question with two answers.",
     "",
     "`scenario` is the offer declaring what it is for, and it is the part of this file that is not",
     "obvious. `cap` is the bound the prompt going looking for this offer places on the price; `found`",
     "is what that prompt is then supposed to do — `always`, `at-the-last-price`, or `never` for",
     "something the search is meant not to return. Those are the same claims a Go table makes about",
-    "these four products, one row each, and holding them here is what makes a fifth product state",
-    "one too. A price edited past its cap does not fail to compile, does not fail to load, and would",
-    "not fail a test written against four constants a new product never acquires: it produces a",
-    "search box that answers nothing for a prompt the documentation says works.",
+    "the four the demonstration is written around, one row each, and holding them here is what makes",
+    "the sixty beside them state one too. A price edited past its cap does not fail to compile, does",
+    "not fail to load, and would not fail a test written against four constants a derived product",
+    "never acquires: it produces a search box that answers nothing for a prompt the documentation",
+    "says works.",
+    "",
+    "All three values are in use since the catalogue was widened. `never` was scenery nothing",
+    "claimed — a product the search is meant not to return is what shows a reader that a list of",
+    "forty rows was filtered rather than merely short — and tools/catalogue's price.go is where the",
+    "proportions are argued.",
     "",
     "`image_url` is root-relative and refused at load if it is not, including a protocol-relative",
     "`//host/…`. That argument is older than this file — an image fetched from a host this project",
     "does not control would make a screenshot depend on somebody else's uptime, and would put a",
     "network call one careless test away — but it used to be a comment beside a literal a reviewer",
     "had read. The guard exists because the data moved: an editor is now enough to change it.",
+    "",
+    "The four illustrations under /images/catalogue are hand-drawn, and everything under",
+    "/images/catalogue/derived is a generated mark — one per offer, a function of the offer's own",
+    "identifier, in the same frame and the same seven palette tokens. Sixty pictures do not scale",
+    "by hand and must not scale by fetching; a handful of category drawings shared across sixty",
+    "rows would read as a mock-up of a shop rather than a shop, and would leave the next shelf",
+    "needing somebody to draw. tools/catalogue/mark.go is where that trade is argued.",
     "",
     "Every offer moves at least once. Issue #192 is why it started that way and issue #198 is why",
     "only two of them still need to: a Human Not Present watch attempts on a step change and never on",
@@ -74,7 +113,16 @@
     "specific object rather than a class of object. Nothing enforces the match — core-isolation keeps",
     "that package and the merchant from sharing a table — and the symptom of a divergence is not a",
     "failing test but a demo where the prompt finds nothing. Grep for the identifier before changing",
-    "either side. The flight and the ladders are matched on attributes and category instead."
+    "either side. The flight and the ladders are matched on attributes and category instead.",
+    "",
+    "Those four facts are what a wide catalogue must not collide with, and the two matched on",
+    "something other than an identifier are the ones a new product could reach by accident. The",
+    "ladders sentence sends `item.category eq ladders` and nothing else, and the flight sentence",
+    "sends both route codes; the agent then buys the first candidate the merchant returns and asks",
+    "nobody — see settle in internal/agent/authorise.go. So a second offer in category `ladders`,",
+    "or a second BEG→PMI, does not fail to load and does not fail to search: it changes what the",
+    "demonstration buys. tools/catalogue's Reserved is what keeps the generator off them, and",
+    "TestEveryScriptedPromptFindsOneCandidate is what measures it through the real query."
   ],
   "currency": "USD",
   "merchant": {
@@ -146,6 +194,992 @@
       "prices": [13900, 13500],
       "scenario": {
         "cap": 15000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q1004258",
+      "category": "cameras",
+      "attributes": {
+        "brand": "Fujifilm Corporation",
+        "released": "2003"
+      },
+      "title": "Fujifilm FinePix S5000",
+      "description": "Digital camera model. Fujifilm Corporation, 2003.",
+      "image_url": "/images/catalogue/derived/wd-q1004258.svg",
+      "retailer": "Sever Optics",
+      "prices": [51900, 45900],
+      "scenario": {
+        "cap": 58000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q1004262",
+      "category": "cameras",
+      "attributes": {
+        "brand": "Fujifilm Corporation"
+      },
+      "title": "Fujifilm FinePix S5200",
+      "description": "Digital camera model. Fujifilm Corporation.",
+      "image_url": "/images/catalogue/derived/wd-q1004262.svg",
+      "retailer": "Sever Optics",
+      "prices": [145900, 119900],
+      "scenario": {
+        "cap": 161000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q100774569",
+      "category": "cameras",
+      "attributes": {
+        "brand": "Panasonic Holdings Corporation",
+        "released": "2020"
+      },
+      "title": "Panasonic Lumix DC-S5",
+      "description": "Mirrorless Interchangeable-Lens Camera. Panasonic Holdings Corporation, 2020.",
+      "image_url": "/images/catalogue/derived/wd-q100774569.svg",
+      "retailer": "Sever Optics",
+      "prices": [175900, 167900],
+      "scenario": {
+        "cap": 194000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q100775896",
+      "category": "cameras",
+      "attributes": {
+        "brand": "Sony Group"
+      },
+      "title": "Sony α7S III",
+      "description": "Professional mirrorless interchangeable-lens camera with full-frame sensor from Sony. Sony Group.",
+      "image_url": "/images/catalogue/derived/wd-q100775896.svg",
+      "retailer": "Sever Optics",
+      "prices": [129900, 109900],
+      "scenario": {
+        "cap": 143000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q101247282",
+      "category": "cameras",
+      "attributes": {
+        "brand": "Sony Group"
+      },
+      "title": "Sony α7C",
+      "description": "Compact mirrorless interchangeable-lens camera with full-frame sensor from Sony. Sony Group.",
+      "image_url": "/images/catalogue/derived/wd-q101247282.svg",
+      "retailer": "Sever Optics",
+      "prices": [165900, 142900],
+      "scenario": {
+        "cap": 183000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q102348262",
+      "category": "cameras",
+      "attributes": {
+        "brand": "Fujifilm Corporation",
+        "released": "2020"
+      },
+      "title": "Fujifilm X-S10",
+      "description": "Digital Mirrorless camera. Fujifilm Corporation, 2020.",
+      "image_url": "/images/catalogue/derived/wd-q102348262.svg",
+      "retailer": "Sever Optics",
+      "prices": [118900, 98900],
+      "scenario": {
+        "cap": 89000,
+        "found": "never"
+      }
+    },
+    {
+      "id": "wd:Q1030263",
+      "category": "cameras",
+      "attributes": {
+        "brand": "Nikon",
+        "released": "2009"
+      },
+      "title": "Nikon D5000",
+      "description": "Digital camera model. Nikon, 2009.",
+      "image_url": "/images/catalogue/derived/wd-q1030263.svg",
+      "retailer": "Sever Optics",
+      "prices": [175900, 147900],
+      "scenario": {
+        "cap": 161900,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "wd:Q1033539",
+      "category": "cameras",
+      "attributes": {
+        "brand": "Canon Inc.",
+        "released": "2011"
+      },
+      "title": "Canon PowerShot S100",
+      "description": "Digital camera model. Canon Inc., 2011.",
+      "image_url": "/images/catalogue/derived/wd-q1033539.svg",
+      "retailer": "Sever Optics",
+      "prices": [89900, 81900],
+      "scenario": {
+        "cap": 99000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q10373386",
+      "category": "cameras",
+      "attributes": {
+        "brand": "Sony Group",
+        "released": "2007"
+      },
+      "title": "Sony Cyber-shot DSC-W35",
+      "description": "Digital camera model. Sony Group, 2007.",
+      "image_url": "/images/catalogue/derived/wd-q10373386.svg",
+      "retailer": "Sever Optics",
+      "prices": [85900, 76900],
+      "scenario": {
+        "cap": 69200,
+        "found": "never"
+      }
+    },
+    {
+      "id": "wd:Q1038814",
+      "category": "cameras",
+      "attributes": {
+        "brand": "Panasonic Holdings Corporation",
+        "released": "2008"
+      },
+      "title": "Panasonic Lumix DMC-G1",
+      "description": "Digital camera model. Panasonic Holdings Corporation, 2008.",
+      "image_url": "/images/catalogue/derived/wd-q1038814.svg",
+      "retailer": "Sever Optics",
+      "prices": [130900, 107900],
+      "scenario": {
+        "cap": 144000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q100876300",
+      "category": "camera-lenses",
+      "attributes": {
+        "brand": "Canon Inc.",
+        "released": "2018"
+      },
+      "title": "Canon EF-M 32mm f/1.4 STM",
+      "description": "Prime lens by Canon Inc. Canon Inc., 2018.",
+      "image_url": "/images/catalogue/derived/wd-q100876300.svg",
+      "retailer": "Sever Optics",
+      "prices": [233900, 189900],
+      "scenario": {
+        "cap": 258000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q101245617",
+      "category": "camera-lenses",
+      "attributes": {
+        "brand": "Canon Inc.",
+        "released": "2018"
+      },
+      "title": "Canon RF 50mm F1.2 L USM",
+      "description": "Prime lens. Canon Inc., 2018.",
+      "image_url": "/images/catalogue/derived/wd-q101245617.svg",
+      "retailer": "Sever Optics",
+      "prices": [129900, 119900],
+      "scenario": {
+        "cap": 143000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q102354947",
+      "category": "camera-lenses",
+      "attributes": {
+        "brand": "Tamron"
+      },
+      "title": "Tamron SP 24-70mm F/2.8 Di VC USD G2",
+      "description": "Zoom lens by Tamron. Tamron.",
+      "image_url": "/images/catalogue/derived/wd-q102354947.svg",
+      "retailer": "Sever Optics",
+      "prices": [177900, 156900],
+      "scenario": {
+        "cap": 196000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q104915001",
+      "category": "camera-lenses",
+      "attributes": {
+        "brand": "Canon Inc."
+      },
+      "title": "Canon EF-S 18-55mm lens F4-5.6 IS STM",
+      "description": "Camera lens developed by Canon. Canon Inc..",
+      "image_url": "/images/catalogue/derived/wd-q104915001.svg",
+      "retailer": "Sever Optics",
+      "prices": [151900, 138900],
+      "scenario": {
+        "cap": 168000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q105044113",
+      "category": "camera-lenses",
+      "attributes": {
+        "brand": "Sony Group",
+        "released": "2020"
+      },
+      "title": "Sony FE 28-60mm F4-5.6",
+      "description": "Zoom lens for the Sony E-mount. Sony Group, 2020.",
+      "image_url": "/images/catalogue/derived/wd-q105044113.svg",
+      "retailer": "Sever Optics",
+      "prices": [120900, 105900],
+      "scenario": {
+        "cap": 133000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q106570311",
+      "category": "camera-lenses",
+      "attributes": {
+        "brand": "Sony Group"
+      },
+      "title": "Sony FE 35mm F1.4 GM",
+      "description": "Wide-angle prime E-mount camera lens. Sony Group.",
+      "image_url": "/images/catalogue/derived/wd-q106570311.svg",
+      "retailer": "Sever Optics",
+      "prices": [30900, 26900],
+      "scenario": {
+        "cap": 28900,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "wd:Q1065981",
+      "category": "camera-lenses",
+      "attributes": {
+        "brand": "Canon Inc."
+      },
+      "title": "Canon EF 24–105mm lens",
+      "description": "EF mount wide-to-telephoto zoom lens. Canon Inc..",
+      "image_url": "/images/catalogue/derived/wd-q1065981.svg",
+      "retailer": "Sever Optics",
+      "prices": [80900, 72900],
+      "scenario": {
+        "cap": 89000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q106925892",
+      "category": "camera-lenses",
+      "attributes": {
+        "brand": "Carl Zeiss AG",
+        "released": "2016"
+      },
+      "title": "Carl Zeiss Batis Distagon T* 2.8/18",
+      "description": "Full-format ultra-wide angle lens manufactured by Carl Zeiss AG for Sony E-Mount only. Carl Zeiss AG, 2016.",
+      "image_url": "/images/catalogue/derived/wd-q106925892.svg",
+      "retailer": "Sever Optics",
+      "prices": [183900, 154900],
+      "scenario": {
+        "cap": 139400,
+        "found": "never"
+      }
+    },
+    {
+      "id": "wd:Q107178096",
+      "category": "camera-lenses",
+      "attributes": {
+        "brand": "Sony Group"
+      },
+      "title": "Sony FE 135mm F1.8 GM",
+      "description": "Prime lens for the Sony E-mount. Sony Group.",
+      "image_url": "/images/catalogue/derived/wd-q107178096.svg",
+      "retailer": "Sever Optics",
+      "prices": [24900, 22900],
+      "scenario": {
+        "cap": 23900,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "wd:Q107178119",
+      "category": "camera-lenses",
+      "attributes": {
+        "brand": "Sony Group",
+        "released": "2021"
+      },
+      "title": "Sony FE 50mm F1.2 GM",
+      "description": "Full-frame prime lens made by Sony for the FE mount. Sony Group, 2021.",
+      "image_url": "/images/catalogue/derived/wd-q107178119.svg",
+      "retailer": "Sever Optics",
+      "prices": [196900, 177900],
+      "scenario": {
+        "cap": 217000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q100261067",
+      "category": "smartphones",
+      "attributes": {
+        "brand": "Huawei"
+      },
+      "title": "Huawei Y9a",
+      "description": "Smartphone model. Huawei.",
+      "image_url": "/images/catalogue/derived/wd-q100261067.svg",
+      "retailer": "Sever Electronics",
+      "prices": [33900, 31900],
+      "scenario": {
+        "cap": 32900,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "wd:Q100286751",
+      "category": "smartphones",
+      "attributes": {
+        "brand": "Sony Mobile Communications"
+      },
+      "title": "Sony Xperia 5 II",
+      "description": "2020 Android smartphone. Sony Mobile Communications.",
+      "image_url": "/images/catalogue/derived/wd-q100286751.svg",
+      "retailer": "Sever Electronics",
+      "prices": [22900, 20900],
+      "scenario": {
+        "cap": 21900,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "wd:Q100309371",
+      "category": "smartphones",
+      "attributes": {
+        "brand": "Samsung Electronics"
+      },
+      "title": "Samsung A520",
+      "description": "Digital single-lens camera by Samsung. Samsung Electronics.",
+      "image_url": "/images/catalogue/derived/wd-q100309371.svg",
+      "retailer": "Sever Electronics",
+      "prices": [103900, 94900],
+      "scenario": {
+        "cap": 115000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q100348826",
+      "category": "smartphones",
+      "attributes": {
+        "brand": "OnePlus"
+      },
+      "title": "OnePlus 8T",
+      "description": "Android-based smartphone manufactured by OnePlus. OnePlus.",
+      "image_url": "/images/catalogue/derived/wd-q100348826.svg",
+      "retailer": "Sever Electronics",
+      "prices": [95900, 78900],
+      "scenario": {
+        "cap": 106000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q100707241",
+      "category": "smartphones",
+      "attributes": {
+        "brand": "Realme"
+      },
+      "title": "realme 7 Pro",
+      "description": "Smartphone by Chinese brand. Realme.",
+      "image_url": "/images/catalogue/derived/wd-q100707241.svg",
+      "retailer": "Sever Electronics",
+      "prices": [17900, 15900],
+      "scenario": {
+        "cap": 20000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q100939876",
+      "category": "smartphones",
+      "attributes": {
+        "brand": "Huawei"
+      },
+      "title": "Honor 6C",
+      "description": "Smartphone model. Huawei.",
+      "image_url": "/images/catalogue/derived/wd-q100939876.svg",
+      "retailer": "Sever Electronics",
+      "prices": [46900, 39900],
+      "scenario": {
+        "cap": 52000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q101071334",
+      "category": "smartphones",
+      "attributes": {
+        "brand": "Huawei"
+      },
+      "title": "Huawei P Smart 2020",
+      "description": "2020 Android Smartphone. Huawei.",
+      "image_url": "/images/catalogue/derived/wd-q101071334.svg",
+      "retailer": "Sever Electronics",
+      "prices": [115900, 107900],
+      "scenario": {
+        "cap": 128000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q102279550",
+      "category": "smartphones",
+      "attributes": {
+        "brand": "Realme",
+        "released": "2020"
+      },
+      "title": "Realme 7",
+      "description": "Smartphone by Chinese brand. Realme, 2020.",
+      "image_url": "/images/catalogue/derived/wd-q102279550.svg",
+      "retailer": "Sever Electronics",
+      "prices": [118900, 95900],
+      "scenario": {
+        "cap": 131000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q103024022",
+      "category": "smartphones",
+      "attributes": {
+        "brand": "Wiko"
+      },
+      "title": "Wiko Lenny 4",
+      "description": "Mobile phone. Wiko.",
+      "image_url": "/images/catalogue/derived/wd-q103024022.svg",
+      "retailer": "Sever Electronics",
+      "prices": [101900, 89900],
+      "scenario": {
+        "cap": 113000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q104531763",
+      "category": "smartphones",
+      "attributes": {
+        "brand": "Xiaomi"
+      },
+      "title": "Xiaomi Mi 11",
+      "description": "Smartphone model developed by Xiaomi. Xiaomi.",
+      "image_url": "/images/catalogue/derived/wd-q104531763.svg",
+      "retailer": "Sever Electronics",
+      "prices": [38900, 37900],
+      "scenario": {
+        "cap": 43000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q103980885",
+      "category": "games-consoles",
+      "attributes": {
+        "brand": "Y.S.A."
+      },
+      "title": "TV Sports Star Model-105",
+      "description": "Pong console. Y.S.A..",
+      "image_url": "/images/catalogue/derived/wd-q103980885.svg",
+      "retailer": "Sever Electronics",
+      "prices": [47900, 44900],
+      "scenario": {
+        "cap": 46400,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "wd:Q1046862",
+      "category": "games-consoles",
+      "attributes": {
+        "brand": "Coleco"
+      },
+      "title": "ColecoVision",
+      "description": "1982 second generation home video-game console. Coleco.",
+      "image_url": "/images/catalogue/derived/wd-q1046862.svg",
+      "retailer": "Sever Electronics",
+      "prices": [32900, 30900],
+      "scenario": {
+        "cap": 37000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q1055215",
+      "category": "games-consoles",
+      "attributes": {
+        "brand": "VTech"
+      },
+      "title": "V.Smile",
+      "description": "Educational home video game console released by VTech in 2004. VTech.",
+      "image_url": "/images/catalogue/derived/wd-q1055215.svg",
+      "retailer": "Sever Electronics",
+      "prices": [57900, 53900],
+      "scenario": {
+        "cap": 64000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q108502055",
+      "category": "games-consoles",
+      "attributes": {
+        "brand": "Hyperkin"
+      },
+      "title": "Hyperkin RetroN 77",
+      "description": "Home game console compatible with the Atari 2600. Hyperkin.",
+      "image_url": "/images/catalogue/derived/wd-q108502055.svg",
+      "retailer": "Sever Electronics",
+      "prices": [26900, 22900],
+      "scenario": {
+        "cap": 30000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q108502306",
+      "category": "games-consoles",
+      "attributes": {
+        "brand": "Hyperkin"
+      },
+      "title": "Hyperkin Retron 1",
+      "description": "Home video game console. Hyperkin.",
+      "image_url": "/images/catalogue/derived/wd-q108502306.svg",
+      "retailer": "Sever Electronics",
+      "prices": [51900, 45900],
+      "scenario": {
+        "cap": 58000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q111303693",
+      "category": "games-consoles",
+      "attributes": {
+        "brand": "Ohio Art Company",
+        "released": "1987"
+      },
+      "title": "Etch A Sketch Animator 2000",
+      "description": "Portable video game console. Ohio Art Company, 1987.",
+      "image_url": "/images/catalogue/derived/wd-q111303693.svg",
+      "retailer": "Sever Electronics",
+      "prices": [39900, 36900],
+      "scenario": {
+        "cap": 44000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q11330544",
+      "category": "games-consoles",
+      "attributes": {
+        "brand": "Toshiba"
+      },
+      "title": "VISICOM",
+      "description": "Home game console. Toshiba.",
+      "image_url": "/images/catalogue/derived/wd-q11330544.svg",
+      "retailer": "Sever Electronics",
+      "prices": [8900, 7900],
+      "scenario": {
+        "cap": 6900,
+        "found": "never"
+      }
+    },
+    {
+      "id": "wd:Q1136902",
+      "category": "games-consoles",
+      "attributes": {
+        "brand": "NEC"
+      },
+      "title": "PC-FX",
+      "description": "Home video game console released by NEC in 1994. NEC.",
+      "image_url": "/images/catalogue/derived/wd-q1136902.svg",
+      "retailer": "Sever Electronics",
+      "prices": [19900, 16900],
+      "scenario": {
+        "cap": 22000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q1140676",
+      "category": "games-consoles",
+      "attributes": {
+        "brand": "Epoch Co."
+      },
+      "title": "Cassette Vision",
+      "description": "Second-generation home video game console released by Epoch Co. in 1981. Epoch Co..",
+      "image_url": "/images/catalogue/derived/wd-q1140676.svg",
+      "retailer": "Sever Electronics",
+      "prices": [42900, 40900],
+      "scenario": {
+        "cap": 41900,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "wd:Q1147227",
+      "category": "games-consoles",
+      "attributes": {
+        "brand": "Cybiko, Inc."
+      },
+      "title": "Cybiko",
+      "description": "Handheld game console and PDA. Cybiko, Inc..",
+      "image_url": "/images/catalogue/derived/wd-q1147227.svg",
+      "retailer": "Sever Electronics",
+      "prices": [26900, 23900],
+      "scenario": {
+        "cap": 30000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q102234496",
+      "category": "bicycles",
+      "attributes": {
+        "brand": "Trek Bicycle Corporation"
+      },
+      "title": "Trek FX Sport Carbon 4",
+      "description": "Bicycle model. Trek Bicycle Corporation.",
+      "image_url": "/images/catalogue/derived/wd-q102234496.svg",
+      "retailer": "Sever Cycles",
+      "prices": [36900, 35900],
+      "scenario": {
+        "cap": 36400,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "wd:Q112971981",
+      "category": "bicycles",
+      "attributes": {
+        "brand": "Helkama"
+      },
+      "title": "Helkama Aino",
+      "description": "Bicycle model. Helkama.",
+      "image_url": "/images/catalogue/derived/wd-q112971981.svg",
+      "retailer": "Sever Cycles",
+      "prices": [225900, 180900],
+      "scenario": {
+        "cap": 203400,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "wd:Q112972003",
+      "category": "bicycles",
+      "attributes": {
+        "brand": "Helkama"
+      },
+      "title": "Helkama Ainotar",
+      "description": "Bicycle model. Helkama.",
+      "image_url": "/images/catalogue/derived/wd-q112972003.svg",
+      "retailer": "Sever Cycles",
+      "prices": [125900, 119900],
+      "scenario": {
+        "cap": 122900,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "wd:Q112972408",
+      "category": "bicycles",
+      "attributes": {
+        "brand": "Helkama"
+      },
+      "title": "Helkama Saana",
+      "description": "Bicycle model. Helkama.",
+      "image_url": "/images/catalogue/derived/wd-q112972408.svg",
+      "retailer": "Sever Cycles",
+      "prices": [154900, 139900],
+      "scenario": {
+        "cap": 147400,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "wd:Q112972442",
+      "category": "bicycles",
+      "attributes": {
+        "brand": "Helkama"
+      },
+      "title": "Helkama Oiva",
+      "description": "Bicycle model. Helkama.",
+      "image_url": "/images/catalogue/derived/wd-q112972442.svg",
+      "retailer": "Sever Cycles",
+      "prices": [235900, 200900],
+      "scenario": {
+        "cap": 260000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q112972789",
+      "category": "bicycles",
+      "attributes": {
+        "brand": "Helkama"
+      },
+      "title": "Helkama Jekku",
+      "description": "Folding bicycle model. Helkama.",
+      "image_url": "/images/catalogue/derived/wd-q112972789.svg",
+      "retailer": "Sever Cycles",
+      "prices": [77900, 62900],
+      "scenario": {
+        "cap": 70400,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "wd:Q112972810",
+      "category": "bicycles",
+      "attributes": {
+        "brand": "Helkama"
+      },
+      "title": "Helkama Senator",
+      "description": "Low-step bicycle model. Helkama.",
+      "image_url": "/images/catalogue/derived/wd-q112972810.svg",
+      "retailer": "Sever Cycles",
+      "prices": [127900, 119900],
+      "scenario": {
+        "cap": 141000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "wd:Q112972828",
+      "category": "bicycles",
+      "attributes": {
+        "brand": "Helkama"
+      },
+      "title": "Helkama Vaeltaja",
+      "description": "Bicycle model. Helkama.",
+      "image_url": "/images/catalogue/derived/wd-q112972828.svg",
+      "retailer": "Sever Cycles",
+      "prices": [31900, 25900],
+      "scenario": {
+        "cap": 36000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "route:BEG-ABA",
+      "category": "flights",
+      "attributes": {
+        "route.destination": "ABA",
+        "route.origin": "BEG"
+      },
+      "title": "Belgrade Nikola Tesla → Abakan",
+      "description": "Scheduled service. Belgrade Nikola Tesla Airport, Serbia to Abakan International Airport, Russia.",
+      "image_url": "/images/catalogue/derived/route-beg-aba.svg",
+      "retailer": "Adria Wings",
+      "prices": [36900, 33900],
+      "scenario": {
+        "cap": 41000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "route:ABA-BEG",
+      "category": "flights",
+      "attributes": {
+        "route.destination": "BEG",
+        "route.origin": "ABA"
+      },
+      "title": "Abakan → Belgrade Nikola Tesla",
+      "description": "Scheduled service. Abakan International Airport, Russia to Belgrade Nikola Tesla Airport, Serbia.",
+      "image_url": "/images/catalogue/derived/route-aba-beg.svg",
+      "retailer": "Adria Wings",
+      "prices": [8900, 7900],
+      "scenario": {
+        "cap": 8400,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "route:BEG-BOJ",
+      "category": "flights",
+      "attributes": {
+        "route.destination": "BOJ",
+        "route.origin": "BEG"
+      },
+      "title": "Belgrade Nikola Tesla → Burgas",
+      "description": "Scheduled service. Belgrade Nikola Tesla Airport, Serbia to Burgas Airport, Bulgaria.",
+      "image_url": "/images/catalogue/derived/route-beg-boj.svg",
+      "retailer": "Adria Wings",
+      "prices": [8900, 7900],
+      "scenario": {
+        "cap": 10000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "route:BOJ-BEG",
+      "category": "flights",
+      "attributes": {
+        "route.destination": "BEG",
+        "route.origin": "BOJ"
+      },
+      "title": "Burgas → Belgrade Nikola Tesla",
+      "description": "Scheduled service. Burgas Airport, Bulgaria to Belgrade Nikola Tesla Airport, Serbia.",
+      "image_url": "/images/catalogue/derived/route-boj-beg.svg",
+      "retailer": "Adria Wings",
+      "prices": [39900, 32900],
+      "scenario": {
+        "cap": 44000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "route:BEG-DSA",
+      "category": "flights",
+      "attributes": {
+        "route.destination": "DSA",
+        "route.origin": "BEG"
+      },
+      "title": "Belgrade Nikola Tesla → Doncaster Sheffield",
+      "description": "Scheduled service. Belgrade Nikola Tesla Airport, Serbia to Doncaster Sheffield Airport, United Kingdom.",
+      "image_url": "/images/catalogue/derived/route-beg-dsa.svg",
+      "retailer": "Adria Wings",
+      "prices": [12900, 11900],
+      "scenario": {
+        "cap": 12400,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "route:DSA-BEG",
+      "category": "flights",
+      "attributes": {
+        "route.destination": "BEG",
+        "route.origin": "DSA"
+      },
+      "title": "Doncaster Sheffield → Belgrade Nikola Tesla",
+      "description": "Scheduled service. Doncaster Sheffield Airport, United Kingdom to Belgrade Nikola Tesla Airport, Serbia.",
+      "image_url": "/images/catalogue/derived/route-dsa-beg.svg",
+      "retailer": "Adria Wings",
+      "prices": [25900, 23900],
+      "scenario": {
+        "cap": 24900,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "route:BEG-HEL",
+      "category": "flights",
+      "attributes": {
+        "route.destination": "HEL",
+        "route.origin": "BEG"
+      },
+      "title": "Belgrade Nikola Tesla → Helsinki",
+      "description": "Scheduled service. Belgrade Nikola Tesla Airport, Serbia to Helsinki Airport, Finland.",
+      "image_url": "/images/catalogue/derived/route-beg-hel.svg",
+      "retailer": "Adria Wings",
+      "prices": [26900, 22900],
+      "scenario": {
+        "cap": 24900,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "route:HEL-BEG",
+      "category": "flights",
+      "attributes": {
+        "route.destination": "BEG",
+        "route.origin": "HEL"
+      },
+      "title": "Helsinki → Belgrade Nikola Tesla",
+      "description": "Scheduled service. Helsinki Airport, Finland to Belgrade Nikola Tesla Airport, Serbia.",
+      "image_url": "/images/catalogue/derived/route-hel-beg.svg",
+      "retailer": "Adria Wings",
+      "prices": [15900, 12900],
+      "scenario": {
+        "cap": 18000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "route:BEG-KUT",
+      "category": "flights",
+      "attributes": {
+        "route.destination": "KUT",
+        "route.origin": "BEG"
+      },
+      "title": "Belgrade Nikola Tesla → Kutaisi",
+      "description": "Scheduled service. Belgrade Nikola Tesla Airport, Serbia to Kutaisi International Airport, Georgia.",
+      "image_url": "/images/catalogue/derived/route-beg-kut.svg",
+      "retailer": "Adria Wings",
+      "prices": [14900, 12900],
+      "scenario": {
+        "cap": 17000,
+        "found": "always"
+      }
+    },
+    {
+      "id": "route:BEG-NBC",
+      "category": "flights",
+      "attributes": {
+        "route.destination": "NBC",
+        "route.origin": "BEG"
+      },
+      "title": "Belgrade Nikola Tesla → Begishevo",
+      "description": "Scheduled service. Belgrade Nikola Tesla Airport, Serbia to Begishevo Airport, Russia.",
+      "image_url": "/images/catalogue/derived/route-beg-nbc.svg",
+      "retailer": "Adria Wings",
+      "prices": [45900, 40900],
+      "scenario": {
+        "cap": 43400,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "route:BEG-PSA",
+      "category": "flights",
+      "attributes": {
+        "route.destination": "PSA",
+        "route.origin": "BEG"
+      },
+      "title": "Belgrade Nikola Tesla → Pisa 'Galileo Galilei'",
+      "description": "Scheduled service. Belgrade Nikola Tesla Airport, Serbia to Pisa International Airport 'Galileo Galilei', Italy.",
+      "image_url": "/images/catalogue/derived/route-beg-psa.svg",
+      "retailer": "Adria Wings",
+      "prices": [40900, 34900],
+      "scenario": {
+        "cap": 37900,
+        "found": "at-the-last-price"
+      }
+    },
+    {
+      "id": "route:BEG-SZY",
+      "category": "flights",
+      "attributes": {
+        "route.destination": "SZY",
+        "route.origin": "BEG"
+      },
+      "title": "Belgrade Nikola Tesla → Szczytno-Szymany",
+      "description": "Scheduled service. Belgrade Nikola Tesla Airport, Serbia to Szczytno-Szymany International Airport, Poland.",
+      "image_url": "/images/catalogue/derived/route-beg-szy.svg",
+      "retailer": "Adria Wings",
+      "prices": [8900, 7900],
+      "scenario": {
+        "cap": 10000,
         "found": "always"
       }
     }

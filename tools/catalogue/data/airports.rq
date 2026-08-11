@@ -1,0 +1,13 @@
+SELECT ?item ?iata ?label ?countryLabel WHERE {
+  ?item wdt:P31 wd:Q644371 ;
+        wdt:P238 ?iata ;
+        wdt:P17 ?country ;
+        rdfs:label ?label .
+  ?country wdt:P30 wd:Q46 ;
+           rdfs:label ?countryLabel .
+  FILTER(LANG(?label) = "en")
+  FILTER(LANG(?countryLabel) = "en")
+  FILTER(REGEX(?iata, "^[A-Z]{3}$"))
+}
+ORDER BY ?iata
+LIMIT 300

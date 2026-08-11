@@ -54,10 +54,30 @@ generate-mocks: $(MOCKERY) ## Regenerate the mocks configured in backend/.mocker
 # `generate` produces them too.
 generate: generate-mocks
 
+# deploy/catalogue.json and the picture beside every row of it, derived from the
+# CC0 snapshot in tools/catalogue/data. A third tool-only module, on the rule
+# the two above follow: a generator is not a dependency of the thing it
+# generates.
+#
+# **It is deliberately not a prerequisite of anything.** Not `generate`, not
+# `check`, not `demo`. Its output is committed, its input is committed, and a
+# catalogue that filled differently between runs would make every scenario block
+# in it a claim that happened to hold when it was written — issue #158 and issue
+# #160 both. What keeps the committed file honest is a test rather than a
+# rebuild: TestTheCommittedCatalogueIsWhatThisProgramProduces re-derives it under
+# `make test` and compares, so a hand edit fails the gate without the gate ever
+# running the generator.
+CATALOGUE_TOOL := tools/catalogue
+
+.PHONY: catalogue
+catalogue: ## Re-derive deploy/catalogue.json and its images from tools/catalogue/data
+	$(GO) -C $(CATALOGUE_TOOL) run .
+
 .PHONY: test
 test: ## Unit tests
 	cd $(BACKEND) && $(GO) test -race ./...
 	$(GO) -C $(CONTRACT_TOOLS) test ./...
+	$(GO) -C $(CATALOGUE_TOOL) test ./...
 
 # pkg/ is in scope alongside adapters/ because that is where implementations of
 # public standards live, and those are the ones with vectors published by
@@ -192,12 +212,19 @@ hooks: ## Point git at the tracked hooks in .githooks
 # never demand a newer Go than its owner has — the failure mode a committed
 # go.work would hand anyone on an older toolchain. It also refuses to overwrite,
 # so a replace directive added locally for debugging survives.
+#
+# tools/catalogue is listed and tools/mockery is not, on the one criterion that
+# separates them: an editor needs a module in the workspace to resolve the Go
+# source in it, and mockery holds none. What made listing contracts/tools a
+# trade-off does not apply to the catalogue generator either — it requires
+# nothing but testify, which backend/ already builds against, so unifying its
+# build list moves no version.
 .PHONY: workspace
 workspace: ## Write the untracked go.work an editor opened at the root needs
 	@if [ -e go.work ]; then \
 		echo "go.work already exists — leaving it alone"; \
 	else \
-		$(GO) work init ./$(BACKEND) ./$(CONTRACT_TOOLS) && \
+		$(GO) work init ./$(BACKEND) ./$(CONTRACT_TOOLS) ./$(CATALOGUE_TOOL) && \
 		echo "wrote go.work — untracked on purpose, see AGENTS.md"; \
 	fi
 

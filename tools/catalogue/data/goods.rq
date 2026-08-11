@@ -1,0 +1,13 @@
+SELECT ?item ?label ?description ?makerLabel ?inception WHERE {
+  ?item wdt:P31 wd:CLASSID ;
+        wdt:P176 ?maker ;
+        rdfs:label ?label ;
+        schema:description ?description .
+  ?maker rdfs:label ?makerLabel .
+  OPTIONAL { ?item wdt:P571 ?inception }
+  FILTER(LANG(?label) = "en")
+  FILTER(LANG(?description) = "en")
+  FILTER(LANG(?makerLabel) = "en")
+}
+ORDER BY ?item
+LIMIT 40

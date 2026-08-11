@@ -2,6 +2,7 @@ package merchant_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -419,12 +420,11 @@ func TestEveryOfferInAResultIsPricedAtOneInstant(t *testing.T) {
 	cat, clk := demoCatalogue(t)
 	clk.Advance(merchant.DefaultStep)
 
-	// A set every offer satisfies, so the result carries all four.
-	results, err := cat.Search(constraintsFrom(t,
-		`[{"op":"lte","field":"amount","value":{"amount":100000,"currency":"USD"}}]`))
+	// A set every offer satisfies, so the result carries the whole catalogue.
+	results, err := cat.Search(everything(t))
 	require.NoError(t, err)
 
-	require.Len(t, results.Offers, 4,
+	require.Len(t, results.Offers, len(cat.Offers()),
 		"this constraint is above every price in the catalogue, so it has to match all of it")
 	assert.Equal(t, clk.Now(), results.ObservedAt,
 		"the result set has to name the instant it describes, or a reader cannot tell a "+
@@ -440,22 +440,55 @@ func TestEveryOfferInAResultIsPricedAtOneInstant(t *testing.T) {
 	}
 }
 
+// everything is a constraint set above every price in the shipped catalogue, so
+// that a search on it returns the whole shop.
+//
+// The bound is read out of the file rather than written down, and that stopped
+// being a nicety when the catalogue widened past four offers: a literal chosen
+// to clear four prices quietly stopped clearing all of them, and a test asserting
+// "this matches everything" went on passing over a result set that was missing
+// nineteen rows.
+func everything(t *testing.T) []generated.Constraint {
+	t.Helper()
+
+	highest := 0
+	for _, o := range shippedCatalogue(t).Offers {
+		for _, p := range o.Prices {
+			highest = max(highest, p)
+		}
+	}
+	return constraintsFrom(t, fmt.Sprintf(
+		`[{"op":"lte","field":"amount","value":{"amount":%d,"currency":%q}}]`,
+		highest, merchant.DemoCurrency))
+}
+
 // TestResultsAreOrderedTheSameWayEveryTime is what a screenshot depends on.
+//
+// The expected order is the catalogue's own rather than a list written out here.
+// A written list was the right shape for four offers and is the wrong one for
+// sixty-four: it would be a second copy of the file, sorted by hand, and the
+// failure it produced on the day somebody added a product would be a diff of
+// sixty strings that says nothing about ordering.
+//
+// What is actually at stake is that the order does not *vary* — Go's map
+// iteration is deliberately unordered, and a product list that shuffles between
+// two runs is one no screenshot can be taken of — so the assertion is that five
+// searches agree with each other and with Catalogue.Offers, which is the
+// sequence NewCatalogue sorted by identifier.
 func TestResultsAreOrderedTheSameWayEveryTime(t *testing.T) {
 	t.Parallel()
 
 	cat, _ := demoCatalogue(t)
-	everything := constraintsFrom(t,
-		`[{"op":"lte","field":"amount","value":{"amount":100000,"currency":"USD"}}]`)
+	all := everything(t)
 
-	want := []string{
-		merchant.DemoConcertID,
-		merchant.DemoBicycleID,
-		merchant.DemoLadderID,
-		merchant.DemoFlightID,
+	want := make([]string, 0, len(cat.Offers()))
+	for _, o := range cat.Offers() {
+		want = append(want, o.ID)
 	}
+	require.Greater(t, len(want), 1, "one offer cannot be out of order")
+
 	for range 5 {
-		results, err := cat.Search(everything)
+		results, err := cat.Search(all)
 		require.NoError(t, err)
 		assert.Equal(t, want, identifiers(results),
 			"Go's map iteration is deliberately unordered, and a product list whose order "+
