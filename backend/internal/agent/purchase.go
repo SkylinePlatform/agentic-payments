@@ -215,8 +215,16 @@ func (c *Client) Fund(ctx context.Context, p *Purchase) error {
 	// PaymentDigestOf. See PaymentDigestOfMandate's doc comment for why reading
 	// it unverified is still sound: nothing here trusts the value for anything
 	// but this event.
+	// p.Price is the amount this agent held throughout — the merchant's own
+	// quote from Client.Quote, unchanged, and the same value already signed
+	// into the Payment Mandate being presented here. Nothing is read back out
+	// of the mandate the way the digest is: PaymentAmount is never recomputed
+	// the way checkout_hash is, so the value this agent quoted is the value it
+	// presented, and using it directly is "the amount it held" rather than a
+	// shortcut.
 	c.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.PaymentDigestOfMandate(p.PaymentMandate))),
-		obs.KindMandatePresented, "Payment Mandate presented to the Credential Provider")
+		obs.KindMandatePresented, "Payment Mandate presented to the Credential Provider",
+		obs.WithAmount(p.Price))
 
 	body := map[string]any{"mandate": p.PaymentMandate}
 	err := c.call(ctx, http.MethodPost,
@@ -266,8 +274,11 @@ func (c *Client) Settle(ctx context.Context, p *Purchase) error {
 	// CheckoutDigestOfMandate, not chain.go's CheckoutDigestOf, for the reason
 	// Fund's own comment gives: p.CheckoutMandate is a bare mandate the surface
 	// signed, not a chain the agent signed.
+	// p.Price, on the same footing Fund's own comment gives: the price this
+	// agent quoted and is presenting, held unchanged since Client.Quote.
 	c.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.CheckoutDigestOfMandate(p.CheckoutMandate))),
-		obs.KindMandatePresented, "Checkout Mandate presented to the merchant")
+		obs.KindMandatePresented, "Checkout Mandate presented to the merchant",
+		obs.WithAmount(p.Price))
 
 	body := map[string]any{
 		"mandate":    p.CheckoutMandate,
