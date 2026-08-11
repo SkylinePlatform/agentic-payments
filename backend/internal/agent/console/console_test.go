@@ -526,6 +526,58 @@ func TestASignedAuthorisationStartsAWatchWithoutCallingTheSurface(t *testing.T) 
 	c.watcher.AssertNumberOfCalls(t, "Authorise", 0)
 }
 
+// TestTheBrowsersTriggerReachesTheWatchItStarts is issue #198's last hop, and
+// the one with nothing else standing behind it.
+//
+// `make demo` drives this route rather than `cmd/agent -watch`, and on this
+// path the browser collected the signature itself — so the trigger the person
+// read on the consent screen arrives here or nowhere. Everything upstream of
+// it can be right while a purchase still waits: `agent.Watch` reads an absent
+// trigger as a watch, deliberately, so an assembly that dropped the field
+// turns *"two tickets, up to $160 all in"* back into a watch with every other
+// test in this repository still green.
+//
+// Asserted over the **wire**, as a map rather than as `agent.Authorisation`,
+// for `anAuthorisationBody`'s own reason: a Go value that happens to marshal
+// correctly is not the thing a browser sends.
+func TestTheBrowsersTriggerReachesTheWatchItStarts(t *testing.T) {
+	t.Parallel()
+
+	watcher := console.NewMockWatcher(t)
+	// Buffered and read on the test goroutine, on the standing hazard: Watch is
+	// called from a goroutine this test does not own, and testify fails from
+	// whichever goroutine touches it.
+	seen := make(chan agent.Authorisation, 1)
+	watcher.EXPECT().Watch(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(
+			_ context.Context, auth agent.Authorisation, _ int, _ agent.Progress,
+		) (agent.Watched, error) {
+			seen <- auth
+			return agent.Watched{}, nil
+		}).Maybe()
+
+	service := &console.Service{Watcher: watcher, Clock: clock.New()}
+	handler, err := service.Handler()
+	require.NoError(t, err)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	body := anAuthorisationBody()
+	body["trigger"] = "immediate"
+
+	var started startedBody
+	require.Equal(t, http.StatusCreated, post(t, server.URL+"/watches", map[string]any{
+		"prompt":        "two tickets to the Vlado Georgijev concert in November, up to $160 all in",
+		"quantity":      2,
+		"authorisation": body,
+	}, &started))
+
+	got := <-seen
+	assert.Equal(t, interpret.TriggerImmediate, got.Trigger,
+		"the sentence carried no condition and the person was shown so before signing; a watch "+
+			"started without that fact waits for a price to move that nobody asked it to wait for")
+}
+
 // TestAWatchStartedFromASignedAuthorisationCarriesTheUsersSentences is what the
 // row on screen is drawn from.
 func TestAWatchStartedFromASignedAuthorisationCarriesTheUsersSentences(t *testing.T) {
