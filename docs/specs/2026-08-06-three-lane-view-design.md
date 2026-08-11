@@ -1,8 +1,12 @@
 # Three-lane view: the digest as spine
 
 **Date:** 2026-08-06
-**Status:** approved, not yet built
-**Issues:** #20, narrow slice of #45. Waits on #12, #16 and #15. Tokens
+**Status:** the screen is built. `/lanes` draws the three columns, the digest
+spine and the event log beneath them; the *Tokens* revision landed with #159.
+Human Present is the half that will not be built — see *What this is not*.
+*Indicators*, below, is the one section that is approved and not yet built:
+#183, #184 and #186 are what build it.
+**Issues:** #20, narrow slice of #45. Waited on #12, #16 and #15. Tokens
 revised by #159. *Indicators* added by #185 and consumed by #183, #184 and
 #186.
 
@@ -250,6 +254,12 @@ of those glyphs is being served by whatever fallback face the reader's machine
 happens to have. A vocabulary whose shapes differ per machine is not a
 vocabulary, and a screenshot is this project's deliverable.
 
+**The count is a symptom and the argument does not rest on it.** #188 adds a
+seventh, `⏱` for `expired`, which is in Miscellaneous Technical and outside the
+subset as well — a table of characters acquires the defect again every time
+somebody adds a row, which is the whole reason the answer is to stop using
+characters. #190 tracks the live defect on its own terms.
+
 Marks are therefore `<svg>`, in one module, on the same geometry the two icons
 in `lanes/Lanes.tsx` already use: a `0 0 16 16` viewBox at `size-3.5`,
 `stroke-current` so the colour is never chosen twice, `strokeWidth="1.75"`,
@@ -259,7 +269,7 @@ round caps and joins.
 
 | Mark | Family | Drawn | Means |
 |---|---|---|---|
-| `open` | pip | circle `r 5`, `fill="none"` | nothing has happened to this yet |
+| `open` | pip | circle `r 5`, `fill="none"` | nothing is outstanding, and this is at its beginning — not reached yet, **or returned to** |
 | `half` | pip | the same circle, plus a filled disc `r 2` at its centre | something is outstanding; an answer is owed |
 | `full` | pip | the circle, `fill-current` | nothing is outstanding; this is where it stopped |
 | `check` | ending | `M3.5 8.5l3 3 6-7` | **a verifier accepted** |
@@ -275,6 +285,14 @@ next section gives, and there an ending stands alone.
 `half` is a ring with a centre rather than a half-filled disc, because a
 half-filled disc at fourteen pixels is a smudge and the difference from `full`
 has to survive a screenshot scaled into a slide.
+
+**`open` says "at its beginning", not "nothing has happened".** The mandate axis
+is why, and it is the one gloss in that table that had to be written twice. A
+mandate a rejection receipt returned to `ready` is at its beginning in the only
+sense `authz.MandateState` has one — it can be spent again — and it is
+emphatically not a mandate nothing has happened to. The obvious wording would
+have made the mark contradict the note on that row below, which is the one place
+in this vocabulary a pip goes backwards.
 
 **The cross is a verifier's verdict and nothing else.** An agent that could not
 finish, a browser that could not reach the Trusted Surface, a person who
@@ -348,10 +366,20 @@ Two rules keep them apart, and neither is a colour.
 
 **The word is always the machine's own spelling.** `awaiting_receipt` is not
 paraphrased as *pending*; `internal/agent/console`'s package doc is explicit
-that these are the machine's own words and there is no second table. So two axes
-can share a mark and still be unmistakable, because they never share a word —
-except `bought`, which is the same fact seen at two scales and is labelled with
-which scale it is.
+that the spelling comes from `authz.MandateState.String()` so that there is no
+second table to drift from the first. So two axes can share a mark and still be
+unmistakable, because they almost never share a word.
+
+**Three words are shared, and each is one fact seen at two scales.** `bought` is
+a watch and the attempt that bought under it. `refused` is one verifier's
+`mandate_rejected` step and the attempt that verifier refused. `declined` is a
+person's `authorisation_refused` step and the decision the console then
+acknowledges. In every pair the smaller scale is a moment *inside* the larger
+one, so the two can only ever agree — which is what makes sharing the word safe
+where sharing it across unrelated axes would not be, and each is labelled with
+which scale it is. **There is no fourth**, and a state added to any axis that
+would make a fourth is a change to this section rather than a screen's own
+choice of word.
 
 **Two axes never share a row.** A run's pair and its mandates' pairs sit on
 different lines, each behind its own label. That is the whole of what stops the
@@ -382,11 +410,25 @@ which is the entire thesis of the screen. **#183 must not invent a mark for
 nothing about it has been to a verifier. A pip would suggest a person is
 partway through consenting, which is not a state that exists; a `check` would
 claim a verification that has not happened. What carries it is *enclosure*: the
-signed box is an outline on `paper` while nothing is signed, and becomes filled
-`wash` with an `ink` border once `POST /authorise` has answered — the same
-transition the heading already makes from *What you are signing* to *What you
-signed*. The one ending it takes is the `bar` on a refusal, which is a person
-declining and therefore not a `cross`.
+signed box is an outline while nothing is signed, and becomes filled `wash` with
+an `ink` border once `POST /authorise` has answered — the transition the heading
+*already* makes from *What you are signing* to *What you signed*. The one ending
+the axis takes is the `bar` on a refusal, which is a person declining and
+therefore not a `cross`.
+
+**Half of that enclosure exists and half of it does not, and no queued issue
+builds the missing half.** `routes/consent/Consent.tsx` and
+`routes/consent/Signing.tsx` both draw the box as `border border-graphite/40`
+with no fill, in every state. On `/consent` that is already right — nothing is
+ever signed on that screen, so the box is an outline throughout. It is
+`Signing.tsx` that has the transition to make, and today it does not: the box
+looks identical either side of `POST /authorise`. So that clause is a
+specification rather than a description, and *What this changes about what is on
+screen today* is where it is recorded as one. #183, #184 and #186 are the lanes,
+the log and the Inspector; none of them touches that screen, so it needs an
+issue of its own. Nothing on it is dishonest in the meantime: `Signing.tsx`
+computes the heading from the state rather than fixing it, with a comment saying
+why, so the fact is already carried by the one device that cannot be misread.
 
 **The disclosure axis has neither, and takes no verdict colour**, because
 nothing on that table was verified — `frontend/src/sdjwt/never-verifies.test.ts`
@@ -409,7 +451,8 @@ Every state, what carries it besides colour, and where it is drawn.
 | mandate | `spent` | `full` | — | `spent` | — |
 | watch | `watching` | `half` | — | `watching` | — |
 | watch | `bought` | `full` | `check` | `bought` | the attempt that bought, expanded beneath |
-| watch | `exhausted` | `full` | `bar` | `exhausted, and it never bought` | — |
+| watch | `exhausted` | `full` | `bar` | `exhausted — never bought` | — |
+| watch | `expired` | `full` | `bar` | `expired — never bought` | **the authorisation's own expiry**, already on the row |
 | watch | `stopped` | `full` | `bar` | `stopped` | — |
 | watch | `failed` | `full` | `bar` | `failed` | **the agent's own error sentence**, `broken` |
 | attempt | `pending` | `open` | — | `pending` | no digest on the spine head |
@@ -418,6 +461,8 @@ Every state, what carries it besides colour, and where it is drawn.
 | attempt | `bought` | `full` | `check` | `bought` | the digest on the spine head |
 | step | not on the spine | — | — | its kind word | **no digest on the card** |
 | step | on the spine | — | — | its kind word | **the same twelve characters as the head** |
+| step | `mandate_constructed` | — | **—** | `signed` | the digest, once the attempt claims one |
+| step | `mandate_presented` | — | **—** | `presented` | the digest |
 | step | `mandate_verified` | — | `check` | `verified` | — |
 | step | `mandate_rejected` | — | `cross` | `refused` | the canonical code beneath, mono |
 | step | `receipt_issued` | — | **—** | `receipt` | — |
@@ -433,15 +478,46 @@ Every state, what carries it besides colour, and where it is drawn.
 
 Notes on the rows that are not self-explanatory.
 
-**`exhausted` is a state the demo cannot currently reach**, and #181 is where
-that is being decided. #177 made the price schedule cycle, so nothing runs out
-of schedule and a watch whose cap no price ever meets now polls forever at
-`watching`. The row above stays, because `stateExhausted` is still reachable
-from the one-shot schedule and deleting a vocabulary entry for a state the
-machine still has would be worse than an entry nothing draws. **Whichever way
-#181 goes, it changes a word and not a mark**: if a watch gains a bound of its
-own, the state it ends in is still an ending with no verifier in it, which is a
-`bar`.
+**Where an axis is a machine's own closed set, the table is closed over it, so a
+state with no row is a defect rather than an omission.** Three mandate states,
+four attempt verdicts, six event kinds, and five run states — six once #188
+lands. The two axes with no such set, the decision and the disclosure, are
+enumerated by this document instead, which is why each of those rows says what
+carries it rather than naming an enum value.
+
+`mandate_constructed` and `mandate_presented` therefore have rows even though
+neither takes a mark: they are the agent's own work, nothing has been decided at
+either moment, and an ending drawn there would claim a verdict from the party
+that has the least authority of the three. Their `Also carried by` is the digest,
+which is the whole of what those two steps have to say — and it is why the step
+axis's two spine rows sit above them rather than replacing them.
+
+**`exhausted` and `expired` are the same shape and differ only in
+reachability**, and #181 is what separated them. #177 made the price schedule
+cycle, so nothing runs out of schedule: `stateExhausted` is unreachable on the
+demo path, stays reachable from the one-shot schedule, and a watch whose cap no
+price ever meets instead runs the open mandate pair out of its own clock. **#188
+is what added `expired` for that**, on a bound the user had already signed and
+nobody was reading. Both rows stay, because deleting a vocabulary entry for a
+state the machine still has would be worse than an entry nothing draws on the
+demo path.
+
+The prediction this section carried before #188 landed — that #181 would move a
+word and never a mark — **was right about the mark and wrong about the shape**.
+What arrived was a sixth run state rather than a re-worded fifth. The mark is
+what was predicted and for the reason given: an authorisation running out its own
+clock is an ending with no verifier anywhere in it, so it is a `bar`, exactly as
+`exhausted` is. That is the property worth having predicted — the two rows sit
+side by side and a reader who has learnt one has learnt the other.
+
+**In those two rows the word is the tracker's rather than the machine's, and it
+is the one place the spelling rule is loosened rather than broken.**
+`runState.String()` answers `exhausted` and `expired`; `RUN_STATE_META` already
+appends `— never bought`, because a watch that ended is the one row on that
+screen where the state alone does not say whether the buyer got what they asked
+for. The machine's word is the head of the label and the gloss is the tail, which
+is what the rule permits — a paraphrase would have replaced the head, which is
+what `pending` for `awaiting_receipt` would have been.
 
 **`receipt_issued` loses the `seal` it has today**, and the argument is in this
 repository's own code. `lanes/model.ts` says it in as many words: *every
@@ -491,20 +567,22 @@ order to look consistent, which is the opposite of what a vocabulary is for.
 
 ### What this changes about what is on screen today
 
-Two dialects and three wrong colours, all of which this section resolves. They
-are listed because an implementing issue needs to know which of its lines are
-being corrected rather than restyled.
+Two dialects, three wrong colours and one carrier that was never built, all of
+which this section resolves. They are listed because an implementing issue needs
+to know which of its lines are being corrected rather than restyled — and, for
+the last row, that nothing queued is going to.
 
 | Where | Today | Under this section | Why |
 |---|---|---|---|
 | `lanes/Lanes.tsx` | two SVG icons, `data-icon="bought"` / `"refused"` | the same two shapes, from the status module, as `data-mark="check"` / `"cross"` | the attribute names a *state* where the shape serves several; `check` is one mark used by three states across two axes |
-| `tracker/model.ts` | six status characters — `◐ ✓ ○ ■ ✕ ?` | pips and endings, drawn | five of the six are outside the shipped font subset; the shapes differ per reader's machine |
+| `tracker/model.ts` | six status characters — `◐ ✓ ○ ■ ✕ ?`, and a seventh, `⏱`, once #188 lands | pips and endings, drawn | five of the six are outside the shipped font subset, and so is the seventh; the shapes differ per reader's machine |
 | `tracker/model.ts` | `○` is both `ready` and `exhausted`; `✓` is both `bought` and `spent` | `ready` is `open`; `exhausted` is `full` + `bar`; `spent` is `full` with no ending | one glyph carrying two states on two axes is the conflation this section exists to prevent, in seed form |
 | `tracker/model.ts` | `spent` has `tone: "positive"` → `seal` | `spent` is `ink` | the acceptance is the attempt's, stated once; two mandates reaching `spent` together would state it three times on one row |
 | `lanes/Lanes.tsx` | `receipt_issued` is `seal` | no mark, `ink` | a rejection produces a receipt too — the module's own comment says so |
 | `inspector/Inspector.tsx` | the `read` cell is `seal` | `ink` | reading is not verifying, and #186's own constraint is that nothing in that table may imply verification |
 | `inspector/Inspector.tsx` | the withheld digest is `graphite` | `signal` | on that screen the digest *is* the subject, which is the spec's own test for the token |
 | `tracker/model.ts` | an unrecognised status is `?` in `broken` | no mark, the raw value in mono, `graphite`, with a sentence | nothing refused anything; a build that is out of date is not a verifier saying no, and drawing it as one puts a refusal on screen for a purchase that may have succeeded |
+| `routes/consent/Signing.tsx` | the signed box is `border-graphite/40` with no fill, identical either side of `POST /authorise` | filled `wash` with an `ink` border once it has answered; `Consent.tsx`'s outline is already right and does not move | the decision axis has no pip and no `check`, so enclosure is the only carrier it has; **and no queued issue owns this row** — see *The axes, and why they do not merge* |
 
 Every one of these is a colour or a shape moving. **No sentence in the table
 above is deleted by it**, and the four categories in *What prose is still for*
@@ -567,6 +645,7 @@ violates it, and an assertion that the file list being scanned is not empty.
 | Rule | Fails on |
 |---|---|
 | **No component draws a mark.** `<svg` appears in exactly one status module, plus `components/ui/dialog.tsx`, which is a *control affordance* and not a status. Same shape as `MAY_NAME_THE_EVENT_SOURCE`: an allow-list of paths, plus the assertion that each path still exists. | a lane, a log row or an Inspector cell inventing a seventh mark — the second-dialect failure this whole section exists to prevent |
+| **A mark cannot be drawn without its word**, and this one is not a test. The status module exports no bare mark: its single component takes the word as a **required** prop and renders both, the mark `aria-hidden` and the word not. *"A mark alone"* is then not a call anybody can write, and `tsc` is what says so. | the rule the whole section rests on, closed at the only moment it could be broken |
 | **`seal` is contained.** No `text-seal`, `border-seal`, `bg-seal` or any variant of them outside the status module. The detector is `colourTokenOf`, already written. | a component claiming a verifier accepted, without going through the one component that can draw a `check` |
 | **The mark set is closed at the type level.** `Mark` is a union of six names, and every status table is `Record<K, StatusMeta>` over a closed union — the totality guarantee `tracker/model.ts` already has, extended to name a mark. | a state added without a mark; a mark invented without this section moving |
 | **The unknown status carries no mark.** `totalStatus`'s fallback asserts `mark === null`. | an unrecognised wire value being placed on a track whose length this build does not know |
@@ -580,26 +659,46 @@ vacuously.**
   legible, not that a component chose the right pair. A test can prove `spent`
   has *a* mark and that the mark is in the closed set. Nothing can prove `full`
   was the honest choice.
-- **That colour is never the only carrier.** jsdom computes no colour, so a DOM
-  contrast assertion written against it always passes — worse than not having
-  one. What is enforceable is narrower and is the table above: `seal` cannot
-  appear without a `check`, and a `check` cannot be drawn outside one module. It
-  is not the property; it is the property's most likely failure, closed.
-- **That prose was reduced rather than deleted.** #185's own *Done when* asks
-  for a test that says which content may be prose, in the shape #159's type rule
-  uses. **That shape does not transfer, and the difference is worth stating.**
-  #159's rules work because they key on mechanically identifiable content — an
-  `<h1>`, a `renderPrice(` call, a `.rendered.map(`. The analogue here would be
-  *a paragraph may not restate what the mark beside it already says*, and
-  nothing in a source file distinguishes that paragraph from the four kinds of
-  prose the section above says must stay. A rule written anyway would either
-  forbid sentences these screens need or match nothing at all. So the honest
-  split is: **the marks are enforced, the four categories of prose are asserted
-  by name where they already are** — `data-testid="signed-box"`, `"basket"`,
-  `"offer-card"` and the refusal acknowledgement are existing hooks and their
-  sentences are existing assertions — **and whether the rest was trimmed well is
-  review.** This repository has spent time removing rules that passed vacuously;
-  this is not the place to add one.
+- **That colour is never the only carrier**, as a property of the rendered page.
+  jsdom computes no colour, so a DOM contrast assertion written against it
+  always passes — worse than not having one. **What replaces it is not a test at
+  all:** the required-word prop above makes *a mark without a word*
+  unexpressible, and `seal` containment keeps the verdict colour inside the one
+  component that can draw a `check`. Between them, a status carried by colour
+  alone cannot be written. What stays unenforced is a component that renders the
+  word and then hides it, which is review, and it is a much smaller hole than
+  the property first appears to have.
+- **That prose was reduced rather than deleted**, as one rule over all four
+  categories. #185's own *Done when* asks for a test that says which content may
+  be prose, in the shape #159's type rule uses. **That shape transfers to two of
+  the four categories and not to the other two**, and the split is worth stating
+  because it is not the one the issue assumed.
+
+  **Categories 1 and 3 are mechanically identifiable and already partly
+  asserted.** *What a signature covers* and *what a screen cannot see* are
+  specific sentences at named hooks: `data-testid="signed-box"`, `"basket"`,
+  `"offer-card"` and `"refusal-acknowledgement"` all exist, and
+  `Consent.test.tsx` and `Signing.test.tsx` already assert *What you are
+  signing* against *What you signed*, the basket line's exclusion from the box,
+  and the offer card's. A rule of the form *this sentence is on this screen* is
+  therefore writable, non-vacuous, and mostly written. **One of them is not
+  written**: nothing asserts *"Your refusal stands — nothing was signed — but
+  the record of it did not reach the surface"*, the sentence this section spends
+  a whole note defending as the only honest carrier of that state.
+  `Console.test.tsx` asserts the *recorded* wording and the acknowledgement's
+  absence, and never the sentence that matters most. An implementing issue
+  should close that gap rather than inherit it.
+
+  **Categories 2 and 4 do not transfer, and no rule should be written for
+  them.** #159's rules work because they key on mechanically identifiable
+  content — an `<h1>`, a `renderPrice(` call, a `.rendered.map(`. The analogue
+  for *why a verdict was reached* and *the first time a reader meets an idea*
+  would be *a paragraph may not restate what the mark beside it already says*,
+  and nothing in a source file distinguishes that paragraph from one of the
+  first two kinds. A rule written anyway would either forbid sentences these
+  screens need or match nothing at all. This repository has spent time removing
+  rules that passed vacuously; this is not the place to add one, and whether the
+  rest was trimmed well is review.
 
 ### Worked example: the demo's headline beat
 
