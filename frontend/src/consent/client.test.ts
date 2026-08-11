@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { propose, refuse, RequestFailed, startWatch } from "./client";
+import { fetchExamples, propose, refuse, RequestFailed, startWatch } from "./client";
 import type { Authorised, Proposal } from "./model";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -169,5 +169,20 @@ describe("the client", () => {
     const failure: unknown = await propose("buy a boat").catch((err: unknown) => err);
     expect(failure).toBeInstanceOf(RequestFailed);
     expect((failure as RequestFailed).code).toBeUndefined();
+  });
+
+  it("names the party that did not answer, when the network itself fails", async () => {
+    // `fetch` rejects with a bare `TypeError: Failed to fetch` when the
+    // process on the other end never started — no status, no body, and
+    // nothing `unwrap` can read a sentence out of. In a demo a role that
+    // failed to start is the likeliest failure of all, so the message has to
+    // name which one rather than repeat the browser's own wording.
+    vi.stubGlobal("fetch", () => Promise.reject(new TypeError("Failed to fetch")));
+
+    await expect(propose("buy a boat")).rejects.toThrow(/the shopping agent did not answer/i);
+    await expect(fetchExamples()).rejects.toThrow(/the shopping agent did not answer/i);
+    await expect(refuse({ constraints: [], prompt: "x" } as never, "d")).rejects.toThrow(
+      /the trusted surface did not answer/i,
+    );
   });
 });

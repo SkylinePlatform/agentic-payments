@@ -134,6 +134,37 @@ async function unwrap<T>(response: Response): Promise<T> {
 }
 
 /**
+ * The party a URL belongs to — every route this module calls is proxied
+ * same-origin (see this file's own header comment), so the path prefix alone
+ * tells the two apart. `/authorise*` is the Trusted Surface; `/proposals`,
+ * `/examples` and `/watches` are the Shopping Agent.
+ */
+function partyOf(url: string): string {
+  return url.startsWith("/authorise") ? "the Trusted Surface" : "the Shopping Agent";
+}
+
+/**
+ * `fetch`, with a network failure renamed to the party that did not answer.
+ *
+ * A process that never started answers with nothing — `fetch` rejects with a
+ * bare `TypeError: Failed to fetch`, no status and no body, so `unwrap` never
+ * gets a chance to read a sentence out of it. Every screen in this app
+ * renders `err.message` verbatim (`Console`, `Consent`, `Signing`), so
+ * without this a role that is simply not running shows up as the browser's
+ * own wording — which names no party, and in a demo a role that failed to
+ * start is the likeliest failure of all. A non-2xx response still reaches
+ * `unwrap` untouched; this only replaces the rejection `fetch` itself
+ * produces when nothing answered.
+ */
+async function request(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new Error(`${partyOf(url)} did not answer.`);
+  }
+}
+
+/**
  * A POST carrying an idempotency key — every unsafe call in this module.
  *
  * `key`, when given, is sent instead of a freshly minted one. Every caller
@@ -142,7 +173,7 @@ async function unwrap<T>(response: Response): Promise<T> {
  * — see its own doc comment.
  */
 async function post<T = unknown>(url: string, body: unknown, key: string = freshKey()): Promise<T> {
-  const response = await fetch(url, {
+  const response = await request(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": key },
     body: JSON.stringify(body),
@@ -156,7 +187,7 @@ async function post<T = unknown>(url: string, body: unknown, key: string = fresh
  * idempotency key: nothing about a repeated read needs replaying.
  */
 export async function fetchExamples(): Promise<string[]> {
-  const body = await unwrap<{ examples: string[] }>(await fetch("/examples"));
+  const body = await unwrap<{ examples: string[] }>(await request("/examples"));
   return body.examples;
 }
 
