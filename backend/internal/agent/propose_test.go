@@ -189,6 +189,45 @@ func TestProposeTakesTheFirstCandidateRegardlessOfPriceOrTitle(t *testing.T) {
 		"the offer carried through has to be the one actually selected, not the better-sounding one")
 }
 
+// TestTheProposalCarriesEveryOfferTheSearchFound is #109's seam: the console's
+// product table needs every candidate the search behind Offer found, not only
+// the one settle chose to watch — and it has to get that list from the agent
+// rather than reimplementing identifying() itself, which is exactly what this
+// field exists to avoid. Same two-offer fixture as
+// TestDiscoverStillChoosesOnTheIdentifierAlone, so a reader can see this is the
+// same search, carried further rather than run twice.
+func TestTheProposalCarriesEveryOfferTheSearchFound(t *testing.T) {
+	t.Parallel()
+
+	merchantURL := merchantReturning(t, `{"offers":[
+		{"id":"gtin:0001","title":"Expensive","retailer":"A","image_url":"/a.svg","price":{"amount":99900,"currency":"USD"},"step":0,"final":false},
+		{"id":"gtin:0002","title":"Cheap","retailer":"B","image_url":"/b.svg","price":{"amount":100,"currency":"USD"},"step":2,"final":true}
+	]}`)
+
+	client := &agent.Client{Endpoints: agent.Endpoints{
+		Surface:  unreachableSurface(t),
+		Merchant: merchantURL,
+	}}
+
+	got, err := client.Propose(t.Context(), agent.Intent{
+		Prompt:      "find and buy telescopic ladders, cheapest",
+		Interpreter: interpret.Demo(),
+	})
+	require.NoError(t, err)
+
+	require.Len(t, got.Offers, 2, "every candidate the search found, not only the one settle chose")
+	assert.Equal(t, "gtin:0001", got.Offers[0].ID,
+		"catalogue order, unranked — the same order settle picks Offer from")
+	assert.Equal(t, "gtin:0002", got.Offers[1].ID)
+	assert.Equal(t, got.Offer, got.Offers[0],
+		"the offer settle chose to watch is Offers[0] by construction, not a second lookup that could disagree with it")
+
+	assert.Equal(t, 2, got.Offers[1].Step, "the price schedule position travels, not only the price")
+	assert.True(t, got.Offers[1].Final, "and whether the schedule has run out of moves")
+	assert.Zero(t, got.Offers[0].Step, "the first offer's own step, decoded rather than left at some other row's value")
+	assert.False(t, got.Offers[0].Final)
+}
+
 // TestProposeRefusesAMerchantThatAnsweredADifferentOffer pins settle's refusal
 // when Intent.Item is set: a search for one identifier has exactly one honest
 // answer, so a merchant that comes back with a different one is answering a

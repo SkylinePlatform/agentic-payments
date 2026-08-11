@@ -59,10 +59,17 @@ function renderConsoleAt(state: unknown) {
  * already a string. That second shape is what lets the 422 test send Go's own
  * plain-text error body rather than a JSON-quoted string, which is the shape
  * `messageOf` in `../consent/client.ts` actually has to parse in production.
+ *
+ * `/watches` defaults to an empty list unless a test overrides it: `Tracker`
+ * mounts unconditionally beside the prompt box, so every test in this file
+ * exercises it whether it is the thing under test or not, and a suite that
+ * had to spell an empty tracker out at every call site would bury the ones
+ * that actually mean something.
  */
 function stubFetch(routes: Record<string, unknown>) {
+  const withDefaults: Record<string, unknown> = { "/watches": { watches: [] }, ...routes };
   vi.stubGlobal("fetch", (url: string) => {
-    const fixture = routes[url];
+    const fixture = withDefaults[url];
     if (fixture === undefined) {
       return Promise.resolve(new Response("not stubbed: " + url, { status: 404 }));
     }
@@ -77,19 +84,21 @@ function stubFetch(routes: Record<string, unknown>) {
 
 /** A `Proposal` with every field populated, in `consent/model.test.ts`'s shape. */
 function aProposal(): Proposal {
+  const offer = {
+    id: "gtin:05014477390221",
+    title: "Telescopic ladder",
+    description: "",
+    image_url: "",
+    retailer: "",
+    price: { amount: 5000, currency: "USD" },
+  };
   return {
     prompt: "find and buy telescopic ladders, cheapest",
     constraints: [{ op: "lte", field: "amount", value: 5000 }],
     agent_key: {} as Proposal["agent_key"],
     item: "gtin:05014477390221",
-    offer: {
-      id: "gtin:05014477390221",
-      title: "Telescopic ladder",
-      description: "",
-      image_url: "",
-      retailer: "",
-      price: { amount: 5000, currency: "USD" },
-    },
+    offer,
+    offers: [offer],
     watch_slots_free: 8,
   };
 }
@@ -150,14 +159,38 @@ describe("the shopping console", () => {
     expect(navigations).toEqual([]);
   });
 
-  it("carries the proposal to the consent screen in router state", async () => {
+  it("shows the product table instead of navigating straight away — #109 replaces the immediate hand-off", async () => {
     stubFetch({ "/examples": { examples: [] }, "/proposals": { body: aProposal() } });
     render(<Console />, { wrapper: Router });
 
     await userEvent.type(screen.getByRole("textbox"), "find and buy telescopic ladders, cheapest");
     await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/consent", state: aProposal() }]));
+    expect(await screen.findByText("Telescopic ladder")).toBeTruthy();
+    expect(navigations, "nothing is signed by fetching a proposal — only a row's own Buy does that").toEqual([]);
+  });
+
+  it("carries the proposal to the consent screen only once a row is bought, with the chosen quantity signed as a constraint", async () => {
+    stubFetch({ "/examples": { examples: [] }, "/proposals": { body: aProposal() } });
+    render(<Console />, { wrapper: Router });
+
+    await userEvent.type(screen.getByRole("textbox"), "find and buy telescopic ladders, cheapest");
+    await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
+    await screen.findByText("Telescopic ladder");
+
+    const quantityBox = screen.getByLabelText(/quantity/i);
+    await userEvent.clear(quantityBox);
+    await userEvent.type(quantityBox, "2");
+    await userEvent.click(screen.getByRole("button", { name: /^buy$/i }));
+
+    await waitFor(() => expect(navigations).toHaveLength(1));
+    expect(navigations[0].to).toBe("/consent");
+    const sent = navigations[0].state as Proposal;
+    expect(sent.quantity, "the count typed into the row, not the default").toBe(2);
+    expect(sent.constraints).toEqual([
+      ...aProposal().constraints,
+      { op: "lte", field: "quantity", value: 2 },
+    ]);
   });
 
   it("acknowledges a recorded refusal and carries the prompt back into the box", async () => {

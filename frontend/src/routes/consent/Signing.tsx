@@ -7,12 +7,6 @@ import type { Authorised, Previewed, Proposal } from "../../consent/model";
 import { lifetime } from "./format";
 
 /**
- * One purchase per watch, for now. #109 is where a person chooses a count,
- * and #133 is why a prompt asking for two tickets still buys one today.
- */
-const QUANTITY = 1;
-
-/**
  * Four states, explicit rather than implicit through `if` chains — the same
  * standard the Go side of this repository is held to, and for the same
  * reason: a screen with no revocation to fall back on cannot afford a state
@@ -111,7 +105,11 @@ export function Signing({
   async function attemptWatch(authorised: Authorised) {
     setState({ kind: "starting", authorised });
     try {
-      const { correlation_id } = await startWatch(proposal, authorised, QUANTITY);
+      // proposal.quantity is #109's product table: a count chosen on a row,
+      // carried here by catalogue/quantity.ts's withQuantity. Absent for a
+      // proposal built the way #22 always built one — one purchase per watch —
+      // so the fallback keeps that behaviour rather than silently changing it.
+      const { correlation_id } = await startWatch(proposal, authorised, proposal.quantity ?? 1);
       navigate(`/lanes?run=${correlation_id}`);
     } catch {
       setState({ kind: "stranded", authorised });

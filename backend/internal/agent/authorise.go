@@ -248,6 +248,14 @@ func (c *Client) Authorise(ctx context.Context, in Intent) (Authorisation, error
 // compares any of it — see candidate. It is deliberately not in contracts/:
 // how a shop describes its stock is presentation, and putting it in the
 // canonical model would mean core knew what a flight is.
+//
+// Step and Final are the same two fields Quote carries for the offer a watch
+// is already running against — the position in the merchant's price schedule,
+// and whether it has run out of moves. #109's product table shows them beside
+// a candidate nobody has started watching yet, on the same reasoning the
+// consent screen's offer card already carries a price: a person deciding
+// whether to watch something benefits from knowing whether the number in front
+// of them can still move.
 type Offer struct {
 	ID          string           `json:"id"`
 	Title       string           `json:"title"`
@@ -255,6 +263,8 @@ type Offer struct {
 	ImageURL    string           `json:"image_url"`
 	Retailer    string           `json:"retailer"`
 	Price       generated.Amount `json:"price"`
+	Step        int              `json:"step"`
+	Final       bool             `json:"final"`
 }
 
 // Proposal is what the agent puts in front of a person: the limits it read out
@@ -263,8 +273,27 @@ type Offer struct {
 // Nothing in it is signed and nothing about it is remembered. It is the input to
 // a decision, and if the decision is no there is nothing to clean up.
 type Proposal struct {
-	Item        string
-	Offer       Offer
+	Item  string
+	Offer Offer
+	// Offers is every candidate the search behind Offer actually found, in the
+	// same catalogue order settle chose Offer from — "the agent serves the
+	// offers it already found" rather than a second search the console would
+	// otherwise have to run itself.
+	//
+	// #109's product table is why this exists: a browser that ran its own
+	// search would have to decide which of the interpretation's constraints
+	// describe *what to buy* rather than *on what terms*, and that decision is
+	// identifying's, made once, here — duplicating it in the console or the
+	// browser is the drift AGENTS.md's "open for extension" row and this
+	// package's own comments on identifying both warn about. Carrying the list
+	// this call already has costs nothing further: it is candidates' own
+	// result, kept instead of discarded down to found[0].
+	//
+	// Never empty when Offer is populated — Offer is Offers[0] by construction,
+	// see settle — and today it never holds more than one element either,
+	// because every scripted interpretation narrows the demo catalogue to
+	// exactly one candidate. Sized for #160's wider catalogue regardless.
+	Offers      []Offer
 	Constraints []generated.Constraint
 	AgentKey    generated.PublicKey
 }
@@ -345,7 +374,7 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 			in.Prompt, err)
 	}
 
-	item, offer, err := c.settle(ctx, constraints, in.Item)
+	item, offer, offers, err := c.settle(ctx, constraints, in.Item)
 	if err != nil {
 		return out, err
 	}
@@ -353,12 +382,14 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 	return Proposal{
 		Item:        item,
 		Offer:       offer,
+		Offers:      offers,
 		Constraints: narrow(constraints, item),
 		AgentKey:    in.AgentKey,
 	}, nil
 }
 
-// settle picks the offer this proposal is about, and describes it.
+// settle picks the offer this proposal is about, describes it, and reports
+// every candidate the search behind it found.
 //
 // A caller that already named one changes what candidates asks the merchant
 // for, never whether it asks; see Intent.Item. The description is fetched
@@ -367,13 +398,13 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 // rather than trusted blindly, below.
 func (c *Client) settle(
 	ctx context.Context, constraints []generated.Constraint, chosen string,
-) (string, Offer, error) {
+) (string, Offer, []Offer, error) {
 	found, err := c.candidates(ctx, constraints, chosen)
 	if err != nil {
-		return "", Offer{}, err
+		return "", Offer{}, nil, err
 	}
 	if len(found) == 0 {
-		return "", Offer{}, fmt.Errorf("%w: the search matched no offer", ErrNothingToBuy)
+		return "", Offer{}, nil, fmt.Errorf("%w: the search matched no offer", ErrNothingToBuy)
 	}
 
 	// The first result wins, and the merchant returns them in catalogue order,
@@ -394,14 +425,20 @@ func (c *Client) settle(
 	// and the description this proposal carries would describe two different
 	// things. Refused rather than trusted over the caller's own choice.
 	if chosen != "" && c0.ID != chosen {
-		return "", Offer{}, fmt.Errorf(
+		return "", Offer{}, nil, fmt.Errorf(
 			"%w: %w: asked the merchant for the offer identified as %q and it answered with %q instead",
 			ErrMerchantAnsweredDifferently, ErrNothingToBuy, chosen, c0.ID)
 	}
 
 	// candidate and Offer carry the same fields for the same reason, so the
-	// conversion below is not a shortcut past a copy — it is that copy.
-	return c0.ID, Offer(c0), nil
+	// conversions below are not a shortcut past a copy — they are that copy.
+	// The Propose caller decides what to do with more than one; settle itself
+	// still chooses nothing beyond found[0].
+	offers := make([]Offer, len(found))
+	for i, f := range found {
+		offers[i] = Offer(f)
+	}
+	return c0.ID, offers[0], offers, nil
 }
 
 // sign posts the proposal's constraints and key to the Trusted Surface and
@@ -464,6 +501,11 @@ type candidate struct {
 	ImageURL    string           `json:"image_url"`
 	Retailer    string           `json:"retailer"`
 	Price       generated.Amount `json:"price"`
+	// Step and Final mirror merchant.PricedOffer's own fields — see Offer's
+	// doc comment for why the product table wants them on a candidate nobody
+	// has started watching yet.
+	Step  int  `json:"step"`
+	Final bool `json:"final"`
 }
 
 // candidates asks the merchant what it sells that a set of constraints

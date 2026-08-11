@@ -54,6 +54,13 @@ type proposed struct {
 	Item        string                 `json:"item"`
 	Offer       agent.Offer            `json:"offer"`
 
+	// Offers is every candidate agent.Client.Propose's search actually found,
+	// Offer included — see agent.Proposal.Offers. #109's product table reads
+	// this rather than calling the merchant itself, which is what keeps the
+	// browser from having to decide which constraints are selective; that
+	// decision is identifying's, made once, in internal/agent.
+	Offers []agent.Offer `json:"offers"`
+
 	// WatchSlotsFree is how many more watches this console will hold.
 	//
 	// **Not a reservation.** Nothing is held and nothing expires; it is a fact
