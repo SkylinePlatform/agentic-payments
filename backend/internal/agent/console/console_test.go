@@ -157,26 +157,46 @@ func (s *scripted) authorisations(t *testing.T, want int) {
 // that are about the routes rather than about what a watch does.
 func nothing(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil }
 
-// post sends POST /watches under an idempotency key, returning the status, the
-// decoded body and whether the middleware answered from its store.
-func (s *scripted) post(t *testing.T, key string, body any) (int, object, bool) {
+// doRequest builds and sends one request: body, when not nil, is JSON-encoded
+// and Content-Type is set for it; key, when not empty, is sent as
+// transport.KeyHeader. It is the one place in this file that builds a request
+// and drives it through http.DefaultClient, so a future change to header
+// handling, a client timeout or TLS config has one place to land — every
+// helper below it, method or free function, differs only in the four
+// arguments here and in how it decodes what comes back.
+//
+// The caller closes the returned response's body.
+func doRequest(t *testing.T, method, url, key string, body any) *http.Response {
 	t.Helper()
 
-	encoded, err := json.Marshal(body)
-	require.NoError(t, err, "encoding the request")
+	var reader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		require.NoError(t, err, "encoding the request")
+		reader = bytes.NewReader(encoded)
+	}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		s.url+"/watches", bytes.NewReader(encoded))
+	req, err := http.NewRequestWithContext(t.Context(), method, url, reader)
 	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if key != "" {
 		req.Header.Set(transport.KeyHeader, key)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err, "reaching the console")
-	defer func() { _ = resp.Body.Close() }()
+	return resp
+}
 
+// post sends POST /watches under an idempotency key, returning the status, the
+// decoded body and whether the middleware answered from its store.
+func (s *scripted) post(t *testing.T, key string, body any) (int, object, bool) {
+	t.Helper()
+
+	resp := doRequest(t, http.MethodPost, s.url+"/watches", key, body)
+	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode, decode(t, resp), resp.Header.Get(transport.ReplayedHeader) == "true"
 }
 
@@ -184,21 +204,20 @@ func (s *scripted) post(t *testing.T, key string, body any) (int, object, bool) 
 func (s *scripted) get(t *testing.T, path string) (int, object) {
 	t.Helper()
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, s.url+path, nil)
-	require.NoError(t, err)
-
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err, "reaching the console")
+	resp := doRequest(t, http.MethodGet, s.url+path, "", nil)
 	defer func() { _ = resp.Body.Close() }()
-
 	return resp.StatusCode, decode(t, resp)
 }
 
 // post, postKeyed, postWithoutKey and get call a route by its whole URL rather
-// than through (*scripted).post above, which is hardcoded to POST /watches.
+// than through (*scripted).post/.get above, which read relative to s.url.
 // /proposals and /examples are not sub-resources of /watches, so a test about
-// them needs a way in that names wherever they live; the encoding and the
-// header these send are the same ones (*scripted).post already uses.
+// them needs a way in that names wherever they live. They build their request
+// through the same doRequest as the method pair above; the only real
+// difference is that they decode strictly, through decodeStrict, rather than
+// through decode's tolerant empty-object-for-non-JSON — every caller of these
+// four expects JSON back, and a route that stopped answering it should fail
+// the test rather than pass one silently.
 
 // post sends body to url under an idempotency key unique to the calling test,
 // decoding the answer into into and returning the status.
@@ -223,38 +242,24 @@ func postKeyed(t *testing.T, key, url string, body, into any) int {
 
 func doPost(t *testing.T, key, url string, body, into any) int {
 	t.Helper()
-
-	encoded, err := json.Marshal(body)
-	require.NoError(t, err, "encoding the request")
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url, bytes.NewReader(encoded))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	if key != "" {
-		req.Header.Set(transport.KeyHeader, key)
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err, "reaching the console")
+	resp := doRequest(t, http.MethodPost, url, key, body)
 	defer func() { _ = resp.Body.Close() }()
-
-	if into != nil {
-		require.NoError(t, json.NewDecoder(resp.Body).Decode(into), "decoding the answer")
-	}
-	return resp.StatusCode
+	return decodeStrict(t, resp, into)
 }
 
 // get reads url, decoding the answer into into and returning the status.
 func get(t *testing.T, url string, into any) int {
 	t.Helper()
-
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
-	require.NoError(t, err)
-
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err, "reaching the console")
+	resp := doRequest(t, http.MethodGet, url, "", nil)
 	defer func() { _ = resp.Body.Close() }()
+	return decodeStrict(t, resp, into)
+}
 
+// decodeStrict decodes resp's body into into when into is not nil, and
+// returns the status. It does not close the body — the caller does, on
+// decode's own pattern above.
+func decodeStrict(t *testing.T, resp *http.Response, into any) int {
+	t.Helper()
 	if into != nil {
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(into), "decoding the answer")
 	}

@@ -74,11 +74,13 @@ import (
 
 // Watcher is the agent this console drives.
 //
-// Three methods because the console calls them at three different moments —
-// Propose inside one request, Authorise inside another, Watch in the goroutine
-// that one leaves behind. One port rather than a Proposer beside a Watcher: two
-// fields would allow a Service wired to propose from one agent and watch with
-// another, which is a state nobody wants and nothing would prevent.
+// Four methods. Three of them are moments: Propose inside one request,
+// Authorise inside another, Watch in the goroutine that one leaves behind. The
+// fourth, Examples, is not a moment at all — it is a static lookup with
+// nothing to call it at, answered from whatever the interpreter was built
+// with. One port rather than a Proposer beside a Watcher: two fields would
+// allow a Service wired to propose from one agent and watch with another,
+// which is a state nobody wants and nothing would prevent.
 type Watcher interface {
 	// Propose reads the prompt and settles on an offer, signing nothing.
 	Propose(ctx context.Context, prompt, item string) (agent.Proposal, error)
