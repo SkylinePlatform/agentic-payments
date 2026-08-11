@@ -182,6 +182,105 @@ describe("the spine", () => {
         "because a retry looks identical from the event stream",
     ).not.toBeNull();
   });
+
+  it("draws no vertical rule down the centre of the grid", () => {
+    seq = 0;
+    const { container } = showing([
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+    ]);
+
+    // The digest at the head is the axis now — issue #158. What is left of
+    // the old split was a hairline threaded behind the agent's own cards,
+    // absolutely positioned down the centre of the grid; it read as a
+    // rendering artefact rather than as an axis, and this pins it gone rather
+    // than trusting nobody brings it back.
+    expect(
+      container.innerHTML.includes("-translate-x-1/2"),
+      "that class was unique to the removed rule's centring; its presence " +
+        "would mean the accessory came back",
+    ).toBe(false);
+  });
+});
+
+describe("an attempt's outcome", () => {
+  it("labels a refusal without making a reader parse the sentence for it", () => {
+    seq = 0;
+    const { container } = showing([
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+      record({
+        kind: "mandate_rejected",
+        role: "mpp",
+        digest: DIGEST,
+        code: "constraint_violated",
+      }),
+    ]);
+
+    expect(
+      screen.queryByText("Refused"),
+      "a clear label, not only the prose sentence the Thesis already carries",
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-icon="refused"]'),
+      "the icon is what survives a reader who cannot use the colour — #109's " +
+        "sibling rule is that a status is colour and icon, never colour alone",
+    ).not.toBeNull();
+    expect(
+      container.querySelector('[data-icon="bought"]'),
+      "one attempt, one verdict — it should not carry the other outcome's icon",
+    ).toBeNull();
+  });
+
+  it("labels a clean purchase distinctly from a refusal", () => {
+    seq = 0;
+    const { container } = showing([
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+      record({ kind: "receipt_issued", role: "merchant", digest: DIGEST }),
+    ]);
+
+    expect(screen.queryByText("Bought")).not.toBeNull();
+    expect(screen.queryByText("Refused")).toBeNull();
+    expect(
+      container.querySelector('[data-icon="bought"]'),
+      "the shape a reader without colour vision, or a black-and-white " +
+        "screenshot, still gets the answer from",
+    ).not.toBeNull();
+    expect(container.querySelector('[data-icon="refused"]')).toBeNull();
+  });
+
+  it("gives the refused and the bought attempt in one watch two different labels", () => {
+    // The demo's own shape: one correlation, two attempts — refused at $210,
+    // bought at $189. Issue #158's finding was that this reads as a
+    // repetition; the two badges are what make it read as two outcomes.
+    seq = 0;
+    const { container } = showing([
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+      record({
+        kind: "mandate_rejected",
+        role: "mpp",
+        digest: DIGEST,
+        code: "constraint_violated",
+      }),
+      record({ kind: "mandate_constructed", role: "agent" }),
+      record({ kind: "mandate_verified", role: "merchant", digest: OTHER }),
+      record({ kind: "receipt_issued", role: "merchant", digest: OTHER }),
+    ]);
+
+    expect(screen.getByText("Refused")).not.toBeNull();
+    expect(screen.getByText("Bought")).not.toBeNull();
+    expect(container.querySelectorAll('[data-icon="refused"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-icon="bought"]')).toHaveLength(1);
+  });
+
+  it("labels an attempt nobody has confirmed a checkout for, rather than showing nothing", () => {
+    seq = 0;
+    showing([record({ kind: "mandate_presented", role: "agent" })]);
+
+    expect(
+      screen.queryByText("Pending"),
+      "every mandate's state is unambiguous, including the one where nothing " +
+        "has attached to the spine yet — a blank space is not an answer",
+    ).not.toBeNull();
+  });
 });
 
 describe("a digest a reader wants to compare or copy", () => {

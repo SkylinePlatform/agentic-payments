@@ -2,13 +2,20 @@
  * Three lanes, and a digest holding them together.
  *
  * The design brief allows this screen exactly one bold move and asks for
- * discipline everywhere else. The bold move is the spine: the checkout digest
- * set vertically down the middle of the agent's column, in the mono face, as the
- * literal axis every artefact attaches to. The agent is the party that carries a
- * value between the other two without being allowed to change it, so the value
- * it carries is what the column is made of.
+ * discipline everywhere else. The bold move is the spine: the checkout digest,
+ * in the mono face, at the head of the agent's column — the literal axis every
+ * artefact attaches to. The agent is the party that carries a value between the
+ * other two without being allowed to change it, so the value it carries is what
+ * the column is made of.
  *
- * Everything else is a hairline rule and a label.
+ * It used to be two pieces: the head and a hairline rule threaded behind the
+ * agent's own step cards. The rule read as a rendering artefact rather than as
+ * an axis — issue #158 — and is gone; the digest at the head is the whole of
+ * the spine now.
+ *
+ * Everything else stays disciplined: a label for each step, and — issue #158's
+ * other half — one for each attempt's outcome, so a reader can tell a refusal
+ * from a purchase without reading a sentence to find out.
  */
 
 import { LANES, shortDigest, stepsIn, titleOf, verdictOf } from "./model";
@@ -102,22 +109,22 @@ function LaneColumn({ lane, attempt }: { readonly lane: Lane; readonly attempt: 
 }
 
 /**
- * The spine: the axis this page hangs from, in two parts.
+ * The spine: the axis this page hangs from.
  *
- * **It was one part and it was wrong.** The first version drew the digest inside
- * an absolutely-positioned overlay running down the centre of the grid — which
- * is exactly the middle of the agent's column, and therefore exactly on top of
- * the agent's own step cards. A positioned element paints above non-positioned
- * in-flow ones whatever the DOM order, so the signature element of the whole
- * design rendered over the content it was meant to organise.
+ * **It used to be two parts, and the second was wrong.** The first version drew
+ * the digest inside an absolutely-positioned overlay running down the centre of
+ * the grid — which is exactly the middle of the agent's column, and therefore
+ * exactly on top of the agent's own step cards. A positioned element paints
+ * above non-positioned in-flow ones whatever the DOM order, so the signature
+ * element of the whole design rendered over the content it was meant to
+ * organise.
  *
- * Split, both halves get room:
- *
- * - {@link SpineHead} is the value, at the head of the axis, in the largest mono
- *   on the page. This is the bold move the brief allows exactly one of.
- * - {@link SpineRule} is the axis itself, a hairline behind the column. The
- *   cards are opaque `paper`, so it shows in the gaps between them and threads
- *   the column rather than crossing it.
+ * Split, the head — {@link SpineHead}, the value at the largest mono on the
+ * page, the bold move the brief allows exactly one of — got its own room and
+ * took over the whole job. What was left of the split, a hairline rule threaded
+ * behind the agent's own cards, read as a rendering artefact rather than as an
+ * axis, and issue #158 is what asked for it to go. The digest at the head *is*
+ * the axis now; nothing else draws it.
  *
  * `broken` is reserved for the binding not holding. A verifier enforcing a limit
  * the user set is the protocol working exactly as designed, and colouring the
@@ -143,24 +150,6 @@ function SpineHead({ verdict }: { readonly verdict: Verdict }) {
         {shortDigest(digest)}
       </span>
     </div>
-  );
-}
-
-/**
- * The axis, behind the lanes.
- *
- * Hidden below the breakpoint where the three columns stack: an axis down the
- * middle of a single stacked column would run through all three parties and say
- * something that is not true.
- */
-function SpineRule({ verdict }: { readonly verdict: Verdict }) {
-  return (
-    <div
-      aria-hidden="true"
-      className={`pointer-events-none absolute inset-y-0 left-1/2 hidden w-px -translate-x-1/2 md:block ${
-        failed(verdict) ? "bg-broken" : "bg-ink"
-      }`}
-    />
   );
 }
 
@@ -220,6 +209,99 @@ function Thesis({ verdict }: { readonly verdict: Verdict }) {
   }
 }
 
+/**
+ * The two icons an outcome can carry, drawn rather than left to colour alone.
+ *
+ * #109's sibling requirement, carried over here rather than invented fresh: a
+ * status is shown by colour **and** icon, never colour alone. `seal` and
+ * `broken` are the only two saturated values on this page for exactly that
+ * reason — their appearance already means something — and pairing each with a
+ * distinct shape means the answer survives a reader without colour vision, a
+ * black-and-white screenshot, or a screen reader that never announces colour at
+ * all. `data-icon` names the shape for a test the same way; nothing renders it.
+ *
+ * `stroke-current` rather than a `stroke-*` utility, matching the close glyph
+ * in `components/ui/dialog.tsx`: the colour comes from the wrapping `text-*`
+ * token, so the icon is never a second place a colour gets chosen.
+ */
+function BoughtIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      data-icon="bought"
+      viewBox="0 0 16 16"
+      className="size-3.5 stroke-current"
+      fill="none"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3.5 8.5l3 3 6-7" />
+    </svg>
+  );
+}
+
+function RefusedIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      data-icon="refused"
+      viewBox="0 0 16 16"
+      className="size-3.5 stroke-current"
+      fill="none"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+    >
+      <path d="M4 4l8 8M12 4l-8 8" />
+    </svg>
+  );
+}
+
+/**
+ * The outcome, stated once as a label a reader does not have to parse a
+ * sentence to find.
+ *
+ * {@link Thesis} already says whether an attempt was refused or bound, in
+ * prose — and issue #158's finding was that the difference between two
+ * attempts was real (refused at one price, bought at another) but legible only
+ * to a reader willing to read the sentence, on a screen whose whole job is to
+ * teach without that being asked of the reader. This badge is the visual layer
+ * the issue asks for, not a replacement for the prose: the descriptions stay,
+ * because they are what makes the screen teach.
+ *
+ * There is deliberately no fourth branch for "the amount". The event stream
+ * this screen reads carries no structured price — `ProtocolEvent.detail` is
+ * free text an emitter writes for a person, and `src/sse/events.test.ts`'s own
+ * "never parses detail" case pins that no consumer may read a number back out
+ * of it. Showing a figure honestly needs the collector's wire schema to carry
+ * one, which is a `backend/internal/platform/obs` change outside this
+ * component's reach.
+ */
+function Outcome({ verdict }: { readonly verdict: Verdict }) {
+  switch (verdict.state) {
+    case "pending":
+      return (
+        <span className="inline-flex items-center gap-1.5 border border-graphite/40 px-2 py-0.5 font-sans text-xs font-semibold uppercase tracking-widest text-graphite">
+          Pending
+        </span>
+      );
+    case "bound":
+      return (
+        <span className="inline-flex items-center gap-1.5 border border-seal px-2 py-0.5 font-sans text-xs font-semibold uppercase tracking-widest text-seal">
+          <BoughtIcon />
+          Bought
+        </span>
+      );
+    case "refused":
+      return (
+        <span className="inline-flex items-center gap-1.5 border border-broken px-2 py-0.5 font-sans text-xs font-semibold uppercase tracking-widest text-broken">
+          <RefusedIcon />
+          Refused
+        </span>
+      );
+  }
+}
+
 function AttemptView({
   attempt,
   index,
@@ -233,14 +315,17 @@ function AttemptView({
 
   return (
     <section className="flex flex-col gap-4">
-      {total > 1 && (
-        // Only when there is more than one. A Human Present purchase is a single
-        // attempt, and numbering it "1 of 1" would invent a sequence where the
-        // content has none.
-        <span className="font-sans text-xs uppercase tracking-widest text-graphite">
-          Attempt {index + 1} of {total}
-        </span>
-      )}
+      <div className="flex flex-wrap items-center gap-3">
+        {total > 1 && (
+          // Only when there is more than one. A Human Present purchase is a
+          // single attempt, and numbering it "1 of 1" would invent a sequence
+          // where the content has none.
+          <span className="font-sans text-xs uppercase tracking-widest text-graphite">
+            Attempt {index + 1} of {total}
+          </span>
+        )}
+        <Outcome verdict={verdict} />
+      </div>
 
       <Thesis verdict={verdict} />
       <SpineHead verdict={verdict} />
@@ -250,8 +335,7 @@ function AttemptView({
         a phone is three unreadable columns, and the left-to-right order the
         design fixes — user, agent, merchant — survives as top-to-bottom.
       */}
-      <div className="relative grid grid-cols-1 gap-6 md:grid-cols-3">
-        <SpineRule verdict={verdict} />
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
         {LANES.map((lane) => (
           <LaneColumn key={lane.id} lane={lane} attempt={attempt} />
         ))}
