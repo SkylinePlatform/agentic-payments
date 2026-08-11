@@ -116,23 +116,33 @@ const (
 	// ForPayment is a Credential Provider, a Network or a Merchant Payment
 	// Processor deciding a closed Payment Mandate.
 	//
-	// Three verifiers, one row, and the third is the one to be careful about.
-	// AP2 names all three — contracts/authz/payment_mandate.json says so — and
-	// this row credits them with what a *Credential Provider* holds, which is
-	// the narrowest of the three. An MPP sits merchant-side and may well hold
-	// the checkout, in which case this row withholds constraints it could have
-	// enforced. That is the safe direction and it is not the right one.
+	// Three verifiers and one row, and the row is not the narrowest of the
+	// three kept for convenience — it is the ceiling for all three, because
+	// none of them is ever sent the checkout. AP2 defines exactly one artefact
+	// for this leg: contracts/authz/payment_mandate.json's own description says
+	// the Payment Mandate "is verified by the Credential Provider, the Network
+	// and the Merchant Payment Processor," and docs/protocols/ap2.md's binding
+	// section is explicit about what that artefact carries and to whom —
+	// *"a Credential Provider or a Merchant Payment Processor sent only that
+	// mandate holds a digest with no price to compare it against,"* and *"the
+	// Credential Provider and the processor are sent no checkout, so nothing
+	// about them changes."* A closed Payment Mandate carries checkout_hash and
+	// never the document behind it, for any of the three.
 	//
-	// **It is now live rather than latent, and that is a change worth stating
-	// plainly.** This used to be a gap nothing could reach — the note here said
-	// so, on the grounds that MPPRules.VerifyCredential answers a different
-	// question entirely, about a credential rather than a mandate. #120 gave
-	// mpp.Service a chain entry point, and it verifies through
-	// CredentialProviderRules, so a Merchant Payment Processor really is being
-	// shown a Credential Provider's reach today. Closing it means a third row
-	// and a third rule set, which is more than that slice was: an MPP's reach
-	// depends on what its deployment actually holds, and this package cannot
-	// know that from here.
+	// **This used to be described as a gap left open; #126 is what closes it as
+	// a decision instead.** #120 gave mpp.Service a chain entry point verified
+	// through CredentialProviderRules, which made a Merchant Payment Processor
+	// a live reader of this row rather than a latent one, and an earlier version
+	// of this comment read that as an omission still owed a third row. It is
+	// not: what an MPP could state *beyond* checkout_hash depends on a document
+	// this package never receives for any of the three verifiers, so there is
+	// nothing here to widen. A deployment that hands its own Merchant Payment
+	// Processor the checkout out of band — plausible, since AP2 lets one entity
+	// play several roles and an MPP typically sits merchant-side — would need a
+	// second, role-owned subject combining this row with what it independently
+	// holds. That composition belongs to internal/roles/mpp, which knows what
+	// its deployment holds; this package does not, and a row here cannot stand
+	// in for it.
 	ForPayment Evaluation = "payment"
 )
 
@@ -155,7 +165,7 @@ type evaluation struct {
 	// role populating less refuses in ignorance while one populating more has
 	// constraints withheld that it could have enforced. PaymentSubject is the
 	// ForPayment row written as code, and
-	// TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState reads
+	// TestTheSubjectEveryPaymentSideVerifierEvaluatesIsExactlyWhatItCanState reads
 	// this map to decide what to expect of it, field by field — so editing one
 	// without the other fails, in either direction, and no role has to be
 	// trusted to fill a subject correctly because AuthorisePaymentChain fills it
@@ -197,14 +207,16 @@ var knownFields = constraint.FieldNames()
 // instrument's type, say — a change to this table rather than a silent
 // widening of what merchants are shown.
 //
-// The Credential Provider's list is short for a reason written into the
-// protocol: AP2 sends it the Payment Mandate and nothing else, so the only
-// facts it holds are the ones that mandate carries. payment_amount is the
-// amount, payee is the merchant — by id only, because contracts/identity/merchant.json
-// has no category — and `at` comes from its own clock, which every verifier
-// has. Item, quantity, category and every item attribute are absent, and a
-// Credential Provider cannot acquire them without being sent a document AP2
-// does not send it.
+// **The payment row is one list credited to three verifiers, and that is a
+// decision rather than an approximation.** AP2 sends the Credential Provider,
+// the Network and the Merchant Payment Processor the same Payment Mandate and
+// nothing else — see ForPayment's own doc comment for the two sources that say
+// so, in as many words, for all three rather than only the first. payment_amount
+// is the amount, payee is the merchant — by id only, because
+// contracts/identity/merchant.json has no category — and `at` comes from each
+// verifier's own clock. Item, quantity, category and every item attribute are
+// absent for all three: a Payment Mandate never carries a basket, and none of
+// them is sent the checkout that would name one.
 var evaluations = map[Evaluation]evaluation{
 	ForCheckout: {
 		who: "the Merchant, which holds the checkout it issued",
@@ -220,7 +232,7 @@ var evaluations = map[Evaluation]evaluation{
 		attributes: true,
 	},
 	ForPayment: {
-		who: "a Credential Provider, Network or Merchant Payment Processor, credited here with what the first of those holds: the Payment Mandate and nothing else",
+		who: "a Credential Provider, Network or Merchant Payment Processor — three verifiers of one Payment Mandate, and this package gives none of them anything else",
 		states: map[string]bool{
 			"amount":      true,
 			"at":          true,
@@ -235,9 +247,10 @@ var evaluations = map[Evaluation]evaluation{
 // clock.
 //
 // **It is the executable form of evaluations[ForPayment].states**, and that is
-// the whole of its job. That row credits a Credential Provider, a Network or a
-// Merchant Payment Processor with `amount`, `at` and `merchant.id` and nothing
-// else; this populates exactly those three and leaves every other field of
+// the whole of its job. That row is the ceiling for a Credential Provider, a
+// Network and a Merchant Payment Processor alike — `amount`, `at` and
+// `merchant.id` and nothing else, for all three rather than for one of them —
+// and this populates exactly those three fields and leaves every other field of
 // constraint.Subject zero, which is how constraint.Evaluate is told a fact was
 // not stated.
 //
@@ -255,7 +268,7 @@ var evaluations = map[Evaluation]evaluation{
 // The table has never been held to either of those until now. A test helper
 // honoured this row by hand and said in its own comment that nothing checked
 // it; the check is now
-// TestTheSubjectACredentialProviderEvaluatesIsExactlyWhatItCanState, which
+// TestTheSubjectEveryPaymentSideVerifierEvaluatesIsExactlyWhatItCanState, which
 // **reads evaluations[ForPayment].states** to decide what to expect of this
 // function — so the row and this body cannot be edited apart. It walks
 // constraint.FieldNames as well, but that guards a different thing: a fact
