@@ -166,6 +166,50 @@ func (m *Manifest) Validate() error {
 // Path returns the process's working directory, resolved against root.
 func (p Process) Path(root string) string { return filepath.Join(root, p.Dir) }
 
+// Append adds extra args to the named process's Args, in place.
+//
+// # Why this exists instead of a second manifest
+//
+// `make demo-live` runs the exact stack `make demo` runs, with one process —
+// agent-watch — handed `-interpreter auto`. The two shapes considered for that
+// were a second manifest file and an override applied here; a second file
+// enumerating the same eight processes is the one that can drift from this
+// one the moment either changes and the other does not, so it lost. Append is
+// the whole of the other shape: it does not know what a process does with the
+// args it hands over, only that a name in this manifest gets some appended to
+// what it already has. deploy/demo.json's own $comment carries the argument
+// for *why* agent-watch is the one process that gets this, and why the flag
+// it appends is not written into that file directly.
+//
+// # Fails on an unknown name, at the same moment Validate would
+//
+// A typo in the process name passed to -append is a mistake about this
+// manifest, the same class of mistake Validate exists to catch before a
+// single process starts — so this returns before cmd/demo calls NewRunner,
+// rather than leaving the caller to notice that the extra args landed
+// nowhere.
+func (m *Manifest) Append(name string, args ...string) error {
+	for i, p := range m.Processes {
+		if p.Name != name {
+			continue
+		}
+		// A fresh slice built with make, rather than `p.Args = append(p.Args,
+		// args...)`: append is free to grow into p.Args's own spare capacity
+		// in place, and this method has no way to know it does not have any.
+		// Building the result separately means two calls against the same
+		// process — two -append flags naming it — compose safely in the
+		// order they were given, which TestAppendCalledTwiceAccumulates
+		// pins.
+		combined := make([]string, 0, len(p.Args)+len(args))
+		combined = append(combined, p.Args...)
+		combined = append(combined, args...)
+		m.Processes[i].Args = combined
+		return nil
+	}
+	return fmt.Errorf("%w: -append names %q, which this manifest has no process called",
+		ErrInvalidManifest, name)
+}
+
 // IsProtocolParticipant reports whether this process is a party to the
 // protocol, as opposed to something that makes the demonstration watchable.
 //

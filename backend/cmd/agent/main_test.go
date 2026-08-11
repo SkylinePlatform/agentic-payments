@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -258,6 +260,55 @@ func TestAutoNamesWhichArmItChose(t *testing.T) {
 	require.NoError(t, err, "auto never refuses for a missing key — it degrades to the scripted table instead")
 	assert.Contains(t, withoutKey, "auto", "the banner has to say auto chose this, not only what it chose")
 	assert.Contains(t, withoutKey, "scripted", "and which arm auto resolved to")
+}
+
+// makeDemoLiveAppend finds what `make demo-live`'s recipe in the repository's
+// Makefile passes to cmd/demo's `-append` flag for agent-watch, or fails the
+// test with why it could not.
+//
+// "../../../Makefile" is the same three levels shippedTopology in
+// internal/demo climbs from backend/internal/demo to reach deploy/demo.json —
+// backend/cmd/agent is the same depth from the repository root.
+func makeDemoLiveAppend(t *testing.T) string {
+	t.Helper()
+
+	raw, err := os.ReadFile("../../../Makefile")
+	require.NoError(t, err, "this test has to read the actual Makefile, or it is pinning nothing")
+
+	match := regexp.MustCompile(`(?m)^demo-live:.*\n(?:\t.*\n)*`).FindString(string(raw))
+	require.NotEmpty(t, match, "no demo-live target found in the Makefile — has it been renamed?")
+
+	value := regexp.MustCompile(`-append\s+agent-watch=-interpreter,(\S+)`).FindStringSubmatch(match)
+	require.Len(t, value, 2,
+		"demo-live's recipe does not pass -append agent-watch=-interpreter,<value> in the shape this test expects")
+	return value[1]
+}
+
+// TestMakeDemoLiveNamesAFlagThisBuildAccepts is the pin the reviewer asked
+// for: nothing else ties `-interpreter auto`, spelled out as a literal string
+// in the Makefile, to interpreterAuto, the constant cmd/agent actually
+// switches on. A typo in either place — the Makefile passing "atuo", or this
+// package renaming the constant without renaming the Makefile to match —
+// would otherwise reach nobody until a person ran `make demo-live` by hand
+// and read a refusal instead of a banner.
+//
+// This holds the two together without crossing the Go-only gate `make check`
+// promises: reading a Makefile is a text operation, not an invocation of
+// make itself, so the assertion costs nothing beyond `go test`. It goes one
+// step further than a string comparison, too — the extracted value is handed
+// to interpreterFor itself, the same call cmd/agent's run makes, so a value
+// that matched the constant by coincidence but that interpreterFor no longer
+// accepted would still fail here.
+func TestMakeDemoLiveNamesAFlagThisBuildAccepts(t *testing.T) {
+	t.Parallel()
+
+	value := makeDemoLiveAppend(t)
+	assert.Equal(t, interpreterAuto, value,
+		"the Makefile's -append value has drifted from the constant this build actually switches on")
+
+	_, _, err := interpreterFor(value, "", "", clock.NewFake(time.Unix(0, 0).UTC()))
+	require.NoError(t, err,
+		"the Makefile names a value that matches the constant's spelling but that interpreterFor itself refuses")
 }
 
 // TestAfterWatchSaysWhatEndedTheWatch pins the first of the two lines rather

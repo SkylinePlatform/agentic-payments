@@ -220,6 +220,56 @@ func TestLoadReportsAMissingOrBrokenFile(t *testing.T) {
 	}
 }
 
+// TestAppendAddsArgsToTheNamedProcess is `make demo-live`'s mechanism, tested
+// as the pure data operation it is — no process is started by this test, only
+// the manifest a runner would be handed.
+func TestAppendAddsArgsToTheNamedProcess(t *testing.T) {
+	t.Parallel()
+
+	m := demo.Manifest{Processes: []demo.Process{
+		{Name: "agent-watch", Args: []string{"-watch", "-poll", "1s"}},
+		{Name: "agent-buy", Args: []string{"-buy"}},
+	}}
+
+	err := m.Append("agent-watch", "-interpreter", "auto")
+	require.NoError(t, err, "agent-watch is a process this manifest has")
+
+	assert.Equal(t, []string{"-watch", "-poll", "1s", "-interpreter", "auto"}, m.Processes[0].Args,
+		"the extra args land after the ones already there, not instead of them")
+	assert.Equal(t, []string{"-buy"}, m.Processes[1].Args,
+		"a process not named in the call is not this method's business")
+}
+
+// TestAppendCalledTwiceAccumulates is the shape two `-append` flags for the
+// same process take: cmd/demo calls this once per flag, in order, and the
+// second call has to add to what the first left rather than replace it.
+func TestAppendCalledTwiceAccumulates(t *testing.T) {
+	t.Parallel()
+
+	m := demo.Manifest{Processes: []demo.Process{{Name: "agent-watch", Args: []string{"-watch"}}}}
+
+	require.NoError(t, m.Append("agent-watch", "-interpreter", "auto"))
+	require.NoError(t, m.Append("agent-watch", "-poll", "2s"))
+
+	assert.Equal(t, []string{"-watch", "-interpreter", "auto", "-poll", "2s"}, m.Processes[0].Args,
+		"a second -append for the same process adds to the first, in the order the flags were given")
+}
+
+// TestAppendRejectsAnUnknownProcess is the fail-fast property: a typo in
+// -append's process name is a mistake about the manifest, and Validate's own
+// rule is that this manifest is strict about that class of mistake before
+// anything starts.
+func TestAppendRejectsAnUnknownProcess(t *testing.T) {
+	t.Parallel()
+
+	m := demo.Manifest{Processes: []demo.Process{{Name: "agent-watch"}}}
+
+	err := m.Append("agent-buy", "-interpreter", "auto")
+	require.Error(t, err, "agent-buy is not a process in this manifest")
+	assert.ErrorIs(t, err, demo.ErrInvalidManifest,
+		"the same sentinel Validate uses, so a caller checking for one catches the other")
+}
+
 func TestPathResolvesAgainstRoot(t *testing.T) {
 	t.Parallel()
 
