@@ -149,10 +149,17 @@ So the token comes with the discipline that makes the claim above true:
 **`signal` marks a value where that value is the subject, not every time one
 appears.** The digest on the spine is the subject and takes it. The same digest
 repeated down a log of steps is a column of identifiers the mono face and the
-alignment already distinguish, and it does not. That is a `className` decision
-and belongs to the type half of #159; it is written here because the guard
-cannot see it — `palette.test.ts` checks that `signal` on `paper` and on `wash`
-are legible, and legibility is not the question a colour used too often fails.
+alignment already distinguish, and it does not. That was a `className` decision
+and it landed with the type half of #159: `SpineHead` in
+`frontend/src/lanes/Lanes.tsx` is the one element that wears `signal`, and the
+step cards, the event log and the Inspector keep `graphite`. It is written here
+because the guard cannot see it — `palette.test.ts` checks that `signal` on
+`paper` and on `wash` are legible, and legibility is not the question a colour
+used too often fails. What *is* now checked is the opposite failure, the one
+this token actually hit: `declares no token that nothing wears`, in
+`frontend/src/architecture.test.ts`, fails when the stylesheet declares a colour
+no className names — which `signal` was for the two pull requests between its
+approval here and its arrival on the spine.
 **Checked against the guards `palette.test.ts` enforces, not merely asserted:**
 every pair the design uses clears the 4.5:1 text floor in both themes — the
 worst is `broken` on `wash` at 4.56:1 in light and `graphite` on `wash` at

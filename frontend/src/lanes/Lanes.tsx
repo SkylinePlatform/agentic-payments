@@ -170,6 +170,18 @@ function LaneColumn({ lane, attempt }: { readonly lane: Lane; readonly attempt: 
  * `broken` is reserved for the binding not holding. A verifier enforcing a limit
  * the user set is the protocol working exactly as designed, and colouring the
  * two the same would teach a viewer the opposite of the truth.
+ *
+ * **When it holds, the head is `signal`, and this is the one place that is
+ * true.** The three-lane design's *Tokens* section is explicit that `signal`
+ * marks a value where that value *is the subject*, not everywhere a computed
+ * value appears — and it names this element as the case: "The digest on the
+ * spine is the subject and takes it. The same digest repeated down a log of
+ * steps is a column of identifiers the mono face and the alignment already
+ * distinguish, and it does not." So the step cards, the event log and the
+ * Inspector keep `graphite`. Painting them too would make the blue the most
+ * common colour on the page, and `seal` arriving would then stand out against
+ * a field of colour rather than against a neutral page — which is the
+ * dilution the whole two-saturated-values rule exists to prevent.
  */
 function failed(verdict: Verdict): boolean {
   return verdict.state === "refused" && verdict.bindingFailed;
@@ -183,9 +195,18 @@ function SpineHead({ verdict }: { readonly verdict: Verdict }) {
   return (
     <div className="flex justify-center">
       <span
-        className={`font-mono text-xl font-semibold tracking-tight sm:text-2xl ${
-          failed(verdict) ? "text-broken" : "text-ink"
-        }`}
+        // Concatenation rather than a template literal, which is what
+        // `EventLog.tsx` and `routes/MandateInspector.tsx` already do, and it
+        // is load-bearing here rather than stylistic: `src/test/source.ts`
+        // reads a template literal as one string from backtick to backtick, so
+        // an interpolated `"text-signal"` reaches the palette rules with its
+        // quotes still attached and parses as no utility at all. Written this
+        // way each class is its own literal, and both the allow-list rule and
+        // `declares no token that nothing wears` can see it.
+        className={
+          "font-mono text-xl font-semibold tracking-tight sm:text-2xl " +
+          (failed(verdict) ? "text-broken" : "text-signal")
+        }
         title={digest}
       >
         {shortDigest(digest)}

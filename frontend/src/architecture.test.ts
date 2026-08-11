@@ -191,6 +191,42 @@ function offPalette(source: string, allowed: ReadonlySet<string>): string[] {
   return offenders;
 }
 
+/**
+ * Every palette token some source actually names in a utility class.
+ *
+ * The converse of the rule above, and the one that was missing. The allow-list
+ * rule asks whether a class names a token the stylesheet declares; it has
+ * nothing to say about a token the stylesheet declares that no class names.
+ * `signal` was exactly that for the length of two pull requests — approved in
+ * the spec, added to `@theme`, given two checked pairs in `palette.test.ts`,
+ * and worn by no element on any screen. Every guard it had was satisfied,
+ * because each of them takes the token as its *input*.
+ *
+ * **This can only fail loudly, never pass on a coincidence**, and the
+ * direction is worth stating because it is what makes the rule honest. A token
+ * named somewhere this scan cannot read reports as unworn and fails; there is
+ * no way for an unworn token to be reported as worn. The one place the scan
+ * cannot read is inside a template literal's interpolation, because
+ * `src/test/source.ts` takes a backtick literal as one string and an
+ * interpolated `"text-signal"` arrives with its quotes attached and parses as
+ * no utility at all. So a failure here means one of two things — the token
+ * genuinely reaches no element, or it reaches one through a template literal —
+ * and the fix for the second is to write the class as its own string literal,
+ * the way `SpineHead`, `EventLog` and `MandateInspector` all do.
+ */
+function tokensWorn(sources: readonly (readonly [string, string])[]): Set<string> {
+  const worn = new Set<string>();
+  for (const [, source] of sources) {
+    for (const literal of stringLiterals(source)) {
+      for (const word of classCandidates(literal)) {
+        const token = colourTokenOf(word);
+        if (token !== null) worn.add(token);
+      }
+    }
+  }
+  return worn;
+}
+
 // --- rule: no component names a theme --------------------------------------
 
 /**
@@ -533,6 +569,19 @@ describe("the frontend's architecture", () => {
           "declares; a second list here would drift toward accepting what the " +
           "stylesheet cannot render",
       ).toEqual([...TOKENS].sort());
+    });
+
+    it("declares no token that nothing wears", () => {
+      const worn = tokensWorn(APP_SOURCES);
+      expect(
+        TOKENS.filter((token) => !worn.has(token)),
+        "a token declared in `@theme` and named by no className is a colour " +
+          "the design approved and the screen never shows. `signal` was that " +
+          "for two pull requests: the spec assigned it to the digest on the " +
+          "spine, `palette.test.ts` checked both its pairs, and nothing wore " +
+          "it — every guard passed because every guard takes the token list " +
+          "as its input rather than asking what the app draws",
+      ).toEqual([]);
     });
 
     it.each(APP_SOURCES)("%s uses no colour outside the palette", (_path, source) => {
