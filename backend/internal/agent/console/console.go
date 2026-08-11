@@ -23,10 +23,14 @@
 //     TestTheStateNamesTheConsoleServesAreTheOnesTheMachineWrites drives a watch
 //     through all three and reads them back off the wire.
 //   - **No route accepts a state.** The DTO is only ever marshalled; the request
-//     shapes in this file decode a prompt, an item and a quantity, and nothing
-//     else, and the paths carry a watch's name and an attempt's number. An agent
-//     that could be *told* where its mandate stood would be taking somebody
-//     else's word for its own bookkeeping.
+//     shapes in this file decode a prompt, an item, a quantity and — POST
+//     /watches only — a pre-signed agent.Authorisation, and nothing else, and
+//     the paths carry a watch's name and an attempt's number. An agent that
+//     could be *told* where its mandate stood would be taking somebody else's
+//     word for its own bookkeeping. An authorisation is not that: it is two
+//     SD-JWTs signed by the user's key, and this package carries them to
+//     verifiers rather than reading anything out of them — see
+//     Watching.Authorisation.
 //
 // # The agent reports what it presented and what came back, never a verdict
 //
@@ -72,15 +76,24 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 )
 
-// Watcher is the agent as this console drives it: authorise a prompt now, then
-// spend what was signed.
+// Watcher is the agent this console drives.
 //
-// Two methods because the console calls them at two different moments and on two
-// different goroutines — Authorise inside the request, Watch in the goroutine it
-// leaves behind — which is Service.Start's whole shape. Neither takes a Tracker
-// or returns one: where the mandates stand arrives through agent.Progress, as
-// values.
+// Four methods. Three of them are moments: Propose inside one request,
+// Authorise inside another, Watch in the goroutine that one leaves behind. The
+// fourth, Examples, is not a moment at all — it is a static lookup with
+// nothing to call it at, answered from whatever the interpreter was built
+// with. One port rather than a Proposer beside a Watcher: two fields would
+// allow a Service wired to propose from one agent and watch with another,
+// which is a state nobody wants and nothing would prevent.
 type Watcher interface {
+	// Propose reads the prompt and settles on an offer, signing nothing.
+	Propose(ctx context.Context, prompt, item string) (agent.Proposal, error)
+
+	// Examples lists the sentences this agent's interpreter is scripted for,
+	// empty when it has none. A model-backed interpreter has no menu because
+	// any sentence is admissible.
+	Examples() []string
+
 	// Authorise puts the interpretation of prompt in front of the user and
 	// returns what they signed. item, when set, is an offer the caller has
 	// already chosen; see agent.Intent.Item.
@@ -151,6 +164,24 @@ type Watching struct {
 	Item string
 	// Quantity is how many to buy. Zero means one.
 	Quantity int
+
+	// Authorisation, when set, is what the user already signed, and Start uses
+	// it instead of asking for a signature.
+	//
+	// **This is an artefact, not a state**, and the distinction is thin enough
+	// to be worth writing down before somebody tests it. The package comment's
+	// rule is that no route accepts a state — an agent that could be told where
+	// its mandate stood would be taking somebody else's word for its own
+	// bookkeeping. What arrives here is two SD-JWTs signed by the user's key.
+	// This package does not parse them, evaluate them or believe anything about
+	// them; it carries them to verifiers whose job that is. Where a mandate
+	// stands is still computed by agent.Tracker from what those verifiers
+	// answered, and there is still no route by which an agent can be told.
+	//
+	// The tempting edit — "while we are accepting an authorisation, we may as
+	// well accept its state" — is one line away and reads as symmetry. It is
+	// not.
+	Authorisation *agent.Authorisation
 }
 
 // Handler returns the console's routes, wrapped in the middleware every role
@@ -174,6 +205,12 @@ func (s *Service) Handler() (http.Handler, error) {
 	mux.HandleFunc("GET /watches", s.list)
 	mux.HandleFunc("GET /watches/{id}", s.read)
 
+	mux.HandleFunc("POST /proposals", s.propose)
+	// A GET, so it sits outside the idempotency middleware by method semantics
+	// rather than by a route exemption — the argument GET /watches/{id}/… above
+	// already makes here. It reads a table fixed at construction.
+	mux.HandleFunc("GET /examples", s.examples)
+
 	// A GET, which is what settles the idempotency question for it: RFC 9110
 	// §9.2.1 safe methods sit outside the middleware by method semantics rather
 	// than by a route exemption, which is the argument GET /nonce and GET
@@ -195,11 +232,14 @@ func (s *Service) Handler() (http.Handler, error) {
 	return roles.Middleware(s.Clock, mux)
 }
 
-// Start authorises a prompt and leaves a watch running against what was signed.
+// Start leaves a watch running against an authorisation: its own, when
+// Watching carries none, or one the caller already collected — see
+// Watching.Authorisation.
 //
 // # Synchronous authorisation, asynchronous watch
 //
-// The signature is collected before this returns, so what comes back names an
+// The signature is collected — by this call, or beforehand by whoever set
+// Watching.Authorisation — before this returns, so what comes back names an
 // authorisation that exists: the two open mandates, the sentences the surface
 // rendered, the item and the expiry. The polling loop is what runs on afterwards.
 //
@@ -211,12 +251,13 @@ func (s *Service) Handler() (http.Handler, error) {
 //
 // # ctx governs both halves
 //
-// Authorise runs under it and so does the watch, so the caller decides how a
-// watch ends. cmd/agent hands the process's signal context to the watch it
-// starts on startup, which is what makes Ctrl-C leave that run reading "stopped";
-// the HTTP handler hands context.WithoutCancel(r.Context()), because a browser
-// navigating away is not a reason to abandon an open mandate the user has just
-// signed, and the request's correlation ID travels either way.
+// Authorise, when it runs at all, runs under it, and so does the watch either
+// way, so the caller decides how a watch ends. cmd/agent hands the process's
+// signal context to the watch it starts on startup, which is what makes
+// Ctrl-C leave that run reading "stopped"; the HTTP handler hands
+// context.WithoutCancel(r.Context()), because a browser navigating away is
+// not a reason to abandon an open mandate the user has just signed, and the
+// request's correlation ID travels either way.
 func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 	if s.Watcher == nil {
 		return nil, errors.New("console: a console needs an agent to start watches with")
@@ -234,10 +275,19 @@ func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 		return nil, err
 	}
 
-	auth, err := s.Watcher.Authorise(ctx, in.Prompt, in.Item)
-	if err != nil {
-		s.release()
-		return nil, err
+	// With an authorisation in hand the slot check above still runs first, and
+	// still against nothing more than a well-formed request — the signature
+	// happened at the Trusted Surface before the browser ever contacted this
+	// agent, so a 429 here spends nothing that was signed. Whether it is rare
+	// depends on watch_slots_free being read first, not on this ordering.
+	auth := in.Authorisation
+	if auth == nil {
+		signed, err := s.Watcher.Authorise(ctx, in.Prompt, in.Item)
+		if err != nil {
+			s.release()
+			return nil, err
+		}
+		auth = &signed
 	}
 
 	id, err := newID()
@@ -266,7 +316,7 @@ func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 
 	go func() {
 		defer close(run.done)
-		watched, err := s.Watcher.Watch(ctx, auth, quantity, run)
+		watched, err := s.Watcher.Watch(ctx, *auth, quantity, run)
 		run.finished(watched, err)
 	}()
 
@@ -328,22 +378,27 @@ func (s *Service) all() []*Run {
 
 // start is POST /watches.
 func (s *Service) start(w http.ResponseWriter, r *http.Request) {
-	// Prompt, item and quantity. **Nothing here reads a state**, and that is the
-	// third of the three arrangements in the package comment: the agent states
-	// where its own mandates stand and nobody may send it an answer.
+	// Prompt, item, quantity and — when the browser already collected one — an
+	// authorisation. **Nothing here reads a state**, and that is the third of
+	// the three arrangements in the package comment: the agent states where its
+	// own mandates stand and nobody may send it an answer. An authorisation is
+	// not that — it is two SD-JWTs, an artefact this handler carries and does
+	// not parse — which is Watching.Authorisation's own distinction.
 	var req struct {
-		Prompt   string `json:"prompt"`
-		Item     string `json:"item"`
-		Quantity int    `json:"quantity"`
+		Prompt        string               `json:"prompt"`
+		Item          string               `json:"item"`
+		Quantity      int                  `json:"quantity"`
+		Authorisation *agent.Authorisation `json:"authorisation"`
 	}
 	if !roles.DecodeJSON(w, r, &req) {
 		return
 	}
 
 	run, err := s.Start(context.WithoutCancel(r.Context()), Watching{
-		Prompt:   req.Prompt,
-		Item:     req.Item,
-		Quantity: req.Quantity,
+		Prompt:        req.Prompt,
+		Item:          req.Item,
+		Quantity:      req.Quantity,
+		Authorisation: req.Authorisation,
 	})
 	switch {
 	case errors.Is(err, ErrTooManyWatches):
@@ -355,6 +410,17 @@ func (s *Service) start(w http.ResponseWriter, r *http.Request) {
 		// describe the call, not a mandate — which is why roles.DecodeJSON above
 		// answers with one.
 		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	case errors.Is(err, agent.ErrMerchantAnsweredDifferently):
+		// Checked before the arm below on purpose: settle wraps this alongside
+		// agent.ErrNothingToBuy, so without an arm of its own it would be caught
+		// by that one's errors.Is and answered 422 — which is the wrong arm. A
+		// merchant answering a question it was not asked is not this agent's own
+		// account of a request it cannot fulfil; it is a party outside this
+		// agent behaving unexpectedly, which is exactly what the arm below
+		// already reserves for "anything else, including a merchant that did not
+		// answer".
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	case errors.Is(err, interpret.ErrNoScript),
 		errors.Is(err, interpret.ErrNoConstraints),
@@ -382,6 +448,83 @@ func (s *Service) start(w http.ResponseWriter, r *http.Request) {
 	}
 
 	roles.OK(w, http.StatusCreated, run.started())
+}
+
+// propose is POST /proposals.
+//
+// A pure function of the prompt: interpret, search, narrow, answer, remember
+// nothing. r.Context() rather than context.WithoutCancel, unlike start below —
+// a proposal that outlives the request has nobody to answer, because nothing
+// is signed and nothing is registered for a later caller to read.
+//
+// The error mapping is Service.start's, taken as it stands rather than restated:
+// that switch already carries the reasoning, and a second table would be a second
+// truth about the same errors. There is no ErrTooManyWatches arm because nothing
+// is reserved here.
+func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Prompt string `json:"prompt"`
+		Item   string `json:"item"`
+	}
+	if !roles.DecodeJSON(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Prompt) == "" {
+		http.Error(w, "console: a proposal needs the sentence the user typed", http.StatusUnprocessableEntity)
+		return
+	}
+
+	proposal, err := s.Watcher.Propose(r.Context(), req.Prompt, req.Item)
+	switch {
+	case errors.Is(err, agent.ErrMerchantAnsweredDifferently):
+		// Same precedence reason as Service.start's arm of the same name: this
+		// also wraps agent.ErrNothingToBuy, so it has to be checked first or the
+		// case below would claim it and answer 422 for what is actually a
+		// merchant that did not answer the question asked.
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	case errors.Is(err, interpret.ErrNoScript),
+		errors.Is(err, interpret.ErrNoConstraints),
+		errors.Is(err, agent.ErrNothingToBuy):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	roles.OK(w, http.StatusOK, proposed{
+		Prompt:         req.Prompt,
+		Constraints:    proposal.Constraints,
+		AgentKey:       proposal.AgentKey,
+		Item:           proposal.Item,
+		Offer:          proposal.Offer,
+		WatchSlotsFree: s.free(),
+	})
+}
+
+// examples is GET /examples.
+func (s *Service) examples(w http.ResponseWriter, _ *http.Request) {
+	menu := s.Watcher.Examples()
+	if menu == nil {
+		// A named empty array rather than null, so a caller iterating it needs
+		// no branch for the model-backed case.
+		menu = []string{}
+	}
+	roles.OK(w, http.StatusOK, examples{Examples: menu})
+}
+
+// free is how many more watches this console will hold, counting the ones in
+// flight. It reserves nothing.
+func (s *Service) free() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	limit := s.Limit
+	if limit < 1 {
+		limit = DefaultLimit
+	}
+	return max(0, limit-len(s.order)-s.pending)
 }
 
 // list is GET /watches.

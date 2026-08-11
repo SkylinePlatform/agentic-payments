@@ -3,6 +3,7 @@ package surface_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -78,6 +79,66 @@ func TestThePreviewNeverReachesTheUsersKey(t *testing.T) {
 	})
 }
 
+// TestARefusalSignsNothing is the claim the route's name makes, proved where it
+// can be: against the signer itself.
+//
+// A response carrying no mandate is not the same claim as no mandate having
+// been made — the file header already says so about the preview, and it is the
+// reason this test lives here rather than beside the others.
+//
+// # The version this replaced proved nothing
+//
+// A digest that does not match what vetted() computes is refused by /refused
+// before it reaches the branch that signs nothing on purpose — the same branch
+// TestThePreviewNeverReachesTheUsersKey's own header warns about: "a check that
+// would pass whatever happened protects nothing." A hand-written digest that
+// happens to be wrong sends every request down that rejected path regardless of
+// what the route is named, so a version of this test that never asserted a
+// status code would pass exactly as well with the route deleted, renamed, or
+// refusing for an unrelated reason. What matters — an *accepted* refusal
+// signing nothing — was never exercised.
+//
+// So this test previews first, to get a digest the surface actually computed
+// for these constraints, refuses using that digest, and requires the 200 that
+// says the refusal went through before it asks anything of the signer. Only
+// the accepted branch is evidence for the claim in the route's name.
+//
+// This package cannot reach roles_test's send and priceCap fixtures — this is
+// package surface_test, a different package from the one that declares them —
+// so both requests are built the same way postJSON's is: a literal body,
+// posted directly.
+func TestARefusalSignsNothing(t *testing.T) {
+	t.Parallel()
+
+	srv, signatures := surfaceWithACountedSigner(t)
+
+	var preview struct {
+		ConstraintsDigest string `json:"constraints_digest"`
+	}
+	require.Equal(t, http.StatusOK,
+		postJSONKeyed(t, t.Name()+"/preview", srv.URL+"/authorise/preview", &preview),
+		"the digest a refusal names has to be one this surface actually computed for these constraints, or /refused rejects it before reaching the branch under test")
+
+	body := fmt.Sprintf(`{
+		"prompt": "a ladder, under two hundred",
+		"constraints": [{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}],
+		"constraints_digest": %q
+	}`, preview.ConstraintsDigest)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/authorise/refused", strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", t.Name()+"/refused")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err, "calling the refused route")
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode,
+		"the branch that signs nothing on purpose is the accepted one; a request rejected for an unrelated reason is the positive control this test must not silently become")
+
+	assert.Zero(t, signatures.Load(),
+		"the user said no; a key that moved here would be a signature nobody asked for")
+}
+
 // surfaceWithACountedSigner stands up a Trusted Surface whose Signer is the
 // generated double, and returns the server and the number of signatures made.
 //
@@ -141,6 +202,16 @@ func (publishedKeys) JWKS(context.Context) ([]byte, error) {
 // that the only difference between the two subtests is the door.
 func postJSON(t *testing.T, url string, into any) int {
 	t.Helper()
+	return postJSONKeyed(t, t.Name(), url, into)
+}
+
+// postJSONKeyed is postJSON under a caller-chosen idempotency key, for a test
+// that makes more than one call and cannot let them collide: the shared
+// middleware keys a record on the method, the full target and the body, so one
+// key reused against two different routes is a conflict rather than two
+// answers.
+func postJSONKeyed(t *testing.T, key, url string, into any) int {
+	t.Helper()
 
 	const body = `{
 		"prompt": "a ladder, under two hundred",
@@ -154,7 +225,7 @@ func postJSON(t *testing.T, url string, into any) int {
 	// Both routes are POSTs behind the shared middleware, which reads the
 	// method rather than the route: a request without this is refused before
 	// the handler runs, and the test would be exercising that refusal.
-	req.Header.Set("Idempotency-Key", t.Name())
+	req.Header.Set("Idempotency-Key", key)
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err, "calling %s", url)

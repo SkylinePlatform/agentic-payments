@@ -7,17 +7,17 @@ import (
 	"time"
 )
 
-// Kind is what happened. The set is closed at exactly the five moments ADR 0003
+// Kind is what happened. The set is closed at exactly the six moments ADR 0003
 // Decision 2 names, and it is closed on purpose: the frontend's three-lane view
-// groups by kind, and a sixth kind appearing without that view learning about
+// groups by kind, and a seventh kind appearing without that view learning about
 // it produces an event nobody can see.
 //
-// It is a defined string type with exported constants rather than five methods
+// It is a defined string type with exported constants rather than six methods
 // on Emitter, matching how generated.ErrorCode closes its own set — one
 // vocabulary, checked in one place, rather than a method per member.
 type Kind string
 
-// The five protocol-significant moments.
+// The six protocol-significant moments.
 const (
 	// KindMandateConstructed is a mandate being assembled and signed. It is the
 	// first event in a transaction that has one.
@@ -51,6 +51,21 @@ const (
 	// receipt carrying the error, because a silent failure leaves nothing to
 	// reason about in a dispute.
 	KindReceiptIssued Kind = "receipt_issued"
+
+	// KindAuthorisationRefused is a person being shown an interpretation and
+	// saying no.
+	//
+	// The one moment here that is about the **absence** of a mandate. Nothing
+	// was signed, so there is nothing to present, verify or receipt — which is
+	// also why it carries no Code: a code is a verifier's verdict on something
+	// that exists, and here nobody was wrong.
+	//
+	// It is the caller's claim rather than a fact, and more visibly so than the
+	// other five. The Trusted Surface's POST /authorise/refused emits it, that
+	// route is called by a browser, and a browser that simply navigated away
+	// emits nothing at all. The log is observability and never evidence — ADR
+	// 0003 — and this is the entry where that distance is widest.
+	KindAuthorisationRefused Kind = "authorisation_refused"
 )
 
 // kinds is the closed set, in the order a transaction produces them.
@@ -60,13 +75,14 @@ var kinds = []Kind{
 	KindMandateVerified,
 	KindMandateRejected,
 	KindReceiptIssued,
+	KindAuthorisationRefused,
 }
 
-// Kinds returns the five kinds. It exists so a test, or the collector, can
+// Kinds returns the six kinds. It exists so a test, or the collector, can
 // check its own coverage against the set rather than repeating it.
 func Kinds() []Kind { return slices.Clone(kinds) }
 
-// Valid reports whether k is one of the five.
+// Valid reports whether k is one of the six.
 func (k Kind) Valid() bool { return slices.Contains(kinds, k) }
 
 // Event is one thing that happened, as the event log records it.
@@ -87,7 +103,7 @@ func (k Kind) Valid() bool { return slices.Contains(kinds, k) }
 // to settle a dispute would be resolving it by reading the loser's own
 // editable log.
 type Event struct {
-	// Kind is which of the five moments this is.
+	// Kind is which of the six moments this is.
 	Kind Kind `json:"kind"`
 
 	// CorrelationID groups every event belonging to one transaction. This is
@@ -135,7 +151,7 @@ var ErrInvalidEvent = errors.New("obs: invalid event")
 func (e Event) Validate() error {
 	switch {
 	case !e.Kind.Valid():
-		return fmt.Errorf("%w: kind %q is not one of the five", ErrInvalidEvent, e.Kind)
+		return fmt.Errorf("%w: kind %q is not one of the six", ErrInvalidEvent, e.Kind)
 	case e.Role == "":
 		return fmt.Errorf("%w: role is required — an event with no lane cannot be displayed", ErrInvalidEvent)
 	case e.At.IsZero():

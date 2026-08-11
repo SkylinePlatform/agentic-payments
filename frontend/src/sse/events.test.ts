@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { EVENT_KINDS, isEventKind, parseRecord } from "./events";
 
 /**
- * The five kinds as `backend/internal/platform/obs/event.go` declares them,
+ * The six kinds as `backend/internal/platform/obs/event.go` declares them,
  * written out here rather than derived from EVENT_KINDS.
  *
  * That is the whole difference between a test and a tautology, and it is the
@@ -13,8 +13,8 @@ import { EVENT_KINDS, isEventKind, parseRecord } from "./events";
  * left under test would be that `Array.prototype.map` works.
  *
  * This list catches a kind going missing from the frontend. It cannot catch a
- * *sixth* kind arriving on the backend, because nothing in this package would
- * change. That check lives on the other side of the wire, in
+ * *seventh* kind arriving on the backend, because nothing in this package
+ * would change. That check lives on the other side of the wire, in
  * `TestTheFrontendKnowsEveryKind` in `internal/platform/obs`, where it fails in
  * `make check` — the gate the person adding the kind is actually running.
  */
@@ -24,6 +24,7 @@ const KINDS = [
   "mandate_verified",
   "mandate_rejected",
   "receipt_issued",
+  "authorisation_refused",
 ];
 
 /** A well-formed record, as the collector serialises one. */
@@ -39,7 +40,7 @@ const RECORD = JSON.stringify({
 });
 
 describe("the event vocabulary", () => {
-  it("names the five kinds, in the order a transaction produces them", () => {
+  it("names the six kinds, in the order a transaction produces them", () => {
     expect(
       [...EVENT_KINDS],
       "SSE has no wildcard listener, so a kind this list does not name is one " +
@@ -49,7 +50,7 @@ describe("the event vocabulary", () => {
 
   it("recognises a kind and refuses anything else", () => {
     for (const kind of KINDS) {
-      expect(isEventKind(kind), `${kind} is one of the five`).toBe(true);
+      expect(isEventKind(kind), `${kind} is one of the six`).toBe(true);
     }
     // The shapes a payload could actually carry, rather than one token case.
     expect(isEventKind("mandate_settled"), "a kind this build has never heard of").toBe(false);
@@ -152,7 +153,7 @@ describe("parseRecord", () => {
         seq: 1,
         event: { kind: "mandate_settled", role: "mpp", at: "2026-08-09T10:11:12Z" },
       }),
-      'kind "mandate_settled" is not one of the five',
+      'kind "mandate_settled" is not one of the six',
     ],
     [
       "no role, so no lane",

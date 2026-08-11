@@ -2,7 +2,7 @@
  * The collector's event stream, typed.
  *
  * `connect()` and nothing else is what a surface needs: it opens `/events`,
- * registers a listener for each of the five kinds — the collector names its
+ * registers a listener for each of the six kinds — the collector names its
  * events, and a named SSE event never reaches `onmessage` — and hands back a
  * subscription per kind, a report of anything the stream skipped, and a
  * connection state.

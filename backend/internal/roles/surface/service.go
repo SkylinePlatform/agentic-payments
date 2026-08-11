@@ -183,8 +183,9 @@ type authorisation struct {
 // previewed is what comes back from POST /authorise/preview: the sentences, and
 // the name of the set they describe.
 //
-// No mandate, no expiry and no instrument, because nothing was signed and there
-// is nothing yet to state a lifetime or a card for.
+// No mandate, because nothing was signed. But the instrument and lifetime are
+// stated, because a consent screen needs to display the full scope of what the
+// user is about to authorise.
 type previewed struct {
 	// Rendered says what each constraint means, one sentence per constraint, in
 	// the order they would be signed. It is what POST /authorise returns for
@@ -196,6 +197,30 @@ type previewed struct {
 	// saying which set those sentences described, and is refused if the two
 	// disagree.
 	ConstraintsDigest string `json:"constraints_digest"`
+
+	// PaymentInstrument is the instrument this surface will pin into the open
+	// Payment Mandate, stated before the signature rather than after it.
+	//
+	// Consent over the constraints alone is consent to part of what the
+	// signature covers: the agent has no business naming the card, so the user
+	// has no other way to learn which one pays. contracts/instrument/
+	// payment_instrument.json's `description` is documented as "Shown on the
+	// Trusted Surface so the user can tell which instrument they are
+	// approving" — this route is where that stops being an aspiration.
+	PaymentInstrument generated.PaymentInstrument `json:"payment_instrument"`
+
+	// OpenMandateLifetimeSeconds is how long the pair will authorise anything.
+	//
+	// **A duration, never an instant**, and that is what keeps this field from
+	// reintroducing the drift the preview exists to close. The expiry is
+	// computed in authorise as clock.Now().Add(openMandateLifetime), so a
+	// timestamp returned here would describe a moment the signature is not
+	// going to carry. The constant cannot disagree with itself.
+	//
+	// Seconds as an integer rather than a time.Duration, which marshals as
+	// nanoseconds and reads as a defect, or a string, which would need a parser
+	// on the other side for a value with one use.
+	OpenMandateLifetimeSeconds int `json:"open_mandate_lifetime_seconds"`
 }
 
 // authorised is what comes back: the two open mandates, signed by the user, and
@@ -252,7 +277,8 @@ func (s *Service) Handler() (http.Handler, error) {
 	mux.Handle("GET "+roles.JWKSPath, roles.JWKS(s.Keys))
 	mux.HandleFunc("POST /approve", s.approve)
 	mux.HandleFunc("POST /authorise", s.authorise)
-	mux.HandleFunc("POST /authorise/preview", preview)
+	mux.HandleFunc("POST /authorise/preview", s.preview)
+	mux.HandleFunc("POST /authorise/refused", s.refused)
 	return roles.Middleware(s.Clock, mux)
 }
 
@@ -434,11 +460,9 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 // routes agree on happens in vetted, so there is no rendering here to drift
 // from the one that gets signed.
 //
-// A package-level function rather than a method on Service, and that is the
-// point: a handler that is not a method cannot reach s.Signer at all, so "the
-// preview signs nothing" is visible in the signature before anybody reads the
-// body. It is not what holds the property — a later edit could make it a method
-// in one token — which is what TestThePreviewNeverReachesTheUsersKey is for.
+// A method rather than a free function since it began answering with the
+// instrument: it reads s.Instrument, which is the surface's own configuration
+// and the one thing on this response that is not derived from the request.
 //
 // It takes an Idempotency-Key, like every other POST here, and satisfies the
 // standing rule vacuously: a preview changes nothing, so there is nothing about
@@ -453,7 +477,7 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 //
 // Nothing calls it yet. The consent screen is #22, several branches away, and
 // the agent has no screen to show sentences on.
-func preview(w http.ResponseWriter, r *http.Request) {
+func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 	var req authorisation
 	if !roles.DecodeJSON(w, r, &req) {
 		return
@@ -462,7 +486,75 @@ func preview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	roles.OK(w, http.StatusOK, previewed{Rendered: rendered, ConstraintsDigest: digest})
+
+	// A copy rather than &s.Instrument, so nothing downstream holds a pointer
+	// into this Service's configuration — the same reason authorise takes one.
+	instrument := s.Instrument
+	roles.OK(w, http.StatusOK, previewed{
+		Rendered:                   rendered,
+		ConstraintsDigest:          digest,
+		PaymentInstrument:          instrument,
+		OpenMandateLifetimeSeconds: int(openMandateLifetime / time.Second),
+	})
+}
+
+// refused records that a person was shown a rendering and said no.
+//
+// # What this proves, and what it does not
+//
+// Nothing about a human. It is called by whatever holds the screen, that caller
+// may equally call nothing at all, and no part of a request can establish that
+// somebody read anything — the same limit authorisation.ConstraintsDigest
+// already documents about itself. So what is emitted below is **the caller's
+// claim that a refusal happened**, and it belongs where every claim of that kind
+// belongs: the collector, which ADR 0003 makes observability and never
+// evidence.
+//
+// Written here rather than left implicit because an event log line reading "the
+// user refused" is exactly the sort of thing a later reader cites as proof.
+//
+// # Why the digest is required here and optional on /authorise
+//
+// On this route the digest is the only content. /authorise has two mandates to
+// show for itself; this has one assertion about which rendering was refused, and
+// a refusal naming no rendering names nothing. Requiring it costs a caller with
+// a screen nothing — it previewed, so it has one — and there is no caller
+// without a screen, because an agent that decided not to authorise something
+// simply does not call this.
+//
+// The same decode, the same vetted() and the same digest check as authorise, so
+// a refusal cannot name a set this surface could not have produced. It signs
+// nothing; TestARefusalSignsNothing proves that against the Signer.
+func (s *Service) refused(w http.ResponseWriter, r *http.Request) {
+	var req authorisation
+	if !roles.DecodeJSON(w, r, &req) {
+		return
+	}
+	if req.ConstraintsDigest == "" {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			"a refusal has to name the rendering it refused; without the digest it names nothing")
+		return
+	}
+	_, _, digest, ok := vetted(w, req.Constraints)
+	if !ok {
+		return
+	}
+	if req.ConstraintsDigest != digest {
+		roles.Fail(w, generated.ErrorCodeRequestMalformed,
+			"these constraints are not the ones that digest was issued for")
+		return
+	}
+
+	s.Events.Emit(r.Context(), obs.KindAuthorisationRefused,
+		fmt.Sprintf("the user refused the interpretation of %q, over %d limits", req.Prompt, len(req.Constraints)))
+
+	roles.OK(w, http.StatusOK, refusal{ConstraintsDigest: digest})
+}
+
+// refusal is what POST /authorise/refused answers with: the name of the set the
+// surface agreed was the one being refused.
+type refusal struct {
+	ConstraintsDigest string `json:"constraints_digest"`
 }
 
 // vetted parses a constraint set, says what each constraint means and names the

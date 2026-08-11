@@ -748,10 +748,11 @@ func authorise(t *testing.T, base string, key generated.PublicKey, cs ...generat
 // would pass whatever that struct's JSON tags said, including a renamed field
 // no client could find.
 type authorisedBody struct {
-	OpenCheckoutMandate string    `json:"open_checkout_mandate"`
-	OpenPaymentMandate  string    `json:"open_payment_mandate"`
-	Rendered            []string  `json:"rendered"`
-	ExpiresAt           time.Time `json:"expires_at"`
+	OpenCheckoutMandate string                      `json:"open_checkout_mandate"`
+	OpenPaymentMandate  string                      `json:"open_payment_mandate"`
+	Rendered            []string                    `json:"rendered"`
+	ExpiresAt           time.Time                   `json:"expires_at"`
+	PaymentInstrument   generated.PaymentInstrument `json:"payment_instrument"`
 }
 
 // priceCap and ladders are the two halves of the built scenario's prompt: a

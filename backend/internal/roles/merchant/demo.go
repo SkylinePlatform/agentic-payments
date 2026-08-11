@@ -102,9 +102,9 @@ type advanced struct {
 // attempt and an expiry will fire, and the person watching should not have to
 // guess why.
 //
-// It emits no event. obs.Kinds is the five protocol moments ADR 0003 names, and
-// moving a demonstration's clock is not one of them; a sixth kind invented here
-// would put demo scaffolding in the lanes the transaction is read from.
+// It emits no event. obs.Kinds is the six protocol moments ADR 0003 names, and
+// moving a demonstration's clock is not one of them; a seventh kind invented
+// here would put demo scaffolding in the lanes the transaction is read from.
 //
 // # The idempotency key is load-bearing
 //

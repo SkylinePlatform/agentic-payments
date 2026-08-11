@@ -65,6 +65,41 @@ func authorised() agent.Authorisation {
 	}
 }
 
+// anAuthorisationBody is what a browser sends when the user has already
+// signed at a Trusted Surface the agent was never on the connection for:
+// agent.Authorisation's JSON shape, built as a map rather than the Go type so
+// these tests exercise the wire and not a struct that happens to produce it.
+//
+// Its fields are deliberately unlike authorised()'s, on proposal()'s own
+// reasoning above: a body that mixed the two routes up fails on sight rather
+// than by coincidence.
+func anAuthorisationBody() map[string]any {
+	return map[string]any{
+		"item":     "gtin:05014477390221",
+		"rendered": []string{"the item is gtin:05014477390221"},
+	}
+}
+
+// proposal is the canned agent.Proposal a mocked Propose answers with — its
+// fields deliberately unlike authorised()'s, so a body that mixed the two
+// routes up would fail on sight rather than by coincidence.
+func proposal() agent.Proposal {
+	field := "item.id"
+	return agent.Proposal{
+		Item: item,
+		Offer: agent.Offer{
+			ID:       item,
+			Title:    "Telescopic ladder, 3.8 m",
+			Retailer: "Balkan Hardware",
+			Price:    generated.Amount{Amount: 24999, Currency: "USD"},
+		},
+		Constraints: []generated.Constraint{
+			{Op: "eq", Field: &field, Value: item},
+		},
+		AgentKey: generated.PublicKey{Kty: "EC"},
+	}
+}
+
 // scripted is a console in front of an agent that does what the test says.
 type scripted struct {
 	service *console.Service
@@ -87,6 +122,8 @@ func newConsole(t *testing.T, watch func(agent.Progress) (agent.Watched, error))
 	// whichever goroutine called the mock, and Watch is called from one this
 	// test does not own. Where a count matters it is asserted afterwards, on the
 	// test goroutine.
+	watcher.EXPECT().Propose(mock.Anything, mock.Anything, mock.Anything).
+		Return(proposal(), nil).Maybe()
 	watcher.EXPECT().Authorise(mock.Anything, mock.Anything, mock.Anything).
 		Return(authorised(), nil).Maybe()
 	watcher.EXPECT().Watch(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -104,6 +141,17 @@ func newConsole(t *testing.T, watch func(agent.Progress) (agent.Watched, error))
 	t.Cleanup(server.Close)
 
 	return &scripted{service: service, watcher: watcher, url: server.URL}
+}
+
+// newConsoleWithExamples stands up a console around an agent whose
+// interpreter offers exactly this menu — nil for the model-backed case, which
+// has none.
+func newConsoleWithExamples(t *testing.T, menu []string) *scripted {
+	t.Helper()
+
+	c := newConsole(t, nothing)
+	c.watcher.EXPECT().Examples().Return(menu).Maybe()
+	return c
 }
 
 // authorisations asserts how many times the user was asked for a signature.
@@ -124,26 +172,46 @@ func (s *scripted) authorisations(t *testing.T, want int) {
 // that are about the routes rather than about what a watch does.
 func nothing(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil }
 
-// post sends POST /watches under an idempotency key, returning the status, the
-// decoded body and whether the middleware answered from its store.
-func (s *scripted) post(t *testing.T, key string, body any) (int, object, bool) {
+// doRequest builds and sends one request: body, when not nil, is JSON-encoded
+// and Content-Type is set for it; key, when not empty, is sent as
+// transport.KeyHeader. It is the one place in this file that builds a request
+// and drives it through http.DefaultClient, so a future change to header
+// handling, a client timeout or TLS config has one place to land — every
+// helper below it, method or free function, differs only in the four
+// arguments here and in how it decodes what comes back.
+//
+// The caller closes the returned response's body.
+func doRequest(t *testing.T, method, url, key string, body any) *http.Response {
 	t.Helper()
 
-	encoded, err := json.Marshal(body)
-	require.NoError(t, err, "encoding the request")
+	var reader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		require.NoError(t, err, "encoding the request")
+		reader = bytes.NewReader(encoded)
+	}
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		s.url+"/watches", bytes.NewReader(encoded))
+	req, err := http.NewRequestWithContext(t.Context(), method, url, reader)
 	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	if key != "" {
 		req.Header.Set(transport.KeyHeader, key)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err, "reaching the console")
-	defer func() { _ = resp.Body.Close() }()
+	return resp
+}
 
+// post sends POST /watches under an idempotency key, returning the status, the
+// decoded body and whether the middleware answered from its store.
+func (s *scripted) post(t *testing.T, key string, body any) (int, object, bool) {
+	t.Helper()
+
+	resp := doRequest(t, http.MethodPost, s.url+"/watches", key, body)
+	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode, decode(t, resp), resp.Header.Get(transport.ReplayedHeader) == "true"
 }
 
@@ -151,14 +219,90 @@ func (s *scripted) post(t *testing.T, key string, body any) (int, object, bool) 
 func (s *scripted) get(t *testing.T, path string) (int, object) {
 	t.Helper()
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, s.url+path, nil)
-	require.NoError(t, err)
-
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err, "reaching the console")
+	resp := doRequest(t, http.MethodGet, s.url+path, "", nil)
 	defer func() { _ = resp.Body.Close() }()
-
 	return resp.StatusCode, decode(t, resp)
+}
+
+// post, postKeyed, postWithoutKey and get call a route by its whole URL rather
+// than through (*scripted).post/.get above, which read relative to s.url.
+// /proposals and /examples are not sub-resources of /watches, so a test about
+// them needs a way in that names wherever they live. They build their request
+// through the same doRequest as the method pair above; the only real
+// difference is that they decode strictly, through decodeStrict, rather than
+// through decode's tolerant empty-object-for-non-JSON — every caller of these
+// four expects JSON back, and a route that stopped answering it should fail
+// the test rather than pass one silently.
+
+// post sends body to url under an idempotency key unique to the calling test,
+// decoding the answer into into and returning the status.
+func post(t *testing.T, url string, body, into any) int {
+	t.Helper()
+	return postKeyed(t, t.Name(), url, body, into)
+}
+
+// postWithoutKey is post with no Idempotency-Key header at all, for
+// TestAProposalNeedsAnIdempotencyKey.
+func postWithoutKey(t *testing.T, url string, body, into any) int {
+	t.Helper()
+	return doPost(t, "", url, body, into)
+}
+
+// postKeyed is post under an explicit key, for a test that sends the same key
+// twice and expects the second press answered from the store.
+func postKeyed(t *testing.T, key, url string, body, into any) int {
+	t.Helper()
+	return doPost(t, key, url, body, into)
+}
+
+func doPost(t *testing.T, key, url string, body, into any) int {
+	t.Helper()
+	resp := doRequest(t, http.MethodPost, url, key, body)
+	defer func() { _ = resp.Body.Close() }()
+	return decodeStrict(t, resp, into)
+}
+
+// get reads url, decoding the answer into into and returning the status.
+func get(t *testing.T, url string, into any) int {
+	t.Helper()
+	resp := doRequest(t, http.MethodGet, url, "", nil)
+	defer func() { _ = resp.Body.Close() }()
+	return decodeStrict(t, resp, into)
+}
+
+// decodeStrict decodes resp's body into into when into is not nil, and
+// returns the status. It does not close the body — the caller does, on
+// decode's own pattern above.
+func decodeStrict(t *testing.T, resp *http.Response, into any) int {
+	t.Helper()
+	if into != nil {
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(into), "decoding the answer")
+	}
+	return resp.StatusCode
+}
+
+// startedBody is what POST /watches answers with, decoded as its own type
+// rather than as the package's unexported started — view.go's own reasoning
+// that a test asserts the wire, not a Go type that happens to produce it.
+type startedBody struct {
+	ID            string    `json:"id"`
+	CorrelationID string    `json:"correlation_id"`
+	Item          string    `json:"item"`
+	Quantity      int       `json:"quantity"`
+	Signed        []string  `json:"signed"`
+	ExpiresAt     time.Time `json:"expires_at"`
+}
+
+// proposedBody is what POST /proposals answers with, decoded as its own type
+// rather than as the package's unexported proposed — view.go's own reasoning
+// that a test asserts the wire, not a Go type that happens to produce it.
+type proposedBody struct {
+	Prompt         string                 `json:"prompt"`
+	Constraints    []generated.Constraint `json:"constraints"`
+	AgentKey       generated.PublicKey    `json:"agent_key"`
+	Item           string                 `json:"item"`
+	Offer          agent.Offer            `json:"offer"`
+	WatchSlotsFree int                    `json:"watch_slots_free"`
 }
 
 // decode reads a JSON body, or an empty map for one that is not JSON.
@@ -298,6 +442,63 @@ func TestTheResponseCarriesWhatTheUserSigned(t *testing.T) {
 		"what the user signed is the interpretation, and it comes back in the order it was signed in")
 }
 
+// TestASignedAuthorisationStartsAWatchWithoutCallingTheSurface is the browser's
+// path.
+//
+// By the time this request arrives the user has already signed, at a surface the
+// agent was not on the connection for. Asking again would collect a second
+// signature for one decision.
+func TestASignedAuthorisationStartsAWatchWithoutCallingTheSurface(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil })
+
+	var started startedBody
+	require.Equal(t, http.StatusCreated, post(t, c.url+"/watches", map[string]any{
+		"prompt":        "find and buy telescopic ladders, cheapest",
+		"quantity":      1,
+		"authorisation": anAuthorisationBody(),
+	}, &started))
+
+	assert.Equal(t, "gtin:05014477390221", started.Item,
+		"the item comes from what was signed, not from the request's own field")
+	// On the test goroutine, after the response.
+	c.watcher.AssertNumberOfCalls(t, "Authorise", 0)
+}
+
+// TestAWatchStartedFromASignedAuthorisationCarriesTheUsersSentences is what the
+// row on screen is drawn from.
+func TestAWatchStartedFromASignedAuthorisationCarriesTheUsersSentences(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil })
+
+	var started startedBody
+	require.Equal(t, http.StatusCreated, post(t, c.url+"/watches", map[string]any{
+		"prompt":        "find and buy telescopic ladders, cheapest",
+		"quantity":      1,
+		"authorisation": anAuthorisationBody(),
+	}, &started))
+
+	assert.Equal(t, []string{"the item is gtin:05014477390221"}, started.Signed,
+		"the sentences the surface rendered are what the user read; the agent shows them and never re-renders them")
+}
+
+// TestAWatchWithoutAnAuthorisationStillAsksTheSurface is the command line's
+// path, unchanged.
+func TestAWatchWithoutAnAuthorisationStillAsksTheSurface(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil })
+
+	var started startedBody
+	require.Equal(t, http.StatusCreated, post(t, c.url+"/watches", map[string]any{
+		"prompt": "find and buy telescopic ladders, cheapest", "quantity": 1,
+	}, &started))
+
+	c.watcher.AssertNumberOfCalls(t, "Authorise", 1)
+}
+
 // TestASentenceThisAgentCannotReadIsTheCallersMistake is why the two failure
 // arms of POST /watches are told apart.
 //
@@ -330,6 +531,17 @@ func TestASentenceThisAgentCannotReadIsTheCallersMistake(t *testing.T) {
 			why:  "a watch with no item polls nothing for ever, which surfaces as a demo where nothing happens",
 		},
 		{
+			// settle wraps both sentinels on this failure — see authorise.go —
+			// so this case is what proves the switch checks
+			// ErrMerchantAnsweredDifferently before it checks ErrNothingToBuy.
+			// Reordered, this would answer 422 like the case above, for a
+			// failure that is not the caller's account of its own request.
+			name: "the merchant answered a different offer than was asked for",
+			err:  fmt.Errorf("%w: %w", agent.ErrMerchantAnsweredDifferently, agent.ErrNothingToBuy),
+			want: http.StatusBadGateway,
+			why:  "a merchant answering a question it was not asked is the arm below's case, not this one's, even though it also wraps ErrNothingToBuy",
+		},
+		{
 			name: "the surface did not answer", err: errors.New("dial tcp: connection refused"),
 			want: http.StatusBadGateway,
 			why:  "this one is not the caller's to fix, and a console cannot offer them a different sentence",
@@ -353,6 +565,128 @@ func TestASentenceThisAgentCannotReadIsTheCallersMistake(t *testing.T) {
 			assert.Equal(t, tc.want, status, tc.why)
 		})
 	}
+}
+
+// TestAProposalCarriesTheSameArmAsAWatch is Service.propose's own copy of the
+// precedence check above.
+//
+// propose's doc comment says its error mapping is Service.start's, "taken as
+// it stands rather than restated" — the switch is duplicated in the two
+// handlers rather than shared, so a fix landing in one and not the other would
+// leave the second silently wrong. This is the second half of that fix.
+func TestAProposalCarriesTheSameArmAsAWatch(t *testing.T) {
+	t.Parallel()
+
+	watcher := console.NewMockWatcher(t)
+	watcher.EXPECT().Propose(mock.Anything, mock.Anything, mock.Anything).
+		Return(agent.Proposal{}, fmt.Errorf("%w: %w",
+			agent.ErrMerchantAnsweredDifferently, agent.ErrNothingToBuy)).Maybe()
+
+	service := &console.Service{Watcher: watcher, Clock: clock.New()}
+	handler, err := service.Handler()
+	require.NoError(t, err)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	status := post(t, server.URL+"/proposals", map[string]any{"prompt": "buy something"}, nil)
+	assert.Equal(t, http.StatusBadGateway, status,
+		"without its own arm for ErrMerchantAnsweredDifferently, propose's switch would fall into the ErrNothingToBuy case and answer 422")
+}
+
+// TestAProposalIsNotAWatch is the state this route must not acquire.
+//
+// A proposal is a pure function of the prompt. Nothing is remembered, so a user
+// who refuses or closes the tab leaves nothing behind — no record with an
+// expiry, no slot held, nothing to clean up. The alternative was weighed and
+// rejected in the spec: it does not avoid the mandates travelling back through
+// the browser, it only adds a third kind of bookkeeping beside watches.
+func TestAProposalIsNotAWatch(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil })
+
+	var proposal proposedBody
+	require.Equal(t, http.StatusOK, post(t, c.url+"/proposals", map[string]any{
+		"prompt": "find and buy telescopic ladders, cheapest",
+	}, &proposal))
+
+	var listed struct {
+		Watches []map[string]any `json:"watches"`
+	}
+	require.Equal(t, http.StatusOK, get(t, c.url+"/watches", &listed))
+	assert.Empty(t, listed.Watches,
+		"a proposal is not a watch; an agent that remembered one would have a third kind of bookkeeping to expire")
+}
+
+// TestAProposalNeedsAnIdempotencyKey is the one route where the key is earned
+// rather than inherited.
+//
+// A double-clicked Interpret must not pay for two model calls.
+func TestAProposalNeedsAnIdempotencyKey(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil })
+
+	var out map[string]any
+	assert.Equal(t, http.StatusBadRequest, postWithoutKey(t, c.url+"/proposals", map[string]any{
+		"prompt": "find and buy telescopic ladders, cheapest",
+	}, &out))
+}
+
+// TestARepeatedKeyProposesOnce is the property the key buys.
+func TestARepeatedKeyProposesOnce(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil })
+	key := "the-same-click-twice"
+
+	var first, second proposedBody
+	require.Equal(t, http.StatusOK, postKeyed(t, key, c.url+"/proposals", map[string]any{
+		"prompt": "find and buy telescopic ladders, cheapest",
+	}, &first))
+	require.Equal(t, http.StatusOK, postKeyed(t, key, c.url+"/proposals", map[string]any{
+		"prompt": "find and buy telescopic ladders, cheapest",
+	}, &second))
+
+	assert.Equal(t, first, second, "the replay has to be the first answer, not a second interpretation")
+	// On the test goroutine, after both calls have returned — never as a
+	// .Once() expectation, which fails from whichever goroutine hit the mock.
+	c.watcher.AssertNumberOfCalls(t, "Propose", 1)
+}
+
+// TestTheMenuIsTheInterpretersOwnPrompts keeps one source of truth.
+//
+// Compared against Prompts() rather than against a literal, so a sixth scenario
+// appears in the console without anybody editing this test — and a scenario
+// removed from the table cannot keep being offered.
+func TestTheMenuIsTheInterpretersOwnPrompts(t *testing.T) {
+	t.Parallel()
+
+	c := newConsoleWithExamples(t, interpret.Demo().Prompts())
+
+	var out struct {
+		Examples []string `json:"examples"`
+	}
+	require.Equal(t, http.StatusOK, get(t, c.url+"/examples", &out))
+	assert.Equal(t, interpret.Demo().Prompts(), out.Examples,
+		"the menu is the interpreter's own table; a second list here is one that drifts")
+}
+
+// TestTheMenuIsEmptyWhenTheInterpreterHasNone is the model-backed case.
+//
+// With -interpreter gemini any sentence is admissible, so there is no menu. An
+// empty list is the honest answer and the console shows nothing.
+func TestTheMenuIsEmptyWhenTheInterpreterHasNone(t *testing.T) {
+	t.Parallel()
+
+	c := newConsoleWithExamples(t, nil)
+
+	var out struct {
+		Examples []string `json:"examples"`
+	}
+	require.Equal(t, http.StatusOK, get(t, c.url+"/examples", &out))
+	assert.Empty(t, out.Examples,
+		"a model-backed interpreter has no menu, and inventing one would offer sentences nothing is scripted for")
 }
 
 // TestTheStateNamesTheConsoleServesAreTheOnesTheMachineWrites is the second of

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, 2026-08-03.
+Accepted, 2026-08-03. Amended 2026-08-11 (#22) — see Amendments below.
 
 ## Context
 
@@ -78,8 +78,9 @@ a log entry that turns out to prove nothing.
    No hop regenerates it and no hop is allowed to drop it.
 2. **Roles emit structured events at protocol-significant moments**: mandate
    constructed, mandate presented, mandate verified, mandate rejected,
-   receipt issued. Each event carries the correlation ID of the transaction
-   it belongs to, so the frontend can group and filter by it.
+   receipt issued, and — added by the amendment below — authorisation
+   refused. Each event carries the correlation ID of the transaction it
+   belongs to, so the frontend can group and filter by it.
 3. **`cmd/collector` gathers those events and streams them to the frontend
    over SSE.** It receives events over the same HTTP transport ADR 0001
    already established — Server-Sent Events is a long-lived HTTP response,
@@ -100,11 +101,13 @@ a log entry that turns out to prove nothing.
 ## Consequences
 
 - Every HTTP-facing role gains an event-emission call at each of the five
-  moments in Decision 2, through a shared helper in `platform/obs` rather
-  than each `cmd/` inventing its own event shape — the same reasoning ADR
-  0001 gave for the error-rendering helper and ADR 0002 for the
-  idempotency helper: one implementation, not seven independently drifting
-  copies.
+  mandate moments in Decision 2. The sixth, added by the amendment below, is
+  not one of them: `authorisation_refused` is emitted by the Trusted Surface
+  alone, the only role a consent screen ever calls to say no to. All six go
+  through a shared helper in `platform/obs` rather than each `cmd/` inventing
+  its own event shape — the same reasoning ADR 0001 gave for the
+  error-rendering helper and ADR 0002 for the idempotency helper: one
+  implementation, not seven independently drifting copies.
 - Event emission has to be best-effort and non-blocking. Because the log is
   never evidence, a `cmd/collector` outage, a dropped event, or a slow SSE
   consumer must never delay or fail a mandate construction, presentation,
@@ -130,6 +133,24 @@ a log entry that turns out to prove nothing.
   limitation of the rejected alternative below, not a gap discovered
   afterwards — a closed set of seven roles plus one collector has no sampling
   problem to solve.
+
+## Amendments
+
+**Amended 2026-08-11 (#22).** Decision 2 named five moments, all of them about
+a mandate. The Trusted Surface consent screen introduces a sixth that is about
+the absence of one: a user shown an interpretation and refusing it. It is not
+`mandate_rejected` — that is a verifier's verdict on a mandate that exists, and
+carries a canonical error code. `authorisation_refused` carries none, because
+nothing was evaluated and nobody was wrong.
+
+It is subject to the same rule as the other five and more visibly so: it is
+**the caller's claim that a person refused**, never proof of one. The route
+that emits it is called by a browser, the browser may equally call nothing,
+and no request can establish that somebody read anything. That is why the log
+is observability and never evidence, which this ADR already decided; this
+entry is the one where the gap between "the log says it happened" and "it
+happened" is widest, and it is recorded here so that nobody cites it as proof
+later.
 
 ## Rejected alternatives
 
