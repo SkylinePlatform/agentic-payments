@@ -198,11 +198,6 @@ github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz
 github.com/SkylinePlatform/agentic-payments/backend/pkg/httpsig
 ```
 
-The tree itself lives in AGENTS.md's Layout section and is not repeated here. A
-directory listing kept in two places disagrees with itself the first time one of
-them gains an entry, and this was the copy that went stale — nothing in the code
-reads it, whereas every agent reads the other before touching a file.
-
 That split has a cost for an editor opened at the repository root: `gopls`
 anchors on the directory the editor opened, finds no `go.mod` there, and
 falls back to a GOPATH view, reporting every intra-module import as
@@ -214,3 +209,8 @@ purpose: a committed workspace would unify the two modules' build lists, and
 against modules CI never provides. `make` always runs with `GOWORK=off`, so
 whether that file exists never changes what `make check` builds — the
 workspace is for the editor, and for nothing else.
+
+The directory tree itself lives in AGENTS.md's Layout section and is not
+repeated here. A listing kept in two places disagrees with itself the first time
+one of them gains an entry, and this was the copy that went stale — nothing in
+the code reads it, whereas every agent reads the other before touching a file.
