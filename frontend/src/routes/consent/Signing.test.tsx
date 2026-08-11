@@ -187,6 +187,40 @@ describe("signing", () => {
     expect(within(screen.getByTestId("signed-box")).getByText("What you are signing")).toBeTruthy();
   });
 
+  it("fills the signed box once authorise has answered, and leaves it an outline until then — #193's decision axis", async () => {
+    // The decision axis takes no pip and no `check` — a consent decision is
+    // one moment and nothing about it has been to a verifier — so enclosure is
+    // its only carrier under docs/specs/2026-08-06-three-lane-view-design.md's
+    // *Indicators* section. The heading beside it already made this
+    // distinction; this is the box itself, checked directly rather than
+    // through the heading, so a regression that reverted the box to a fixed
+    // outline would be caught here even if the heading stayed right.
+    stubFetch({
+      "/authorise": { body: anAuthorised(), delayMs: 50 },
+      "/watches": { status: 502, body: "no" },
+    });
+    renderSigning();
+
+    // Nothing has been signed yet: `authorise` is still in flight, exactly
+    // the moment "keeps the signed sentences on screen…" above also checks.
+    const before = screen.getByTestId("signed-box").className;
+    expect(before, "an outline while nothing is signed").toContain("border-graphite/40");
+    expect(before, "no fill until authorise has answered").not.toContain("bg-wash");
+
+    // authorise succeeds, /watches then fails — the box has to be filled
+    // regardless of the watch never starting: the signature is real.
+    await screen.findByText(/signed, and the watch did not start/i);
+
+    const after = screen.getByTestId("signed-box").className;
+    expect(after, "filled wash with an ink border once authorise has answered").toContain("bg-wash");
+    expect(after).toContain("border-ink");
+    expect(after, "the outline is gone once the box is filled").not.toContain("border-graphite/40");
+
+    // The property the issue asks for directly: drawing the two states
+    // identically is exactly the defect this test exists to catch.
+    expect(after).not.toBe(before);
+  });
+
   it("says the signature exists when the watch did not start", async () => {
     // The ugly one. The user has signed; two open mandates exist carrying their
     // key's authority, and the agent never received them. There is no

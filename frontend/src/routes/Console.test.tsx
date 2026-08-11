@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -253,11 +253,25 @@ describe("the shopping console", () => {
     // A refusal the surface failed to record must not read as identical to
     // one it kept — the user's "no" holds either way, because /authorise was
     // never called, and this is the one place that gets said out loud.
+    // `docs/specs/2026-08-06-three-lane-view-design.md`'s *Indicators* section
+    // spends a whole note defending this exact sentence as the only honest
+    // carrier of that state: a mark here would attach to a decision that did
+    // not change and read as though the refusal itself were in doubt.
+    //
+    // Matched as one whole sentence, scoped to `refusal-acknowledgement`,
+    // rather than two loose fragments anywhere on the page — an unscoped
+    // `getByText` would still pass if this text moved out of the
+    // acknowledgement and into some other box, which is exactly the failure
+    // mode this screen's own review has flagged before.
     stubFetch({ "/examples": { examples: [] } });
     renderConsoleAt({ refused: true, recorded: false, prompt: "buy a boat" });
 
-    expect(await screen.findByText(/refusal stands/i)).toBeTruthy();
-    expect(screen.getByText(/did not reach the surface/i)).toBeTruthy();
+    const acknowledgement = await screen.findByTestId("refusal-acknowledgement");
+    expect(
+      within(acknowledgement).getByText(
+        "Your refusal stands — nothing was signed — but the record of it did not reach the surface.",
+      ),
+    ).toBeTruthy();
     expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("buy a boat");
   });
 
