@@ -580,15 +580,16 @@ func asMuchAsThisSurfaceWillSign(t *testing.T, handler http.Handler) []string {
 
 	rendering := budgetThisSurfaceStates(t, handler)
 
+	each := renderedSizeOf(t, shortestLimit)
+	require.Positive(t, each,
+		"a limit that costs nothing to say would make the loop below never end, which is a "+
+			"renderer that has stopped saying anything rather than a cheap limit")
+
 	var chosen []string
 	size := 0
-	for {
-		next := size + renderedSizeOf(t, shortestLimit)
-		if next > rendering {
-			break
-		}
+	for size+each <= rendering {
 		chosen = append(chosen, shortestLimit)
-		size = next
+		size += each
 	}
 	require.NotEmpty(t, chosen,
 		"a budget that fits no limit at all would make every assertion in the caller vacuous")
