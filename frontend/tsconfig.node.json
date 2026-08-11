@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+
+    // vite.config.ts genuinely runs under Node, and this is the one
+    // TypeScript program in this package allowed to know that: Node's
+    // globals are granted here, deliberately, and nowhere else. `typeRoots`
+    // is still pinned to this package's own node_modules/@types rather than
+    // left at its default — not because vite.config.ts's own code reaches
+    // for a Node global today (it does not; see the comment on `loadEnv`
+    // below), but so that whichever @types/node answers a future
+    // process.cwd() or path.resolve() here is always this repository's own
+    // devDependency and never a stray one above it. #222.
+    //
+    // The limit of that, stated because the branch is named for the opposite:
+    // `typeRoots` governs *type reference directives* and nothing else. A plain
+    // module import inside a dependency's declarations still walks every
+    // ancestor node_modules, and one does — @types/node's own `undici-types`
+    // imports from "buffer", which is not installed here, so on a machine with
+    // a stray `buffer` package above the repository that file joins this
+    // program. It is inert (skipLibCheck, and vite.config.ts names no Node
+    // type), and TypeScript offers no knob that would stop it, so it is
+    // recorded rather than worked around. src/** is clean of it: nothing in
+    // that program resolves to a file outside frontend/ at all.
+    "types": ["node"],
+    "typeRoots": ["./node_modules/@types"],
+
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["vite.config.ts"]
+}

@@ -1,27 +1,21 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "jsx": "react-jsx",
-
-    "types": ["vite/client"],
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "verbatimModuleSyntax": true,
-    "noEmit": true,
-
-    // Strict, and the four extra checks the default does not turn on. This is
-    // a proof of concept about proving things, and a frontend that reads a
-    // field nobody set is the kind of wrongness a screenshot hides.
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
-    "skipLibCheck": true
-  },
-  "include": ["src", "vite.config.ts"]
+  // Solution file. Not built directly — `npm run build`/`npm run typecheck`
+  // invoke tsconfig.app.json and tsconfig.node.json separately, because
+  // vite.config.ts is allowed Node's globals and everything under src/ is
+  // not; a single shared program cannot make that distinction, since an
+  // ambient global declared in one file is visible to every file compiled
+  // alongside it. This file exists so an editor opened at frontend/ still
+  // finds one tsconfig.json and routes each open file to the right project.
+  //
+  // Worth knowing before reaching for the obvious command: `tsc --noEmit` here
+  // resolves to this file, compiles the empty `files` list and **exits 0
+  // having checked nothing** — which is what `npm run build` used to be, so it
+  // is what muscle memory reaches for. `npm run typecheck` is the one that
+  // checks both programs; `npx tsc -b` also works and checks both, at the cost
+  // of the .tsbuildinfo files .gitignore covers. See #222.
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
 }
