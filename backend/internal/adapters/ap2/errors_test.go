@@ -93,7 +93,19 @@ func TestTheSecuringFormatsFailuresAreNameableToo(t *testing.T) {
 		// sdjwtCodeOf's default arm and answer verifier_unavailable, blaming this
 		// verifier for a presentation that was simply not a chain. #147.
 		{sdjwt.ErrMalformedChain, generated.ErrorCodeMandateMalformed},
+		// #162: not a broken chain but a well-formed one whose delegate_payload
+		// disclosed zero or two elements — draft §6 step 3.2 requires exactly
+		// one. Unlike ErrMalformedChain above, this one was live rather than
+		// latent: AuthoriseCheckoutChain returns it unchanged, so it used to
+		// reach a signed rejection receipt reading verifier_unavailable,
+		// telling the counterparty to retry a shape no retry changes.
+		{sdjwt.ErrDelegatePayloadInvalid, generated.ErrorCodeMandateMalformed},
 		{sdjwt.ErrInvalidOptions, generated.ErrorCodeVerifierUnavailable},
+		// The verifier's own bookkeeping, not the mandate's: raised only by
+		// Blinder.Blind over a path the issuer built itself. See sdjwtCodeOf's
+		// own doc comment and errors_internal_test.go's allowlist for why this
+		// is deliberately unmapped to anything naming a fault in a mandate.
+		{sdjwt.ErrNoSuchClaim, generated.ErrorCodeVerifierUnavailable},
 		{sdjwt.ErrUnexpectedType, generated.ErrorCodeRequestMalformed},
 	} {
 		t.Run(tc.err.Error(), func(t *testing.T) {
