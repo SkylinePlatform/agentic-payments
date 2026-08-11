@@ -229,10 +229,28 @@ describe("the protocol screen", () => {
     // screen above the panel, which is the one thing that lets a reader check
     // the panel is about the attempt they opened.
     expect(within(screen.getByRole("article")).getAllByText(OLD_SHOWN).length).toBeGreaterThan(0);
+
+    // The walk starts one element *above* the panel, and that is the whole of
+    // this assertion rather than a detail of it. `closest` begins at the
+    // element it is called on, and `Disclosure`'s own root is a `<section>` —
+    // so `panel.closest("section")` is the panel, and asking whether it
+    // contains itself is a question with one answer. Measured rather than
+    // reasoned about: with the panel moved to the foot of `Lanes`, which is
+    // the exact arrangement the message below names, that spelling stayed
+    // green.
+    //
+    // What the walk has to find is the attempt's own spine head. The panel's
+    // tables name a `checkout_hash` and say in one sentence that it is the
+    // value on the spine above; that claim is only checkable by eye if the two
+    // are in the same section, so this is the placement rule stated as the
+    // thing it exists for.
+    const attempt = panel.parentElement?.closest("section");
+    expect(attempt, "the panel is inside an attempt rather than loose on the page").toBeTruthy();
     expect(
-      panel.closest("section")?.contains(panel),
-      "the panel belongs to the attempt, not to the foot of the page",
-    ).toBe(true);
+      within(attempt as HTMLElement).getAllByText(OLD_SHOWN).length,
+      "the panel belongs to the attempt whose digest is on the spine above it, not to the " +
+        "foot of the page — the digest is what says the two are the same attempt",
+    ).toBeGreaterThan(0);
 
     // The join, which is the part no rendered sentence states: the correlation
     // id the lanes are drawing became a watch id, and the attempt the reader
