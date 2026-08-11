@@ -224,7 +224,7 @@ func TestAPairThatCannotBeFinishedLeavesNothingBehind(t *testing.T) {
 // where the defect these tests were written against left half of one.
 //
 // It passes on purpose, on the terms crypto.Challenger's
-// TestTheReplayThisDoesNotStop already set here: a limitation stated as a fact
+// TestTheReplayThisDoesNotStop set in this repository: a limitation stated as a fact
 // in the suite is one issue #223 has to invert rather than a paragraph somebody
 // has to notice. The day the route bounds what it will sign, this test fails
 // and is rewritten as the assertion that it does.
@@ -253,9 +253,10 @@ func TestTheSecondPairThisDoesNotStop(t *testing.T) {
 }
 
 // maxRemembered is transport.Idempotency's cap on a response it will keep for
-// replay. Unexported over there, so it is restated here rather than reached
-// for — and a change to it that is not made here shows up as this test's
-// require failing, which names the cap, rather than as a silent pass.
+// replay. Unexported over there, so it is restated here rather than reached for.
+// A rise in the real one that is not copied here fails the require below rather
+// than passing quietly, which is the direction that matters: it is the one that
+// would have closed this hole without anybody noticing.
 const maxRemembered = 1 << 20
 
 // moreConstraintsThanTheAnswerCanRemember builds an authorisation whose answer
@@ -263,10 +264,10 @@ const maxRemembered = 1 << 20
 // the middleware and roles.DecodeJSON read.
 //
 // Three thousand rather than the smallest number that works. The crossing is
-// near two thousand — a thousand answers in 557 KB and replays — and a test
-// sitting on the boundary would go quiet the first time a claim was added to
-// either mandate. Well past it is what keeps this measuring the route's
-// amplification rather than an arithmetic coincidence.
+// somewhere near two thousand — a thousand constraints answer in 557 KB and
+// replay normally — and a test sitting on the boundary would go quiet the first
+// time a claim was added to either mandate. Well past it is what keeps this
+// measuring the route's amplification rather than an arithmetic coincidence.
 func moreConstraintsThanTheAnswerCanRemember() string {
 	var b strings.Builder
 	b.WriteString(`{"prompt":"a great many limits","constraints":[`)
