@@ -411,8 +411,9 @@ func (f *CatalogueFile) Catalogue(
 }
 
 // jitteredCatalogue is Catalogue with each offer's own transitions holding a
-// random width from [min, max] instead of a fixed step — see
-// NewJitteredSchedule.
+// random width from [min, max] instead of a fixed step, and with the sequence
+// cycling rather than stopping on its last price — see jitteredSchedule for
+// which constructor that is and why this one rather than NewJitteredSchedule.
 //
 // Unexported: NewDemoService is this package's only caller, under
 // DemoOptions.StepMax. Nothing outside asks a file for a jittered catalogue on
@@ -477,9 +478,10 @@ func (f *CatalogueFile) catalogue(
 // being true.
 //
 // **That argument only holds for a fixed step.** Two calls to schedule for the
-// same entry agree today because the arithmetic is deterministic; under
-// NewJitteredSchedule they would not, since each call draws its own random
-// widths. That is why NewDemoService does not call this method for the flight
+// same entry agree today because the arithmetic is deterministic; under a
+// drawn width — jitteredSchedule's, and so NewCyclingJitteredSchedule's — they
+// would not, since each call draws its own. That is why NewDemoService does
+// not call this method for the flight
 // when DemoOptions.StepMax is set — it builds the catalogue first and reads
 // the flight's own Schedule back out of it, so there is exactly one draw
 // rather than two that might disagree. This method is unaffected and stays

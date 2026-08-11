@@ -195,9 +195,9 @@ func NewCatalogue(clk authz.Clock, merchant constraint.Party, offers ...Offer) (
 // valid reports whether an offer can be listed at all.
 //
 // The schedule guard repeats Inventory.New's, and for the same reason: a
-// Schedule built as a literal rather than through NewSchedule or
-// NewJitteredSchedule reaches at with no prices to index, which takes the
-// process down inside a handler rather than at construction.
+// Schedule built as a literal rather than through one of the three
+// constructors reaches at with no prices to index, which takes the process
+// down inside a handler rather than at construction.
 func (o Offer) valid() error {
 	switch {
 	case strings.TrimSpace(o.ID) == "":

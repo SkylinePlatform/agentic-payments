@@ -84,6 +84,15 @@ type Quote struct {
 	// Final reports whether the schedule has run out of moves. The last price
 	// holds indefinitely, so without this a watcher cannot tell "not yet" from
 	// "never".
+	//
+	// **A cyclic schedule never reports it**, because there is always a next
+	// price to move to — the wrap included. That is not "not yet at the last
+	// price", it is a schedule with no last price, and a watcher reading this
+	// as a promise that one will eventually arrive would wait for ever. Which
+	// kind of schedule a quote came from is fixed at construction and is not on
+	// the quote: see NewCyclingJitteredSchedule for why, and
+	// DemoOptions.StepMax for the one composition in this repository that
+	// builds one.
 	Final bool
 
 	// ObservedAt is the instant the price was read, from the injected clock.
@@ -124,11 +133,16 @@ type Schedule struct {
 	// cyclic reports whether this schedule wraps back to prices[0] once its
 	// last boundary passes, rather than holding prices[len-1] forever.
 	//
-	// Only NewCyclingJitteredSchedule ever sets it. NewSchedule and
-	// NewJitteredSchedule both leave it false, which is what keeps "the last
-	// price holds" true for every caller of either — this package's own
-	// fixed-step tests among them, see TestTheLastPriceHolds and
+	// Only NewCyclingJitteredSchedule ever asks for it, and only buildSchedule
+	// ever sets it — see there for why the two are not the same place.
+	// NewSchedule and NewJitteredSchedule both leave it false, which is what
+	// keeps "the last price holds" true for every caller of either — this
+	// package's own fixed-step tests among them, see TestTheLastPriceHolds and
 	// TestQuotesAreReproducible.
+	//
+	// True implies there is at least one boundary and that it is strictly
+	// after start, which is the whole of what at needs to reduce an instant
+	// against a lap without indexing out of range or dividing by zero.
 	cyclic bool
 }
 
@@ -142,7 +156,7 @@ func NewSchedule(start time.Time, step time.Duration, prices ...generated.Amount
 	for i := range widths {
 		widths[i] = step
 	}
-	return buildSchedule(start, widths, prices)
+	return buildSchedule(start, widths, prices, oneShot)
 }
 
 // NewJitteredSchedule returns a schedule stepping through prices exactly like
@@ -174,7 +188,7 @@ func NewJitteredSchedule(start time.Time, min, max time.Duration, prices ...gene
 		}
 		widths[i] = w
 	}
-	return buildSchedule(start, widths, prices)
+	return buildSchedule(start, widths, prices, oneShot)
 }
 
 // NewCyclingJitteredSchedule is NewJitteredSchedule, except the schedule wraps
@@ -199,6 +213,17 @@ func NewJitteredSchedule(start time.Time, min, max time.Duration, prices ...gene
 // callers assert — TestJitteredScheduleObservesEveryPriceInOrder among them —
 // and a schedule that sometimes wraps and sometimes does not is not a
 // schedule anybody could write a test against.
+//
+// **Being a sibling left NewJitteredSchedule with no caller outside its own
+// tests**, and that is worth stating rather than leaving for somebody to
+// discover: CatalogueFile.jitteredSchedule was its only one and now calls this
+// instead. It stays because deleting it deletes #163's own box —
+// TestJitteredScheduleObservesEveryPriceInOrder is the test that turns "the
+// refusal happens on every run" into a property, and it is written against a
+// one-shot schedule — and because a one-shot jittered schedule is what a
+// merchant wanting #163's pacing without #177's cycling would reach for. If a
+// second composition never appears, removing the pair together is a decision
+// somebody should take deliberately, not one this comment should pre-empt.
 //
 // # Each transition draws its own width, wrap included
 //
@@ -232,16 +257,19 @@ func NewCyclingJitteredSchedule(start time.Time, min, max time.Duration, prices 
 		}
 		widths[i] = w
 	}
-	s, err := buildSchedule(start, widths, prices)
-	if err != nil {
-		return nil, err
-	}
-	// Only when there is a wrap transition to take: a single price built no
-	// widths above, and a Schedule with nothing to wrap around behaves exactly
-	// as the one-shot constructors already leave it — see at.
-	s.cyclic = len(widths) > 0
-	return s, nil
+	// Asked for rather than set afterwards: buildSchedule is where the
+	// boundaries at divides by exist, so it is the only place that can refuse
+	// the flag when there is no lap to divide by — see there and at.
+	return buildSchedule(start, widths, prices, cycling)
 }
+
+// The two values buildSchedule's last argument takes, named because a bare
+// true or false at a call site says which constructor was reading the
+// documentation and not what the schedule does.
+const (
+	oneShot = false
+	cycling = true
+)
 
 // randDuration draws a duration uniformly from [min, max], inclusive, using
 // crypto/rand — see NewJitteredSchedule for why crypto/rand rather than
@@ -285,10 +313,23 @@ func cyclicTransitions(n int) int {
 
 // buildSchedule is what NewSchedule, NewJitteredSchedule and
 // NewCyclingJitteredSchedule all build down to: prices, validated, with one
-// boundary per width already computed from start. Setting cyclic is left to
-// the caller — this only lays out the boundaries the cyclic case then reads
-// its lap length from.
-func buildSchedule(start time.Time, widths []time.Duration, prices []generated.Amount) (*Schedule, error) {
+// boundary per width already computed from start.
+//
+// # Why cyclic is an argument rather than a field the caller sets afterwards
+//
+// at reads a cyclic schedule's lap length off the last boundary and divides by
+// it, so cyclic without a boundary is an index out of range and a lap of no
+// length is a division by zero — both inside a handler, which is the failure
+// Inventory.New and Offer.valid already have written guards against. This is
+// the only place both facts are in hand at once, so it is the only place that
+// can refuse the flag rather than trust a caller to have earned it. Neither
+// case is reachable from NewCyclingJitteredSchedule, which draws one width per
+// price from a range whose floor it has already refused to let be
+// non-positive; establishing it here is what keeps that true of a fourth
+// constructor nobody has written yet.
+func buildSchedule(
+	start time.Time, widths []time.Duration, prices []generated.Amount, cyclic bool,
+) (*Schedule, error) {
 	if len(prices) == 0 {
 		return nil, ErrEmptySchedule
 	}
@@ -316,6 +357,7 @@ func buildSchedule(start time.Time, widths []time.Duration, prices []generated.A
 		prices:     append([]generated.Amount(nil), prices...),
 		start:      start,
 		boundaries: boundaries,
+		cyclic:     cyclic && len(boundaries) > 0 && boundaries[len(boundaries)-1].After(start),
 	}, nil
 }
 
@@ -337,6 +379,25 @@ func buildSchedule(start time.Time, widths []time.Duration, prices []generated.A
 // last price, and idx ranges over the same [0, len(prices)-1] a one-shot
 // schedule's would. Final is reported false unconditionally in this case —
 // see NewCyclingJitteredSchedule for what that costs a caller.
+//
+// # The wrap shortens no hold, which is what #163's guarantee needs
+//
+// #163's argument is that a poll no longer than the *shortest* hold cannot
+// skip a price, because a price is skipped only when its whole hold falls
+// strictly between two polls. That argument is about hold widths, so cycling
+// preserves it only if wrapping does not produce a hold narrower than the
+// widths the constructor drew — and it does not. Reduction modulo the lap maps
+// price i's hold onto [kL + B(i-1), kL + B(i)) for every lap k, where B is the
+// running sum of the drawn widths and L is the whole of it. Those intervals
+// have width w(i) for every k, the first and the last included: prices[0]'s
+// hold after a wrap is the full w(0) because the wrap boundary is exactly L,
+// and prices[n-1] has a hold at all only because NewCyclingJitteredSchedule
+// draws n widths for n prices rather than n-1 — see cyclicTransitions. So
+// every hold on a cyclic schedule is one the constructor drew from [min, max],
+// and #163's bound carries over unchanged. Modulo is exact integer nanosecond
+// arithmetic over boundaries fixed at construction, so laps do not drift
+// either. TestACyclingScheduleShortensNoHoldAtTheWrap is where both halves of
+// that are checked at the shipped numbers rather than argued.
 func (s *Schedule) at(t time.Time) (generated.Amount, int, bool) {
 	last := len(s.prices) - 1
 
@@ -396,9 +457,9 @@ func New(clk authz.Clock, routes map[Route]*Schedule) (*Inventory, error) {
 		if s == nil {
 			return nil, fmt.Errorf("merchant: route %s has no schedule", r)
 		}
-		// A Schedule built as a literal rather than through NewSchedule or
-		// NewJitteredSchedule is the one a caller can get wrong, and quoting it
-		// would take the process down: at indexes prices[0] on an empty slice.
+		// A Schedule built as a literal rather than through one of the three
+		// constructors is the one a caller can get wrong, and quoting it would
+		// take the process down: at indexes prices[0] on an empty slice.
 		// Refusing here is the difference between a constructor error and a
 		// panic in a handler.
 		//
