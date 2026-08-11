@@ -225,10 +225,25 @@ export function Signing({
             {sentence}
           </p>
         ))}
-        {/* Carried over from Consent's own box, on the same terms every other
-            line here is: the screen does not jump, so what was read before
-            Sign was clicked stays on screen through both round trips. */}
+      </section>
+
+      {/*
+        Carried over from Consent's zone 3, and outside the box for the reason
+        the heading above is computed rather than fixed: in `starting` and
+        `stranded` that heading reads "What you signed", and a basket size is
+        the one line here no signature covers. The surface never saw it. So it
+        stays beside the box, labelled, rather than acquiring a claim by
+        sitting inside one — the same defect as the heading, one row down.
+      */}
+      <section className="flex flex-col gap-1" data-testid="basket" aria-labelledby="basket">
+        <h2 id="basket" className="font-sans text-sm text-graphite">
+          How many the agent will buy
+        </h2>
         <p className="font-sans text-ink">Quantity {proposal.quantity}</p>
+        <p className="font-sans text-sm text-graphite">
+          Not part of your signature. Whatever the agent puts in the basket is still held to the
+          limits above.
+        </p>
       </section>
 
       {/*

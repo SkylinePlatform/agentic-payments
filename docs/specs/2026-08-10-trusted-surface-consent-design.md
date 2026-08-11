@@ -637,8 +637,22 @@ Gates: `make check` and `make frontend-check`.
   consent screen now renders *"the quantity is at most 2"* to a person who then
   receives one ticket, which is a worse experience of the same defect than a CLI
   had. The real repair is a basket size the interpretation returns and the
-  surface renders, which is a change to `IntentInterpreter` and belongs to #133.
+  screen shows, which is a change to `IntentInterpreter` and belongs to #133.
   What this design must not do is quietly stop showing the constraint.
+
+  **#133 has since landed, and it settled one thing this bullet left open.**
+  The surface does *not* render the basket size, and could not honestly be made
+  to: it signs constraints, and a count is not one — nothing puts a quantity in
+  a mandate and no verifier is ever asked about it. So the number is the
+  agent's, carried by the browser from `POST /proposals` to `POST /watches`,
+  and the screen shows it **outside** the signed box under a label of its own.
+  That placement is the part worth keeping in a spec rather than only in a
+  component: this design's standard is that what a person reads inside that box
+  is what their signature covers, and the box is one line away from being able
+  to state something untrue about itself. Making the surface sign a count
+  instead is a protocol change — the mandate would carry a claim no verifier
+  evaluates, or `quantity eq 2` would replace `lte 2` and forbid buying one —
+  and neither belongs to #133.
 
 - **No choice among candidates.** `discover` takes `found[0]`, and this design
   does not change that. What it adds is the offer card, so a first match that was

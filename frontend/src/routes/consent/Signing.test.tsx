@@ -150,14 +150,20 @@ describe("signing", () => {
     expect(body.authorisation.quantity).toBe(2);
   });
 
-  it("names the basket size inside the signed box", () => {
+  it("names the basket size beside the signed box, never in it", () => {
+    // This screen's heading over that box becomes "What you signed" the
+    // moment `authorise` succeeds, and a basket size is the one thing on it
+    // no signature covers — the surface is never told a count. The heading
+    // was already made to state which of the two it was; a row inside the box
+    // would have quietly undone that.
     stubFetch({
       "/authorise": { body: anAuthorised(), delayMs: 50 },
       "/watches": { status: 201, body: {} },
     });
     renderSigning({ ...aProposal(), quantity: 2 });
 
-    expect(within(screen.getByTestId("signed-box")).getByText("Quantity 2")).toBeTruthy();
+    expect(within(screen.getByTestId("basket")).getByText("Quantity 2")).toBeTruthy();
+    expect(within(screen.getByTestId("signed-box")).queryByText(/^Quantity\b/)).toBeNull();
   });
 
   it("keeps the signed sentences on screen while the two calls run", () => {

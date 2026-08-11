@@ -53,16 +53,22 @@ export interface Proposal {
   readonly offers?: readonly Offer[];
 
   /**
-   * How many of `item` the interpretation proposes to buy, always one or
-   * more — `agent.Propose` normalises "the sentence named no count" to 1
-   * before this ever reaches the wire, so there is no zero for this screen
-   * to special-case.
+   * How many of `item` the agent proposes to buy, always one or more —
+   * `console.Service.propose` resolves "the sentence named no count" to 1 at
+   * the wire, precisely because a browser has no fallback of its own, so
+   * there is no zero for this screen to special-case.
    *
    * Issue #133: a `quantity lte 2` constraint is a limit, not an
    * instruction, and is satisfied by a purchase of one ticket as readily as
-   * two. This is the fact that actually says how many to buy, and the
-   * consent screen renders it — inside the signed box, beside `Pays` and
-   * `Valid` — precisely so a person reads it before `startWatch` spends it.
+   * two. This is the fact that actually says how many to buy, and the consent
+   * screen renders it so a person reads it before `startWatch` spends it.
+   *
+   * **Outside the signed box, and that placement is load-bearing rather than
+   * layout.** Nothing signs this number: the Trusted Surface is never told a
+   * count, no mandate carries one, and it lives in this browser from the
+   * proposal to `POST /watches`. The box headed "What you are signing" — and,
+   * on `Signing`, "What you signed" — has to be true of every line in it, so
+   * this one sits beside it under a label of its own. See `Consent.tsx`.
    */
   readonly quantity: number;
 }

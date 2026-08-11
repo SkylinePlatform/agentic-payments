@@ -161,19 +161,29 @@ describe("the consent screen", () => {
     expect(within(signed).getByText(/1 hour/i)).toBeTruthy();
   });
 
-  it("names the basket size inside the signed box — issue #133", async () => {
+  it("names the basket size, and never inside the signed box — issue #133", async () => {
     // The concert prompt's own number: "two tickets... up to $160 all in"
-    // interprets to a quantity lte 2 constraint that one ticket satisfies as
-    // readily as two, and proposal.quantity is the fact that actually says
-    // how many. It has to be inside the signed box, on the same footing as
-    // the constraints, because a quantity a person did not read here is a
-    // quantity they did not approve.
+    // interprets to a `quantity lte 2` constraint that one ticket satisfies
+    // as readily as two, and proposal.quantity is the fact that actually says
+    // how many. A person has to read it before signing — which is why it is
+    // on the screen at all — and it is not a thing anybody signs: the surface
+    // never sees a count, no mandate carries one, and the browser is where
+    // this number lives from end to end.
+    //
+    // So both assertions matter and the second is the one with teeth. A box
+    // headed "What you are signing" — and, one screen along, "What you
+    // signed" — has to be true of every line in it.
     const proposal = { ...aProposal(), quantity: 2 };
     stubFetch({ "/authorise/preview": { body: aPreview() } });
     renderConsent(proposal);
 
-    const signed = await screen.findByTestId("signed-box");
-    expect(within(signed).getByText("Quantity 2")).toBeTruthy();
+    const basket = await screen.findByTestId("basket");
+    expect(within(basket).getByText("Quantity 2")).toBeTruthy();
+    // `/^Quantity\b/` rather than the literal: a surface-rendered sentence
+    // reading "the quantity is at most 2" is a constraint and belongs in that
+    // box, so the assertion has to name the browser's own line and not the
+    // word.
+    expect(within(screen.getByTestId("signed-box")).queryByText(/^Quantity\b/)).toBeNull();
   });
 
   it("disables signing when a constraint did not render", async () => {
