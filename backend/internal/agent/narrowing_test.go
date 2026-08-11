@@ -152,6 +152,16 @@ func TestNothingToBuySaysWhichKindOfConstraintNarrowedNothing(t *testing.T) {
 				"larger half would be the same ambiguity with a majority rule on top",
 		},
 		{
+			name:   "a node that is neither",
+			given:  []string{priceCap, `{"op":"eq"}`, `{"op":"eq"}`},
+			says:   []string{"1 leaf", "2 nodes carrying neither a field nor children"},
+			silent: []string{"group"},
+			why: "a leaf with no field is what arrives when a constraint lost half of itself in " +
+				"transit, and it reaches this message rather than a parser's: Discover has no " +
+				"Validate in front of it, so counting it as a leaf would report a fact the " +
+				"registry rejected as one the registry merely called a term",
+		},
+		{
 			name:  "no constraints at all",
 			given: nil,
 			says:  []string{"no constraints at all"},
