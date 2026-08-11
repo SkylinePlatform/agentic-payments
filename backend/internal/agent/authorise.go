@@ -77,15 +77,25 @@ const (
 // registry.
 //
 // That tension is real and is tracked as issue #132, which sets out the three
-// ways out and why a test walking the registry from the *test* package is
-// probably the first step. Two consequences worth knowing before the next field
-// lands, because neither announces itself:
+// ways out. The third — a test walking the registry from the *test* package —
+// has landed; the duplication itself has not gone, so the issue stays open.
+// Two consequences worth knowing before the next field lands, and they no
+// longer both announce themselves the same way:
 //
 //   - **A selective field added to the registry outside these prefixes is
-//     silently dropped from discovery.** Nothing fails to compile and no test
-//     goes red; the query simply stops carrying it and a search returns more
-//     candidates than it should.
-//   - **Group nodes are dropped whole.** identifying reads leaves only, because
+//     dropped from discovery**: the query simply stops carrying it and a search
+//     returns more candidates than it should. Nothing fails to compile, and
+//     until #132's first step nothing went red either.
+//     TestTheAgentsPrefixesAgreeWithFieldSelectivity is what goes red now. It
+//     walks constraint.Vocabulary() from this package's test binary and holds
+//     these two prefixes against the registry's own selective column in both
+//     directions — the reverse one because a prefix that widened to swallow
+//     `amount` would send the user's price bound to the search, which is the
+//     one case the watch exists for — and names constraint.AttributePrefix so
+//     that item.attr.*, which is selective and is in no registry to walk, is
+//     caught by argument no longer.
+//   - **Group nodes are dropped whole, and that one is still silent.**
+//     identifying reads leaves only, because
 //     a group can mix a bound on the price with a fact about the object and
 //     there is no honest way to send half of one. All five scripted
 //     interpretations are flat lists, and the model-backed interpreter of #17
@@ -396,7 +406,9 @@ func (c *Client) discover(ctx context.Context, constraints []generated.Constrain
 //
 // Group nodes are left out rather than walked into, and a selective field
 // registered outside those two prefixes would be left out too. Both are argued
-// where the prefixes are declared, because both are silent.
+// where the prefixes are declared. The second now fails a test rather than
+// passing quietly; the first is still silent, and still waiting on an
+// interpreter that can produce a group at all.
 //
 // What is dropped is dropped from a *query*, never from the mandate. See
 // Authorise for why that distinction is the whole of this function.
