@@ -40,11 +40,14 @@ var subjectAt = time.Date(2026, time.August, 3, 12, 0, 0, 0, time.UTC)
 // make.
 //
 // The name says "every payment-side verifier" rather than "a Credential
-// Provider" on purpose. The row it reads is one list credited to a Credential
-// Provider, a Network and a Merchant Payment Processor alike — see ForPayment's
-// own doc comment for why that is a decision and not an approximation — and a
-// test that only claimed to speak for the first of the three would be the same
-// gap the row's own comment used to describe: #126 is what closes both at once.
+// Provider" on purpose, and "every" rather than a count on a second purpose.
+// The row it reads is one list credited to every verifier of a closed Payment
+// Mandate — see ForPayment's own doc comment for why that is a decision and not
+// an approximation, and for the four readers this tree actually has against the
+// three AP2 names. A test that claimed to speak for one of them would be the
+// same gap the row's own comment used to describe; one that named three would
+// go stale the next time a role was wired through AuthorisePaymentChain, which
+// is how the count got wrong in the first place.
 //
 // The row says which facts a payment-side verifier can supply. PaymentSubject
 // is that row as code. Nothing connected the two until now: a test helper in
