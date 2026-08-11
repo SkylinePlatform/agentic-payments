@@ -331,7 +331,7 @@ describe("the frontend's architecture", () => {
       ).toEqual([...TOKENS].sort());
     });
 
-    it.each(APP_SOURCES)("%s uses no colour outside the six", (_path, source) => {
+    it.each(APP_SOURCES)("%s uses no colour outside the palette", (_path, source) => {
       expect(
         offPalette(source, allowed),
         "an off-palette utility does not fail the build — Tailwind generates " +
@@ -378,7 +378,7 @@ describe("the frontend's architecture", () => {
     });
   });
 
-  describe("no semantic utility is unbacked by the six", () => {
+  describe("no semantic utility is unbacked by the palette", () => {
     it("declares the reset inside @theme and before the tokens", () => {
       const theme = blockOf(BLOCK_OF.light);
       const reset = theme.indexOf("--color-*: initial");
@@ -398,11 +398,11 @@ describe("the frontend's architecture", () => {
       expect(fontReset).toBeLessThan(theme.indexOf("--font-mono"));
     });
 
-    it.each(THEMES)("declares exactly the six in the %s theme", (theme) => {
+    it.each(THEMES)("declares exactly the palette in the %s theme", (theme) => {
       expect(
         [...colourDeclarations(blockOf(BLOCK_OF[theme])).keys()].sort(),
-        "a theme that declares five leaves one token inherited, and a theme " +
-          "that declares seven has grown a colour nobody approved",
+        "a theme that declares fewer leaves a token inherited, and a theme " +
+          "that declares more has grown a colour nobody approved",
       ).toEqual([...TOKENS].sort());
     });
 
@@ -523,14 +523,14 @@ describe("the frontend's architecture", () => {
     });
 
     it("catches the literal it claims to catch", () => {
-      expect(hexes(`const bg = "#12100E";`)).toEqual(["#12100E"]);
+      expect(hexes(`const bg = "#10243A";`)).toEqual(["#10243A"]);
       expect(hexes(`const bg = "#fff";`), "the three-digit form counts").toEqual(["#fff"]);
 
       // …and does not report prose. The line it draws is a comment, not a
       // digit: `#109` in code is still a violation and is why Placeholder
       // takes a number.
       expect(hexes(`// see #109 for the console\n`), "an issue number in a comment").toEqual([]);
-      expect(hexes(`/* #12100E is ink */\n`), "a colour quoted in a comment").toEqual([]);
+      expect(hexes(`/* #10243A is ink */\n`), "a colour quoted in a comment").toEqual([]);
       expect(hexes(`const issue = "#109";`), "the same digits, in code").toEqual(["#109"]);
 
       // The trap the shared scanner exists for: a `//` inside a string is not

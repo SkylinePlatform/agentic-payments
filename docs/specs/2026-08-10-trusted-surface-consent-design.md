@@ -374,11 +374,13 @@ its own."* This is the change that fills it, and it also adds the line the rule
 was missing: an assertion that the loop is **not empty**, so the guard cannot
 quietly return to proving nothing if the directory is ever renamed.
 
-**The palette and the type are the ones pinned today** — six tokens, monospace as
-the protagonist. #159 proposes navy and cream and demotes monospace, and it is
-open. #22 must not pre-empt it: `palette.test.ts` pins the hexes and says in as
-many words that the spec leads and the stylesheet follows. These two screens are
-repainted when #159 lands.
+**The palette and the type are the ones pinned today**, and #22 must not
+pre-empt either: `palette.test.ts` pins the hexes and says in as many words that
+the spec leads and the stylesheet follows. #159 owns both. Its palette half has
+since landed — seven tokens, navy in dark and cream in light — and repainted
+these two screens without touching them, because they name tokens rather than
+hexes. Its type half has not: monospace is still the protagonist at every call
+site, and demoting it is a `className` change on its own branch.
 
 ### `/` — the shopping console, first slice
 

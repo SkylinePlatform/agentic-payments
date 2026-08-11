@@ -27,7 +27,7 @@
  * has an answer that does not start with "find the fonts again".
  *
  * `font-display` differs by role and that is the point. IBM Plex Mono carries
- * the digests, the `vct` strings and the amounts — it *is* the content — so it
+ * the digests and the `vct` strings — the values a screenshot is *of* — so it
  * blocks: nothing is painted in a fallback for the first three seconds. Paired
  * with the preload in `index.html` for an 11 KB file served from the same
  * origin, that is the difference between a screenshot of a digest and a
@@ -35,6 +35,10 @@
  * period `block` swaps like anything else — it is a three-second head start on
  * a request that takes milliseconds. The other two swap, because a heading
  * appearing in a fallback for 80ms costs nothing.
+ *
+ * This argument is the one part of the type hierarchy #159 does not disturb. It
+ * rests on the digest being the content and being set in mono, and both stay
+ * true when amounts leave mono for the sans.
  */
 
 @font-face {
@@ -143,16 +147,23 @@
    * Three faces, and no fourth. The serif Tailwind ships by default is deleted
    * along with the colours, for the same reason: a face nobody chose is a face
    * that turns up in a screenshot.
+   *
+   * The comment beside each face says what that face is *for*, which #159
+   * revised: mono is a utility voice again and the sans is no longer support.
+   * The declarations themselves are unchanged — which content asks for which
+   * face is a `className` on a component, and that half lands on its own
+   * branch, so what is written here is the spec's answer and not yet every
+   * call site's.
    */
   --font-*: initial;
 
-  /* The protagonist. Digests, `vct` strings, key ids, amounts. */
+  /* Code. Log lines, canonical error codes, raw JSON, digests, keys. */
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
     monospace;
-  /* Support. Descriptions, labels, prose. */
+  /* Body. Descriptions, labels, prose, amounts, status labels, sequence numbers. */
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system,
     "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  /* Display. Lane headings and the thesis line: tight tracking, low contrast. */
+  /* Display. Lane headings, the thesis line and large figures: tight tracking. */
   --font-display: "Space Grotesk", "IBM Plex Sans", ui-sans-serif, system-ui,
     sans-serif;
 }
