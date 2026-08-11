@@ -38,7 +38,13 @@ function useTracker() {
       })
       .catch((cause: unknown) => {
         if (!live) return;
-        setRuns([]);
+        // Left at null rather than emptied, and the difference is the whole
+        // claim this screen makes. "No purchase is being watched" is a
+        // statement about the agent's bookkeeping; a read that failed
+        // establishes nothing about it. An empty list here would put that
+        // sentence on screen — in the one place this app answers where every
+        // mandate stands — for a console that may be watching four.
+        setRuns(null);
         setError(cause instanceof Error ? cause.message : String(cause));
       });
     return () => {
@@ -146,15 +152,26 @@ export function Tracker() {
         </button>
       </div>
 
+      {/*
+        Four mutually exclusive bodies, flat rather than nested, because three
+        of them are claims of different strengths and a nested ternary is where
+        two of them ended up rendering together: "the read failed" and "nothing
+        is being watched" are not the same sentence, and only one of them is
+        ever true.
+      */}
       {error !== null && <p className="font-sans text-sm text-broken">{error}</p>}
 
-      {runs === null ? (
+      {runs === null && error === null && (
         <p className="font-sans text-sm text-graphite">Reading the console…</p>
-      ) : runs.length === 0 ? (
+      )}
+
+      {runs !== null && runs.length === 0 && (
         <p className="border border-graphite/40 bg-wash px-4 py-6 font-sans text-sm text-graphite">
           No purchase is being watched.
         </p>
-      ) : (
+      )}
+
+      {runs !== null && runs.length > 0 && (
         <ul className="flex flex-col gap-3">
           {runs.map((run) => (
             <RunRow key={run.id} run={run} />
