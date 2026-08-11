@@ -176,7 +176,7 @@ func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 		why  string
 	}{
 		{
-			name: "a field named the way a person would say it",
+			name:    "a field named the way a person would say it",
 			raw:     `[{"op":"lte","field":"price","value":{"amount":20000,"currency":"USD"}}]`,
 			trigger: interpret.TriggerConditional,
 			want:    constraint.ErrUnknownField,
@@ -184,7 +184,7 @@ func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 				" gets signed, and is refused as constraint_type_unknown at the moment of purchase",
 		},
 		{
-			name: "an ordering applied to a label",
+			name:    "an ordering applied to a label",
 			raw:     `[{"op":"lte","field":"item.category","value":"ladders"}]`,
 			trigger: interpret.TriggerConditional,
 			want:    constraint.ErrTypeMismatch,
@@ -202,7 +202,7 @@ func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 				" return a mandate with fewer limits than the sentence the user typed",
 		},
 		{
-			name: "no limits at all",
+			name:    "no limits at all",
 			raw:     `[]`,
 			trigger: interpret.TriggerConditional,
 			want:    interpret.ErrNoConstraints,

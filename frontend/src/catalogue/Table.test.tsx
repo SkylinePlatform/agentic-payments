@@ -30,6 +30,7 @@ function aProposal(overrides: Partial<Proposal> = {}): Proposal {
     offers: [offer],
     watch_slots_free: 8,
     quantity: 1,
+    trigger: "conditional",
     ...overrides,
   };
 }

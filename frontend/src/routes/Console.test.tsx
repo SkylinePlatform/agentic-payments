@@ -101,6 +101,10 @@ function aProposal(): Proposal {
     offers: [offer],
     watch_slots_free: 8,
     quantity: 1,
+    // "find and buy" is an instruction, so this prompt's own trigger — the
+    // agent answers `immediate` for it, and the proposal carries it to the
+    // consent screen. Issue #198.
+    trigger: "immediate",
   };
 }
 

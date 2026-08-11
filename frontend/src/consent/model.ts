@@ -33,9 +33,21 @@ export interface Offer {
 }
 
 /**
+ * `interpret.Trigger`'s two spellings, as the agent writes them.
+ *
+ * The machine's own words, on the rule `tracker/model.ts` states for
+ * `RUN_STATES`: there is no second table, so nothing here paraphrases
+ * `immediate` into a word of its own. What the screen shows a person is a
+ * *sentence about* the trigger — {@link whenItBuys} — which is a different
+ * thing from respelling the value.
+ */
+export const TRIGGERS = ["immediate", "conditional"] as const;
+export type Trigger = (typeof TRIGGERS)[number];
+
+/**
  * What `POST /proposals` answers with: the interpretation, the offer it
- * narrowed to, the key it wants endorsed, and the basket size the sentence
- * asked for. Nothing here is signed.
+ * narrowed to, the key it wants endorsed, the basket size the sentence asked
+ * for, and when it asked to buy. Nothing here is signed.
  */
 export interface Proposal {
   readonly prompt: string;
@@ -71,6 +83,30 @@ export interface Proposal {
    * this one sits beside it under a label of its own. See `Consent.tsx`.
    */
   readonly quantity: number;
+
+  /**
+   * When the agent will buy — `interpret.Trigger`, one of {@link TRIGGERS}.
+   *
+   * Issue #198. Two shapes of sentence reach the interpreter: *"buy a flight
+   * to Palma **when it drops below** $200"* presupposes a price now and asks
+   * for it not to be acted on at that price, and *"**two tickets**, **up to**
+   * $160 all in"* carries a cap and an instruction. They authorise different
+   * behaviour and they render **identically** from the constraints, because
+   * the words that separate them are in the sentence and in no limit.
+   *
+   * **Outside the signed box, for the reason `quantity` is** — nothing signs
+   * it. The Trusted Surface signs constraints, and "when the person asked to
+   * buy" is not one: no verifier can refute it at the point of sale, which is
+   * the criterion the constraint registry is closed on. It lives in this
+   * browser from the proposal to `POST /watches`, exactly as the basket size
+   * does.
+   *
+   * Typed as `string` rather than as {@link Trigger}, on the rule
+   * `tracker/model.ts` states for a run's state: TypeScript cannot narrow a
+   * value that arrived as JSON, so the closed set is applied at the read —
+   * {@link whenItBuys} — and never asserted over the wire.
+   */
+  readonly trigger: string;
 }
 
 /**
@@ -98,6 +134,54 @@ export interface Authorised {
 }
 
 /**
+ * What the screen says about when the agent will buy, for one wire value.
+ *
+ * A **sentence** rather than the word, and that is the difference between this
+ * and `tracker/model.ts`'s status tables. There the machine's own spelling is
+ * what a reader sees, because the tracker is showing where something stands.
+ * Here the person has to decide, before signing, whether they meant this — and
+ * `immediate` is a word about the agent's behaviour, not an answer to *what
+ * will happen to my money*. The sentence is that answer.
+ *
+ * **The second arm is the honest one and it fails closed.** A value neither
+ * spelling covers is this build not knowing a word — the agent grew a third
+ * trigger and this bundle predates it — and there is nothing safe to draw for
+ * it. Guessing either way puts a person's signature under an intention nobody
+ * showed them, which is issue #198's first trap: a mode the user cannot see on
+ * the screen they signed is the same class of problem as a constraint no
+ * verifier reads. So `raw` travels for a reader to see, and {@link canSign}
+ * refuses.
+ */
+export type Buying =
+  | { readonly sentence: string; readonly raw?: undefined }
+  | { readonly sentence: string; readonly raw: string };
+
+/** The two sentences, keyed by the agent's own word for each. */
+const BUYING: Record<Trigger, Buying> = {
+  // "At the price the merchant is quoting" rather than the price on the offer
+  // card: the agent quotes the merchant when the watch starts, and this screen
+  // cannot promise that number has not moved between the proposal and the
+  // signature.
+  immediate: { sentence: "Now, at the price the merchant is quoting when the agent starts." },
+  // The second sentence is what the offer card's price is for. `240.00 USD
+  // today` beside `the amount is at most 200.00 USD` already teaches that this
+  // purchase cannot happen yet; this says the agent will not attempt it at
+  // that price either, which is `agent.Watch`'s documented behaviour — the
+  // baseline is never attempted.
+  conditional: {
+    sentence: "Only once the merchant's price moves. Not at the price it is quoting now.",
+  },
+};
+
+export function whenItBuys(trigger: string): Buying {
+  if ((TRIGGERS as readonly string[]).includes(trigger)) return BUYING[trigger as Trigger];
+  return {
+    sentence: "This console does not recognise what the agent said about when it would buy.",
+    raw: trigger,
+  };
+}
+
+/**
  * Whether the sign button may be enabled.
  *
  * #22's third box: "Approve is disabled until every constraint has rendered."
@@ -105,7 +189,18 @@ export interface Authorised {
  * lengths always agree in practice — which is the point. The rule exists so a
  * disagreement **fails closed** rather than signing more than the screen
  * displayed.
+ *
+ * The trigger is the second clause and it is the same rule one column along:
+ * the screen has to be able to say which of the two authorisations this is, so
+ * a value it cannot read stops the signature rather than being drawn as a
+ * guess. Both clauses are unreachable in a matched pair of builds —
+ * `interpret.Validate` refuses an interpretation that names no trigger, so the
+ * agent cannot propose one this set does not contain unless it has grown a
+ * third since this bundle was built. See {@link whenItBuys}.
  */
 export function canSign(proposal: Proposal, previewed: Previewed): boolean {
-  return previewed.rendered.length === proposal.constraints.length;
+  return (
+    previewed.rendered.length === proposal.constraints.length &&
+    whenItBuys(proposal.trigger).raw === undefined
+  );
 }

@@ -81,6 +81,7 @@ function aProposal(): Proposal {
     },
     watch_slots_free: 8,
     quantity: 1,
+    trigger: "immediate",
   };
 }
 
@@ -164,6 +165,26 @@ describe("signing", () => {
 
     expect(within(screen.getByTestId("basket")).getByText("Quantity 2")).toBeTruthy();
     expect(within(screen.getByTestId("signed-box")).queryByText(/^Quantity\b/)).toBeNull();
+  });
+
+  it("says when the agent will buy beside the signed box, never in it — issue #198", () => {
+    // The same argument as the basket size's, and it is on this screen for
+    // the reason the sentences are: two round trips run here, and what the
+    // agent is about to do with the authority just given it is the whole of
+    // what there is to read while they do.
+    stubFetch({
+      "/authorise": { body: anAuthorised(), delayMs: 50 },
+      "/watches": { status: 201, body: {} },
+    });
+    renderSigning({ ...aProposal(), trigger: "immediate" });
+
+    const when = screen.getByTestId("when");
+    expect(within(when).getByText(/^Now, at the price/i)).toBeTruthy();
+    expect(
+      screen.getByTestId("signed-box").contains(when),
+      "the box's heading reads \"What you signed\" the moment authorise answers, and no " +
+        "signature covers this line — the surface is never told when the person wanted to buy",
+    ).toBe(false);
   });
 
   it("keeps the signed sentences on screen while the two calls run", () => {

@@ -52,15 +52,23 @@ import type { StatusMeta } from "../status/model";
 
 // --- the run's own axis: internal/agent/console's runState -----------------
 
-/** `runState.String()`'s six spellings, in `internal/agent/console/run.go`'s own order. */
-export const RUN_STATES = ["watching", "bought", "exhausted", "expired", "stopped", "failed"] as const;
+/** `runState.String()`'s seven spellings, in `internal/agent/console/run.go`'s own order. */
+export const RUN_STATES = [
+  "watching",
+  "bought",
+  "exhausted",
+  "expired",
+  "stopped",
+  "failed",
+  "refused",
+] as const;
 export type RunState = (typeof RUN_STATES)[number];
 
 /**
  * Is the agent still trying, and how did it stop?
  *
  * The axis with a full pair on every row, and the only one on this screen that
- * takes an ending: a run is the thing that finishes. Four of the six finish
+ * takes an ending: a run is the thing that finishes. Four of the seven finish
  * with a `bar` rather than a `cross`, and that is the rule rather than a
  * coincidence — **the cross is a verifier's verdict and nothing else**. A
  * schedule running out, an authorisation running out its own clock, a person
@@ -68,6 +76,23 @@ export type RunState = (typeof RUN_STATES)[number];
  * verifier anywhere in them, so none of them may wear the shape that means one
  * said no. `failed` in particular: the agent's own error sentence is what says
  * why, and no mark can hold a reason.
+ *
+ * `refused` is the seventh, issue #198's, and it is the second row here that
+ * earns a `cross`: a sentence with no condition in it makes one attempt and
+ * stops, and this is that attempt having been turned down — by a verifier,
+ * with a signed receipt. The three-lane design's *Indicators* section is where
+ * the vocabulary is settled, and its rules decide this row rather than a
+ * screen's own taste: `full` because nothing is outstanding and this is where
+ * it stopped, `cross` because a verifier said no, and the machine's own word
+ * with no gloss on it. `exhausted` and `expired` take `— never bought` because
+ * neither word says whether the buyer got what they asked for; `refused` says
+ * so on its own.
+ *
+ * **That section's per-state table does not yet carry this row.** It is closed
+ * over `runState`'s spellings by its own rule — *a state with no row is a
+ * defect rather than an omission* — and it counts six. The entry below follows
+ * the section's stated rules rather than inventing from them, which is the
+ * most a component may do: adding the row is a change to the specification.
  */
 export const RUN_STATE_META: Record<RunState, StatusMeta> = {
   watching: { label: "watching", pip: "half", ending: null },
@@ -86,6 +111,7 @@ export const RUN_STATE_META: Record<RunState, StatusMeta> = {
   expired: { label: "expired — never bought", pip: "full", ending: "bar" },
   stopped: { label: "stopped", pip: "full", ending: "bar" },
   failed: { label: "failed", pip: "full", ending: "bar" },
+  refused: { label: "refused", pip: "full", ending: "cross" },
 };
 
 export function runStatus(raw: string): StatusMeta {

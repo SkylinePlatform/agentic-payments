@@ -222,7 +222,7 @@ func TestEachScenarioSaysWhenItsSentenceWantedToBuy(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]interpret.Trigger{
-		builtScenarioPrompt: interpret.TriggerConditional,
+		builtScenarioPrompt:                             interpret.TriggerConditional,
 		"buy a flight to Palma under $200, this summer": interpret.TriggerConditional,
 		"buy me this bicycle when it drops below $400":  interpret.TriggerConditional,
 		concertPrompt: interpret.TriggerImmediate,

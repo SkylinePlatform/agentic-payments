@@ -75,6 +75,7 @@ describe("the client", () => {
       },
       watch_slots_free: 8,
       quantity: 3,
+      trigger: "immediate",
     };
     const authorised: Authorised = {
       open_checkout_mandate: "checkout.jwt",
@@ -93,6 +94,7 @@ describe("the client", () => {
         item: string;
         constraints: unknown;
         quantity: number;
+        trigger: string;
         open_checkout_mandate: string;
         open_payment_mandate: string;
         rendered: string[];
@@ -107,11 +109,17 @@ describe("the client", () => {
     expect(body.prompt).toBe("buy a ladder");
     expect(body.quantity).toBe(3);
 
-    // The proposal's half: what was narrowed, signed and — issue #133 —
-    // sized.
+    // The proposal's half: what was narrowed, signed, — issue #133 — sized,
+    // and — issue #198 — timed.
     expect(body.authorisation.item).toBe("gtin:proposal-item");
     expect(body.authorisation.constraints).toEqual(proposal.constraints);
     expect(body.authorisation.quantity).toBe(3);
+    // The field with the quietest failure of any on this object. An assembly
+    // that dropped it would send an authorisation whose trigger is empty,
+    // which `agent.Watch` reads as a watch — so an instruction would go back
+    // to waiting for the merchant to change its mind, on the one path
+    // `make demo` actually drives, with every backend test still green.
+    expect(body.authorisation.trigger).toBe("immediate");
 
     // The surface's half: its own account of what it signed.
     expect(body.authorisation.open_checkout_mandate).toBe("checkout.jwt");
