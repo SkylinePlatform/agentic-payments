@@ -17,7 +17,8 @@ Mallorca, route **BEG→PMI**; a price cap of **USD 20000** in minor units —
 whose price for that route moves during the window — **$240 → $210 → $189**
 — because a flat price cannot tell this story.
 
-It breaks into ten beats, each one a screenshot.
+It breaks into ten beats, each one a screenshot. Nine of them run today; the
+tenth arrives with the Visa TAP milestone.
 
 | # | Beat | What it proves |
 |---|---|---|
@@ -28,20 +29,24 @@ It breaks into ten beats, each one a screenshot.
 | 5 | A candidate at $210; the agent assembles mandates and **the verifier rejects** | the verifier rejects, not the agent |
 | 6 | Price falls to $189; the agent signs closed mandates with **its own** key | the core of Human Not Present |
 | 7 | CP verifies the delegated Payment Mandate and returns a scoped token; the merchant then checks `checkout_hash` and constraints | the agent never sees a PAN |
-| 8 | Inspector: the merchant sees route and price, the CP sees amount and instrument, neither sees the whole set | the most valuable screenshot |
+| 8 | Inspector: the merchant is shown all four constraints, the CP the price cap and the booking window and never the route | the most valuable screenshot |
 | 9 | Both receipts signed, references matching the closed mandate hashes | non-repudiation |
-| 10 | The same flow with every HTTP call carrying an RFC 9421 signature verified at the proxy | the three-layer thesis on one transaction |
+| 10 | The same flow with every HTTP call carrying an RFC 9421 signature verified at the proxy — the TAP milestone, `cmd/proxy` a stub until it | the three-layer thesis on one transaction |
 
 Beats 5, 8 and 10 are the ones that carry the article series; the rest is
 context that gets the story from one end to the other. Beat 5 proves that the
 **verifier** rejects, not the agent — an agent that could wave through its own
 mistake would make every other guarantee here decorative. Beat 8 makes
-selective disclosure visible: the merchant and the party that holds the
-payment instrument each see a different slice of the same transaction, and
-neither sees the whole of it, which is the most concrete evidence that the
-system works as designed rather than on trust. Beat 10 shows both protocol
-layers holding on **one** transaction — identity and authorisation enforced
-together, not as two separate demos that never touch the same booking.
+selective disclosure visible, and it is one-sided on purpose: the merchant
+issued the checkout, so there is no fact in the constraint vocabulary it cannot
+state and nothing is withheld from it, while the Credential Provider is shown
+the price cap and the booking window and never learns where the user is flying.
+Withholding the route from the one party that could not have evaluated it is the
+most concrete evidence that the system works as designed rather than on trust —
+`../protocols/ap2.md` has why that is correctness as much as privacy. Beat 10
+shows both protocol layers holding on **one** transaction — identity and
+authorisation enforced together, not as two separate demos that never touch the
+same booking.
 
 The mock merchant needs inventory whose price moves over time —
 **$240 → $210 → $189** — because beats 4, 5 and 6 have nothing to show against

@@ -476,6 +476,14 @@ or a table with one row, is ceremony — leave it out. This documentation is den
 because every line earns its place, and a rule that produced a diagram on every
 typo fix would be the first one people quietly stopped following.
 
+**Documentation moves in the same pull request as the code.** A change to a
+mandate flow, to a verification rule, or to which protocol detail lives in
+`adapters/ap2/` rather than in the canonical model carries its update to
+`docs/architecture/` or `docs/protocols/ap2.md` in that same pull request, never
+in a follow-up. Documentation that has stopped matching the code it illustrates
+is worse than none, because a diagram carries the authority of a picture even
+after it has started teaching the wrong thing.
+
 **Issues:** work is tracked in GitHub Issues under two milestones, *Google AP2*
 (#1–23) and *Visa TAP* (#24–33), plus *Foundations*. Issue bodies carry spec
 references, dependencies and known traps. Read the issue before starting.
