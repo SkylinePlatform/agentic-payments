@@ -1,8 +1,18 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { fetchExamples, propose } from "../consent/client";
 import type { Proposal } from "../consent/model";
+
+/**
+ * What `Consent`'s `onRefuse` hands back in router state — see that file's
+ * own comment on why `prompt` travels alongside the other two.
+ */
+interface RefusalState {
+  readonly refused: boolean;
+  readonly recorded: boolean;
+  readonly prompt: string;
+}
 
 /**
  * The shopping console, and the app's index route.
@@ -19,10 +29,22 @@ import type { Proposal } from "../consent/model";
  * only when it matches one of the agent's scripted sentences. The menu below
  * the box exists so that boundary is visible *before* anybody hits it, not
  * discovered by trial and error.
+ *
+ * **A refusal that landed here says so.** `Consent`'s `onRefuse` never calls
+ * `authorise` either way, so `recorded` only ever distinguishes whether the
+ * *record* of the "no" reached the collector — never whether the "no" itself
+ * holds, which it always does. Losing that distinction silently would make a
+ * refusal the surface failed to record indistinguishable from one it kept,
+ * which is exactly the gap #22's design calls out.
  */
 export function Console() {
   const navigate = useNavigate();
-  const [prompt, setPrompt] = useState("");
+  // `useLocation().state` is read once, into a lazy initialiser, rather than
+  // watched with an effect: this route mounts exactly once (the comment below
+  // on `fetchExamples` already relies on that), so the router state present
+  // at that first render is the only one this screen will ever see.
+  const refusal = useLocation().state as RefusalState | null;
+  const [prompt, setPrompt] = useState(() => refusal?.prompt ?? "");
   const [examples, setExamples] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,6 +97,18 @@ export function Console() {
           mandate stands.
         </p>
       </header>
+
+      {refusal?.refused === true &&
+        (refusal.recorded ? (
+          <p className="font-sans text-sm text-ink" data-testid="refusal-acknowledgement">
+            Your refusal was recorded. Nothing was signed.
+          </p>
+        ) : (
+          <p className="font-sans text-sm text-broken" data-testid="refusal-acknowledgement">
+            Your refusal stands — nothing was signed — but the record of it did not reach the
+            surface.
+          </p>
+        ))}
 
       <div className="flex flex-col gap-2">
         <label htmlFor="console-prompt" className="font-display text-lg text-ink">

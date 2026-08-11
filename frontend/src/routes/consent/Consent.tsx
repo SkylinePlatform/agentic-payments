@@ -98,11 +98,17 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
     // batches this `setState` with the `navigate` below into one commit, and
     // the router swaps this screen out for `Console` in that same commit —
     // there is no paint in between for a message here to appear in.
+    //
+    // `prompt` travels too, in both branches, so a user who caught a
+    // misinterpretation does not have to retype it — `Console` reads it back
+    // into the box it came from. It is `proposal.prompt`, not a copy typed
+    // twice, so there is nothing here that could disagree with what was
+    // actually typed.
     try {
       await refuse(proposal, previewed.constraints_digest);
-      navigate("/", { state: { refused: true, recorded: true } });
+      navigate("/", { state: { refused: true, recorded: true, prompt: proposal.prompt } });
     } catch {
-      navigate("/", { state: { refused: true, recorded: false } });
+      navigate("/", { state: { refused: true, recorded: false, prompt: proposal.prompt } });
     }
   }
 

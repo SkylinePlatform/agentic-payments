@@ -40,6 +40,18 @@ function Router({ children }: { children: ReactNode }) {
 }
 
 /**
+ * Mounts `Console` the way a browser landing back from `/consent` would: with
+ * router state already on the entry, the same shape `Consent.test.tsx`'s
+ * `renderConsent` uses for the trip the other way.
+ */
+function renderConsoleAt(state: unknown) {
+  function RouterWithState({ children }: { children: ReactNode }) {
+    return <MemoryRouter initialEntries={[{ pathname: "/", state }]}>{children}</MemoryRouter>;
+  }
+  return render(<Console />, { wrapper: RouterWithState });
+}
+
+/**
  * A stubbed `fetch` keyed by path.
  *
  * A fixture is either the response body directly — 200, JSON-encoded — or
@@ -146,5 +158,33 @@ describe("the shopping console", () => {
     await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
 
     await waitFor(() => expect(navigations).toEqual([{ to: "/consent", state: aProposal() }]));
+  });
+
+  it("acknowledges a recorded refusal and carries the prompt back into the box", async () => {
+    stubFetch({ "/examples": { examples: [] } });
+    renderConsoleAt({ refused: true, recorded: true, prompt: "buy a boat" });
+
+    expect(await screen.findByText(/your refusal was recorded/i)).toBeTruthy();
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("buy a boat");
+  });
+
+  it("says the refusal stands even when the surface could not record it", async () => {
+    // A refusal the surface failed to record must not read as identical to
+    // one it kept — the user's "no" holds either way, because /authorise was
+    // never called, and this is the one place that gets said out loud.
+    stubFetch({ "/examples": { examples: [] } });
+    renderConsoleAt({ refused: true, recorded: false, prompt: "buy a boat" });
+
+    expect(await screen.findByText(/refusal stands/i)).toBeTruthy();
+    expect(screen.getByText(/did not reach the surface/i)).toBeTruthy();
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("buy a boat");
+  });
+
+  it("shows no acknowledgement on a fresh visit", async () => {
+    stubFetch({ "/examples": { examples: [] } });
+    render(<Console />, { wrapper: Router });
+
+    await screen.findByRole("textbox");
+    expect(screen.queryByTestId("refusal-acknowledgement")).toBeNull();
   });
 });

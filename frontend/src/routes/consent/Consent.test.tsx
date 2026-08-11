@@ -178,7 +178,9 @@ describe("the consent screen", () => {
     await userEvent.click(await screen.findByRole("button", { name: /refuse/i }));
 
     await waitFor(() =>
-      expect(navigations).toEqual([{ to: "/", state: { refused: true, recorded: true } }]),
+      expect(navigations).toEqual([
+        { to: "/", state: { refused: true, recorded: true, prompt: aProposal().prompt } },
+      ]),
     );
     expect(calls.map((c) => c.url)).not.toContain("/authorise");
   });
@@ -187,10 +189,11 @@ describe("the consent screen", () => {
     // A Refuse button that stops working when the collector is down is the
     // worst available way to lose a person's decision. Nothing was signed,
     // because /authorise was simply never called. `recorded: false` is what
-    // this screen can honestly say — rendering that fact belongs to whoever
-    // owns Console, which reads it from router state after landing there;
-    // this screen has already unmounted by the time it would show, so there
-    // is nothing on this screen's own DOM for a test to assert.
+    // this screen can honestly say — rendering that fact belongs to Console,
+    // which reads it from router state after landing there, and
+    // `Console.test.tsx` is where that rendering is actually covered; this
+    // screen has already unmounted by the time it would show, so there is
+    // nothing on this screen's own DOM for a test here to assert.
     stubFetch({
       "/authorise/preview": { body: aPreview() },
       "/authorise/refused": { status: 502, body: "the surface did not answer" },
@@ -200,7 +203,9 @@ describe("the consent screen", () => {
     await userEvent.click(await screen.findByRole("button", { name: /refuse/i }));
 
     await waitFor(() =>
-      expect(navigations).toEqual([{ to: "/", state: { refused: true, recorded: false } }]),
+      expect(navigations).toEqual([
+        { to: "/", state: { refused: true, recorded: false, prompt: aProposal().prompt } },
+      ]),
     );
   });
 
