@@ -137,6 +137,61 @@ func TestTheProposalKeepsTheDifferenceBetweenTwoAndNoAnswer(t *testing.T) {
 	}
 }
 
+// TestTheProposalCarriesWhenTheSentenceWantedToBuy is issue #198 one hop along
+// from the interpreter.
+//
+// A proposal is what a person is about to be shown, and "buy now, up to $160"
+// and "buy when the price moves, up to $160" are different authorisations that
+// render identically from the constraints alone — the words that tell them
+// apart are in the sentence and in no limit. So the fact has to survive the
+// discovery half rather than being read off the constraints later, which is
+// where the same argument put the basket size in #133.
+//
+// Unlike the quantity there is nothing to fall back to and no zero to preserve:
+// Propose calls interpret.Validate, which refuses an interpretation that names
+// no trigger, so the only two answers this can carry are the two below.
+func TestTheProposalCarriesWhenTheSentenceWantedToBuy(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		prompt string
+		want   interpret.Trigger
+		why    string
+	}{
+		{
+			name: "a sentence with a condition in it", prompt: palmaPrompt,
+			want: interpret.TriggerConditional,
+			why:  "\"when it drops below $200\" presupposes a price now and asks for it not to be acted on",
+		},
+		{
+			name: "a sentence with none", prompt: concertPrompt,
+			want: interpret.TriggerImmediate,
+			why: "\"up to $160 all in\" is a cap, and a cap is not a condition to wait on — a person " +
+				"reading that sentence expects a purchase",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newWorld(t)
+			w.endpoints.Surface = unreachableSurface(t)
+
+			key := newParty(t, "agent", w.clock)
+			agentKey, err := roles.PublicKey(t.Context(), key.keys)
+			require.NoError(t, err, "reading the key the open mandates will endorse")
+
+			got, err := w.client().Propose(t.Context(), agent.Intent{
+				Prompt:      tc.prompt,
+				Interpreter: interpret.Demo(),
+				AgentKey:    agentKey,
+			})
+			require.NoError(t, err, "a scripted sentence has to produce a proposal")
+			assert.Equal(t, tc.want, got.Trigger, tc.why)
+		})
+	}
+}
+
 // TestTheProposalCarriesTheOfferTheMerchantPublished is why the consent screen
 // can name what the identifier refers to.
 //

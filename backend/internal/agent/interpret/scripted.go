@@ -44,6 +44,18 @@ type Script struct {
 	// limits. Wrapping the array in an envelope to carry a fifth, unrelated
 	// fact would break that comparison for every entry to add it to one.
 	Quantity int
+
+	// Trigger is whether this prompt asked for the purchase now or when
+	// something changes. Required — NewScripted refuses an entry without one,
+	// which is Validate's refusal reaching the table rather than a second rule.
+	//
+	// It is the one field here with no default, and that is deliberate. A
+	// scripted table is where somebody writes down what a sentence means, so
+	// the entry is exactly the place the question should have to be answered;
+	// an omission that quietly became "conditional" would put the sentence back
+	// in the state issue #198 found it in, with nothing on the screen or in
+	// this file saying so.
+	Trigger Trigger
 }
 
 // ScriptedInterpreter answers from a fixed table and never calls a model.
@@ -111,7 +123,7 @@ func NewScripted(scripts ...Script) (*ScriptedInterpreter, error) {
 		if err != nil {
 			return nil, fmt.Errorf("interpret: the script for %q: %w", script.Prompt, err)
 		}
-		if err := Validate(constraints); err != nil {
+		if err := Validate(script.interpretation(constraints)); err != nil {
 			return nil, fmt.Errorf("interpret: the script for %q: %w", script.Prompt, err)
 		}
 
@@ -154,10 +166,23 @@ func (s *ScriptedInterpreter) Interpret(_ context.Context, prompt string) (Inter
 	// The interface's contract, not a repeat of the constructor's check: this is
 	// the tree about to be returned, and the promise belongs to
 	// IntentInterpreter rather than to one way of building one.
-	if err := Validate(constraints); err != nil {
+	out := s.scripts[i].interpretation(constraints)
+	if err := Validate(out); err != nil {
 		return Interpretation{}, err
 	}
-	return Interpretation{Constraints: constraints, Quantity: s.scripts[i].Quantity}, nil
+	return out, nil
+}
+
+// interpretation is this script's answer, once its constraints have been
+// decoded.
+//
+// One place where a Script becomes an Interpretation, so that the tree the
+// constructor validates and the tree Interpret returns cannot be assembled
+// differently — a script whose trigger was checked at construction and dropped
+// on the way out would pass every test in this package and buy at the wrong
+// moment in the demo.
+func (s Script) interpretation(constraints []generated.Constraint) Interpretation {
+	return Interpretation{Constraints: constraints, Quantity: s.Quantity, Trigger: s.Trigger}
 }
 
 // Prompts lists the sentences this interpreter answers, as they were written.

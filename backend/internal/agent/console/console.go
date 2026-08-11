@@ -521,13 +521,17 @@ func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	roles.OK(w, http.StatusOK, proposed{
-		Prompt:         req.Prompt,
-		Constraints:    proposal.Constraints,
-		AgentKey:       proposal.AgentKey,
-		Item:           proposal.Item,
-		Offer:          proposal.Offer,
-		Offers:         proposal.Offers,
-		Quantity:       quantity,
+		Prompt:      req.Prompt,
+		Constraints: proposal.Constraints,
+		AgentKey:    proposal.AgentKey,
+		Item:        proposal.Item,
+		Offer:       proposal.Offer,
+		Offers:      proposal.Offers,
+		Quantity:    quantity,
+		// Unresolved, unlike the quantity above: there is no absence to stand
+		// in for, and a consent screen has to be able to say which of the two
+		// authorisations the person is signing. See proposed.Trigger.
+		Trigger:        proposal.Trigger,
 		WatchSlotsFree: s.free(),
 	})
 }

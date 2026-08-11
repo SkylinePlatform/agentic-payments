@@ -179,7 +179,7 @@ func TestAModelAnswerNobodyCanReadIsQuotedBack(t *testing.T) {
 		},
 		{
 			name: "a field nobody can read",
-			raw:  `{"constraints":[{"op":"lte","field":"price","value":1}],"quantity":1}`, quote: "price",
+			raw:  `{"constraints":[{"op":"lte","field":"price","value":1}],"quantity":1,"trigger":"conditional"}`, quote: "price",
 			why: "which word the model got wrong is the whole diagnosis",
 		},
 	} {
@@ -210,7 +210,7 @@ func TestTheModelsQuantityReachesTheInterpretation(t *testing.T) {
 	model := interpret.NewMockModel(t)
 	model.EXPECT().
 		Complete(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return([]byte(`{"constraints":[{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}],"quantity":2}`), nil)
+		Return([]byte(`{"constraints":[{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}],"quantity":2,"trigger":"conditional"}`), nil)
 
 	interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))
 	require.NoError(t, err)
@@ -315,7 +315,8 @@ func completionArguments(t *testing.T) (string, []byte) {
 			instruction, schema = gotInstruction, gotSchema
 			// The built scenario's bare constraint array, wrapped in the
 			// envelope this package's answer shape now is.
-			return []byte(`{"constraints":` + interpret.Scenarios()[0].Constraints + `,"quantity":1}`), nil
+			return []byte(`{"constraints":` + interpret.Scenarios()[0].Constraints +
+				`,"quantity":1,"trigger":"conditional"}`), nil
 		})
 
 	interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))

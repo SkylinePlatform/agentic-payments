@@ -202,6 +202,51 @@ func TestASentenceNamingNoCountProposesNoBasketSize(t *testing.T) {
 	}
 }
 
+// TestEachScenarioSaysWhenItsSentenceWantedToBuy is issue #198 at the
+// interpreter — before any of it has reached an agent, a surface or a watch.
+//
+// Five prompts and two shapes of sentence. Three presuppose a price now and ask
+// for it not to be acted on at that price; two carry a cap and an instruction,
+// and a person reading either expects a purchase. The agent had one mode for
+// all five, which is why the concert demonstration read as *saw $150.00 for
+// two, declined it, paid $158.00*.
+//
+// It walks Scenarios rather than naming the five, so a sixth prompt has to
+// arrive with a row here — and asserts every prompt's trigger explicitly rather
+// than only the two that changed, because the interesting entry is the alias:
+// "buy a flight to Palma **under** $200" names no moment at all and is
+// conditional because the table declares it the same intent as the sentence
+// above it. A rule reading the words could not have known that, which is the
+// argument for the fact living in the table at all.
+func TestEachScenarioSaysWhenItsSentenceWantedToBuy(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]interpret.Trigger{
+		builtScenarioPrompt: interpret.TriggerConditional,
+		"buy a flight to Palma under $200, this summer": interpret.TriggerConditional,
+		"buy me this bicycle when it drops below $400":  interpret.TriggerConditional,
+		concertPrompt: interpret.TriggerImmediate,
+		ladderPrompt:  interpret.TriggerImmediate,
+	}
+
+	for _, script := range interpret.Scenarios() {
+		t.Run(script.Prompt, func(t *testing.T) {
+			t.Parallel()
+
+			expected, known := want[script.Prompt]
+			require.True(t, known,
+				"a prompt this package publishes with nothing here saying whether it asked to buy "+
+					"now or to wait; the agent has to act on one of the two either way")
+
+			interpretation, err := interpret.Demo().Interpret(t.Context(), script.Prompt)
+			require.NoError(t, err, "a scenario this package publishes is not in its own script")
+			assert.Equal(t, expected, interpretation.Trigger,
+				"answering this sentence with the other behaviour is either a purchase it asked "+
+					"the agent to wait past, or a wait it never asked for")
+		})
+	}
+}
+
 func elsewhere() constraint.Subject {
 	s := flight(18900)
 	s.Item.Attributes = map[string]string{"route.origin": "LHR", "route.destination": "PMI"}
@@ -355,9 +400,16 @@ func TestInterpretingTwiceReturnsIndependentTrees(t *testing.T) {
 // Interpret validates too, so nothing unreadable escapes either way. The point
 // of failing here is when: a script wired at startup that nobody can evaluate
 // should stop the program that wired it, rather than surfacing three minutes
-// later as a demo that will not run. The last row is the other half of the same
-// idea — an entry with nothing to match on can never answer anything, so it is a
-// dead line in a table whose whole content is the matching.
+// later as a demo that will not run. The fourth row is the other half of the
+// same idea — an entry with nothing to match on can never answer anything, so it
+// is a dead line in a table whose whole content is the matching.
+//
+// Every row states a good trigger except the two it is about, so that each one
+// fails for the defect it names. Those two are issue #198's: a table is where
+// somebody writes down what a sentence means, so an entry that does not say
+// when the sentence wanted to buy is an unanswered question rather than a
+// default, and it stops the program that wired it on the terms an unreadable
+// constraint already does.
 func TestNewScriptedRefusesAScriptThatCouldNotDoItsJob(t *testing.T) {
 	t.Parallel()
 
@@ -368,18 +420,31 @@ func TestNewScriptedRefusesAScriptThatCouldNotDoItsJob(t *testing.T) {
 		{"a field the registry does not have", interpret.Script{
 			Prompt:      "buy a flight to Palma",
 			Constraints: `[{"op":"lte","field":"price","value":{"amount":20000,"currency":"USD"}}]`,
+			Trigger:     interpret.TriggerConditional,
 		}},
 		{"not JSON at all", interpret.Script{
 			Prompt:      "buy a flight to Palma",
 			Constraints: `at most two hundred dollars`,
+			Trigger:     interpret.TriggerConditional,
 		}},
 		{"no limits at all", interpret.Script{
 			Prompt:      "buy a flight to Palma",
 			Constraints: `[]`,
+			Trigger:     interpret.TriggerConditional,
 		}},
 		{"no prompt to match on", interpret.Script{
 			Prompt:      "   ",
 			Constraints: `[{"op":"eq","field":"item.category","value":"flights"}]`,
+			Trigger:     interpret.TriggerConditional,
+		}},
+		{"no answer to when the sentence wanted to buy", interpret.Script{
+			Prompt:      "buy a flight to Palma",
+			Constraints: `[{"op":"eq","field":"item.category","value":"flights"}]`,
+		}},
+		{"a trigger this package does not define", interpret.Script{
+			Prompt:      "buy a flight to Palma",
+			Constraints: `[{"op":"eq","field":"item.category","value":"flights"}]`,
+			Trigger:     "eventually",
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -405,8 +470,8 @@ func TestNewScriptedRefusesTwoPromptsThatMatchTheSameWay(t *testing.T) {
 	const hotels = `[{"op":"eq","field":"item.category","value":"hotels"}]`
 
 	_, err := interpret.NewScripted(
-		interpret.Script{Prompt: "book me something", Constraints: flights},
-		interpret.Script{Prompt: "Book  me   something", Constraints: hotels},
+		interpret.Script{Prompt: "book me something", Constraints: flights, Trigger: interpret.TriggerImmediate},
+		interpret.Script{Prompt: "Book  me   something", Constraints: hotels, Trigger: interpret.TriggerImmediate},
 	)
 	assert.Error(t, err, "one of two entries would have been silently unreachable")
 }

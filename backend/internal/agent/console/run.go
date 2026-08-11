@@ -68,6 +68,12 @@ const (
 	// stateWatching is the resting state and the one a Human Not Present flow
 	// spends most of its life in: authorised, polling, nothing attempted yet or
 	// nothing attempted since the last refusal.
+	//
+	// It is also, briefly, where a run that never waits for anything begins —
+	// an instruction is at this state for the one round trip it takes to quote
+	// the merchant and mint. Not given a name of its own because a state
+	// nothing can be polled in is a state nobody reads, and every terminal one
+	// below already tells that run's story.
 	stateWatching runState = iota
 	// stateBought is the purchase having gone through.
 	stateBought
@@ -104,6 +110,20 @@ const (
 	stateStopped
 	// stateFailed is every other way a watch can end.
 	stateFailed
+	// stateRefused is agent.ErrPurchaseRefused: the sentence carried no
+	// condition, the purchase it asked for was assembled and presented, and a
+	// verifier turned it down.
+	//
+	// Distinct from stateExhausted and from stateFailed, and both distinctions
+	// are about what a viewer would otherwise be told. Exhaustion is a claim
+	// about the *merchant* — its last price is committed and there is nowhere
+	// further to move — which is not what happened here and would read as the
+	// shop having run out. Failure is a claim about this agent, and nothing
+	// failed: the mandates were minted, the chains were presented, and a
+	// verifier answered, with a signed receipt, that the terms the user set
+	// were not met. That is the system working, and it is the one terminal
+	// state on this axis that carries a verdict somebody else signed.
+	stateRefused
 )
 
 // runStateNames are what this console serves for the axis above.
@@ -120,6 +140,7 @@ var runStateNames = [...]string{
 	stateExpired:   "expired",
 	stateStopped:   "stopped",
 	stateFailed:    "failed",
+	stateRefused:   "refused",
 }
 
 func (s runState) String() string {
@@ -382,6 +403,8 @@ func (r *Run) finished(watched agent.Watched, err error) {
 		r.state = stateExhausted
 	case errors.Is(err, agent.ErrAuthorisationExpired):
 		r.state = stateExpired
+	case errors.Is(err, agent.ErrPurchaseRefused):
+		r.state = stateRefused
 	default:
 		r.state = stateFailed
 	}

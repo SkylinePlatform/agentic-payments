@@ -171,6 +171,7 @@ func (m *ModelInterpreter) Interpret(ctx context.Context, prompt string) (Interp
 	var envelope struct {
 		Constraints json.RawMessage `json:"constraints"`
 		Quantity    int             `json:"quantity"`
+		Trigger     Trigger         `json:"trigger"`
 	}
 	if err := json.Unmarshal(answer, &envelope); err != nil {
 		return Interpretation{}, fmt.Errorf("interpret: the model's answer to %q %w; it said: %s",
@@ -187,11 +188,23 @@ func (m *ModelInterpreter) Interpret(ctx context.Context, prompt string) (Interp
 	// steps long: what a model returns is the one input in this system nobody
 	// can predict, so it is the one that must be run past the verifier's parser
 	// before a user is shown it.
-	if err := Validate(constraints); err != nil {
+	//
+	// **The trigger is checked by the same call and refused on the same terms.**
+	// A model that answered a word this package does not define — or answered
+	// nothing, which is what a provider ignoring the schema does — leaves the
+	// agent with no honest reading of when the sentence asked to buy, and
+	// Trigger records why both available guesses are wrong. So it fails here,
+	// loudly, rather than downstream as a purchase at a moment nobody chose.
+	out := Interpretation{
+		Constraints: constraints,
+		Quantity:    envelope.Quantity,
+		Trigger:     envelope.Trigger,
+	}
+	if err := Validate(out); err != nil {
 		return Interpretation{}, fmt.Errorf("interpret: the model's reading of %q is not something a verifier could read: %w; it said: %s",
 			prompt, err, excerpt(answer))
 	}
-	return Interpretation{Constraints: constraints, Quantity: envelope.Quantity}, nil
+	return out, nil
 }
 
 // instruction is what the model is told: the job, the vocabulary and the shapes,
@@ -257,13 +270,13 @@ func vocabulary() string {
 	var b strings.Builder
 
 	b.WriteString(`You read one sentence a person typed into a shopping agent and turn it into the
-limits a payment verifier will enforce, and the basket size the sentence asked
-for. You are proposing limits, never deciding a purchase: what you answer is
-shown to the person, signed by them, and then enforced by software that never
-sees this sentence.
+limits a payment verifier will enforce, the basket size the sentence asked for,
+and whether it asked to buy now or to wait. You are proposing limits, never
+deciding a purchase: what you answer is shown to the person, signed by them, and
+then enforced by software that never sees this sentence.
 
-Answer with one JSON object and nothing else, with exactly two keys —
-"constraints" and "quantity".
+Answer with one JSON object and nothing else, with exactly three keys —
+"constraints", "quantity" and "trigger".
 
 "constraints" is a flat JSON array of leaf constraints. Every element is an
 object with exactly three keys — "op", "field" and "value".
@@ -316,6 +329,24 @@ different things: "two tickets... up to $160 all in" is a quantity of 2 and,
 separately, a constraint capping the count at 2 as well, because the cap
 protects the person if this answer is ever read back and re-priced, while the
 quantity is what actually gets bought today.
+
+"trigger" is one of exactly two words, and it is about the sentence rather than
+about any price:
+
+  conditional  the sentence made the purchase wait on something changing —
+               "when it drops below $200", "if it goes on sale", "once it is
+               back in stock". Something is being asked for that is not true
+               yet.
+  immediate    the sentence asked to buy, on the terms it stated — "two
+               tickets, up to $160 all in", "find and buy the cheapest one".
+               A cap is not a condition: "up to $160" says what the person will
+               pay, not that they want to wait for a better price.
+
+Answer one of those two words. Do not invent a third, do not leave it out, and
+do not decide it by looking at what anything costs — you have not been told any
+prices, and whether today's price is acceptable is checked later by software
+whose whole job that is. The only question here is what kind of sentence you
+were given.
 
 Two things decide whether a constraint is a good reading.
 
@@ -394,17 +425,17 @@ func textOperators() []string {
 }
 
 // answerSchema describes the answer as JSON Schema: an object carrying the
-// leaf constraints and the basket size, side by side.
+// leaf constraints, the basket size and the trigger, side by side.
 //
 // # Why an object and not the bare array this used to be
 //
-// Interpretation carries two facts a model has no other way to answer both
-// of in one call: the limits, and how many of the item the sentence asked
-// for. quantity is required in the schema for the same reason the vocabulary
-// tells the model to say 1 rather than say nothing — an omitted field reads
-// as "the model had no opinion", and the honest default for almost every
-// sentence is a stated 1, not a silent absence Interpretation.Quantity's zero
-// value would have to stand in for either way.
+// Interpretation carries three facts a model has no other way to answer in one
+// call: the limits, how many of the item the sentence asked for, and whether it
+// asked to buy now. quantity is required in the schema for the same reason the
+// vocabulary tells the model to say 1 rather than say nothing — an omitted
+// field reads as "the model had no opinion", and the honest default for almost
+// every sentence is a stated 1, not a silent absence Interpretation.Quantity's
+// zero value would have to stand in for either way.
 //
 // # Why "constraints" is not contracts/authz/constraint.json
 //
@@ -507,8 +538,20 @@ func answerSchema() ([]byte, error) {
 				"minimum":     1,
 				"description": "how many of the item the sentence asks for; 1 when nothing in the sentence names a count",
 			},
+			// An enum of the two triggers rather than a free string, so a
+			// provider with a structured-output mode refuses a third word at
+			// its own boundary. It is required for the reason quantity is: an
+			// omitted field reads as "the model had no opinion", and there is
+			// no honest default for this one — see Trigger. A provider that
+			// ignores the schema is caught a moment later by Validate, which
+			// is the same arrangement every other field here relies on.
+			"trigger": map[string]any{
+				"type":        "string",
+				"enum":        []any{string(TriggerImmediate), string(TriggerConditional)},
+				"description": "immediate when the sentence asked to buy on the terms it stated; conditional when it asked to wait for something to change",
+			},
 		},
-		"required":             []any{"constraints", "quantity"},
+		"required":             []any{"constraints", "quantity", "trigger"},
 		"additionalProperties": false,
 	})
 }

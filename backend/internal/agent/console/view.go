@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 )
 
@@ -76,6 +77,24 @@ type proposed struct {
 	// two-ticket prompt still bought one through the browser — the exact defect
 	// #133 is about, one hop further along than where it was fixed.
 	Quantity int `json:"quantity"`
+
+	// Trigger is whether the agent will buy at once or watch and buy when the
+	// merchant's commitment moves — interpret.TriggerImmediate or
+	// interpret.TriggerConditional, never empty. See agent.Proposal.Trigger.
+	//
+	// **It is on this response because a consent screen has to show it.** "Buy
+	// now, up to $160" and "buy when the price moves, up to $160" are different
+	// authorisations, and they render identically from the constraints alone —
+	// the words that tell them apart are in the sentence and in no limit. A
+	// screen that showed only the limits would be collecting a signature
+	// without saying which of the two the person was agreeing to, which is
+	// issue #198's first trap and the same class of problem as a constraint no
+	// verifier reads.
+	//
+	// Passed through rather than resolved here, unlike Quantity: there is no
+	// absence to resolve, because interpret.Validate refuses an interpretation
+	// that names no trigger.
+	Trigger interpret.Trigger `json:"trigger"`
 
 	// WatchSlotsFree is how many more watches this console will hold.
 	//
