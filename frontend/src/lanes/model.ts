@@ -13,6 +13,7 @@
  */
 
 import { DIGEST_SHOWN, shortDigest } from "../digest";
+import type { StatusMeta } from "../status/model";
 import type { EventKind, EventRecord } from "../sse";
 import type { Amount } from "../protocol";
 
@@ -91,7 +92,6 @@ export interface Step {
   readonly role: string;
   readonly kind: EventKind;
   readonly at: string;
-  readonly detail?: string;
   readonly digest?: string;
   readonly code?: string;
   /**
@@ -104,6 +104,68 @@ export interface Step {
    */
   readonly amount?: Amount;
 }
+
+/**
+ * The step axis: what happened at this moment, and what the card says about it.
+ *
+ * **No pip anywhere in this table, and that is the axis's defining property.**
+ * A step is a moment; it either named the checkout or it did not, and what
+ * carries *that* is the twelve characters themselves, repeated verbatim from
+ * the spine head. That is a stronger indicator than any glyph, because the
+ * reader **verifies** it by eye instead of trusting it — which is the entire
+ * thesis of the screen. There is deliberately no mark for "attached to the
+ * spine": the value is the mark.
+ *
+ * Three rows are worth reading twice.
+ *
+ * **`mandate_constructed` and `mandate_presented` take no ending**, though they
+ * have rows. They are the agent's own work, nothing has been decided at either
+ * moment, and an ending drawn there would claim a verdict from the party that
+ * has the least authority of the three.
+ *
+ * **`receipt_issued` takes no ending either, and it used to be `seal`** — the
+ * bug #191 filed, and this module's own comment on {@link settled} is what
+ * proves it: *every verifier issues a receipt whether it accepted or refused —
+ * a rejection produces one carrying the error*. A receipt is an artefact being
+ * produced, not a verdict, and colouring it as an acceptance put a green mark
+ * immediately after the demonstration's headline refusal.
+ *
+ * **`authorisation_refused` takes a `bar` and never a `cross`.** The cross is a
+ * verifier's verdict and nothing else; a person declining to authorise anything
+ * is not a verifier saying no, which is the distinction
+ * `obs.KindAuthorisationRefused` exists to make on the wire. The screen has to respect a difference the event
+ * vocabulary already draws, or it contradicts what it is drawn from.
+ *
+ * # What this table cannot say, and #183 made visible by saying less
+ *
+ * **A card cannot say which of AP2's two mandates it is about**, and on the
+ * demonstration's own transaction that leaves four pairs of identical cards:
+ * the open Checkout and open Payment Mandates in the user's lane, the two
+ * closed ones in the agent's. The digest cannot separate them and never will —
+ * a Payment Mandate's `transaction_id` *is* the checkout hash, so
+ * `CheckoutDigestOf` and `PaymentDigestOf` answer the same twelve characters,
+ * which is the binding this screen exists to demonstrate rather than a defect.
+ *
+ * The sentence that used to separate them was `ProtocolEvent.detail`, printed
+ * beneath the word. Deleting that paragraph is right — it is free text an
+ * emitter writes for a person, `src/sse/events.test.ts` pins that no consumer
+ * may parse it, and a structural fact carried by prose disagrees with the wire
+ * the first time somebody rewords a sentence. What it is not is free: **#201 is
+ * the typed field that answers it**, on the precedent #174 set for the price,
+ * and this comment exists so that the gap is a known one rather than something
+ * the next reader has to rediscover from a screenshot.
+ */
+export const STEP_META: Record<EventKind, StatusMeta> = {
+  mandate_constructed: { label: "signed", pip: null, ending: null },
+  mandate_presented: { label: "presented", pip: null, ending: null },
+  mandate_verified: { label: "verified", pip: null, ending: "check" },
+  mandate_rejected: { label: "refused", pip: null, ending: "cross" },
+  receipt_issued: { label: "receipt", pip: null, ending: null },
+  // Distinct from "refused" above on purpose: that word is a verifier's verdict
+  // on a mandate that exists. This one is a person declining to authorise
+  // anything, so no mandate was ever made.
+  authorisation_refused: { label: "declined", pip: null, ending: "bar" },
+};
 
 /**
  * One run at buying something: the steps that share a checkout.
@@ -226,6 +288,35 @@ export type Verdict =
       readonly bindingFailed: boolean;
     };
 
+/**
+ * The attempt axis: did *this* purchase go through, and how far along is it?
+ *
+ * **This is the progression channel the screen gained in #183**, and it is
+ * carried by state rather than by a travelling object. Nothing in AP2 travels
+ * between parties — three parties independently compute the same twelve
+ * characters, which is the whole point — so what legitimately changes over time
+ * is a mandate's state and an attempt's outcome, and here that is the pip:
+ * `open` while nothing has confirmed a checkout, `half` once the binding holds
+ * and an answer is owed, `full` once the attempt is over. The ending says which
+ * way it ended, and appears only once it has.
+ *
+ * The pip is drawn beside the outcome word, above the spine and never across
+ * it. Where progression and agreement compete for space, agreement wins: the
+ * digest stays the vertical axis, because it is the only thing on this screen
+ * that is proved rather than asserted.
+ *
+ * `bound` is the state worth explaining, and separating it from `bought` is why
+ * it exists: an attempt is `bound` from the moment the agent signs, long before
+ * any verifier has seen it. `half` is the honest pip for that — something is
+ * outstanding, an answer is owed — where `full` would say it was over.
+ */
+export const ATTEMPT_META: Record<Verdict["state"], StatusMeta> = {
+  pending: { label: "pending", pip: "open", ending: null },
+  bound: { label: "bound", pip: "half", ending: null },
+  refused: { label: "refused", pip: "full", ending: "cross" },
+  bought: { label: "bought", pip: "full", ending: "check" },
+};
+
 export function verdictOf(attempt: Attempt): Verdict {
   if (attempt.refusals.length > 0) {
     return {
@@ -303,7 +394,6 @@ export function group(records: readonly EventRecord[]): readonly Transaction[] {
       role: record.event.role,
       kind: record.event.kind,
       at: record.event.at,
-      detail: record.event.detail,
       digest: record.event.digest,
       code: record.event.code,
       amount: record.event.amount,

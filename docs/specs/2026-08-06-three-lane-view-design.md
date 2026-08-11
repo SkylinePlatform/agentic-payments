@@ -719,14 +719,28 @@ not use them.
   watch  wch_7f3a                       ● ✓ bought
     "buy a flight to Palma when it drops below $200, this summer"
 
-    attempt 1   210.00 USD              ● ✗ refused
+    attempt 1   210.00 USD
       checkout mandate  ○ ready         ← retreated: the rejection
       payment mandate   ○ ready            receipt returned both
 
-    attempt 2   189.00 USD              ● ✓ bought
+    attempt 2   189.00 USD   settled
       checkout mandate  ● spent
       payment mandate   ● spent
 ```
+
+**An attempt row on this screen carries no pair, and an earlier draft of this
+sketch drew one.** *Two voices, one brand* is what the tracker follows — one
+pair per run and one per mandate — and the reason it must is stronger than
+density. `console.attemptView` carries no verdict. It has `settled`, and it has
+`error` as the text of whatever the delivery returned, and `internal/agent/console`'s
+`view.go` **refuses an error code field in as many words**: adding one "would be
+the buyer stating the verifier's finding", which is in the receipts beside it,
+signed by whoever reached it. A `cross` derived from that text would be the
+tracker inventing a verdict out of the agent's account of its own failure, which
+is precisely the distinction *the cross is a verifier's verdict and nothing else*
+exists to hold. `settled` is a word and not a mark for the same reason the
+mandate axis takes no ending: the acceptance was already stated once, on the
+run's own `check`.
 
 ```
   THREE LANES
@@ -770,13 +784,13 @@ Five things a reader gets at a glance, and the point of each.
   `spent` — the rejection receipt returned them — and the pip going backwards is
   the only place in this application where the rejection-receipt rule is visible
   at all.
-- **The mandates claim no verdict, and the run's does not double the
-  attempt's.** Attempt 2's `check` is the settling party's acceptance. The two
-  `spent` mandates beneath it carry no ending mark, because they state a
-  different fact — these authorisations cannot be spent again. The run row above
-  repeats `● ✓ bought`, and that is a **summary of the rows nested under it**,
-  which collapse: the same mark at two levels of one hierarchy is one claim
-  shown at two zooms, where three marks side by side on one line would be one
+- **The mandates claim no verdict, and one acceptance is drawn once per
+  screen.** On the lanes it is attempt 2's `check`, the settling party's
+  acceptance. On the tracker it is the run's, since the attempt row there has no
+  pair to put it on — and the two `spent` mandates beneath carry no ending mark
+  either way, because they state a different fact: these authorisations cannot
+  be spent again. The same mark at two levels of one hierarchy is **one claim
+  shown at two zooms**, where three marks side by side on one line would be one
   claim made three times.
 - **The prices are beside the outcomes**, and the pair `210.00 refused` /
   `189.00 bought` against a signed cap of `200.00` is the whole of Human Not

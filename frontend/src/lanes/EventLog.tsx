@@ -6,6 +6,22 @@
  * an event belonging to no purchase — a role announcing itself, anything with no
  * correlation ID — appears here and nowhere else. A screen that dropped it would
  * be a screen with a hole in it that nothing on the page could reveal.
+ *
+ * # This is now the only place `detail` is rendered
+ *
+ * #183 took the sentence off the step card, and the argument it made for doing
+ * so was that nothing left the application because this file prints every
+ * `detail` verbatim. That argument is only as true as this line, so **#184 must
+ * not drop the column while turning the log into a table.**
+ *
+ * Nothing about that conflicts with #184's own constraint. *"`detail` is never
+ * parsed"* forbids a column **extracted from** it — an amount, a code, a
+ * mandate type scraped back out of prose — and `src/sse/events.test.ts` pins
+ * that with a JSON-shaped fixture. Printing the field whole is the opposite
+ * thing: it is the emitter's own sentence, shown as a sentence, and it is what
+ * carries the ideas the marks cannot — *once for each of the three verifiers
+ * that reads it*, *under the open mandate the user signed*, and the prompt the
+ * user typed. Those exist nowhere else on the page now.
  */
 
 import { useMemo, useState } from "react";

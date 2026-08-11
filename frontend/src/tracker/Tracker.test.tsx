@@ -157,6 +157,39 @@ describe("the mandate tracker", () => {
     ).toBeNull();
   });
 
+  it("draws each mandate's own pair, and never an ending on a mandate", async () => {
+    // The retreat is the point: a rejection receipt returns both mandates from
+    // `awaiting_receipt` to `ready`, so the pip goes backwards — the one place
+    // in this application that rule is visible at all. And no `check` on either
+    // of them, because a mandate reaching `spent` is the same acceptance the
+    // run's own ending already carries, said again about a second artefact.
+    stubFetch({
+      "/watches": {
+        body: { watches: [{ id: "run-a", correlation_id: "c-a", typed: "x", item: "i", quantity: 1, expires_at: "2026-08-31T23:59:59Z", state: "bought", attempts: 2 }] },
+      },
+      "/watches/run-a": {
+        body: {
+          id: "run-a", correlation_id: "c-a", typed: "x", signed: [], item: "i", quantity: 1,
+          expires_at: "2026-08-31T23:59:59Z", state: "bought", baseline: null,
+          attempts: [
+            attempt(1, "ready", "ready", false, "refused: constraint_violated"),
+            attempt(2, "spent", "spent", true),
+          ],
+          unminted: 0, bought: { attempt: 2, price: { amount: 19000, currency: "USD" }, settled: true },
+        },
+      },
+    });
+
+    const { container } = render(<Tracker />);
+    await screen.findByTestId("run-run-a");
+
+    expect(
+      [...container.querySelectorAll("[data-mark]")].map((m) => m.getAttribute("data-mark")),
+      "the run's full-and-check, then attempt 1's two retreated `open` mandates, " +
+        "then attempt 2's two `full` ones — and not one ending among the four",
+    ).toEqual(["full", "check", "open", "open", "full", "full"]);
+  });
+
   it("draws a mandate state this build does not recognise as a visible fact, never as a blank cell", async () => {
     stubFetch({
       "/watches": {
@@ -172,9 +205,19 @@ describe("the mandate tracker", () => {
       },
     });
 
-    render(<Tracker />);
+    const { container } = render(<Tracker />);
 
-    expect(await screen.findByText(/unrecognised status: revoked/i)).toBeTruthy();
+    expect(await screen.findByText(/not a status this build knows/i)).toBeTruthy();
+    expect(
+      screen.getByText("revoked"),
+      "the raw wire value travels beside the sentence, in mono — the one thing " +
+        "about an unreadable status a verifier could paste into a terminal",
+    ).toBeTruthy();
+    expect(
+      [...container.querySelectorAll("[data-mark]")].map((m) => m.getAttribute("data-mark")),
+      "#191: nothing refused anything, so the row carries the run's own pair and " +
+        "no mark at all for the status this build cannot read",
+    ).toEqual(["half", "open"]);
   });
 
   it("draws a run state this build does not recognise as a visible fact too", async () => {
@@ -193,7 +236,8 @@ describe("the mandate tracker", () => {
 
     render(<Tracker />);
 
-    expect(await screen.findByText(/unrecognised status: hibernating/i)).toBeTruthy();
+    expect(await screen.findByText(/not a status this build knows/i)).toBeTruthy();
+    expect(screen.getByText("hibernating")).toBeTruthy();
   });
 
   it("reloads the list on demand", async () => {

@@ -16,38 +16,34 @@
  * Everything else stays disciplined: a label for each step, and — issue #158's
  * other half — one for each attempt's outcome, so a reader can tell a refusal
  * from a purchase without reading a sentence to find out.
+ *
+ * **#183 gave the screen a second channel and took its prose down to what the
+ * marks cannot say.** Progression is the pip on each attempt's outcome —
+ * `open`, `half`, `full` — drawn beside the spine and never across it, because
+ * where the two compete the agreement wins. What went is the sentence each step
+ * card used to carry beneath its own word: `ProtocolEvent.detail` is free text
+ * an emitter writes for a person, and on this card it restated the mark, the
+ * word and the party that are already there. It has not left the page — the
+ * event log below prints every one of them verbatim, which is the log's job.
+ * The four categories `docs/specs/2026-08-06-three-lane-view-design.md` protects
+ * are untouched: {@link Thesis} is category 2 and says *why* a verdict was
+ * reached, which no mark in the vocabulary can.
  */
 
-import { LANES, amountOf, shortDigest, stepsIn, titleOf, verdictOf } from "./model";
+import { Status } from "../status/Status";
+
+import {
+  ATTEMPT_META,
+  LANES,
+  STEP_META,
+  amountOf,
+  shortDigest,
+  stepsIn,
+  titleOf,
+  verdictOf,
+} from "./model";
 import type { Attempt, Lane, Step, Transaction, Verdict } from "./model";
 import type { Amount } from "../protocol";
-
-/** What a step's kind says, in words a reader who has not read AP2 can follow. */
-const KIND_WORDS: Readonly<Record<Step["kind"], string>> = {
-  mandate_constructed: "signed",
-  mandate_presented: "presented",
-  mandate_verified: "verified",
-  mandate_rejected: "refused",
-  receipt_issued: "receipt",
-  // Distinct from "refused" above on purpose: that word is a verifier's
-  // verdict on a mandate that exists. This one is a person declining to
-  // authorise anything, so no mandate was ever made — see
-  // obs.KindAuthorisationRefused.
-  authorisation_refused: "declined",
-};
-
-/**
- * The colour a step is drawn in.
- *
- * `seal` and `broken` are the only two saturated values in the whole system, so
- * their appearance has to mean something: a verdict was reached, and which way.
- * Everything on the way to a verdict is ink on wash.
- */
-function toneOf(step: Step): string {
-  if (step.kind === "mandate_rejected") return "text-broken";
-  if (step.kind === "mandate_verified" || step.kind === "receipt_issued") return "text-seal";
-  return "text-ink";
-}
 
 /**
  * A price, in the register a constraint's own sentence uses — `"210.00 USD"`
@@ -79,20 +75,18 @@ function renderPrice(amount: Amount): string {
 }
 
 function StepCard({ step }: { readonly step: Step }) {
+  const meta = STEP_META[step.kind];
+
   return (
     <li className="flex flex-col gap-1 border border-graphite/40 bg-paper px-3 py-2">
       <div className="flex items-baseline justify-between gap-2">
-        <span className={`font-sans text-xs font-semibold tracking-tight ${toneOf(step)}`}>
-          {KIND_WORDS[step.kind]}
+        <span className="text-xs font-semibold tracking-tight">
+          <Status word={meta.label} ending={meta.ending} />
         </span>
         <span className="font-sans text-xs tabular-nums text-graphite">#{step.seq}</span>
       </div>
 
       <span className="font-sans text-xs text-graphite">{titleOf(step.role)}</span>
-
-      {step.detail !== undefined && step.detail !== "" && (
-        <p className="font-sans text-xs leading-snug text-ink">{step.detail}</p>
-      )}
 
       {step.code !== undefined && step.code !== "" && (
         <code className="font-mono text-xs text-broken">{step.code}</code>
@@ -279,54 +273,6 @@ function Thesis({ verdict }: { readonly verdict: Verdict }) {
 }
 
 /**
- * The two icons an outcome can carry, drawn rather than left to colour alone.
- *
- * #109's sibling requirement, carried over here rather than invented fresh: a
- * status is shown by colour **and** icon, never colour alone. `seal` and
- * `broken` are the only two saturated values on this page for exactly that
- * reason — their appearance already means something — and pairing each with a
- * distinct shape means the answer survives a reader without colour vision, a
- * black-and-white screenshot, or a screen reader that never announces colour at
- * all. `data-icon` names the shape for a test the same way; nothing renders it.
- *
- * `stroke-current` rather than a `stroke-*` utility, matching the close glyph
- * in `components/ui/dialog.tsx`: the colour comes from the wrapping `text-*`
- * token, so the icon is never a second place a colour gets chosen.
- */
-function BoughtIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      data-icon="bought"
-      viewBox="0 0 16 16"
-      className="size-3.5 stroke-current"
-      fill="none"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M3.5 8.5l3 3 6-7" />
-    </svg>
-  );
-}
-
-function RefusedIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      data-icon="refused"
-      viewBox="0 0 16 16"
-      className="size-3.5 stroke-current"
-      fill="none"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-    >
-      <path d="M4 4l8 8M12 4l-8 8" />
-    </svg>
-  );
-}
-
-/**
  * The outcome, stated once as a label a reader does not have to parse a
  * sentence to find.
  *
@@ -335,17 +281,27 @@ function RefusedIcon() {
  * attempts was real (refused at one price, bought at another) but legible only
  * to a reader willing to read the sentence, on a screen whose whole job is to
  * teach without that being asked of the reader. This badge is the visual layer
- * the issue asks for, not a replacement for the prose: the descriptions stay,
- * because they are what makes the screen teach.
+ * the issue asks for, not a replacement for {@link Thesis}: that sentence says
+ * *why* a verdict was reached, which is the one thing no mark here can say, and
+ * it is what makes the screen teach.
  *
  * **Four states rather than three, and the fourth is the one worth explaining.**
  * The model's `bound` means the binding held and nobody refused — it does not
  * mean a purchase happened, and the agent's own first step already carries the
  * digest, so an attempt is `bound` from the moment it is signed. Labelling that
- * "Bought" put a completed sale on screen for the whole of every attempt,
+ * "bought" put a completed sale on screen for the whole of every attempt,
  * including the six steps of the demo's first one that ends in the refusal this
- * screen exists to show. `Bound` says what is true then; `Bought` waits for a
+ * screen exists to show. `bound` says what is true then; `bought` waits for a
  * settling party to accept.
+ *
+ * **Since #183 the badge carries the pip as well as the ending**, which is the
+ * whole of the progression channel on this screen: `open` before any party has
+ * confirmed a checkout, `half` while an answer is owed, `full` once the attempt
+ * is over. Two attempts then read as two shapes rather than as two paragraphs —
+ * `full` `cross` against `full` `check` — and both are over, which the words
+ * alone said only to a reader willing to read them. The words themselves are
+ * {@link ATTEMPT_META}'s, which is the model's own spelling of the verdict
+ * rather than a second table this component keeps.
  *
  * **The figure for "the amount" is {@link PriceBadge}, drawn beside this one
  * rather than folded into it.** Until issue #174 the event stream carried no
@@ -366,38 +322,12 @@ function RefusedIcon() {
  * outcome beside it can never disagree about which attempt they describe.
  */
 function Outcome({ verdict }: { readonly verdict: Verdict }) {
-  switch (verdict.state) {
-    case "pending":
-      return (
-        <span className="inline-flex items-center gap-1.5 border border-graphite/40 px-2 py-0.5 font-sans text-xs font-semibold uppercase tracking-widest text-graphite">
-          Pending
-        </span>
-      );
-    case "bound":
-      // No icon and no saturated tone: `seal` and `broken` are reserved for a
-      // verdict having been reached, and an attempt still in flight has not
-      // reached one. The word is the whole of the distinction from Pending,
-      // which is what makes both survive a reader who cannot use colour.
-      return (
-        <span className="inline-flex items-center gap-1.5 border border-ink px-2 py-0.5 font-sans text-xs font-semibold uppercase tracking-widest text-ink">
-          Bound
-        </span>
-      );
-    case "bought":
-      return (
-        <span className="inline-flex items-center gap-1.5 border border-seal px-2 py-0.5 font-sans text-xs font-semibold uppercase tracking-widest text-seal">
-          <BoughtIcon />
-          Bought
-        </span>
-      );
-    case "refused":
-      return (
-        <span className="inline-flex items-center gap-1.5 border border-broken px-2 py-0.5 font-sans text-xs font-semibold uppercase tracking-widest text-broken">
-          <RefusedIcon />
-          Refused
-        </span>
-      );
-  }
+  // No `switch` any more, and losing it is the point: four cases that differed
+  // only in a colour and a shape were four places to get the pairing wrong, and
+  // #191 found two of them elsewhere in the app. The pairing is now one table,
+  // pinned against the specification.
+  const meta = ATTEMPT_META[verdict.state];
+  return <Status framed word={meta.label} pip={meta.pip} ending={meta.ending} />;
 }
 
 /**
