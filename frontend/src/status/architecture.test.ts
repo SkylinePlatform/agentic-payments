@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import shell from "../../index.html?raw";
 import subsetScript from "../../scripts/subset-fonts.sh?raw";
+import stylesheet from "../styles.css?raw";
 import { codeOf, stringLiterals } from "../test/source";
 
 /**
@@ -186,6 +188,34 @@ function unshipped(source: string): string[] {
  */
 const MAY_NAME_AN_UNSHIPPED_CHARACTER = ["constraint/render.ts"] as const;
 
+/**
+ * The two files the app ships that are not TypeScript, scanned without a
+ * comment stripper.
+ *
+ * Over-strict on purpose, and it costs nothing: neither holds any non-ASCII but
+ * the em dash, and neither is a place an argument about a glyph would be
+ * written. Writing an HTML-comment stripper to permit one would be a parser
+ * standing between this rule and two files whose whole non-ASCII content is
+ * punctuation. #190's last question is *every other non-ASCII character in the
+ * app*, and the answer has to include the shell that ships the fonts and the
+ * stylesheet that declares the faces.
+ */
+const NOT_TYPESCRIPT: readonly (readonly [string, string])[] = [
+  ["index.html", shell],
+  ["src/styles.css", stylesheet],
+];
+
+function unshippedAnywhere(text: string): string[] {
+  const found = new Set<string>();
+  for (const character of text) {
+    const codepoint = character.codePointAt(0) ?? 0;
+    if (codepoint > 0x7f && !ships(codepoint)) {
+      found.add(`${character} U+${codepoint.toString(16).toUpperCase().padStart(4, "0")}`);
+    }
+  }
+  return [...found];
+}
+
 // --- the rules --------------------------------------------------------------
 
 describe("the indicator vocabulary is one vocabulary", () => {
@@ -331,6 +361,14 @@ describe("the indicator vocabulary is one vocabulary", () => {
           "a different advance width per operating system, and tofu on a machine " +
           "missing the block. A screenshot is this project's deliverable",
       ).toEqual([]);
+    });
+
+    it.each(NOT_TYPESCRIPT)("%s does either", (path, text) => {
+      expect(
+        unshippedAnywhere(text),
+        `${path} is shipped to the browser and is not scanned by the rule above`,
+      ).toEqual([]);
+      expect(text.length, "and it was read, rather than resolving to nothing").toBeGreaterThan(100);
     });
 
     it("catches the characters it claims to catch", () => {
