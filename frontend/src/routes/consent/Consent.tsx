@@ -6,6 +6,7 @@ import { preview, refuse } from "../../consent/client";
 import { canSign } from "../../consent/model";
 import type { Previewed, Proposal } from "../../consent/model";
 import type { Amount, PaymentInstrument } from "../../protocol";
+import { lifetime } from "./format";
 import { Resting } from "./Resting";
 import { Signing } from "./Signing";
 
@@ -83,7 +84,7 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
   }, [proposal]);
 
   if (signing && previewed !== null) {
-    return <Signing proposal={proposal} previewed={previewed} digest={previewed.constraints_digest} />;
+    return <Signing proposal={proposal} previewed={previewed} />;
   }
 
   async function onRefuse() {
@@ -204,22 +205,6 @@ function money(amount: Amount): string {
   const whole = digits.slice(0, digits.length - MINOR_DIGITS);
   const fraction = digits.slice(digits.length - MINOR_DIGITS);
   return `${whole}.${fraction} ${amount.currency}`;
-}
-
-/**
- * Formats a lifetime in seconds as a plain `"1 hour"` / `"24 hours"` — no
- * `Intl`, so a screenshot taken on this machine reads the same on any other.
- * `open_mandate_lifetime_seconds` is always a whole number of hours on the
- * surfaces this app talks to; a value that is not falls back to whole
- * minutes rather than round to the wrong hour.
- */
-function lifetime(seconds: number): string {
-  if (seconds % 3600 === 0) {
-    const hours = seconds / 3600;
-    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
-  }
-  const minutes = Math.round(seconds / 60);
-  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
 
 /** What a person reads for an instrument: its description, or its bare id when the Credential Provider gave none. */
