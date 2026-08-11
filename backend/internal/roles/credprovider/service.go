@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -72,6 +73,17 @@ type Service struct {
 	// Payment Mandate, and the receipt carrying it. Optional — a nil Emitter
 	// records nothing.
 	Events *obs.Emitter
+	// Entropy is where the token that stands in for money gets its randomness.
+	// Optional, and nil means crypto/rand — which is what any deployment must
+	// leave it as. A predictable source here is a guessable credential, so this
+	// field weakens the one value in this package worth stealing.
+	//
+	// It exists because minting is the only step in fund that can fail after
+	// this role has signed its receipt, and a branch that hands out the thing
+	// standing in for money should not be the one branch no test can reach.
+	// sdjwt.WithSaltSource is the same trade made for the same reason and says
+	// the same thing about production.
+	Entropy io.Reader
 }
 
 // request is what POST /credential takes, in either mode.
@@ -280,12 +292,11 @@ func (s *Service) fund(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("issuing the receipt: %v", err))
 		return
 	}
-	s.Events.Emit(r.Context(), obs.KindReceiptIssued, "receipt issued for the Payment Mandate")
 
 	if got.verdict != nil {
 		// A refusal still gets a receipt, and gets no credential. Returning one
 		// alongside a rejection would be the whole point of this role failing.
-		roles.OK(w, http.StatusUnprocessableEntity, issued{Receipt: receipt})
+		s.deliver(w, r, http.StatusUnprocessableEntity, issued{Receipt: receipt})
 		return
 	}
 
@@ -295,7 +306,26 @@ func (s *Service) fund(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("minting the credential: %v", err))
 		return
 	}
-	roles.OK(w, http.StatusOK, issued{Receipt: receipt, Credential: &credential})
+	s.deliver(w, r, http.StatusOK, issued{Receipt: receipt, Credential: &credential})
+}
+
+// deliver hands the receipt to the caller and announces it in the same step.
+//
+// The merchant's identical helper carries the whole argument, and nothing about
+// it differs here: the announcement used to come the moment ap2.IssueReceipt
+// returned, and the one step after it — minting — could still fail, drop the
+// receipt and answer 503. A released 5xx then ran fund again and announced a
+// second receipt for one presentation. ADR 0003 is why that is worth fixing
+// even though the log is never evidence: nobody can appeal to it, and everybody
+// reads it. Issue #224.
+//
+// Where the two roles genuinely differ is in what the Trusted Surface's fix
+// would even have to attach to. #212 detached the caller's cancellation from a
+// pair of signatures; mint takes no context at all, so there is nothing here
+// for context.WithoutCancel to be applied to. The ordering is the whole fix.
+func (s *Service) deliver(w http.ResponseWriter, r *http.Request, status int, body issued) {
+	s.Events.Emit(r.Context(), obs.KindReceiptIssued, "receipt issued for the Payment Mandate")
+	roles.OK(w, status, body)
 }
 
 // examine settles which mode this request is in and reaches a verdict in it.
@@ -411,7 +441,7 @@ func (s *Service) mint(checkoutHash string) (generated.PaymentCredential, error)
 	// crypto/rand, not math/rand — this is the value that stands in for money,
 	// and math/rand is banned everywhere in this module for exactly this reason.
 	raw := make([]byte, 24)
-	if _, err := rand.Read(raw); err != nil {
+	if _, err := io.ReadFull(s.entropy(), raw); err != nil {
 		return generated.PaymentCredential{}, fmt.Errorf("token entropy: %w", err)
 	}
 
@@ -421,6 +451,15 @@ func (s *Service) mint(checkoutHash string) (generated.PaymentCredential, error)
 		CheckoutHash: checkoutHash,
 		ExpiresAt:    &expires,
 	}, nil
+}
+
+// entropy is the source mint draws from: crypto/rand unless a caller replaced
+// it. See the Entropy field for why one ever would.
+func (s *Service) entropy() io.Reader {
+	if s.Entropy == nil {
+		return rand.Reader
+	}
+	return s.Entropy
 }
 
 func (s *Service) credentialLifetime() time.Duration {

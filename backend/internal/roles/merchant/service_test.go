@@ -16,6 +16,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
@@ -47,7 +48,21 @@ type shop struct {
 // newShop stands up a merchant whose Checkout and Payment Mandates are both
 // verified against the user's key, which is what Human Present means: the user
 // signs both closed mandates at the Trusted Surface.
+//
+// It records nothing, which is what a test not asking about the event log
+// wants: a nil Emitter drops everything. newShopWatched is the same merchant
+// with one attached.
 func newShop(t *testing.T) shop {
+	t.Helper()
+	return newShopWatched(t, nil)
+}
+
+// newShopWatched is newShop with somewhere for the merchant's events to go.
+//
+// events may be nil. The split exists because what this merchant says about a
+// purchase is only observable through an Emitter, and announced_test.go is
+// about one thing it must not say.
+func newShopWatched(t *testing.T, events *obs.Emitter) shop {
 	t.Helper()
 
 	clk := clock.NewFake(base)
@@ -94,6 +109,7 @@ func newShop(t *testing.T) shop {
 		Keys:      shopStore,
 		Clock:     clk,
 		Processor: processor,
+		Events:    events,
 	}
 	handler, err := svc.Handler()
 	require.NoError(t, err, "building the merchant handler")
@@ -188,6 +204,23 @@ func settling(p *merchant.MockProcessor) {
 		Return("", true, nil)
 }
 
+// presented counts the times this merchant asked its processor for the money.
+//
+// Read from the test goroutine after the request has returned, which is what
+// makes reading Calls safe: the handler is done with it. Counting here rather
+// than through a .Once() expectation is the same decision settling records —
+// testify fails an exceeded expectation from whichever goroutine tripped it,
+// and this one is tripped inside an HTTP handler.
+func (s shop) presented() int {
+	var calls int
+	for _, c := range s.processor.Calls {
+		if c.Method == "InitiatePayment" {
+			calls++
+		}
+	}
+	return calls
+}
+
 // TestTheMerchantDoesNotAskForMoneyOnAPurchaseItRefused is the branch's headline
 // safety property, and it is invisible from outside the response.
 //
@@ -239,15 +272,9 @@ func TestTheMerchantDoesNotAskForMoneyOnAPurchaseItRefused(t *testing.T) {
 				require.Equal(t, http.StatusUnprocessableEntity, status)
 			}
 
-			calls := 0
-			for _, c := range s.processor.Calls {
-				if c.Method == "InitiatePayment" {
-					calls++
-				}
-			}
-			// Counted here rather than through an expectation, because the call
-			// happens on the server's goroutine. Reading Calls after the request
-			// has returned is safe: the handler is done with it.
+			// Counted rather than expected, because the call happens on the
+			// server's goroutine — see shop.presented.
+			calls := s.presented()
 			want := 0
 			if tc.asks {
 				want = 1
