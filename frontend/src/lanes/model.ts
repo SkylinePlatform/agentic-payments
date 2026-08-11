@@ -135,6 +135,25 @@ export interface Step {
  * is not a verifier saying no, which is the distinction
  * `obs.KindAuthorisationRefused` exists to make on the wire. The screen has to respect a difference the event
  * vocabulary already draws, or it contradicts what it is drawn from.
+ *
+ * # What this table cannot say, and #183 made visible by saying less
+ *
+ * **A card cannot say which of AP2's two mandates it is about**, and on the
+ * demonstration's own transaction that leaves four pairs of identical cards:
+ * the open Checkout and open Payment Mandates in the user's lane, the two
+ * closed ones in the agent's. The digest cannot separate them and never will —
+ * a Payment Mandate's `transaction_id` *is* the checkout hash, so
+ * `CheckoutDigestOf` and `PaymentDigestOf` answer the same twelve characters,
+ * which is the binding this screen exists to demonstrate rather than a defect.
+ *
+ * The sentence that used to separate them was `ProtocolEvent.detail`, printed
+ * beneath the word. Deleting that paragraph is right — it is free text an
+ * emitter writes for a person, `src/sse/events.test.ts` pins that no consumer
+ * may parse it, and a structural fact carried by prose disagrees with the wire
+ * the first time somebody rewords a sentence. What it is not is free: **#201 is
+ * the typed field that answers it**, on the precedent #174 set for the price,
+ * and this comment exists so that the gap is a known one rather than something
+ * the next reader has to rediscover from a screenshot.
  */
 export const STEP_META: Record<EventKind, StatusMeta> = {
   mandate_constructed: { label: "signed", pip: null, ending: null },

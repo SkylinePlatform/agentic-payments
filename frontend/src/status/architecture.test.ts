@@ -109,19 +109,20 @@ function wearsSeal(source: string): string[] {
 }
 
 /**
- * Files allowed to name `seal`, and the second entry is a debt rather than a
- * decision.
+ * Files allowed to name `seal`, and there is exactly one.
  *
- * `inspector/Inspector.tsx` paints its *read* cell `seal`, which is the second
- * of the three rows #191 filed: **reading is not verifying**, and
- * `src/sdjwt/never-verifies.test.ts` exists to hold precisely that line for the
- * whole module. #186 owns that screen and is where the cell becomes `ink`; this
- * entry is what lets the rule land now rather than waiting for it, and removing
- * it is part of that issue rather than a tidy-up somebody may or may not
- * notice. The `exempts only files that exist` case below is what stops it
- * becoming a comment.
+ * It carried a second entry while this branch was open. `inspector/Inspector.tsx`
+ * painted its *read* cell `seal`, which is the second of the three rows #191
+ * filed — **reading is not verifying**, and `src/sdjwt/never-verifies.test.ts`
+ * exists to hold precisely that line for the whole module — and the entry was
+ * what let this rule land before #186 got to that screen. #186 landed first, as
+ * PR #199, so the debt is paid and the entry is gone with it. It is named here
+ * rather than deleted silently because the sequence is the argument for
+ * `exempts only files that need it` below: the file did not move, so nothing
+ * about its *existence* changed, and an allow-list checked only for existence
+ * would have gone on permitting `seal` in a file that no longer wears it.
  */
-const MAY_WEAR_SEAL = ["status/Status.tsx", "inspector/Inspector.tsx"] as const;
+const MAY_WEAR_SEAL = ["status/Status.tsx"] as const;
 
 // --- rule: the app prints nothing the font does not ship ---------------------
 
@@ -216,6 +217,46 @@ function unshippedAnywhere(text: string): string[] {
   return [...found];
 }
 
+// --- what an allow-list has to keep proving ---------------------------------
+
+/**
+ * Entries that grant a permission the file no longer uses.
+ *
+ * **An allow-list has two ways to stop being a rule and `…files that exist`
+ * sees only the first.** The second is the one that actually happened while
+ * this branch was open: #186 landed as PR #199 and turned the Inspector's
+ * *read* cell to `ink`, after which the entry excusing that file still named a
+ * path that was still there — and went on permitting a verdict colour in a file
+ * that had stopped wearing one. Nothing would have failed. The next author to
+ * want a green cell on that screen would have found the permission already
+ * granted, with a comment explaining why, and the rule would have been holding
+ * a door open rather than shut.
+ *
+ * So each list is asserted in both directions, which is `declares no token that
+ * nothing wears` in `src/architecture.test.ts` one level up: that rule fails
+ * when the palette declares a colour nothing uses; this one fails when an
+ * exemption excuses a violation nobody commits.
+ */
+function unnecessary(
+  list: readonly string[],
+  uses: (source: string) => readonly unknown[],
+): string[] {
+  return list.filter((path) => uses(SOURCES.get(path) ?? "").length === 0);
+}
+
+/**
+ * How many files a rule is asserted over, which has to be more than none.
+ *
+ * Every rule below is `it.each(governed)`, and **`it.each([])` registers no
+ * tests and reports the file green.** A list that grew until it covered
+ * everything, or a filter that stopped matching, would therefore turn a rule
+ * off rather than fail it — which is the vacuity this tree keeps finding, in
+ * the one shape a negative assertion cannot notice about itself. The count is
+ * loose on purpose: it is here to catch a subject set that collapsed, not to be
+ * a second inventory of the app.
+ */
+const GOVERNED_AT_LEAST = 10;
+
 // --- the rules --------------------------------------------------------------
 
 describe("the indicator vocabulary is one vocabulary", () => {
@@ -247,6 +288,18 @@ describe("the indicator vocabulary is one vocabulary", () => {
         MAY_DRAW.filter((path) => !SOURCES.has(path)),
         "an allow-list entry for a path no longer in the app is a line that " +
           "looks like a rule and enforces nothing",
+      ).toEqual([]);
+      expect(governed.length, "and the rule has files to be asserted over").toBeGreaterThan(
+        GOVERNED_AT_LEAST,
+      );
+    });
+
+    it("allows only files that need it", () => {
+      expect(
+        unnecessary(MAY_DRAW, drawsAMark),
+        "a file allowed to draw a mark and no longer drawing one is a standing " +
+          "permission with nothing behind it: the next `<svg>` added there is " +
+          "the seventh mark, and this rule would wave it through",
       ).toEqual([]);
     });
 
@@ -281,9 +334,22 @@ describe("the indicator vocabulary is one vocabulary", () => {
     it("exempts only files that exist", () => {
       expect(
         MAY_WEAR_SEAL.filter((path) => !SOURCES.has(path)),
-        "the same argument as the allow-list above, and it matters more here: " +
-          "the second entry is #186's debt and has to fail visibly once that " +
-          "screen moves",
+        "the same argument as the allow-list above",
+      ).toEqual([]);
+      expect(governed.length, "and the rule has files to be asserted over").toBeGreaterThan(
+        GOVERNED_AT_LEAST,
+      );
+    });
+
+    it("exempts only files that need it", () => {
+      expect(
+        unnecessary(MAY_WEAR_SEAL, wearsSeal),
+        "this is the direction the list actually failed in: #186 landed as " +
+          "PR #199 and the Inspector's *read* cell became `ink`, leaving an " +
+          "entry that named a file that still existed and no longer wore the " +
+          "colour it was excused for. `seal` says a verifier accepted, so a " +
+          "standing permission to write it is the one exemption that must not " +
+          "outlive its reason",
       ).toEqual([]);
     });
 
@@ -350,6 +416,19 @@ describe("the indicator vocabulary is one vocabulary", () => {
         MAY_NAME_AN_UNSHIPPED_CHARACTER.filter((path) => !SOURCES.has(path)),
         "an exemption for a path no longer in the app is a line that looks like " +
           "a rule and enforces nothing",
+      ).toEqual([]);
+      expect(governed.length, "and the rule has files to be asserted over").toBeGreaterThan(
+        GOVERNED_AT_LEAST,
+      );
+    });
+
+    it("exempts only files that need it", () => {
+      expect(
+        unnecessary(MAY_NAME_AN_UNSHIPPED_CHARACTER, unshipped),
+        "`fold` replacing `İ` with `i` somewhere other than `constraint/render.ts` " +
+          "would leave this entry excusing a file with no unshipped character in " +
+          "it — and the next non-ASCII character written there would ship to a " +
+          "font that does not carry it, unnoticed",
       ).toEqual([]);
     });
 

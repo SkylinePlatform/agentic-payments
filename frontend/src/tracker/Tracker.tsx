@@ -137,9 +137,13 @@ function RunRow({ run }: { readonly run: RunView }) {
       {run.attempts.length === 0 ? (
         // "no attempt yet", and no longer "— it is still watching the price".
         // The pair beside the run's id already says which of the six states it
-        // is in, and the tail was not merely repeating it: a `stopped` or an
-        // `expired` run with no attempt is not watching anything, so the
-        // sentence was wrong on two of the six rows it rendered under.
+        // is in, and the tail was not merely repeating it: it was **false**.
+        // `run.go`'s own switch is what says how badly — `stopped`, `exhausted`,
+        // `expired` and `failed` are all reachable before a first attempt, and
+        // none of them is watching anything. `bought` is the only state that
+        // cannot reach this branch at all, since a purchase implies an attempt.
+        // So of the six run states the sentence rendered under, one was true,
+        // one was unreachable, and four were wrong.
         <p className="font-sans text-xs text-graphite">no attempt yet</p>
       ) : (
         <ul>
