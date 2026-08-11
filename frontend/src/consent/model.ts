@@ -34,7 +34,8 @@ export interface Offer {
 
 /**
  * What `POST /proposals` answers with: the interpretation, the offer it
- * narrowed to, and the key it wants endorsed. Nothing here is signed.
+ * narrowed to, the key it wants endorsed, and the basket size the sentence
+ * asked for. Nothing here is signed.
  */
 export interface Proposal {
   readonly prompt: string;
@@ -43,27 +44,27 @@ export interface Proposal {
   readonly item: string;
   readonly offer: Offer;
   readonly watch_slots_free: number;
+
   /**
    * Every offer the agent's search found — `agent.Proposal.Offers` — #109's
    * product table. Optional for the same reason `Offer.step`/`.final` are:
    * `offer` alone is what every existing consumer of this interface reads.
    */
   readonly offers?: readonly Offer[];
+
   /**
-   * How many of `offer` the click on the product table's row asked for.
+   * How many of `item` the interpretation proposes to buy, always one or
+   * more — `agent.Propose` normalises "the sentence named no count" to 1
+   * before this ever reaches the wire, so there is no zero for this screen
+   * to special-case.
    *
-   * Absent on the object `POST /proposals` itself answers with — quantity is
-   * chosen after the proposal, on the table, never part of what the agent
-   * proposed — and present on the one `catalogue/quantity.ts`'s `withQuantity`
-   * builds from it, which is the shape `routes/consent/Signing.tsx` reads to
-   * replace the single purchase it hardcoded before #109 gave a person a count
-   * to choose. `startWatch` takes the count as a required argument and applies
-   * no default of its own; the fallback to 1 is `Signing.tsx`'s, at the one
-   * call site, which is what keeps every `Proposal` built before this field
-   * existed buying exactly what it always bought. Worth being exact about:
-   * read the other way round, the `?? 1` there looks redundant and deletable.
+   * Issue #133: a `quantity lte 2` constraint is a limit, not an
+   * instruction, and is satisfied by a purchase of one ticket as readily as
+   * two. This is the fact that actually says how many to buy, and the
+   * consent screen renders it — inside the signed box, beside `Pays` and
+   * `Valid` — precisely so a person reads it before `startWatch` spends it.
    */
-  readonly quantity?: number;
+  readonly quantity: number;
 }
 
 /**

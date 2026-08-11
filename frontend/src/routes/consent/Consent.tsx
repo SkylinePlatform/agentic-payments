@@ -156,6 +156,16 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
             {sentence}
           </p>
         ))}
+        {/*
+          Issue #133: a `quantity lte 2` sentence above is a bound, not an
+          instruction, and says nothing about how many are actually bought.
+          This is the fact that does — proposal.quantity, the basket size the
+          interpretation proposed — and it is inside the signed box because
+          it is part of the decision, on the same footing as the limits
+          above it: a quantity the user did not read here is a quantity they
+          did not approve.
+        */}
+        <p className="font-sans text-ink">Quantity {proposal.quantity}</p>
         <hr className="border-graphite/40" />
         <p className="font-sans text-ink">Pays {instrumentName(previewed.payment_instrument)}</p>
         <p className="font-sans text-ink">

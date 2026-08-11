@@ -105,11 +105,11 @@ export function Signing({
   async function attemptWatch(authorised: Authorised) {
     setState({ kind: "starting", authorised });
     try {
-      // proposal.quantity is #109's product table: a count chosen on a row,
-      // carried here by catalogue/quantity.ts's withQuantity. Absent for a
-      // proposal built the way #22 always built one — one purchase per watch —
-      // so the fallback keeps that behaviour rather than silently changing it.
-      const { correlation_id } = await startWatch(proposal, authorised, proposal.quantity ?? 1);
+      // proposal.quantity is #133's: the interpretation's own basket size,
+      // required on Proposal and always sent by POST /proposals — see
+      // model.ts. startWatch no longer takes a quantity of its own to fall
+      // back to; there is no caller-supplied number left to prefer over it.
+      const { correlation_id } = await startWatch(proposal, authorised);
       navigate(`/lanes?run=${correlation_id}`);
     } catch {
       setState({ kind: "stranded", authorised });
@@ -225,6 +225,10 @@ export function Signing({
             {sentence}
           </p>
         ))}
+        {/* Carried over from Consent's own box, on the same terms every other
+            line here is: the screen does not jump, so what was read before
+            Sign was clicked stays on screen through both round trips. */}
+        <p className="font-sans text-ink">Quantity {proposal.quantity}</p>
       </section>
 
       {/*

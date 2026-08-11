@@ -96,6 +96,7 @@ function aProposal(): Proposal {
       price: { amount: 24000, currency: "USD" },
     },
     watch_slots_free: 8,
+    quantity: 1,
   };
 }
 
@@ -158,6 +159,21 @@ describe("the consent screen", () => {
     const signed = await screen.findByTestId("signed-box");
     expect(within(signed).getByText(/Visa ending 4242/)).toBeTruthy();
     expect(within(signed).getByText(/1 hour/i)).toBeTruthy();
+  });
+
+  it("names the basket size inside the signed box — issue #133", async () => {
+    // The concert prompt's own number: "two tickets... up to $160 all in"
+    // interprets to a quantity lte 2 constraint that one ticket satisfies as
+    // readily as two, and proposal.quantity is the fact that actually says
+    // how many. It has to be inside the signed box, on the same footing as
+    // the constraints, because a quantity a person did not read here is a
+    // quantity they did not approve.
+    const proposal = { ...aProposal(), quantity: 2 };
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent(proposal);
+
+    const signed = await screen.findByTestId("signed-box");
+    expect(within(signed).getByText("Quantity 2")).toBeTruthy();
   });
 
   it("disables signing when a constraint did not render", async () => {

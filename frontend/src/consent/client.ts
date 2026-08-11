@@ -267,28 +267,36 @@ export async function authorise(p: Proposal, digest: string, idempotencyKey?: st
  * `POST /watches`.
  *
  * Takes the whole `Proposal` and the whole `Authorised` rather than a loose
- * item, and assembles `authorisation` from both halves: `item` and
- * `constraints` are the proposal's, because they are what was narrowed and
- * signed; the two mandates, `rendered`, `expires_at` and `payment_instrument`
- * are the surface's own account of what it signed.
+ * item, and assembles `authorisation` from both halves: `item`, `constraints`
+ * and `quantity` are the proposal's, because they are what was narrowed,
+ * rendered and signed; the two mandates, `rendered`, `expires_at` and
+ * `payment_instrument` are the surface's own account of what it signed.
  *
  * **`constraints` travels even though nothing reads it today.**
  * `agent.Authorisation.Constraints` is write-only in the current tree — no
  * handler decodes it back out — so leaving it off would break nothing this
  * moment and would quietly leave a field documented as "the limits as signed"
  * empty for whoever reads it first.
+ *
+ * **`quantity` is no longer a parameter of this function**, and that is
+ * issue #133's fix at this call site: it used to be a caller-supplied number
+ * — `Signing.tsx` passed a hardcoded 1 — which is exactly how a two-ticket
+ * prompt bought one. `proposal.quantity` is what the consent screen actually
+ * showed the person before they signed, so it is what travels, both at the
+ * top level (for a console that has not adopted the nested field) and inside
+ * `authorisation` (what `agent.Authorisation.Quantity` decodes).
  */
 export async function startWatch(
   proposal: Proposal,
   authorised: Authorised,
-  quantity: number,
 ): Promise<{ id: string; correlation_id: string }> {
   return post("/watches", {
     prompt: proposal.prompt,
-    quantity,
+    quantity: proposal.quantity,
     authorisation: {
       item: proposal.item,
       constraints: proposal.constraints,
+      quantity: proposal.quantity,
       open_checkout_mandate: authorised.open_checkout_mandate,
       open_payment_mandate: authorised.open_payment_mandate,
       rendered: authorised.rendered,

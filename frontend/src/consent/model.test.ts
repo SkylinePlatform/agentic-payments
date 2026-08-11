@@ -9,6 +9,7 @@ const proposal = (n: number): Proposal => ({
   item: "gtin:05014477390221",
   offer: { id: "gtin:05014477390221", title: "", description: "", image_url: "", retailer: "", price: { amount: 1, currency: "USD" } },
   watch_slots_free: 8,
+  quantity: 1,
 });
 
 const previewed = (n: number): Previewed => ({

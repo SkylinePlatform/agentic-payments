@@ -80,6 +80,7 @@ function aProposal(): Proposal {
       price: { amount: 24000, currency: "USD" },
     },
     watch_slots_free: 8,
+    quantity: 1,
   };
 }
 
@@ -126,6 +127,37 @@ describe("signing", () => {
 
     await waitFor(() => expect(navigations).toEqual([{ to: "/lanes?run=6f2a1c" }]));
     expect(calls.map((c) => c.url)).toEqual(["/authorise", "/watches"]);
+  });
+
+  it("carries the basket size to the agent, not a number this screen invents — issue #133", async () => {
+    // The concert scenario's own number, distinct from every other fixture's
+    // default of 1 so a version that silently sent 1 regardless is caught by
+    // the value rather than by coincidence.
+    const calls = stubFetch({
+      "/authorise": { body: anAuthorised() },
+      "/watches": { status: 201, body: { id: "w-2", correlation_id: "c9" } },
+    });
+    renderSigning({ ...aProposal(), quantity: 2 });
+
+    await waitFor(() => expect(navigations).toEqual([{ to: "/lanes?run=c9" }]));
+
+    const watchCall = calls.find((c) => c.url === "/watches");
+    const body = JSON.parse(watchCall?.init?.body as string) as {
+      quantity: number;
+      authorisation: { quantity: number };
+    };
+    expect(body.quantity).toBe(2);
+    expect(body.authorisation.quantity).toBe(2);
+  });
+
+  it("names the basket size inside the signed box", () => {
+    stubFetch({
+      "/authorise": { body: anAuthorised(), delayMs: 50 },
+      "/watches": { status: 201, body: {} },
+    });
+    renderSigning({ ...aProposal(), quantity: 2 });
+
+    expect(within(screen.getByTestId("signed-box")).getByText("Quantity 2")).toBeTruthy();
   });
 
   it("keeps the signed sentences on screen while the two calls run", () => {
