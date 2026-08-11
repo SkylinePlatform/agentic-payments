@@ -428,6 +428,12 @@ type Watched struct {
 // Run watches until the purchase goes through, the mandate is spent, the
 // schedule runs out, the authorisation expires or the context ends.
 //
+// **Unless the sentence carried no condition**, in which case it does not watch
+// at all: it attempts the offer it was just quoted and ends there, bought or
+// ErrPurchaseRefused. Which of the two runs this is comes off
+// Authorisation.Trigger and from nothing that happens while it runs — see
+// Watch's own doc for why it cannot come from a price.
+//
 // The Tracker is a local rather than a field, and that is the containment
 // Tracker's own comment claims: Fund and Settle are methods on this type, so a
 // field would put the lifecycle machine within reach of the code that presents
