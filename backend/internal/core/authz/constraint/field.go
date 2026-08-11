@@ -74,7 +74,7 @@ type Field struct {
 	// the user did not approve as one.
 	exact bool
 
-	// Selective marks a field as describing *what to go looking for*, rather
+	// selective marks a field as describing *what to go looking for*, rather
 	// than a term the purchase has to meet at the point of sale.
 	//
 	// internal/agent's discovery half needs exactly this bit before it builds a
@@ -87,12 +87,18 @@ type Field struct {
 	// internal/agent may not import this package — a constraint is evaluated
 	// by the verifier, never by the party that assembled the purchase, and
 	// TestTheAgentCannotReachAConstraintEvaluator holds that against the import
-	// graph — so it cannot read this column here either. It reads Selective off
+	// graph — so it cannot read this column here either. It reads the bit off
 	// the FieldSpec values Vocabulary returns instead, and
 	// TestTheAgentsPrefixesAgreeWithFieldSelectivity in internal/agent holds the
 	// two string prefixes authorise.go still carries against this column, in
 	// both directions. See issue #132.
-	Selective bool
+	//
+	// Unexported for the reason exact is, and the reason is not consistency: a
+	// Field is the registry's own entry and nothing outside this package ever
+	// holds one, so exporting the column would publish it twice — here, where
+	// it cannot be read usefully, and on FieldSpec, where it can. Vocabulary is
+	// in this package and reads it either way.
+	selective bool
 
 	// read pulls the value out of a subject. The second result is false when
 	// the purchase does not state this fact at all, which is never the same as
@@ -100,9 +106,27 @@ type Field struct {
 	read func(Subject) (value, bool)
 }
 
-// attributePrefix addresses a fact belonging to one kind of purchase rather
+// AttributePrefix addresses a fact belonging to one kind of purchase rather
 // than to purchases in general — "item.attr.route.origin".
-const attributePrefix = "item.attr."
+//
+// Exported because the open half of the vocabulary is the half no list can
+// answer for. Vocabulary and FieldNames both omit it on purpose — it is a rule
+// rather than a table — so a caller reasoning about the family has nothing to
+// hold but this string, and until it was published the only way to name the
+// family outside this package was to write the literal again.
+//
+// The caller that made it worth publishing is a test. Every name under this
+// prefix is selective, and none of them is in Vocabulary, so what carries a
+// route into a merchant search is internal/agent's itemFieldPrefix matching
+// "item." — which works only because this constant happens to begin with it, a
+// coincidence between two literals in two packages that no compiler relates.
+// TestTheAgentsPrefixesAgreeWithFieldSelectivity names this constant so the
+// coincidence is checked rather than argued, and the case is not hypothetical:
+// the built scenario's flight is discovered by item.attr.route.origin and
+// item.attr.route.destination and by nothing else, so a rename that moved the
+// family out from under "item." would leave that search matching every flight
+// this merchant sells.
+const AttributePrefix = "item.attr."
 
 // fields is the closed registry of facts every purchase has.
 //
@@ -123,13 +147,13 @@ var fields = buildFields(
 		read: func(s Subject) (value, bool) {
 			return value{kind: KindNumber, number: int64(s.Quantity)}, s.Quantity > 0
 		}},
-	Field{Name: "item.id", Kind: KindText, Noun: "the item", exact: true, Selective: true,
+	Field{Name: "item.id", Kind: KindText, Noun: "the item", exact: true, selective: true,
 		read: func(s Subject) (value, bool) { return exactText(s.Item.ID) }},
-	Field{Name: "item.category", Kind: KindText, Noun: "the item category", Selective: true,
+	Field{Name: "item.category", Kind: KindText, Noun: "the item category", selective: true,
 		read: func(s Subject) (value, bool) { return text(s.Item.Category) }},
-	Field{Name: "merchant.id", Kind: KindText, Noun: "the merchant", exact: true, Selective: true,
+	Field{Name: "merchant.id", Kind: KindText, Noun: "the merchant", exact: true, selective: true,
 		read: func(s Subject) (value, bool) { return exactText(s.Merchant.ID) }},
-	Field{Name: "merchant.category", Kind: KindText, Noun: "the merchant category", Selective: true,
+	Field{Name: "merchant.category", Kind: KindText, Noun: "the merchant category", selective: true,
 		read: func(s Subject) (value, bool) { return text(s.Merchant.Category) }},
 )
 
@@ -169,7 +193,7 @@ func lookupField(name string) (Field, error) {
 	if f, ok := fields[name]; ok {
 		return f, nil
 	}
-	if attr, ok := strings.CutPrefix(name, attributePrefix); ok && attr != "" {
+	if attr, ok := strings.CutPrefix(name, AttributePrefix); ok && attr != "" {
 		// Attributes are always text: core does not know what a flight is, so
 		// it cannot know that an origin is an airport code.
 		//
@@ -178,15 +202,16 @@ func lookupField(name string) (Field, error) {
 		// search naming item.attr.route.origin is answerable exactly as one
 		// naming item.id is. It is never enumerated by FieldNames or Vocabulary
 		// — this field is minted per name rather than held in the closed
-		// registry — so no caller outside this package ever reads this bit off
-		// it; internal/agent's itemFieldPrefix catches item.attr.* as a
-		// consequence of also being "item.", not by asking this column, and
-		// this comment is what keeps the two readings honest with each other.
+		// registry — so no caller outside this package ever reads the bit off
+		// it. What carries the family into a search is internal/agent's
+		// itemFieldPrefix matching "item.", not this column; AttributePrefix is
+		// exported so that a test can hold those two literals together rather
+		// than a comment claiming they agree.
 		return Field{
 			Name:      name,
 			Kind:      KindText,
 			Noun:      "the item's " + strings.ReplaceAll(attr, ".", " "),
-			Selective: true,
+			selective: true,
 			read: func(s Subject) (value, bool) {
 				raw, ok := s.attribute(attr)
 				if !ok {
@@ -237,7 +262,7 @@ type FieldSpec struct {
 	// whole set including those three is published.
 	Operators []string
 
-	// Selective mirrors Field.Selective: true when this field describes what
+	// Selective mirrors Field.selective: true when this field describes what
 	// to go looking for rather than a term the purchase has to meet. See that
 	// field's comment for why internal/agent needs it and cannot read it any
 	// other way.
@@ -267,7 +292,7 @@ func Vocabulary() []FieldSpec {
 			Name:      f.Name,
 			Kind:      f.Kind,
 			Operators: operatorsFor(f.Kind),
-			Selective: f.Selective,
+			Selective: f.selective,
 		})
 	}
 	slices.SortFunc(out, func(a, b FieldSpec) int { return strings.Compare(a.Name, b.Name) })
