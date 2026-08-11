@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -259,13 +260,87 @@ func TestTheDigestNamesTheLimitsRatherThanTheBytes(t *testing.T) {
 			"would let one be signed in place of another, which is the whole of what this refuses")
 }
 
+// TestThePreviewNamesTheCardAndTheLifetime is consent over the whole signature
+// rather than over part of it.
+//
+// The open Payment Mandate pins an instrument the user never chose and both
+// mandates expire, so a screen showing only the constraints asks for a
+// signature over two thirds of a decision it did not display.
+func TestThePreviewNamesTheCardAndTheLifetime(t *testing.T) {
+	t.Parallel()
+
+	user := newParty(t, "user")
+	agent := newParty(t, "agent")
+	srv := theSurface(t, user)
+
+	agentKey, err := roles.PublicKey(t.Context(), agent.keys)
+	require.NoError(t, err)
+
+	var preview previewedBody
+	require.Equal(t, http.StatusOK, send(t, srv.URL+"/authorise/preview", map[string]any{
+		"prompt":      "a ladder for under two hundred dollars",
+		"constraints": []generated.Constraint{priceCap(), ladders()},
+		"agent_key":   agentKey,
+	}, &preview))
+
+	// pinnedInstrument is the package-level fixture theSurface is built with,
+	// so this asserts the surface stated *its own* configuration rather than
+	// merely that some instrument came back.
+	assert.Equal(t, pinnedInstrument, preview.PaymentInstrument,
+		"the user is signing a mandate that pins a card; a screen that cannot name it is asking for consent to something it did not show")
+	assert.Positive(t, preview.OpenMandateLifetimeSeconds,
+		"how long the authorisation lives is part of what the signature covers")
+}
+
+// TestThePreviewLifetimeIsTheOneAuthoriseUses is the drift the duration exists
+// to prevent.
+//
+// A preview returning an instant would promise a moment the signature will not
+// honour, because the expiry is computed from the clock at signing. Returning
+// the constant instead makes the two unable to disagree — and this test is what
+// notices if somebody later "improves" the preview into returning a timestamp.
+func TestThePreviewLifetimeIsTheOneAuthoriseUses(t *testing.T) {
+	t.Parallel()
+
+	user := newParty(t, "user")
+	agent := newParty(t, "agent")
+	srv := theSurface(t, user)
+
+	agentKey, err := roles.PublicKey(t.Context(), agent.keys)
+	require.NoError(t, err)
+	limits := []generated.Constraint{priceCap(), ladders()}
+
+	var preview previewedBody
+	require.Equal(t, http.StatusOK, send(t, srv.URL+"/authorise/preview", map[string]any{
+		"prompt": "a ladder", "constraints": limits, "agent_key": agentKey,
+	}, &preview))
+
+	var signed authorisedBody
+	require.Equal(t, http.StatusOK, send(t, srv.URL+"/authorise", map[string]any{
+		"prompt": "a ladder", "constraints": limits, "agent_key": agentKey,
+	}, &signed))
+
+	// `base` is the package-level instant newParty fixes every fake clock at,
+	// and theSurface runs on the user's — so the two calls read the same moment
+	// and the window the preview described is exactly the one the signature
+	// carries. Use the existing constant; a second copy of the same instant is
+	// a second thing to keep in step.
+	window := signed.ExpiresAt.Sub(base)
+	assert.Equal(t, time.Duration(preview.OpenMandateLifetimeSeconds)*time.Second, window,
+		"the preview described a window the signature then did not give")
+	assert.Equal(t, signed.PaymentInstrument, preview.PaymentInstrument,
+		"the card shown before signing has to be the card that was pinned")
+}
+
 // previewedBody is POST /authorise/preview's answer, declared here rather than
 // exported from the surface, on the same terms as authorisedBody: a test that
 // decoded into the server's own struct would pass whatever that struct's JSON
 // tags said, including a renamed field no client could find.
 type previewedBody struct {
-	Rendered          []string `json:"rendered"`
-	ConstraintsDigest string   `json:"constraints_digest"`
+	Rendered                   []string                    `json:"rendered"`
+	ConstraintsDigest          string                      `json:"constraints_digest"`
+	PaymentInstrument          generated.PaymentInstrument `json:"payment_instrument"`
+	OpenMandateLifetimeSeconds int                         `json:"open_mandate_lifetime_seconds"`
 }
 
 // send posts a JSON body to the surface and decodes the answer, giving every
