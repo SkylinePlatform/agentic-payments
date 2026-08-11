@@ -2,6 +2,7 @@ package merchant
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
@@ -199,7 +200,33 @@ type DemoOptions struct {
 	// POST /demo/advance moves the clock. A non-positive value is refused by
 	// NewSchedule rather than defaulted here: a flag somebody set to zero
 	// should stop the process, not quietly become thirty seconds.
+	//
+	// When StepMax is set, Step is the *shortest* a price can hold rather than
+	// the only length it holds — see StepMax.
 	Step time.Duration
+
+	// StepMax is the longest a price can hold. Zero, the default, means no
+	// extra randomness at all: every price holds exactly Step, precisely as
+	// when this field did not exist. A positive value has to be at least Step,
+	// and each transition then draws its own width once from [Step, StepMax]
+	// via NewJitteredSchedule — see there for why crypto/rand.
+	//
+	// # What this does not change
+	//
+	// POST /demo/advance still moves the clock by exactly Step, unconditionally
+	// — see Service.DemoStep. Under a jittered schedule that is not guaranteed
+	// to land on the next transition: a transition whose draw came out closer
+	// to StepMax than Step can take a second press to cross. Nothing in this
+	// package's own tests presses the control with StepMax set, and the
+	// automated demonstration this field exists for does not press it at all —
+	// make demo lets the wall clock carry the schedule, which is exactly what
+	// TestTheOffsetIsAddedToAClockThatIsStillRunning already relies on. A
+	// presenter reaching for the control during a jittered run may need to
+	// press it twice; that imprecision is accepted rather than solved here,
+	// since solving it would mean Advance asking the schedule for its own next
+	// boundary instead of moving by a duration, which is a bigger change than
+	// this field's job.
+	StepMax time.Duration
 
 	// Controls registers POST /demo/advance. False is the default in every
 	// sense — the zero value here, the flag's default in cmd/merchant, and what
@@ -256,6 +283,11 @@ func NewDemoService(role roles.Role, opts DemoOptions) (*Service, error) {
 		// — which reads as a protocol failure rather than as a missing file.
 		return nil, errors.New("merchant: a demo service needs a catalogue; load one with LoadCatalogue")
 	}
+	if opts.StepMax > 0 && opts.StepMax < opts.Step {
+		return nil, fmt.Errorf(
+			"merchant: step-max %s is shorter than step %s; a price cannot hold for less than its own minimum",
+			opts.StepMax, opts.Step)
+	}
 
 	var demoClock *clock.Offset
 	if opts.Controls {
@@ -270,15 +302,48 @@ func NewDemoService(role roles.Role, opts DemoOptions) (*Service, error) {
 	//
 	// One file seeds both as well, which is the other half of that property and
 	// the half a data file put at risk: the prices below come from one list, in
-	// one entry, read twice. See CatalogueFile.Inventory.
+	// one entry, read twice — see CatalogueFile.Inventory's doc comment for the
+	// deterministic case.
+	//
+	// # Why the catalogue is built first, and the inventory from it
+	//
+	// CatalogueFile.Inventory used to be called here directly, alongside
+	// Catalogue, each independently deriving the flight entry's Schedule from
+	// opts.Step. That agreed by construction while step was a fixed duration —
+	// two calls to the same arithmetic always land on the same answer — but
+	// stops being true the moment opts.StepMax makes it a draw: two independent
+	// draws for the same flight would disagree, and GET /checkout?from=&to=
+	// (Inventory) and GET /checkout?item=&quantity= (Catalogue) would name
+	// different prices for the one product this demonstration is about. What
+	// closes that hole under a draw is not calling Inventory a second time at
+	// all — the flight's Schedule is built exactly once, inside the catalogue,
+	// and the inventory below reads that same *Schedule back out rather than
+	// building its own.
 	start := role.Clock.Now()
 
-	inventory, err := opts.Catalogue.Inventory(role.Clock, start, opts.Step)
+	var catalogue *Catalogue
+	var err error
+	if opts.StepMax > 0 {
+		catalogue, err = opts.Catalogue.jitteredCatalogue(role.Clock, opts.ID, start, opts.Step, opts.StepMax)
+	} else {
+		catalogue, err = opts.Catalogue.Catalogue(role.Clock, opts.ID, start, opts.Step)
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	catalogue, err := opts.Catalogue.Catalogue(role.Clock, opts.ID, start, opts.Step)
+	flight, err := opts.Catalogue.flight()
+	if err != nil {
+		return nil, err
+	}
+	route, _ := flight.route()
+	flightOffer, err := catalogue.Find(flight.ID)
+	if err != nil {
+		// Unreachable: catalogue was just built from this same file's offers,
+		// flight.ID among them.
+		return nil, fmt.Errorf("merchant: the flight offer is missing from the catalogue built from its own file: %w", err)
+	}
+	inventory, err := New(role.Clock, map[Route]*Schedule{route: flightOffer.Schedule})
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +430,10 @@ func NewDemoService(role roles.Role, opts DemoOptions) (*Service, error) {
 		// would defeat that, which is why demoClock is declared as the concrete
 		// type and this branch is not written as a bare assignment.
 		DemoClock: demoAdvancer(demoClock),
-		DemoStep:  opts.Step,
+		// opts.Step, the minimum, even when StepMax makes the schedule itself
+		// jittered — see DemoOptions.StepMax for what that costs the control's
+		// own precision, and why it is accepted rather than solved here.
+		DemoStep: opts.Step,
 		// The merchant initiates payment, not the agent.
 		Processor: opts.Processor,
 	}, nil

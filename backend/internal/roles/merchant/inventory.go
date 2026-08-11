@@ -1,8 +1,10 @@
 package merchant
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
 	"slices"
 	"strings"
 	"time"
@@ -88,26 +90,109 @@ type Quote struct {
 	ObservedAt time.Time
 }
 
-// Schedule is a deterministic price sequence for one route.
+// Schedule is a price sequence for one route.
 //
 // The price is a pure function of the instant it is read at: prices[0] until
-// start+step, prices[1] until start+2*step, and so on, with the last price
-// holding forever after. Before start, the first price applies — a demonstration
-// that begins early sees the opening price rather than an error.
+// the first boundary, prices[1] until the second, and so on, with the last
+// price holding forever after. Before start, the first price applies — a
+// demonstration that begins early sees the opening price rather than an error.
+//
+// # Why boundaries rather than a start-plus-step pair
+//
+// NewSchedule and NewJitteredSchedule both build down to the same shape: a
+// start and one boundary per transition, computed once at construction.
+// NewSchedule's boundaries happen to be evenly spaced and NewJitteredSchedule's
+// are not, but at cannot tell the difference — it walks boundaries either way,
+// which is what guarantees a price can never be reordered or skipped by
+// whichever constructor produced them. See at.
 type Schedule struct {
 	prices []generated.Amount
 	start  time.Time
-	step   time.Duration
+
+	// boundaries holds one instant per transition: boundaries[i] is when
+	// prices[i+1] takes over from prices[i]. Always len(prices)-1 long.
+	boundaries []time.Time
 }
 
 // NewSchedule returns a schedule stepping through prices, one every step,
 // beginning at start.
 func NewSchedule(start time.Time, step time.Duration, prices ...generated.Amount) (*Schedule, error) {
-	if len(prices) == 0 {
-		return nil, ErrEmptySchedule
-	}
 	if step <= 0 {
 		return nil, fmt.Errorf("merchant: step must be positive, got %s", step)
+	}
+	widths := make([]time.Duration, numTransitions(len(prices)))
+	for i := range widths {
+		widths[i] = step
+	}
+	return buildSchedule(start, widths, prices)
+}
+
+// NewJitteredSchedule returns a schedule stepping through prices exactly like
+// NewSchedule, except each transition's width is drawn once, independently and
+// uniformly, from [min, max] rather than held fixed.
+//
+// The draw happens here, at construction, and nowhere else. Schedule.at walks
+// whatever boundaries this produces exactly as it would walk NewSchedule's
+// evenly-spaced ones, so the *order* of prices can never be reordered or
+// skipped by the draw — only how long each one holds changes.
+//
+// crypto/rand rather than math/rand: this reaches a demonstration people watch
+// rather than anything security-bearing, but no-weak-randomness bans math/rand
+// and math/rand/v2 module-wide regardless of what the randomness reaches, so
+// the ban is followed rather than argued with here too.
+func NewJitteredSchedule(start time.Time, min, max time.Duration, prices ...generated.Amount) (*Schedule, error) {
+	if min <= 0 {
+		return nil, fmt.Errorf("merchant: min must be positive, got %s", min)
+	}
+	if max < min {
+		return nil, fmt.Errorf("merchant: max %s is less than min %s", max, min)
+	}
+
+	widths := make([]time.Duration, numTransitions(len(prices)))
+	for i := range widths {
+		w, err := randDuration(min, max)
+		if err != nil {
+			return nil, fmt.Errorf("merchant: drawing a random step width: %w", err)
+		}
+		widths[i] = w
+	}
+	return buildSchedule(start, widths, prices)
+}
+
+// randDuration draws a duration uniformly from [min, max], inclusive, using
+// crypto/rand — see NewJitteredSchedule for why crypto/rand rather than
+// math/rand.
+//
+// rand.Int rather than a modulo over a handful of random bytes: the standard
+// library's rejection sampling is what keeps a range that is not a power of
+// two from being biased toward its low end, which a naive modulo would be.
+func randDuration(min, max time.Duration) (time.Duration, error) {
+	if max == min {
+		return min, nil
+	}
+	span := big.NewInt(int64(max-min) + 1)
+	n, err := rand.Int(rand.Reader, span)
+	if err != nil {
+		return 0, err
+	}
+	return min + time.Duration(n.Int64()), nil
+}
+
+// numTransitions is how many boundaries a schedule over n prices needs: one
+// less than the count, floored at zero for the flat, single-price case.
+func numTransitions(n int) int {
+	if n <= 1 {
+		return 0
+	}
+	return n - 1
+}
+
+// buildSchedule is what NewSchedule and NewJitteredSchedule both build down
+// to: prices, validated, with one boundary per width already computed from
+// start.
+func buildSchedule(start time.Time, widths []time.Duration, prices []generated.Amount) (*Schedule, error) {
+	if len(prices) == 0 {
+		return nil, ErrEmptySchedule
 	}
 	for i, p := range prices {
 		if p.Amount < 0 {
@@ -121,29 +206,39 @@ func NewSchedule(start time.Time, step time.Duration, prices ...generated.Amount
 			return nil, fmt.Errorf("merchant: price %d has currency %q, want an ISO 4217 code", i, p.Currency)
 		}
 	}
+
+	boundaries := make([]time.Time, len(widths))
+	t := start
+	for i, w := range widths {
+		t = t.Add(w)
+		boundaries[i] = t
+	}
+
 	return &Schedule{
-		prices: append([]generated.Amount(nil), prices...),
-		start:  start,
-		step:   step,
+		prices:     append([]generated.Amount(nil), prices...),
+		start:      start,
+		boundaries: boundaries,
 	}, nil
 }
 
 // at returns the price and step index in force at t.
+//
+// It walks boundaries rather than dividing by a fixed width, which is what
+// lets one implementation serve both a uniform schedule and a jittered one:
+// idx is the count of boundaries at or before t, a rule that does not care
+// whether those boundaries are evenly spaced.
 func (s *Schedule) at(t time.Time) (generated.Amount, int, bool) {
 	last := len(s.prices) - 1
 
-	elapsed := t.Sub(s.start)
-	if elapsed < 0 {
-		// A run that starts early sees the opening price. Refusing would make
-		// the schedule's start a deadline, which is not what it is.
-		return s.prices[0], 0, last == 0
-	}
-
-	idx := int(elapsed / s.step)
-	if idx < 0 || idx > last {
-		// Past the end, or arithmetic that overflowed on an absurd instant.
-		// The final price holds: the merchant does not stop selling.
-		idx = last
+	idx := 0
+	for _, b := range s.boundaries {
+		if t.Before(b) {
+			// A run that starts early, or reads between two boundaries, sees
+			// the price already in force. Refusing a read before start would
+			// make the schedule's start a deadline, which is not what it is.
+			break
+		}
+		idx++
 	}
 	return s.prices[idx], idx, idx == last
 }
@@ -180,20 +275,18 @@ func New(clk authz.Clock, routes map[Route]*Schedule) (*Inventory, error) {
 		if s == nil {
 			return nil, fmt.Errorf("merchant: route %s has no schedule", r)
 		}
-		// A Schedule built without NewSchedule is the one a caller can get
-		// wrong, and quoting it would take the process down. Refusing here is
-		// the difference between a constructor error and a panic in a handler.
+		// A Schedule built as a literal rather than through NewSchedule or
+		// NewJitteredSchedule is the one a caller can get wrong, and quoting it
+		// would take the process down: at indexes prices[0] on an empty slice.
+		// Refusing here is the difference between a constructor error and a
+		// panic in a handler.
 		//
-		// Both of at's panics, not just the first. An empty schedule indexes
-		// prices[0] on an empty slice; a zero step divides by zero one line
-		// later. NewSchedule refuses both, so this only bites a literal built
-		// inside this package — but the guard is worth nothing if it stops one
-		// short of what at can actually do.
+		// This is the only guard at needs now that it walks boundaries instead
+		// of dividing by a fixed width — there is no zero-step divide-by-zero
+		// left to protect against, since a Schedule with prices but no
+		// boundaries simply reads as flat rather than panicking.
 		if s.Steps() == 0 {
 			return nil, fmt.Errorf("merchant: route %s: %w", r, ErrEmptySchedule)
-		}
-		if s.step <= 0 {
-			return nil, fmt.Errorf("merchant: route %s has a step of %s; build schedules with NewSchedule", r, s.step)
 		}
 		own[r] = s
 	}

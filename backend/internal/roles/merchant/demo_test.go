@@ -106,6 +106,17 @@ func demoService(t *testing.T) (*merchant.Service, *clock.Fake, demoKeys) {
 // reachable from a test rather than only from cmd/merchant.
 func demoServiceWith(t *testing.T, controls bool) (*merchant.Service, *clock.Fake, demoKeys) {
 	t.Helper()
+	return demoServiceWithStep(t, controls, demoStep, 0)
+}
+
+// demoServiceWithStep is demoServiceWith with the schedule's own cadence as a
+// parameter too, so that DemoOptions.StepMax — off for every fixture above,
+// which is what every merchant but a jittered one runs — is reachable from a
+// test rather than only from cmd/merchant's -step-max.
+func demoServiceWithStep(
+	t *testing.T, controls bool, step, stepMax time.Duration,
+) (*merchant.Service, *clock.Fake, demoKeys) {
+	t.Helper()
 
 	under := clock.NewFake(base)
 
@@ -139,7 +150,8 @@ func demoServiceWith(t *testing.T, controls bool) (*merchant.Service, *clock.Fak
 			Catalogue: shippedCatalogue(t),
 			User:      userVerifier,
 			Processor: merchant.NewMockProcessor(t),
-			Step:      demoStep,
+			Step:      step,
+			StepMax:   stepMax,
 			Controls:  controls,
 		})
 	require.NoError(t, err, "standing up the demo merchant")
@@ -541,4 +553,50 @@ func TestAMerchantWillNotServeAControlOverAClockItDoesNotRead(t *testing.T) {
 		assert.NoError(t, err,
 			"a guard that refused every merchant would satisfy the cases above without being a guard")
 	})
+}
+
+// TestAJitteredScheduleKeepsTheCatalogueAndInventoryAgreeing is issue #158's
+// second trap, the one beside the box: two independent draws for the same
+// flight entry would let GET /checkout?from=&to= (Inventory) and
+// GET /checkout?item=&quantity= (Catalogue) name different prices for the one
+// product this demonstration is about. NewDemoService closes that by building
+// the catalogue first and reading the flight's own Schedule back out of it
+// rather than drawing a second time — see the comment on that composition —
+// and this is what exercises it rather than trusting the comment.
+func TestAJitteredScheduleKeepsTheCatalogueAndInventoryAgreeing(t *testing.T) {
+	t.Parallel()
+
+	// Millisecond-scale and not deploy/demo.json's own seconds: this drives a
+	// fake clock, so nothing here waits, and a tight range in a short loop
+	// reaches the final price inside a handful of iterations rather than a
+	// few hundred.
+	const (
+		min = 200 * time.Millisecond
+		max = 400 * time.Millisecond
+	)
+
+	svc, under, _ := demoServiceWithStep(t, false, min, max)
+
+	sawFinal := false
+	for range 200 {
+		routeQuote, err := svc.Inventory.Quote(merchant.DemoRoute)
+		require.NoError(t, err, "Quote")
+		itemQuote, err := svc.Catalogue.Price(merchant.DemoFlightID)
+		require.NoError(t, err, "Price")
+
+		assert.Equal(t, routeQuote.Price, itemQuote.Price,
+			"the route door and the item door have to name the same price for one flight, jittered or not")
+		assert.Equal(t, routeQuote.Step, itemQuote.Step,
+			"a watcher counting price moves would count differently depending on which door it looked through")
+		assert.Equal(t, routeQuote.Final, itemQuote.Final,
+			"one door saying the price may still move while the other says it will not is the same "+
+				"disagreement wearing a different field")
+
+		if routeQuote.Final {
+			sawFinal = true
+			break
+		}
+		under.Advance(50 * time.Millisecond)
+	}
+	assert.True(t, sawFinal, "the run has to reach the final price at least once, or the loop above checked nothing new")
 }

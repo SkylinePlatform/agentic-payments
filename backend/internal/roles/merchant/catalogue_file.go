@@ -405,9 +405,36 @@ func (f *CatalogueFile) flight() (CatalogueEntry, error) {
 func (f *CatalogueFile) Catalogue(
 	clk authz.Clock, merchantID string, start time.Time, step time.Duration,
 ) (*Catalogue, error) {
+	return f.catalogue(clk, merchantID, func(e CatalogueEntry) (*Schedule, error) {
+		return f.schedule(e, start, step)
+	})
+}
+
+// jitteredCatalogue is Catalogue with each offer's own transitions holding a
+// random width from [min, max] instead of a fixed step — see
+// NewJitteredSchedule.
+//
+// Unexported: NewDemoService is this package's only caller, under
+// DemoOptions.StepMax. Nothing outside asks a file for a jittered catalogue on
+// its own, so there is nothing to export.
+func (f *CatalogueFile) jitteredCatalogue(
+	clk authz.Clock, merchantID string, start time.Time, min, max time.Duration,
+) (*Catalogue, error) {
+	return f.catalogue(clk, merchantID, func(e CatalogueEntry) (*Schedule, error) {
+		return f.jitteredSchedule(e, start, min, max)
+	})
+}
+
+// catalogue is what Catalogue and jitteredCatalogue both build down to: every
+// offer the file lists, priced by whatever scheduleFor computes for it. The
+// two callers differ only in that function, which is the whole of what tells
+// a fixed cadence from a jittered one.
+func (f *CatalogueFile) catalogue(
+	clk authz.Clock, merchantID string, scheduleFor func(CatalogueEntry) (*Schedule, error),
+) (*Catalogue, error) {
 	offers := make([]Offer, 0, len(f.Offers))
 	for _, e := range f.Offers {
-		schedule, err := f.schedule(e, start, step)
+		schedule, err := scheduleFor(e)
 		if err != nil {
 			return nil, err
 		}
@@ -448,6 +475,16 @@ func (f *CatalogueFile) Catalogue(
 // flight entry, Catalogue reads the same entry, and both go through schedule.
 // TestTheCatalogueAndTheInventoryQuoteOneFlight is what fails if that stops
 // being true.
+//
+// **That argument only holds for a fixed step.** Two calls to schedule for the
+// same entry agree today because the arithmetic is deterministic; under
+// NewJitteredSchedule they would not, since each call draws its own random
+// widths. That is why NewDemoService does not call this method for the flight
+// when DemoOptions.StepMax is set — it builds the catalogue first and reads
+// the flight's own Schedule back out of it, so there is exactly one draw
+// rather than two that might disagree. This method is unaffected and stays
+// exactly what it was for every caller that still wants one route priced on
+// its own, step fixed.
 func (f *CatalogueFile) Inventory(
 	clk authz.Clock, start time.Time, step time.Duration,
 ) (*Inventory, error) {
@@ -475,6 +512,21 @@ func (f *CatalogueFile) schedule(e CatalogueEntry, start time.Time, step time.Du
 		// The offer's identifier, because NewSchedule's errors say which price
 		// and not which product, and a catalogue of any size makes that the
 		// difference between a fix and a search.
+		return nil, fmt.Errorf("merchant: offer %q: %w", e.ID, err)
+	}
+	return s, nil
+}
+
+// jitteredSchedule is schedule with each transition's width drawn once from
+// [min, max] instead of held fixed — see NewJitteredSchedule.
+func (f *CatalogueFile) jitteredSchedule(e CatalogueEntry, start time.Time, min, max time.Duration) (*Schedule, error) {
+	prices := make([]generated.Amount, 0, len(e.Prices))
+	for _, p := range e.Prices {
+		prices = append(prices, generated.Amount{Amount: p, Currency: f.Currency})
+	}
+
+	s, err := NewJitteredSchedule(start, min, max, prices...)
+	if err != nil {
 		return nil, fmt.Errorf("merchant: offer %q: %w", e.ID, err)
 	}
 	return s, nil
