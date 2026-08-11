@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { PROTOCOL_EVENT_FIELDS } from "../sse";
 import type { EventRecord, ProtocolEvent } from "../sse";
@@ -18,6 +18,22 @@ import { BENEATH, COLUMNS, EventLog } from "./EventLog";
  * down. {@link column} is what makes the difference between "the digest is on
  * the screen somewhere" and "the digest is in the digest column".
  */
+
+/**
+ * Pinned once, at the top, rather than left to whatever zone runs this suite.
+ *
+ * #214 moved {@link timeOf} from reading an RFC 3339 string's own digits to
+ * reading it through `Date`, so the "Time" column now renders the *reader's*
+ * clock rather than the wire's. Every fixture below already writes its `at`
+ * in UTC, so pinning the reader to UTC is what keeps each of those
+ * assertions meaning what it said before #214, on a machine of any zone —
+ * the alternative is a suite that is green in one timezone and red in
+ * another for a reason none of the individual tests states.
+ *
+ * The dedicated "time, rendered where the reader lives" cases below move it
+ * away from UTC on purpose, and restore it before returning.
+ */
+process.env.TZ = "UTC";
 
 const DIGEST = "Eo_-w3Yl9o0qXf3n";
 const SHOWN = "Eo_-w3Yl9o0q";
@@ -194,6 +210,72 @@ describe("the columns", () => {
         "claim is that three parties reached the same value, and a reader " +
         "checking it must be able to copy the whole one",
     ).toBe(SHOWN);
+  });
+});
+
+describe("time, rendered where the reader lives", () => {
+  /**
+   * Restored after every case in this block, whatever the case did to it —
+   * `afterEach` rather than trusting each `it` to put it back on every path,
+   * including a thrown assertion, so a failure here cannot leave a later
+   * `describe`'s "Time" assertions reading a zone they never pinned.
+   */
+  afterEach(() => {
+    process.env.TZ = "UTC";
+  });
+
+  it("renders the reported defect's own numbers: 19:00:24 UTC as 21:00:24 for a reader in Berlin", () => {
+    // Issue #214, reported off a live run: the column showed 19:00:24 for an
+    // event a reader at 21:00 local had just watched happen — the UTC digits,
+    // not their own clock. Berlin in August is UTC+2, so this is that exact
+    // report, not a stand-in for it.
+    process.env.TZ = "Europe/Berlin";
+    showing([
+      record(1, { kind: "mandate_constructed", role: "surface", at: "2026-08-10T19:00:24Z" }),
+    ]);
+
+    expect(
+      column("Time"),
+      "a test that formatted with timeOf and compared against timeOf would go " +
+        "green whichever zone it rendered; this pins the wall-clock string a " +
+        "reader in Berlin actually reads, so a regression to the UTC digits " +
+        "goes red",
+    ).toEqual(["21:00:24"]);
+  });
+
+  it("renders the same instant differently for a reader in a different zone", () => {
+    // The property the case above cannot show on its own: it is the reader's
+    // zone moving the string, not a fixed adjustment baked into timeOf.
+    process.env.TZ = "Pacific/Auckland";
+    showing([
+      record(1, { kind: "mandate_constructed", role: "surface", at: "2026-08-10T19:00:24Z" }),
+    ]);
+
+    expect(column("Time")).toEqual(["07:00:24"]);
+  });
+
+  it("keeps the original instant, offset included, reachable in the cell's title", () => {
+    // A non-Z offset on purpose: the title has to be the wire's own string
+    // and not a reformatting of it, which a fixture already in UTC could not
+    // tell apart from one.
+    showing([
+      record(1, { kind: "mandate_constructed", role: "surface", at: "2026-08-10T21:00:24+02:00" }),
+    ]);
+
+    expect(
+      column("Time"),
+      "the reader here is pinned to UTC, and +02:00 wall-clock 21:00:24 is " +
+        "19:00:24 in that zone",
+    ).toEqual(["19:00:24"]);
+
+    const cell = within(table()).getByTitle("2026-08-10T21:00:24+02:00");
+    expect(
+      cell.textContent,
+      "the on-screen digits differ from the title on purpose: 19:00:24 is what " +
+        "this reader's clock reads, and the title is what a server log holding " +
+        "this same instant would show, offset and all — somebody comparing the " +
+        "two needs both",
+    ).toBe("19:00:24");
   });
 });
 
