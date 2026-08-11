@@ -600,6 +600,67 @@ func groundedIn(f *merchant.CatalogueFile) *merchant.CatalogueEntry {
 	return nil
 }
 
+// frontendPublicDir is where an offer's root-relative ImageURL resolves, from
+// this package's directory — the same four levels cataloguePath climbs to
+// reach deploy/catalogue.json, because the two files live beside each other
+// at the repository root.
+const frontendPublicDir = "../../../../frontend/public"
+
+// TestEveryShippedImageURLNamesAFileThatExists is issue #215's headline, as a
+// test rather than as a screenshot somebody noticed.
+//
+// Validate refuses an image_url that is not root-relative, on the recorded
+// ground that an image fetched from a host this project does not control
+// would make a screenshot depend on somebody else's uptime. That check is
+// about shape: it says nothing about whether the path it approved resolves to
+// a file anywhere, so a catalogue can be entirely valid, load, and still show
+// four broken images on the screen the demonstration exists to show — which
+// is exactly what deploy/catalogue.json did before this test existed, because
+// frontend/public held nothing but fonts.
+//
+// # Why this is a test and not a rule inside Validate
+//
+// Validate runs at LoadCatalogue, which is on the path of a merchant starting
+// up in any deployment shape — including one where the frontend's static tree
+// is not checked out beside the backend at all: a merchant image served from
+// a CDN under a future protocol, or a container built from backend/ alone.
+// Making Validate stat a sibling frontend/public directory would fail a
+// perfectly good catalogue in that shape, and would tie a domain rule about
+// what a catalogue is allowed to say to a fact about this one repository's
+// layout on disk — which is not what Validate is for anywhere else in this
+// file. What is true right now, in this tree, is narrower and exactly what a
+// test can state: deploy/catalogue.json and frontend/public are checked out
+// together, the second is what serves what the first names, and that pairing
+// is worth asserting in CI even though nothing at runtime should depend on it.
+//
+// It is a Go test rather than one in the frontend suite for the same reason
+// LoadCatalogue and Validate are Go in the first place: the parsing and the
+// rules for what deploy/catalogue.json may say already live here, and a
+// second reader of the same file in TypeScript — to learn nothing but which
+// paths to stat — would be exactly the "second copy that drifts" this
+// package's own doc comment warns against for a JSON Schema restating
+// Validate's rules. Keeping the check beside the file it reads also means it
+// runs under `make check`, which needs only Go; catching a broken image would
+// otherwise need a Node toolchain for a fact that has nothing to do with the
+// frontend's own source.
+func TestEveryShippedImageURLNamesAFileThatExists(t *testing.T) {
+	t.Parallel()
+
+	f := shippedCatalogue(t)
+	for _, offer := range f.Offers {
+		t.Run(offer.ID, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(frontendPublicDir, offer.ImageURL)
+			_, err := os.Stat(path)
+			assert.NoError(t, err, "%s names image_url %q, which Validate accepts as root-relative "+
+				"and shaped correctly — but nothing at that path exists, so the offer table renders "+
+				"a broken-image placeholder on the screen this demonstration is shown from", offer.ID,
+				offer.ImageURL)
+		})
+	}
+}
+
 // TestLoadCatalogueReportsAMissingOrBrokenFile covers the two failures that
 // happen before Validate is reached, and the one thing they both have to do.
 //
