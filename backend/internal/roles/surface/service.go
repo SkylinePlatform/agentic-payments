@@ -522,6 +522,18 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 // failure no longer lands in the gap — either the pair is signed or the first
 // signature fails for a reason the second would have failed for too.
 //
+// What makes that safe rather than merely useful is that nothing in here waits
+// on anything: both calls build claims, blind them and sign, with no network
+// call, no reader and no lock held across one. That is a precondition and it is
+// written here rather than assumed, because a context with neither
+// cancellation nor deadline over work that *can* block is a goroutine that
+// never ends — a worse bug than the one this closes, and one that arrives
+// silently under load rather than in a test. internal/platform/crypto's Store
+// names the change that would break it: keys in a KMS or an HSM, which its own
+// doc calls "a wiring change in cmd/, not a change to any call site". It would
+// be that everywhere except here, where the detached context would have to gain
+// a deadline of its own on the way in.
+//
 // Finishing is also what lets a retry be answered rather than re-run.
 // transport.Idempotency deliberately does not remember a 5xx: an operation that
 // failed for the verifier's own reasons has not happened once, and remembering
@@ -537,6 +549,20 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 // What it does not promise is that the caller's key is never asked twice across
 // two attempts. It cannot: a failure early in the first attempt leaves nothing
 // behind, which is exactly the state in which signing afresh is correct.
+//
+// There is a second way one decision reaches two pairs, and it is not a failure
+// at all. transport.Idempotency remembers a response only up to
+// defaultMaxRemembered and gives up the record — never the answer — above it,
+// so a reply past a megabyte completes, answers 200 and is forgotten: the key
+// comes back and a retry signs afresh. This route reaches that size from a
+// request well inside the body cap, because every constraint is carried by both
+// mandates and rendered a third time. Neither attempt is wrong in itself, which
+// is why nothing above closes it, and the outcome is still this function's
+// leak one unit larger — a retry only happens if the first answer was lost, and
+// the first attempt therefore leaves behind a *complete* pair carrying the
+// user's key that nobody holds. Issue #223 is where bounding it is decided, and
+// TestTheSecondPairThisDoesNotStop asserts it as a passing test so that there
+// is something to invert rather than a paragraph to notice.
 func issueOpenPair(
 	ctx context.Context,
 	signer authz.Signer,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -128,6 +129,15 @@ func TestOneDecisionMakesOnePairOfSignatures(t *testing.T) {
 // below is stated as "nothing is left behind" rather than as "this cannot
 // happen": the pair is made atomic in what it announces, which is achievable,
 // rather than in whether a signature was computed, which is not.
+//
+// The rotation itself is not performed here, and does not need to be. That a
+// Signer held across one refuses with authz.ErrKeyRetired rather than minting
+// under the retired key is internal/platform/crypto's own property, held by
+// TestRotationRetiresThePreviousKey; what this file owns is what the handler
+// does when the second signature fails, and driving a real store through a real
+// rotation here would test that package's mechanism a second time while saying
+// nothing more about this one. So the failure arrives as an error, and the name
+// says which one it stands for.
 var errKeyRetired = errors.New("the signing key was retired between the two mandates")
 
 // TestAPairThatCannotBeFinishedLeavesNothingBehind is what makes dropping the
@@ -198,6 +208,81 @@ func TestAPairThatCannotBeFinishedLeavesNothingBehind(t *testing.T) {
 	}
 }
 
+// TestTheSecondPairThisDoesNotStop is the door the two tests above do not
+// close, asserted as a passing test rather than described in a comment.
+//
+// Neither attempt below fails. transport.Idempotency remembers a response only
+// up to its own cap and gives up the record — never the answer — above it, so a
+// reply past a megabyte completes, answers 200, is forgotten, and hands the key
+// back for a retry to run the handler again. This route reaches that size from
+// a request well inside the body cap, because every constraint is carried by
+// both mandates and rendered a third time.
+//
+// The outcome is the leak this file is about, one unit larger. A retry only
+// happens because the first answer was lost, so the attempt that was forgotten
+// leaves behind a *complete* pair carrying the user's key that nobody holds —
+// where the defect these tests were written against left half of one.
+//
+// It passes on purpose, on the terms crypto.Challenger's
+// TestTheReplayThisDoesNotStop already set here: a limitation stated as a fact
+// in the suite is one issue #223 has to invert rather than a paragraph somebody
+// has to notice. The day the route bounds what it will sign, this test fails
+// and is rewritten as the assertion that it does.
+func TestTheSecondPairThisDoesNotStop(t *testing.T) {
+	t.Parallel()
+
+	handler, signatures := surfaceThatSigns(t, nil, func(int64) error { return nil })
+
+	body := moreConstraintsThanTheAnswerCanRemember()
+	const key = "a decision whose answer is too large to be remembered"
+
+	first := answered(handler, asking(t.Context(), "/authorise", key, body))
+	require.Equal(t, http.StatusOK, first.Code, "the pair this surface exists to make")
+	require.Greater(t, first.Body.Len(), maxRemembered,
+		"the whole case is an answer the middleware will not keep, and one under the cap would "+
+			"be the ordinary replay this file already covers")
+
+	retry := answered(handler, asking(t.Context(), "/authorise", key, body))
+	require.Equal(t, http.StatusOK, retry.Code, "nothing here fails, which is what makes it the awkward case")
+	assert.Empty(t, retry.Header().Get(transport.ReplayedHeader),
+		"an answer that was never recorded cannot be replayed, and this is the step where the "+
+			"guarantee is lost rather than the one where it shows")
+	assert.Equal(t, int64(4), signatures.Load(),
+		"two complete pairs for one decision: the first is a pair nobody holds, and it carries "+
+			"the user's key exactly as the one they were given does")
+}
+
+// maxRemembered is transport.Idempotency's cap on a response it will keep for
+// replay. Unexported over there, so it is restated here rather than reached
+// for — and a change to it that is not made here shows up as this test's
+// require failing, which names the cap, rather than as a silent pass.
+const maxRemembered = 1 << 20
+
+// moreConstraintsThanTheAnswerCanRemember builds an authorisation whose answer
+// is over the cap while the request itself is comfortably inside the 1 MiB both
+// the middleware and roles.DecodeJSON read.
+//
+// Three thousand rather than the smallest number that works. The crossing is
+// near two thousand — a thousand answers in 557 KB and replays — and a test
+// sitting on the boundary would go quiet the first time a claim was added to
+// either mandate. Well past it is what keeps this measuring the route's
+// amplification rather than an arithmetic coincidence.
+func moreConstraintsThanTheAnswerCanRemember() string {
+	var b strings.Builder
+	b.WriteString(`{"prompt":"a great many limits","constraints":[`)
+	for i := range 3000 {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		// item.attr.<name> is the one field name that is open without a source
+		// change, which is what lets this be three thousand distinct limits
+		// rather than one repeated — a set the parser accepts in full.
+		fmt.Fprintf(&b, `{"op":"eq","field":"item.attr.tag%d","value":"value-%d"}`, i, i)
+	}
+	b.WriteString(`],"agent_key":{"kty":"EC","crv":"P-256","kid":"the-agents-key","x":"MA","y":"MA"}}`)
+	return b.String()
+}
+
 // surfaceThatSigns stands up a Trusted Surface whose Signer is the generated
 // double, under a script that decides what the user's key does on each call.
 //
@@ -224,6 +309,13 @@ func surfaceThatSigns(t *testing.T, events *obs.Emitter, script func(signature i
 			// under test rather than a convenience. Counted after it, so the
 			// count is signatures the key actually made rather than calls that
 			// were refused before it was reached.
+			//
+			// What keeps the copy honest is
+			// TestSignAndResolveRespectContextCancellation over in that
+			// package, which fails if the real signer stops refusing a
+			// cancelled context. Worth naming, because a double that
+			// reimplements its subject is a double that can drift from it, and
+			// this one would drift in the direction of still passing.
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
