@@ -131,6 +131,11 @@ One open mandate, carrying a temporal recurrence constraint, is reused across
 billing periods until it expires. The interesting property is the expiry:
 authority ends on its own, without anyone having to revoke it.
 
+This is the one of the three that is further away than unbuilt. A mandate here
+is spent by the first receipt that accepts a purchase, so a second billing
+period is unrepresentable rather than merely unimplemented, and widening that is
+a source change — `../protocols/ap2.md` records the decision and what it costs.
+
 ```mermaid
 sequenceDiagram
     actor U as User

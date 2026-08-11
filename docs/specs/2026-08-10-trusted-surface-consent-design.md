@@ -1,7 +1,9 @@
 # The Trusted Surface consent screen, and the hop that stopped being one call
 
 **Date:** 2026-08-10
-**Status:** approved, not yet built
+**Status:** the screen is built — `/consent` is the Trusted Surface route #22
+closed with. #193 is the gap left on it: the decision axis is carried by a
+heading where the indicator vocabulary says enclosure.
 **Issues:** #22. First slice of #109. Follows #15, #16, #17, #20, #21.
 Bounded by #133 and #160, both of which it makes visible and neither of which it
 fixes — see *What this does not do*.

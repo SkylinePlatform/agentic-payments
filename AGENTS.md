@@ -204,13 +204,16 @@ These are enforced, not advisory.
    set. Those three packages are the whole of the production import graph; tests
    in `internal/adapters/ap2`, `internal/agent` and `internal/agent/console`
    build one as well.
-   `roles/surface/nonagentic_test.go` is the one place that names the import
-   path *without* importing it — it holds the path as a string and walks the
-   transitive graph to prove the Trusted Surface cannot reach it. `grep -rn
-   'agent/interpret"' backend --include='*.go'` is what checks that paragraph,
-   and `TestOnlyTheAgentCanReachAnInterpreter` is the same question asked of the
-   transitive graph rather than of the files, so a role that reached one through
-   a helper would fail rather than pass a grep.
+   Two files name the import path *without* importing it, each holding it as a
+   string for a graph walk to ask about: `roles/surface/nonagentic_test.go`,
+   whose `TestTheTrustedSurfaceCannotReachAnInterpreter` proves the Trusted
+   Surface cannot reach one, and `internal/agent/interpret/reach_test.go`, whose
+   `TestOnlyTheAgentCanReachAnInterpreter` asks the same of every package in the
+   module, against an allow-list of the three above plus the interpreter itself.
+   `grep -rn 'agent/interpret"' backend --include='*.go'` is what checks the
+   paragraph above; both tests ask it of the transitive graph rather than of the
+   files, so a role that reached one through a helper would fail rather than
+   pass a grep.
 
    Whatever ends up behind `IntentInterpreter` must call `interpret.Validate`
    on what it is about to return. A constraint naming a field the verifier does
@@ -524,8 +527,8 @@ reconcile against the code for no benefit.
   `t.FailNow`, which the testing package documents as legal only from the
   goroutine running the test. Inside a `wg.Go`, an HTTP handler or any other
   callback, use `assert` — a `require` there loses the failure silently and
-  can leave the test hanging instead of failing. `internal/collector`,
-  `internal/platform/obs` and `internal/demo` all assert from goroutines.
+  can leave the test hanging instead of failing. `internal/collector` and
+  `internal/platform/obs` both assert from goroutines.
 
   This reaches further than it first looks, and the conversion that
   introduced this rule tripped over it: a **helper** containing `require` is
