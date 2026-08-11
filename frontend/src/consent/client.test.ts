@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { propose, refuse } from "./client";
+import { propose, refuse, startWatch } from "./client";
+import type { Authorised, Proposal } from "./model";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -44,5 +45,85 @@ describe("the client", () => {
       "d",
     );
     expect(calls.map((c) => c.url)).toEqual(["/authorise/refused"]);
+  });
+
+  it("assembles the watch's authorisation from both halves, field by field", async () => {
+    const calls = capture({ id: "w1", correlation_id: "c1" }, 201);
+
+    // Every value below is unique across both objects, so a field pulled from
+    // the wrong one — or dropped, or renamed — shows up as a mismatch rather
+    // than a coincidence. Proposal and Authorised share no field names, so the
+    // risk this guards is a typo or an omission, not a mix-up between two
+    // fields that happen to be called the same thing.
+    const proposal: Proposal = {
+      prompt: "buy a ladder",
+      constraints: [{ op: "lte", field: "amount", value: 1 }],
+      agent_key: {} as Proposal["agent_key"],
+      item: "gtin:proposal-item",
+      offer: {
+        id: "gtin:proposal-item",
+        title: "a ladder",
+        description: "",
+        image_url: "",
+        retailer: "",
+        price: { amount: 1, currency: "USD" },
+      },
+      watch_slots_free: 8,
+    };
+    const authorised: Authorised = {
+      open_checkout_mandate: "checkout.jwt",
+      open_payment_mandate: "payment.jwt",
+      rendered: ["at most $1.00"],
+      expires_at: "2026-01-01T00:00:00Z",
+      payment_instrument: { id: "card-9999", type: "CARD" },
+    };
+
+    await startWatch(proposal, authorised, 3);
+
+    const body = JSON.parse(calls[0].init.body as string) as {
+      prompt: string;
+      quantity: number;
+      authorisation: {
+        item: string;
+        constraints: unknown;
+        open_checkout_mandate: string;
+        open_payment_mandate: string;
+        rendered: string[];
+        expires_at: string;
+        payment_instrument: unknown;
+      };
+    };
+
+    // Top level: the prompt and the quantity, neither of which lives on
+    // either input object under this name.
+    expect(body.prompt).toBe("buy a ladder");
+    expect(body.quantity).toBe(3);
+
+    // The proposal's half: what was narrowed and signed.
+    expect(body.authorisation.item).toBe("gtin:proposal-item");
+    expect(body.authorisation.constraints).toEqual(proposal.constraints);
+
+    // The surface's half: its own account of what it signed.
+    expect(body.authorisation.open_checkout_mandate).toBe("checkout.jwt");
+    expect(body.authorisation.open_payment_mandate).toBe("payment.jwt");
+    expect(body.authorisation.rendered).toEqual(["at most $1.00"]);
+    expect(body.authorisation.expires_at).toBe("2026-01-01T00:00:00Z");
+    expect(body.authorisation.payment_instrument).toEqual({ id: "card-9999", type: "CARD" });
+  });
+
+  it("carries the server's own sentence when the body is not JSON at all", async () => {
+    // capture() above always runs its response through JSON.stringify, which
+    // turns even a "plain text" fixture into a JSON-quoted string — a shape
+    // messageOf's JSON.parse branch happens to read correctly, but not the
+    // shape a real http.Error body has. Go's own 422 is unquoted text with a
+    // trailing newline, which is not valid JSON at all, so this is the one
+    // case that drives messageOf's catch branch instead — the branch
+    // production actually uses.
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve(
+        new Response('interpret: no script for this prompt: "buy a boat"\n', { status: 422 }),
+      ),
+    );
+    await expect(propose("buy a boat")).rejects.toThrow(/no script for this prompt/);
   });
 });
