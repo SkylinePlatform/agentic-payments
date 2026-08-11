@@ -1090,13 +1090,16 @@ const maxRenderedSize = 4096
 // constraints a decision can hold, and the answer grows with both. Raising
 // either alone would move headroom nobody was looking at.
 //
-// Eight is measured. A constraint set where every byte signed is a byte some
-// sentence says costs at most about **2.7 bytes of encoding per byte of
-// sentence** — the worst is a flat list of the shortest limits the vocabulary
-// can state, and every other shape the field-by-operator matrix can build comes
-// in under it. Eight is three times that, which leaves a caller room for a
-// redundant `all` around each limit and no room for material no sentence
-// mentions.
+// Eight is measured, leaf by leaf and shape by shape. Every leaf the
+// field-by-operator matrix can build costs at most **3.0 bytes of encoding per
+// byte of sentence** — `amount eq` is the worst of them and the shortest limit
+// the vocabulary can say is 2.7 — and a group over several children is no worse,
+// because `and` and `or` have to be said as well as written. The only shape that
+// climbs is a group with exactly one child, which says nothing its child does
+// not: 4.1 for one such wrapper, 5.4 for two, 6.7 for three. Eight takes all of
+// those and refuses the fourth, which is room for the redundant grouping an
+// interpreter might emit and no room for the half a megabyte of padding that
+// went through this bound's predecessor.
 //
 // Then the mechanism check, which is the half the rendering bound could not
 // make honestly. Spent to the last byte of both budgets at once — 273 of the
