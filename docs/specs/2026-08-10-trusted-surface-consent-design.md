@@ -65,8 +65,19 @@ sequenceDiagram
 ### The agent holds nothing between the first hop and the last
 
 `POST /proposals` is a pure function of the prompt: interpret, search, narrow,
-answer. No identifier to hand back, no record with a lifetime, nothing to clean
-up when the user refuses or closes the tab.
+answer. **The console holds nothing** — no identifier to hand back, no record
+with a lifetime of its own, nothing this handler cleans up when the user
+refuses or closes the tab.
+
+That is the handler's promise, and it is narrower than the route's. `POST
+/proposals` still sits behind `roles.Middleware` like every other POST here,
+and `transport.Idempotency` retains the body of any 2xx it sees for its
+default 24-hour window, in a store bounded at 10,000 records and shared with
+`POST /watches`. That record belongs to the middleware, not to this handler —
+it ages out on its own schedule regardless of what `/proposals` itself
+remembers, which stays nothing — and it is genuinely earned here for the
+reason the error-mapping table below gives: a double-clicked *Interpret* must
+not pay for two model calls.
 
 The alternative — a pending intent the agent remembers — was considered and
 rejected. It does not avoid the mandates travelling back through the browser,
