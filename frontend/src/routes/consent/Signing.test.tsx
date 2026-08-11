@@ -317,12 +317,114 @@ describe("signing", () => {
     expect(within(screen.getByTestId("signed-box")).getByText("What you are signing")).toBeTruthy();
   });
 
+  /**
+   * The two `authorise` failures, and the one fact that separates them — #206.
+   *
+   * `request_malformed` is the surface's own answer, refusing the request
+   * *before* it signed anything, so **nothing was signed** is a fact this
+   * screen holds. Everything else is not: `client.ts`'s own doc comment says
+   * that on a 502, a dropped connection or a backgrounded tab "the surface may
+   * have already signed and only the response was lost… the browser sees a
+   * bare rejected fetch, not an answer it can read a code from".
+   *
+   * Both arms end in the same place today — one outlined box and the surface's
+   * sentence — and that is the defect: the screen stated *nothing was signed*
+   * over the half of it that cannot know. Each arm below is a way of reaching
+   * the second case, and they have to reach the *same* state, because "every
+   * other failure" is one state and not a list this screen curates.
+   */
+  const CANNOT_TELL: [string, () => void][] = [
+    [
+      "a dropped connection, which carries no body and no code at all",
+      () => {
+        vi.stubGlobal("fetch", (url: string) =>
+          url === "/authorise"
+            ? Promise.reject(new TypeError("Failed to fetch"))
+            : Promise.resolve(new Response("not stubbed: " + url, { status: 404 })),
+        );
+      },
+    ],
+    [
+      "a 502, which carries a sentence and still settles nothing",
+      () => {
+        stubFetch({ "/authorise": { status: 502, body: "the Trusted Surface did not answer." } });
+      },
+    ],
+  ];
+
+  it.each(CANNOT_TELL)("says the surface may have signed already, on %s", async (_case, stub) => {
+    stub();
+    renderSigning();
+
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText(/may have signed already/i),
+      "a person told only that it failed walks away believing no mandate carrying their key " +
+        "exists, and this is the one failure where that may be false and nothing can check it",
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(/nothing was signed/i),
+      "#206's first Done when: the screen never states nothing was signed about a case it " +
+        "cannot distinguish from a signature",
+    ).toBeNull();
+
+    // The enclosure keeps its two readings rather than growing a third. What
+    // the outline says is that this browser holds no signed answer for the
+    // sentences in that box, which is true here; what no enclosure can say is
+    // that a signature may exist at the surface anyway, and the sentence above
+    // is the only honest carrier of it — the same argument the *Indicators*
+    // section already makes about a refusal whose record did not land.
+    const box = screen.getByTestId("signed-box");
+    expect(box.className, "an outline: this browser was handed no signature").toContain(
+      "border-graphite/40",
+    );
+    expect(box.className, "and no fill, which would claim one it has not got").not.toContain(
+      "bg-wash",
+    );
+    expect(within(box).getByText("What you are signing")).toBeTruthy();
+  });
+
+  it("states that nothing was signed only where the surface's own answer proves it", async () => {
+    // The other half of the pair above. A digest mismatch is refused before
+    // anything is signed, so this is the one branch where the screen may say
+    // so outright — and saying it here is what makes the distinction legible
+    // to a reader rather than only to the type.
+    stubFetch({
+      "/authorise": {
+        status: 400,
+        body: {
+          type: "urn:x",
+          title: "y",
+          status: 400,
+          detail: "the constraints do not match the digest",
+          code: "request_malformed",
+        },
+      },
+    });
+    renderSigning();
+
+    const alert = await screen.findByRole("alert");
+    expect(
+      within(alert).getByText(/nothing was signed/i),
+      "the surface answered, and its answer is what proves it — this is the one branch " +
+        "entitled to the claim the box used to make everywhere",
+    ).toBeTruthy();
+    expect(
+      within(alert).queryByText(/may have signed already/i),
+      "and it must not hedge about a case it can tell: a screen that doubts everything " +
+        "equally has told the reader nothing",
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
+  });
+
   it("offers a retry when authorise fails for a reason other than a digest mismatch, and it can succeed", async () => {
-    // A 502 is nothing the browser did: the constraint set was never
-    // touched, nothing was signed, and retrying might simply work. Unlike
-    // the stranded retry, this one calls authorise again — correctly,
-    // because a *failed* authorise produced no mandate, so this is the
-    // first successful signature rather than a second one.
+    // A 502 is nothing the browser did: the constraint set was never touched
+    // and retrying might simply work. Unlike the stranded retry, this one
+    // calls authorise again — and **not** because a failed authorise proved
+    // no mandate exists, which #206 is the correction of: it cannot prove
+    // that. What makes it safe is the shared `signatureKey`, pinned two tests
+    // below, which is what turns a repeat into "answer with what I already
+    // signed" rather than into a second signature.
     const calls = stubFetch({
       "/authorise": [{ status: 502, body: "the surface did not answer" }, { body: anAuthorised() }],
       "/watches": { status: 201, body: { id: "w", correlation_id: "c2" } },
