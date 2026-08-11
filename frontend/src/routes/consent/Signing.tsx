@@ -149,14 +149,36 @@ const REFUSED_BEFORE_SIGNING = "request_malformed";
  * replays an answer it remembers, and it deliberately remembers no 5xx —
  * `transport.Idempotency`'s own comment gives the reason, that an operation
  * which failed for the verifier's own reasons has not happened once. That
- * reasoning holds for a handler that is atomic and `authorise` is not: it
- * signs the Checkout Mandate, then the Payment Mandate, and a failure between
- * them answers 503 with one signature already made and nothing remembered to
- * replay. So the key is what makes the retry safe in the case this state is
- * usually reached by, and #212 is the case where it is not. Not a reason to
- * withhold the button — a person with no way forward is worse off than one
- * whose retry is imperfect — but every sentence on screen is written to the
- * weaker guarantee rather than to this paragraph's old absolute.
+ * reasoning holds for a handler which leaves nothing behind when it fails,
+ * and `authorise` was not one: it signed the Checkout Mandate, then the
+ * Payment Mandate, and a failure between them answered 503 with one signature
+ * already made and nothing remembered to replay.
+ *
+ * **#212 closed that at the surface.** The pair is now signed as one unit of
+ * work that does not take the caller's cancellation, so a dropped connection
+ * no longer lands between the two signatures: the surface finishes, the
+ * answer is remembered, and the retry is replayed rather than run again. A
+ * failure that still cannot be finished drops the half it made rather than
+ * announcing it, so no mandate anybody holds comes out of an attempt that did
+ * not complete. The key is therefore what makes the retry safe, and the case
+ * #212 named is gone.
+ *
+ * **One case survives it and is not this screen's**, recorded here so the
+ * paragraph above is not read as the absolute it is one word away from being.
+ * The middleware keeps a response only up to a megabyte and forgets — never
+ * refuses — a larger one, so a constraint set big enough to push the surface's
+ * answer past the cap completes, is not remembered, and is signed again on the
+ * retry. Issue #223 is where bounding that is decided. It is out of reach from
+ * here for the reason this screen exists: a set of limits large enough to do
+ * it is a set nobody could have read on the way past, and what this component
+ * sends is what a person was shown.
+ *
+ * **What has not changed is what this screen may assert**, which is why no
+ * sentence below moved. The guarantee is the surface's to keep, and a browser
+ * cannot see which surface it is talking to — so the screen states the
+ * mechanism rather than the absolute for that reason now, rather than for the
+ * one #212 fixed. Neither was ever a reason to withhold the button: a person
+ * with no way forward is worse off than one whose retry is imperfect.
  */
 export function Signing({
   proposal,
@@ -446,15 +468,18 @@ export function Signing({
                   guarantees**, and that is #212's correction rather than
                   hedging for its own sake. It read *"trying again cannot
                   produce a second signature"* — an absolute about the surface,
-                  asserted by the one screen that cannot see it. The key is
-                  what lets the surface answer with the pair it already made,
-                  and it does exactly that for the failure this state is
-                  usually reached by; what it is not is a guarantee this
-                  browser is in any position to give, and #212 records the
-                  reachable case where the surface signs and then has nothing
-                  to replay. Stating the mechanism is the most a client can
-                  honestly say, and it is still the whole of what a person
-                  needs in order to press the button. */}
+                  asserted by the one screen that cannot see it. Two things
+                  were wrong with that, and only one of them has been fixed.
+                  #212 closed the reachable case where the surface signed and
+                  then had nothing to replay: the pair is one unit of work
+                  now, and an attempt that cannot finish it leaves no mandate
+                  anybody holds. What survives is the other half — the
+                  guarantee is the surface's to keep, and a browser cannot see
+                  which surface it is talking to, so a client asserting it
+                  would be asserting something it has no way to check. Stating
+                  the mechanism is the most a client can honestly say, and it
+                  is still the whole of what a person needs in order to press
+                  the button. */}
               <p className="font-sans text-sm text-graphite">
                 The Trusted Surface may have signed already — this browser was not told either way.
                 Trying again sends the same request under the same key, which is what lets the

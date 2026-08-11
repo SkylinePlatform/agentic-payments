@@ -165,6 +165,20 @@ func (m *Idempotency) Wrap(h http.Handler) http.Handler {
 		// transient fault into a permanent one for the life of the window,
 		// with the caller holding a key that can now never succeed.
 		//
+		// "Has not happened once" is a precondition on the handler rather than
+		// an observation this middleware can make, and it is worth naming
+		// because nothing here can check it. The deferred Release above hands
+		// the key back and the next attempt runs the handler from the top, so
+		// a handler that fails part-way through something it cannot undo has
+		// that part done twice under one key — and the caller, holding only
+		// whichever answer arrived last, has no way to learn that a first one
+		// exists. Issue #212 is where a route was found not meeting it: the
+		// Trusted Surface signed one mandate of a pair, failed on the second
+		// and answered 503. The fix belonged in the handler and not here,
+		// because a route allowed to remember its own 5xx would hand its
+		// caller a key that can never succeed — on a consent route, a person
+		// who can never complete a decision they have already made.
+		//
 		// A hijacked connection is not remembered either, and for a sharper
 		// reason: after a hijack the answer never passes through this writer at
 		// all, so status is still the 200 the recorder was born with and body is
