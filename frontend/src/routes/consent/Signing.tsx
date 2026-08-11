@@ -199,6 +199,17 @@ export function Signing({
     }
   }
 
+  // The heading names what state the signature is actually in, not what the
+  // box always looked like: "What you are signing" while nothing has been
+  // signed yet — mid-flight in `signing`, or `authorise` having just failed
+  // in `failed`, where the state's own doc comment is explicit that nothing
+  // was signed — and "What you signed" only once `authorise` has actually
+  // succeeded, in `starting` and `stranded`. A heading that said "signed" over
+  // sentences nobody produced a signature for would misstate the one fact
+  // this screen exists to get right.
+  const signedHeading =
+    state.kind === "signing" || state.kind === "failed" ? "What you are signing" : "What you signed";
+
   return (
     <section className="flex flex-col gap-8">
       <h1 className="font-display text-3xl tracking-tight text-ink">Signing</h1>
@@ -209,7 +220,7 @@ export function Signing({
         aria-labelledby="signed"
       >
         <h2 id="signed" className="font-sans text-sm text-graphite">
-          What you signed
+          {signedHeading}
         </h2>
         {previewed.rendered.map((sentence) => (
           <p key={sentence} className="font-mono text-ink">

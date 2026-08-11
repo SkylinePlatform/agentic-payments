@@ -144,6 +144,9 @@ describe("signing", () => {
     // without having to be focused on this exact node: `role="status"` is a
     // polite live region, so the in-flight line announces itself.
     expect(screen.getByRole("status").textContent).toMatch(/collecting your signature/i);
+    // `authorise` has not resolved yet, so nothing is signed — the heading
+    // has to say so rather than claim a signature that does not exist.
+    expect(within(screen.getByTestId("signed-box")).getByText("What you are signing")).toBeTruthy();
   });
 
   it("says the signature exists when the watch did not start", async () => {
@@ -167,6 +170,9 @@ describe("signing", () => {
     expect(
       within(screen.getByRole("alert")).getByText(/signed, and the watch did not start/i),
     ).toBeTruthy();
+    // `authorise` succeeded before `/watches` failed — a signature exists,
+    // so the heading is allowed to say so.
+    expect(within(screen.getByTestId("signed-box")).getByText("What you signed")).toBeTruthy();
   });
 
   it("retries with the same authorisation under a fresh key", async () => {
@@ -212,6 +218,10 @@ describe("signing", () => {
     expect(screen.queryByRole("button", { name: /try again/i })).toBeNull();
     // Announced all the same, even with nothing to click.
     expect(within(screen.getByRole("alert")).getByText(/request_malformed/)).toBeTruthy();
+    // `authorise` threw — nothing was signed — so the heading must not claim
+    // otherwise. A reader seeing "What you signed" above "the surface did
+    // not answer" would reasonably conclude a mandate exists; it does not.
+    expect(within(screen.getByTestId("signed-box")).getByText("What you are signing")).toBeTruthy();
   });
 
   it("offers a retry when authorise fails for a reason other than a digest mismatch, and it can succeed", async () => {
