@@ -30,7 +30,7 @@ Adapters populate the axes; `core` never learns which protocol filled one.
 ## Module dependencies
 
 The three-layer model above only holds if the code cannot route around it.
-Six `depguard` rules in `backend/.golangci.yml` enforce it: `make lint` runs
+Eight `depguard` rules in `backend/.golangci.yml` enforce it: `make lint` runs
 them locally and CI runs them again on every pull request, and AGENTS.md's own
 framing is that a failure against any of them is an architecture violation
 rather than a style nit, so the fix is never a suppressing comment — the rule
@@ -46,6 +46,8 @@ flowchart RL
     platform["internal/platform<br/>crypto · clock · store · obs"]
     roles["internal/roles"]
     pkg["pkg/httpsig · pkg/sdjwt<br/>public standards, extractable"]
+    collector["internal/collector<br/>event log — cmd/collector only"]
+    console["internal/agent/console<br/>watch state — cmd/agent only"]
 
     ap2 --> core
     tap --> core
@@ -57,8 +59,10 @@ flowchart RL
     core -.->|depguard: core-isolation| ap2
     ap2 -.->|depguard: adapter-isolation| tap
     pkg -.->|depguard: pkg-purity| platform
+    roles -.->|depguard: collector-containment| collector
+    roles -.->|depguard: console-containment| console
 
-    linkStyle 6,7,8 stroke:#d73a4a,stroke-dasharray:4
+    linkStyle 6,7,8,9,10 stroke:#d73a4a,stroke-dasharray:4
 ```
 
 The dashed red edges are forbidden and enforced in CI, not merely discouraged
@@ -72,6 +76,8 @@ in review.
 | `pkg-purity` | `pkg/**` cannot import `internal/**` — `pkg/` implements public standards and must remain extractable, liftable out of this repository unchanged |
 | `key-material-containment` | `crypto/ecdsa`, `crypto/ed25519`, `crypto/rsa`, `crypto/ecdh` and `crypto/x509` are importable only from `internal/platform/crypto` — everywhere else holds an `authz.Signer` or a `KeyRef` (a kid and an algorithm name), never a type a private key would arrive in |
 | `no-weak-randomness` | `math/rand` and `math/rand/v2` are banned everywhere — randomness in this codebase reaches nonces and keys, and there is no call site where a weak source would be benign |
+| `collector-containment` | `internal/collector` is importable only from `cmd/collector` — the event log is observability and never evidence, so a dispute path cannot reach a log entry even by accident |
+| `console-containment` | `internal/agent/console` is importable only from `cmd/agent` — the same argument one party along: a merchant able to import it would read the buyer's own bookkeeping as fact, where AP2 gives it a signed receipt to read instead |
 
 `adapter-isolation-ap2` and `adapter-isolation-tap` are the same rule applied
 from both sides: deliberate duplication between the two adapters is accepted
@@ -110,7 +116,10 @@ all. It watches the `step` index on the merchant's own quote and attempts a
 purchase when that moves, so the bound the user set is read only by the
 verifiers. `price < 20000` is the line `internal/agent/watch.go` is built not to
 contain — a watch that made that comparison would filter out the $210 candidate
-the merchant has to be shown refusing.
+the Credential Provider has to be shown refusing. It is that role and not the
+merchant, because the merchant initiates payment and so cannot be reached until
+the purchase has been funded; `../protocols/ap2.md`'s Human Not Present section
+argues it.
 
 ## What is mocked
 
@@ -132,8 +141,9 @@ Mocked, and why:
   kind of inference: a real processor integration is not under test either,
   and mocking it completes the pairing with the Merchant above.
 - **Agent registry** — TAP's production directory requires a commercial
-  relationship with Visa; the reference implementation's local registry is
-  used instead, which is also why the milestone needs no Visa account.
+  relationship with Visa, so the TAP milestone stands up a local one instead,
+  which is why it needs no Visa account. `cmd/registry` is a stub until then,
+  and `deploy/demo.json` marks it `"implemented": false`.
 - **Settlement** — AGENTS.md states, elsewhere in the same section, that
   nothing here moves real money. Read against settlement's place on this
   list, that appears to be the reason, though the Scope section never states
@@ -150,14 +160,15 @@ Nothing here is PCI-compliant. Nothing moves real money.
 
 `cmd/collector` is an eighth binary, and it is neither one of AP2's five roles
 — Shopping Agent, Credential Provider, Merchant, Merchant Payment Processor,
-Trusted Surface — nor a TAP identity party. It exists so the three-lane
-frontend has something to show, and the screenshots from that view are what
-carry the article series.
+Trusted Surface — nor a TAP identity party. It exists so the three-lane view
+has something to show, and the screenshots from that view are what carry the
+article series.
 
 The distinction needs stating because everything about it invites the opposite
-conclusion. It runs on the same HTTP transport as every participant, it speaks
-to all seven role binaries, and it is the one component in the system that sees
-every transaction end to end. That is exactly the shape of a protocol
+conclusion. It runs on the same HTTP transport as every participant, every role
+that emits does so into it — the five AP2 ones today, `registry` and `proxy`
+being stubs until the TAP milestone — and it is the one component in the system
+that sees every transaction end to end. That is exactly the shape of a protocol
 participant, and it is none of one.
 
 What follows from that is the rule worth remembering: **the event log is
@@ -187,37 +198,6 @@ github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz
 github.com/SkylinePlatform/agentic-payments/backend/pkg/httpsig
 ```
 
-```
-contracts/              JSON Schema — single source of truth → Go + TS types
-  authz/ identity/ instrument/ evidence/
-  tools/                the generators, in their own Go module
-  codegen.mk
-backend/                ⬅ the Go module root. go.mod lives here, not at the top
-  cmd/                  agent, merchant, credprovider, mpp, surface, registry, proxy
-                        collector — an eighth binary, and NOT an AP2 role
-  internal/
-    collector/          event log and SSE fan-out. demo infrastructure, never
-                        evidence; only cmd/collector may import it
-    core/               domain. imports nothing from this project
-      authz/            mandates, ports
-        constraint/     types, schemas, evaluators — ours, never in adapters/ap2
-      identity/         agent identity, ports
-      instrument/       payment instrument ports
-      evidence/         receipts, dispute, ports
-    adapters/ap2/       wire format ⇄ core
-    adapters/tap/
-    agent/interpret/    IntentInterpreter — the ONLY place an LLM may live
-    roles/              mock role implementations
-    platform/           crypto, store, clock, obs — implements core ports
-  pkg/
-    httpsig/            RFC 9421 — public standard, externally importable
-    sdjwt/              SD-JWT — public standard, externally importable
-frontend/               React + Vite + TypeScript
-docs/                   architecture, business, protocols, diagrams
-deploy/                demo.json — the topology `make demo` starts
-                       catalogue.json — what the mock Merchant sells
-```
-
 That split has a cost for an editor opened at the repository root: `gopls`
 anchors on the directory the editor opened, finds no `go.mod` there, and
 falls back to a GOPATH view, reporting every intra-module import as
@@ -229,3 +209,8 @@ purpose: a committed workspace would unify the two modules' build lists, and
 against modules CI never provides. `make` always runs with `GOWORK=off`, so
 whether that file exists never changes what `make check` builds — the
 workspace is for the editor, and for nothing else.
+
+The directory tree itself lives in AGENTS.md's Layout section and is not
+repeated here. A listing kept in two places disagrees with itself the first time
+one of them gains an entry, and this was the copy that went stale — nothing in
+the code reads it, whereas every agent reads the other before touching a file.

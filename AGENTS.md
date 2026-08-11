@@ -197,17 +197,23 @@ These are enforced, not advisory.
    **The Human Not Present flow is what imports it.** `internal/agent`'s
    `Client.Authorise` calls an `IntentInterpreter` once, before the user signs;
    `internal/agent/console` holds one for the watches it starts; and `cmd/agent`
-   is what chooses the implementation — `-interpreter scripted`, the default,
-   is `interpret.Demo()`, and `-interpreter gemini` is a model behind the same
-   interface. Those three are the whole of the production import graph; tests in
-   `internal/adapters/ap2` and `internal/agent` build one as well.
-   `roles/surface/nonagentic_test.go` is the one place that names the import
-   path *without* importing it — it holds the path as a string and walks the
-   transitive graph to prove the Trusted Surface cannot reach it. `grep -rn
-   'agent/interpret"' backend --include='*.go'` is what checks that paragraph,
-   and `TestOnlyTheAgentCanReachAnInterpreter` is the same question asked of the
-   transitive graph rather than of the files, so a role that reached one through
-   a helper would fail rather than pass a grep.
+   is what chooses between three — `-interpreter scripted`, the default, is
+   `interpret.Demo()`; `-interpreter gemini` is a model behind the same
+   interface and refuses to start without a key; `-interpreter auto` is the one
+   `make demo-live` passes, and takes the model only when `GEMINI_API_KEY` is
+   set. Those three packages are the whole of the production import graph; tests
+   in `internal/adapters/ap2`, `internal/agent` and `internal/agent/console`
+   build one as well.
+   Two files name the import path *without* importing it, each holding it as a
+   string for a graph walk to ask about: `roles/surface/nonagentic_test.go`,
+   whose `TestTheTrustedSurfaceCannotReachAnInterpreter` proves the Trusted
+   Surface cannot reach one, and `internal/agent/interpret/reach_test.go`, whose
+   `TestOnlyTheAgentCanReachAnInterpreter` asks the same of every package in the
+   module, against an allow-list of the three above plus the interpreter itself.
+   `grep -rn 'agent/interpret"' backend --include='*.go'` is what checks the
+   paragraph above; both tests ask it of the transitive graph rather than of the
+   files, so a role that reached one through a helper would fail rather than
+   pass a grep.
 
    Whatever ends up behind `IntentInterpreter` must call `interpret.Validate`
    on what it is about to return. A constraint naming a field the verifier does
@@ -473,6 +479,14 @@ or a table with one row, is ceremony — leave it out. This documentation is den
 because every line earns its place, and a rule that produced a diagram on every
 typo fix would be the first one people quietly stopped following.
 
+**Documentation moves in the same pull request as the code.** A change to a
+mandate flow, to a verification rule, or to which protocol detail lives in
+`adapters/ap2/` rather than in the canonical model carries its update to
+`docs/architecture/` or `docs/protocols/ap2.md` in that same pull request, never
+in a follow-up. Documentation that has stopped matching the code it illustrates
+is worse than none, because a diagram carries the authority of a picture even
+after it has started teaching the wrong thing.
+
 **Issues:** work is tracked in GitHub Issues under two milestones, *Google AP2*
 (#1–23) and *Visa TAP* (#24–33), plus *Foundations*. Issue bodies carry spec
 references, dependencies and known traps. Read the issue before starting.
@@ -513,8 +527,8 @@ reconcile against the code for no benefit.
   `t.FailNow`, which the testing package documents as legal only from the
   goroutine running the test. Inside a `wg.Go`, an HTTP handler or any other
   callback, use `assert` — a `require` there loses the failure silently and
-  can leave the test hanging instead of failing. `internal/collector`,
-  `internal/platform/obs` and `internal/demo` all assert from goroutines.
+  can leave the test hanging instead of failing. `internal/collector` and
+  `internal/platform/obs` both assert from goroutines.
 
   This reaches further than it first looks, and the conversion that
   introduced this rule tripped over it: a **helper** containing `require` is
@@ -572,12 +586,11 @@ reconcile against the code for no benefit.
   `lifecycle_test.go`. **That rule is still out, and for the same reason.** What
   #19 named as the case that *would* qualify is the one that arrived:
   `Expression.Render()`'s sentence is an artefact and it travels — it is what the
-  user read and signed, and it is what the Mandate Inspector will re-render from
-  a mandate signed some time ago, with no live surface to ask — and
+  user read and signed, and it is what the Mandate Inspector re-renders from a
+  mandate signed some time ago, with no live surface to ask — and
   `frontend/src/constraint/render.ts` is a second implementation that has to
-  reproduce it exactly. The Inspector is still a placeholder and nothing imports
-  that module yet; the two implementations can drift from today regardless,
-  which is what the vectors are for.
+  reproduce it exactly. `frontend/src/inspector/model.ts` imports it, so the two
+  implementations are live and can drift, which is what the vectors are for.
   `contracts/testdata/render_vectors.json` is where the two meet, and Go owns
   it: `TestGoldenRenderVectors` generates the file from a table and compares
   against it, so a `Render()` change with no regeneration fails in the language
@@ -628,20 +641,21 @@ make generate-ts      # the TypeScript half on its own              ⟵ needs No
 make generate-verify  # prove generation is reproducible and touches nothing tracked ⟵ needs Node
 make diagrams         # export inline mermaid from docs/ to SVG     ⟵ needs Node
 make demo             # bring the whole stack up, one Ctrl-C stops it ⟵ needs Node
+make demo-live        # the same stack, with -interpreter auto on the watch ⟵ needs Node
 make frontend         # the frontend dev server on its own           ⟵ needs Node
 make frontend-test    # the frontend suite: Vitest in jsdom          ⟵ needs Node
 make frontend-check   # type-check, build and test the frontend      ⟵ needs Node
 ```
 
 **`make check` needs only Go.** Node is required by `make generate`,
-`make generate-ts`, `make diagrams`, `make demo` and the three frontend targets
-— `diagrams` pulls a headless Chromium, which is exactly why it was kept out of
-`check`. `check` regenerates the *Go* half of the canonical model and the mocks
-before linting — testing a tree whose generated half came from an older schema
-checks the wrong thing, and the mocks are what the tests are written against —
-but it stops there, so work that touches neither the frontend nor a diagram
-never needs npm. mockery is a Go program like the schema generator, so neither
-half of that generation costs a Node toolchain.
+`make generate-ts`, `make diagrams`, the two demo targets and the three frontend
+ones — `diagrams` pulls a headless Chromium, which is exactly why it was kept
+out of `check`. `check` regenerates the *Go* half of the canonical model and
+the mocks before linting — testing a tree whose generated half came from an
+older schema checks the wrong thing, and the mocks are what the tests are
+written against — but it stops there, so work that touches neither the frontend
+nor a diagram never needs npm. mockery is a Go program like the schema
+generator, so neither half of that generation costs a Node toolchain.
 
 **The frontend suite is where that trade-off shows.** `frontend-test` is Vitest
 in jsdom, and it is deliberately not a prerequisite of `check` — a gate that
@@ -659,7 +673,7 @@ the TypeScript half and any cross-language drift are caught. `make check`
 passing locally is necessary, not sufficient — which is why the bar below
 counts green jobs on the PR separately.
 
-A fourth workflow, `.github/workflows/docs.yml`, builds `docs/` into the site
+A second workflow, `.github/workflows/docs.yml`, builds `docs/` into the site
 published at <https://skylineplatform.github.io/agentic-payments> and deploys
 it on every merge to `main` that touches documentation. It runs on pull
 requests too, without deploying, so a dead link or a nav entry pointing at

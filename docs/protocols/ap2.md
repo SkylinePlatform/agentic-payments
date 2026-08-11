@@ -269,7 +269,7 @@ sequenceDiagram
     end
     A->>M: quote route:BEG-PMI
     M-->>A: 21000, step 1
-    Note over A: the step moved — assemble four closed<br/>mandates, one per verifier, sign with agent key
+    Note over A: the step moved — sign four closed mandates with the agent key:<br/>the Checkout for the merchant, the Payment for each of its three verifiers
     A->>C: delegated Payment Mandate
     C->>C: does the closed mandate satisfy every constraint?
     C-->>A: rejected — the amount bound is exceeded + rejection receipt
@@ -293,10 +293,11 @@ and the fourth difference is why the refusal above is drawn where it is:
   signed with the agent's Key Binding JWT over it — rather than a closed
   mandate the user signed directly. It reaches a different verification entry
   point, `AuthorisePaymentChain` rather than `VerifyPayment`.
-- **One chain per verifier.** `aud` is signed and compared, so the Payment
-  Mandate the Credential Provider reads, the one the merchant reads and the one
-  the processor reads are three different documents bound to three different
-  challenges.
+- **One chain per verifier, not per transaction.** `aud` is signed and compared,
+  so the Payment Mandate the Credential Provider reads, the one the merchant
+  reads and the one the processor reads are three different documents bound to
+  three different challenges. Two open mandates and four verifier slots is why
+  one attempt mints four chains.
 - The merchant **forwards the processor's chain and the processor's challenge
   unread**, because it is the audience of neither.
 - The user's constraints are **evaluated on this leg**. Under Human Present a
@@ -605,8 +606,8 @@ disclosable, and an **evaluation algorithm**.
 flowchart TB
     OM["open mandate<br/>constraints, user-signed"] --> REG
     CM["closed mandate<br/>agent-signed"] --> REG
-    REG{"registry:<br/>type → schema + evaluator"}
-    REG -->|"unknown type"| REJ1["reject — never ignore silently"]
+    REG{"registry:<br/>field → kind, kind → operators"}
+    REG -->|"unknown field or operator"| REJ1["reject — never ignore silently"]
     REG -->|"known"| EV["evaluate each constraint"]
     EV -->|"any fails"| REJ2["reject + signed rejection receipt"]
     EV -->|"all pass"| ACC["accept"]
@@ -618,19 +619,22 @@ it likes — that is what a language model does — and the deterministic gate o
 the other side decides. An agent that could wave through its own mistake would
 make every other guarantee here decorative.
 
-**An unknown constraint type is rejected, never silently ignored.** Silently
-ignoring one converts a limit the user set into a limit nobody enforces, which
-is the worst available outcome: the transaction proceeds and the user's
-approval is misrepresented. This is why the canonical model deliberately leaves
-the type identifier as an open string rather than an enumeration — an unknown
-type has to be *representable* in order to be rejected explicitly and named in
-a receipt, where a parse failure could be neither.
+**A constraint the verifier cannot read is rejected, never silently ignored.**
+Silently ignoring one converts a limit the user set into a limit nobody
+enforces, which is the worst available outcome: the transaction proceeds and the
+user's approval is misrepresented. This is why the canonical model deliberately
+leaves `op` and `field` as open strings rather than enumerations — an unknown
+one has to be *representable* in order to be rejected explicitly and named in a
+receipt, where a parse failure could be neither.
 
 The vocabulary itself is ours, not AP2's; AP2 merely transports it. Where it
 lives, and why it does not live in the AP2 adapter, is an implementation
 decision recorded in `../../contracts/README.md` and in issue #11 —
-`backend/internal/core/authz/constraint/` is the package, and it holds the
-registry, the per-type parameter schemas and the evaluators.
+`backend/internal/core/authz/constraint/` is the package, and what it holds is a
+matrix rather than a list of named types: a closed registry of fields each
+carrying a value kind, a table of the operators valid for each kind, and one
+evaluator over the expression tree those build. Adding a fact about a purchase
+is one field entry, after which every operator that fits its kind works on it.
 
 ### The known open problem
 
@@ -803,7 +807,7 @@ part worth re-reading before writing code.
 | The Checkout JWT must use a non-deterministic signature scheme | Binding |
 | `transaction_id` and `checkout_hash` are the same value under two names | Binding |
 | "Bound to the same checkout" does not mean "agreed on the price" — no AP2 rule compares `payment_amount` to what the checkout costs, and no role is assigned it | What the binding does not cover |
-| An unknown constraint type must be rejected, never silently ignored | Constraints |
+| A constraint naming a field or operator the verifier does not know must be rejected, never silently ignored | Constraints |
 | Constraints are evaluated by the verifier, never by the agent | Constraints |
 | Presenting every disclosure passes every test and defeats SD-JWT entirely | Selective disclosure |
 | Withholding too much leaves a limit nobody enforces; *which* constraint went is unrecoverable, but *that* some went is a count the signed payload gives you | Selective disclosure |

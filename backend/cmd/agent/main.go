@@ -313,8 +313,8 @@ func flagsAgree(addr string, once bool) error {
 	return nil
 }
 
-// The two implementations of IntentInterpreter -interpreter chooses between, and
-// the environment variable the second one needs.
+// The three names -interpreter takes, and the environment variable two of them
+// read — gemini requires it, auto lets it decide.
 //
 // The variable is named here rather than in internal/agent/interpret because
 // this is the process that reads it. A library package reaching into the
