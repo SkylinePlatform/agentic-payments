@@ -28,10 +28,10 @@ import { ThemeToggle } from "../theme/ThemeToggle";
  *
  * **No icons.** Four labelled surfaces under two headings are already
  * distinguishable by the thing a reader is actually reading, and the palette is
- * closed at six colours with a type hierarchy that makes monospace the
- * protagonist — a set of four glyphs would be four more shapes nobody approved,
- * carrying no information the label does not. An icon set is also appearance by
- * definition, and appearance is the half of shadcn this project declined.
+ * closed at seven colours with a type hierarchy that gives each face a job — a
+ * set of four glyphs would be four more shapes nobody approved, carrying no
+ * information the label does not. An icon set is also appearance by definition,
+ * and appearance is the half of shadcn this project declined.
  */
 export function Shell() {
   return (

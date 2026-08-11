@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-06
 **Status:** approved, not yet built
-**Issues:** #20, narrow slice of #45. Waits on #12, #16 and #15.
+**Issues:** #20, narrow slice of #45. Waits on #12, #16 and #15. Tokens
+revised by #159.
 
 ## The standard this screen is held to
 
@@ -89,34 +90,100 @@ Everything else stays quiet. One bold move, and the rest disciplined.
 
 ## Tokens
 
-**Colour.** Drawn from settlement and evidence rather than from fintech
-gradient: the palette of a signed document under examination.
+*Revised 2026-08-11 (#159): navy and cream, replacing the bond-paper palette
+this section originally recorded, and monospace demoted from protagonist to
+what is actually code. Recorded here, with the reasoning, before either change
+reaches a stylesheet — `palette.test.ts` says as much beside the hexes it
+pins: changing a colour is a design decision, and this document is where it
+gets made.*
 
-| Token | Hex | Role |
-|---|---|---|
-| `ink` | `#12100E` | Text and the spine itself |
-| `paper` | `#FBF9F5` | Ground. Warm but not the cream default — closer to bond paper than to oat milk |
-| `graphite` | `#5E5A52` | Secondary text, lane rules |
-| `seal` | `#1E4D3F` | Verified. A deep bottle green, the colour of a stamp rather than a status pill |
-| `broken` | `#8C2F1E` | The spine failing. Oxide red — a document annotated, not an alert |
-| `wash` | `#EDE8DF` | Lane backgrounds, one step off paper |
+**Colour.** The demo is investor-facing and has to hold attention. The
+bond-paper palette above was correct — the document metaphor is worth keeping
+— but it was quiet, and what it needed was a warmer, more modern identity
+rather than a change of metaphor. Navy and cream keep ink on paper, a value
+stamped rather than a status pill; they add presence by giving each theme its
+own ground rather than one hue pushed to both extremes — navy is the ground at
+night, cream the ground in daylight.
 
-No pure black, no pure white, and only two saturated values in the whole system.
-`seal` and `broken` are the only colour on the page, so their appearance means
+| Token | Light | Dark | Role |
+|---|---|---|---|
+| `paper` | `#F7F2E8` | `#0D1B2A` | Ground |
+| `wash` | `#E8DFCC` | `#17293D` | A panel, one step off the ground |
+| `ink` | `#10243A` | `#EEF3F8` | Text |
+| `graphite` | `#546375` | `#93A7BF` | Secondary text, rules |
+| `signal` | `#1F5FBF` | `#6FA8FF` | Values the protocol computed: digests, `cnf`, correlation ids |
+| `seal` | `#1F6B4A` | `#4ED89B` | Verified |
+| `broken` | `#A14917` | `#FF9A5C` | Refused, or the binding failing |
+
+No pure black, no pure white, and only three saturated values in the whole
+system — `signal`, `seal` and `broken` — so each one's appearance still means
 something.
+
+**`signal` is the one structural change, and it is not an accent.** The
+previous palette's best idea survives unchanged: only the verdict colours are
+saturated, so a colour appearing at all is already telling the reader
+something, and a decorative blue would spend that credibility on nothing.
+`signal` is not decorative — it marks *a value the protocol computed*, as
+distinct from prose about it. A digest, a `cnf` thumbprint, a correlation id
+are things a reader should be able to find at a glance and never mistake for
+commentary. `seal` and `broken` already say "this claim was checked, and here
+is the verdict"; `signal` says "this is the claim", which is a third thing
+neither of the first two says. Widening `ink` or `graphite` to carry that
+distinction would have made it a matter of weight rather than colour, and
+weight is not what the eye catches first in a screenshot.
+
+**What that argument does not settle is frequency, and frequency is where the
+original rule got its force.** The sentence it replaces was "`seal` and `broken`
+are the only colour *on the page*" — a claim about the rendered surface, not
+about how many entries the table has. `seal` and `broken` are verdict colours
+and a verdict is rare: one per transaction, at the end. A digest is not. The
+three-lane view draws one in every lane step and the event log draws one in
+every row, so a rule of "every digest is `signal`" would make the blue the most
+common colour on the screen by a wide margin — and `seal` arriving would then be
+a colour standing out against a field of colour rather than against a neutral
+page, which is the dilution the two-value rule existed to prevent. The third
+meaning is real; it is the third meaning applied everywhere that would spend the
+credibility the first two need.
+
+So the token comes with the discipline that makes the claim above true:
+**`signal` marks a value where that value is the subject, not every time one
+appears.** The digest on the spine is the subject and takes it. The same digest
+repeated down a log of steps is a column of identifiers the mono face and the
+alignment already distinguish, and it does not. That is a `className` decision
+and belongs to the type half of #159; it is written here because the guard
+cannot see it — `palette.test.ts` checks that `signal` on `paper` and on `wash`
+are legible, and legibility is not the question a colour used too often fails.
+**Checked against the guards `palette.test.ts` enforces, not merely asserted:**
+every pair the design uses clears the 4.5:1 text floor in both themes — the
+worst is `broken` on `wash` at 4.56:1 in light and `graphite` on `wash` at
+6.00:1 in dark — and the `wash` step off `paper` holds to very nearly the same
+distance in both directions: 1.1868 in light against 1.1770 in dark, a
+difference of 0.0098 against the 0.05 the suite allows.
 
 **Type.**
 
-- Display: a grotesque with real character at large sizes for the lane headings
-  and the thesis line. Tight tracking, low contrast.
-- Body: a workhorse humanist sans, quiet, for descriptions.
-- **Data: monospace, and it is the most important face on the page.** The digest,
-  the `vct` strings, the key ids and the amounts all live in it. It is not the
-  caption face here — it is the face the whole design is built around, because
-  the artefacts are the content.
+- Display: Space Grotesk 700 — already subset and committed, so no new font
+  files and no new licence to vendor — takes lane headings, the thesis line,
+  and large figures, at a wider scale and tighter tracking than the other two
+  faces.
+- Body: a workhorse humanist sans, for descriptions, amounts, status labels and
+  sequence numbers. `200.00 USD` set in a humanist sans reads as **money**; set
+  in mono it reads as a field dump, and this screen is for people who do not
+  read field dumps.
+- Data: monospace, demoted to what is actually code — log lines, canonical
+  error codes, raw JSON, digests and keys. It keeps the spine's own string and
+  everything a verifier would paste into a terminal; it loses amounts,
+  headings, status labels and sequence numbers, all of which move above.
 
-The inversion is deliberate: on most pages monospace is a utility voice. Here it
-is the protagonist and the sans is support.
+The inversion this document previously argued for is retired, and retired
+deliberately rather than quietly: monospace as the protagonist made every
+number on the page read as a field dump, including the ones that are money.
+The sans is support again, mono is a utility voice again, and Space Grotesk
+takes the display role that was already built for it. Which `className` a
+component reaches for to realise this is the second half of #159 and lands on
+its own branch, separately from this document; what is fixed here is which
+content each face is *for*, so that work has a spec to build against rather
+than a colour sense to guess at.
 
 **Layout.** Three columns, fixed order — the user on the left, the merchant on
 the right, the agent between them because that is where it sits in the protocol

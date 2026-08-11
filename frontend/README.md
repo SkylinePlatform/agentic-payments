@@ -260,32 +260,41 @@ so the resume point goes on the URL as `?last_event_id=`, which
 
 ## The design system
 
-Tailwind v4 and six colours. `src/styles.css` is the whole of it — **there is no
-`tailwind.config.js`**, because v4 has none; the plugin is `@tailwindcss/vite`
-and the theme is an `@theme` block in the stylesheet. Most of what a search
-turns up about configuring Tailwind and about shadcn's setup is v3 and will send
-you looking for a file that is not there.
+Tailwind v4 and seven colours. `src/styles.css` is the whole of it — **there is
+no `tailwind.config.js`**, because v4 has none; the plugin is
+`@tailwindcss/vite` and the theme is an `@theme` block in the stylesheet. Most
+of what a search turns up about configuring Tailwind and about shadcn's setup is
+v3 and will send you looking for a file that is not there.
 
 The palette comes from
 [the three-lane design spec](../docs/specs/2026-08-06-three-lane-view-design.md):
-`ink`, `paper`, `graphite`, `seal`, `broken`, `wash`. No pure black, no pure
-white, and only two saturated values in the system — `seal` means *verified* and
-`broken` means *the spine failed*, so neither is spent on a button.
+`paper`, `wash`, `ink`, `graphite`, `signal`, `seal`, `broken`. No pure black,
+no pure white, and only three saturated values in the system — `signal` marks a
+value the protocol computed, `seal` means *verified*, `broken` means *the spine
+failed*, so none of the three is spent on a button.
 
 **The dark theme keeps the names and changes the values.** A component writes
 `bg-paper text-ink` and never learns which theme it is in, and
-`src/architecture.test.ts` fails a component that tries to find out. The dark
-values are derived — hue held, lightness raised in OKLCH until the contrast
-clears 4.5:1 — and the OKLCH each hex came from is in the comment beside it.
-`seal #1e4d3f` on `ink #12100e` is 1.98:1, which is why the second palette is
-computed rather than picked.
+`src/architecture.test.ts` fails a component that tries to find out.
+
+**The two themes are chosen as a pair, not derived from one another.** They used
+to be: the dark values were computed from their light counterpart's OKLCH — hue
+held, lightness raised until the contrast cleared 4.5:1 — and the formula sat in
+a comment beside each hex. #159 replaced the palette with navy in dark and cream
+in light, one direction per theme, which is not a transform of anything and
+retires that method along with the colours it produced. The consequence worth
+knowing is in `src/palette.test.ts`: it pins **both** themes' hexes, because
+while the dark block was derived the derivation anchored it and pinning light
+alone pinned both, and now nothing else would hold it but the floors — and a
+floor admits every colour that clears it rather than the one the review
+approved.
 
 Two tests hold this together, and between them they are this package's
 equivalent of the backend's `depguard` rules:
 
 | | |
 |---|---|
-| `src/palette.test.ts` | every foreground/background pair the design uses clears WCAG 4.5:1 **in both themes**, and the pair table is exhaustive over the tokens |
+| `src/palette.test.ts` | both themes' hexes are the approved ones, every foreground/background pair the design uses clears WCAG 4.5:1 **in both themes**, and the pair table is exhaustive over the tokens |
 | `src/architecture.test.ts` | the palette is closed, shadcn's second palette is absent, no component names a theme, generated types come through the barrel, and `src/sse/stream.ts` is the one file that may name `EventSource` |
 
 `src/test/palette.ts` builds the dark block's selector out of `THEME_ATTRIBUTE`
@@ -309,7 +318,7 @@ would wave it through.
 ### Components
 
 shadcn/ui, admitted as **behaviour rather than appearance**: `button`, `dialog`
-and `tooltip`, in `src/components/ui/`, re-skinned onto the six tokens. What is
+and `tooltip`, in `src/components/ui/`, re-skinned onto the palette. What is
 worth taking is `asChild`, the focus trap, Escape-to-dismiss and the ARIA — not
 a visual identity. The spine and the lanes are hand-written CSS grid.
 
@@ -323,16 +332,26 @@ Self-hosted, subset, committed as `woff2` under `public/fonts/` with their
 
 | Role | Face | Weights |
 |---|---|---|
-| Data — **the protagonist** | IBM Plex Mono | 400, 500, 600 |
+| Data | IBM Plex Mono | 400, 500, 600 |
 | Body | IBM Plex Sans | 400, 600 |
 | Display | Space Grotesk | 500, 700 |
 
-The inversion is the design: the digests, `vct` strings, key ids and amounts are
-the content, so the mono is the face the page is built around and the sans is
-support. The mono's `@font-face` carries `font-display: block` and the 400 is
-preloaded from `index.html` — three seconds of head start on an 11 KB
-same-origin request, which is what keeps a screenshot from catching a digest
-mid-swap. The other two `swap`.
+**Which content each face is for is being revised, and the components have not
+caught up yet.** The three-lane design spec used to make monospace the
+protagonist — digests, `vct` strings, key ids *and amounts* — with the sans as
+support. #159 retires that: mono keeps what is actually code, and amounts,
+headings, status labels and sequence numbers move to the sans and the display
+face. That decision is recorded in
+[the spec](../docs/specs/2026-08-06-three-lane-view-design.md)'s *Tokens*
+section; the `className` changes that realise it land on their own branch, so
+until they do the components still set an amount in mono. The faces and weights
+above are unaffected either way — nothing new is subset and nothing is dropped.
+
+The mono's `@font-face` carries `font-display: block` and the 400 is preloaded
+from `index.html` — three seconds of head start on an 11 KB same-origin request,
+which is what keeps a screenshot from catching a digest mid-swap. That argument
+survives the demotion: the digest stays in mono and it is still the thing a
+screenshot is of. The other two `swap`.
 
 `scripts/subset-fonts.sh` is what produced the files. It pins the upstream
 google/fonts commit, instances the two variable faces at the weights above and

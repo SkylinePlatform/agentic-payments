@@ -18,10 +18,18 @@ import stylesheet from "../styles.css?raw";
 import { THEME_ATTRIBUTE, THEMES, type Theme } from "../theme/theme";
 
 /**
- * The six, in the order `docs/specs/2026-08-06-three-lane-view-design.md`
+ * The seven, in the order `docs/specs/2026-08-06-three-lane-view-design.md`
  * tabulates them.
  */
-export const TOKENS = ["ink", "paper", "graphite", "seal", "broken", "wash"] as const;
+export const TOKENS = [
+  "paper",
+  "wash",
+  "ink",
+  "graphite",
+  "signal",
+  "seal",
+  "broken",
+] as const;
 
 export type Token = (typeof TOKENS)[number];
 
