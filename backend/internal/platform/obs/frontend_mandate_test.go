@@ -134,8 +134,9 @@ func TestTheFrontendKnowsEveryMandateValue(t *testing.T) {
 // what earns it a fourth test. A field the frontend does not know is *dropped*
 // by parseRecord and costs one fact. A member name the two sides disagree about
 // makes optionalMandate refuse the record **whole**, so every mandate-bearing
-// step — eighteen of the twenty-one emit sites — vanishes from the three-lane
-// view and surfaces as a hole in the sequence, roles away from its cause.
+// step — seventeen of the twenty-one emit sites, the other four being the two
+// kinds that carry no mandate — vanishes from the three-lane view and surfaces
+// as a hole in the sequence, roles away from its cause.
 func TestTheFrontendKnowsEveryMandateField(t *testing.T) {
 	raw, err := os.ReadFile(frontendKinds)
 	require.NoError(t, err, "the frontend's event module has moved; see TestTheFrontendKnowsEveryKind")
