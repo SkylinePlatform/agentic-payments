@@ -224,12 +224,6 @@ describe("the per-state table, pinned to the specification", () => {
       // a verifier's verdict and nothing else, and `bar` here would say this
       // run ended with no verifier in it, which is what `exhausted`,
       // `expired`, `stopped` and `failed` say and this one does not.
-      //
-      // **The specification's own per-state table does not yet carry this
-      // row**, and its rule is that a state with no row is a defect. The entry
-      // is derived from the section's stated rules rather than invented
-      // beside them, which is the most a component may do; the row itself is
-      // a change to the specification.
       refused: ["full", "cross"],
     });
     expect(

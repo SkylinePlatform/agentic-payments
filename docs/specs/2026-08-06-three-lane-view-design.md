@@ -455,6 +455,7 @@ Every state, what carries it besides colour, and where it is drawn.
 | watch | `expired` | `full` | `bar` | `expired — never bought` | **the authorisation's own expiry**, already on the row |
 | watch | `stopped` | `full` | `bar` | `stopped` | — |
 | watch | `failed` | `full` | `bar` | `failed` | **the agent's own error sentence**, `broken` |
+| watch | `refused` | `full` | `cross` | `refused` | the attempt that was refused, expanded beneath |
 | attempt | `pending` | `open` | — | `pending` | no digest on the spine head |
 | attempt | `bound` | `half` | — | `bound` | the digest on the spine head |
 | attempt | `refused` | `full` | `cross` | `refused` | the spine breaking when the binding failed; `Thesis` |
@@ -480,10 +481,11 @@ Notes on the rows that are not self-explanatory.
 
 **Where an axis is a machine's own closed set, the table is closed over it, so a
 state with no row is a defect rather than an omission.** Three mandate states,
-four attempt verdicts, six event kinds, and five run states — six once #188
-lands. The two axes with no such set, the decision and the disclosure, are
-enumerated by this document instead, which is why each of those rows says what
-carries it rather than naming an enum value.
+four attempt verdicts, six event kinds, and seven run states — five when this
+was written, a sixth with #188 and a seventh with #198. The two axes with no
+such set, the decision and the disclosure, are enumerated by this document
+instead, which is why each of those rows says what carries it rather than
+naming an enum value.
 
 `mandate_constructed` and `mandate_presented` therefore have rows even though
 neither takes a mark: they are the agent's own work, nothing has been decided at

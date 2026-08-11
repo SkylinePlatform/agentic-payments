@@ -86,18 +86,11 @@ export type RunState = (typeof RUN_STATES)[number];
  * earns a `cross`: a sentence with no condition in it makes one attempt and
  * stops, and this is that attempt having been turned down — by a verifier,
  * with a signed receipt. The three-lane design's *Indicators* section is where
- * the vocabulary is settled, and its rules decide this row rather than a
- * screen's own taste: `full` because nothing is outstanding and this is where
- * it stopped, `cross` because a verifier said no, and the machine's own word
- * with no gloss on it. `exhausted` and `expired` take `— never bought` because
- * neither word says whether the buyer got what they asked for; `refused` says
- * so on its own.
- *
- * **That section's per-state table does not yet carry this row.** It is closed
- * over `runState`'s spellings by its own rule — *a state with no row is a
- * defect rather than an omission* — and it counts six. The entry below follows
- * the section's stated rules rather than inventing from them, which is the
- * most a component may do: adding the row is a change to the specification.
+ * the vocabulary is settled, and its per-state table carries this row: `full`
+ * because nothing is outstanding and this is where it stopped, `cross` because
+ * a verifier said no, and the machine's own word with no gloss on it.
+ * `exhausted` and `expired` take `— never bought` because neither word says
+ * whether the buyer got what they asked for; `refused` says so on its own.
  */
 export const RUN_STATE_META: Record<RunState, StatusMeta> = {
   watching: { label: "watching", pip: "half", ending: null },
