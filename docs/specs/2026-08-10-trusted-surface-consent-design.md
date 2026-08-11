@@ -658,6 +658,31 @@ Gates: `make check` and `make frontend-check`.
   evaluates, or `quantity eq 2` would replace `lte 2` and forbid buying one —
   and neither belongs to #133.
 
+  **#198 is the same decision one field along, and it is recorded here on the
+  sentence above.** *"Two tickets, up to \$160 all in"* carries no condition and
+  *"buy a flight to Palma when it drops below \$200"* does; they are different
+  authorisations and they render **identically** from the constraints, because
+  the words that separate them are in the sentence and in no limit. So the
+  agent's reading of which one it is — `interpret.Trigger` — is on the screen
+  under a label of its own, **outside** the signed box, on exactly the terms the
+  basket size is: no verifier can refute it at the point of sale, nothing puts
+  it in a mandate, and the surface is never told it. Two headings rather than
+  one shared box, because the questions differ — *how many* and *when* — and a
+  heading vague enough to cover both is the thing this screen has least room
+  for.
+
+  **Where it is not the same decision is what an unreadable value does.** A
+  quantity has an honest zero and every caller downstream holds a number of its
+  own; a trigger has neither, so `interpret.Validate` refuses an interpretation
+  that states none, and *Sign* is disabled for any value this browser cannot
+  read — absent, empty or a word it does not hold. That is the same rule as
+  `rendered.length !== constraints.length` one column along: a screen that
+  cannot say which of the two authorisations it is collecting a signature for
+  has no business collecting one. `agent.Watch` reads an absent trigger as a
+  watch instead, and the asymmetry is deliberate — a loop with nobody in front
+  of it is safer not buying, and a screen with somebody in front of it is safer
+  not signing.
+
 - **No choice among candidates.** `discover` takes `found[0]`, and this design
   does not change that. What it adds is the offer card, so a first match that was
   wrong can at least be *seen* and refused. Choosing is #109's table.

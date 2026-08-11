@@ -370,16 +370,17 @@ that the spelling comes from `authz.MandateState.String()` so that there is no
 second table to drift from the first. So two axes can share a mark and still be
 unmistakable, because they almost never share a word.
 
-**Three words are shared, and each is one fact seen at two scales.** `bought` is
-a watch and the attempt that bought under it. `refused` is one verifier's
-`mandate_rejected` step and the attempt that verifier refused. `declined` is a
-person's `authorisation_refused` step and the decision the console then
-acknowledges. In every pair the smaller scale is a moment *inside* the larger
-one, so the two can only ever agree — which is what makes sharing the word safe
-where sharing it across unrelated axes would not be, and each is labelled with
-which scale it is. **There is no fourth**, and a state added to any axis that
-would make a fourth is a change to this section rather than a screen's own
-choice of word.
+**Three words are shared, and each is one fact seen at two scales — `refused`,
+since #198, at three.** `bought` is a watch and the attempt that bought under
+it. `refused` is one verifier's `mandate_rejected` step, the attempt that
+verifier refused, and the run that had only that one attempt to make. `declined`
+is a person's `authorisation_refused` step and the decision the console then
+acknowledges. In each the smaller scale is a moment *inside* the larger one, so
+they can only ever agree — which is what makes sharing the word safe where
+sharing it across unrelated axes would not be, and each is labelled with which
+scale it is. **There is no fourth**, and a state added to any axis that would
+make a fourth — or give one of these three a further scale, which is what #198
+did — is a change to this section rather than a screen's own choice of word.
 
 **Two axes never share a row.** A run's pair and its mandates' pairs sit on
 different lines, each behind its own label. That is the whole of what stops the
