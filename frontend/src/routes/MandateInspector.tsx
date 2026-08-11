@@ -41,7 +41,7 @@ function Attempts({
           }}
           aria-pressed={selected === n}
           className={
-            "border px-2 py-1 font-mono text-xs " +
+            "border px-2 py-1 font-sans text-xs " +
             (selected === n
               ? "border-ink bg-ink text-paper"
               : "border-graphite/40 bg-paper text-graphite hover:border-ink hover:text-ink")

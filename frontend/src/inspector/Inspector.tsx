@@ -44,8 +44,11 @@ const MANDATE_TITLES: Readonly<Record<string, string>> = {
 
 function Cell({ how, digest }: { readonly how: Reception | undefined; readonly digest: string }) {
   if (how === "disclosed") {
+    // A status word, not a digest — there is nothing to check because the
+    // verifier holds the value itself, so this cell carries no code-like
+    // content and takes the sans like any other label.
     return (
-      <span className="font-mono text-xs text-seal" title="This verifier can read the value.">
+      <span className="font-sans text-xs text-seal" title="This verifier can read the value.">
         read
       </span>
     );
@@ -62,8 +65,10 @@ function Cell({ how, digest }: { readonly how: Reception | undefined; readonly d
   }
   // Not in this presentation at all. Distinct from withheld and said so: a
   // digest that is absent is a claim the mandate did not carry to this reader,
-  // which is a different fact from one it carried and closed.
-  return <span className="font-mono text-xs text-graphite">—</span>;
+  // which is a different fact from one it carried and closed. No digest sits
+  // behind this mark either, so — like "read" above — it is not code-like and
+  // takes the sans.
+  return <span className="font-sans text-xs text-graphite">—</span>;
 }
 
 /**

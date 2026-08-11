@@ -87,6 +87,19 @@ export function EventLog({ records }: { readonly records: readonly EventRecord[]
               key={record.seq}
               className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-graphite/20 px-3 py-1.5 last:border-b-0"
             >
+              {/*
+                This row's own fields stay in mono, unlike the counterpart
+                badges #159 moved off it in StepCard — `#{step.seq}` there
+                names a position in a narrative card, sitting beside a
+                sentence, and reads as a field dump next to prose exactly the
+                way the issue describes. This is not that: it is the log
+                itself, "one line per step" in this file's own doc comment
+                and in the layout section of the three-lane design, and #159
+                keeps "log lines" in mono by name. Sequence and time are
+                columns of this line, not commentary on it, so they read the
+                same way `kind`, the correlation id and the digest already
+                did.
+              */}
               <span className="font-mono text-xs tabular-nums text-graphite">
                 {String(record.seq).padStart(4, "0")}
               </span>

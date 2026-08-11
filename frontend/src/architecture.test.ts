@@ -257,6 +257,87 @@ function withoutCssComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, (block) => block.replace(/[^\n]/g, " "));
 }
 
+// --- rule: monospace is for code, not for money or headings ----------------
+
+/**
+ * #159's demotion, and the two claims about it a source scan can check
+ * honestly.
+ *
+ * "Which content is code-like" is mostly a judgement made once, at each call
+ * site, and recorded in a comment there. `src/lanes/EventLog.tsx`'s own
+ * comment is the shape of it: its row keeps the sequence number in mono that
+ * `src/lanes/Lanes.tsx`'s `StepCard` lost, because the same fact — a
+ * sequence number — is a column of a genuine log line in one component and a
+ * badge beside a sentence in the other, and nothing in the *source* tells
+ * the two apart short of knowing which one draws a line and which one draws
+ * a card. A rule that grepped for `.seq` would either miss the badge or
+ * break the log, and a false rule is worse than an honest gap, so that
+ * boundary — and "status label" generally — stays a reviewed one rather than
+ * a mechanical one, the same way `MAY_NAME_A_THEME` below is a reviewed list
+ * rather than a derived one.
+ *
+ * What a scan *can* decide without knowing which component drew the line is
+ * two narrower, sharper claims the issue makes by name:
+ *
+ * - **A heading is never mono.** `<h1>`…`<h6>` is unambiguous in the source,
+ *   whatever is inside it.
+ * - **A rendered amount is never mono.** `renderPrice` and `formatAmount` are
+ *   this app's only two functions that turn an `Amount` into the string a
+ *   reader sees, so a call to either inside an element is unambiguously "an
+ *   amount is here" — and `Previewed.rendered`, the sentence a person
+ *   actually signs, is the sharpest version of the same claim: prose that
+ *   can *contain* one, which is #159's own worked example (`200.00 USD`
+ *   reads as money in the sans and as a field dump in mono).
+ */
+const HEADING_TAG = /<h[1-6]\b([^>]*)>/g;
+
+function headingsSetInMono(source: string): string[] {
+  const offenders: string[] = [];
+  for (const match of codeOf(source).matchAll(HEADING_TAG)) {
+    if (/font-mono/.test(match[1])) offenders.push(match[0]);
+  }
+  return offenders;
+}
+
+/**
+ * The tag has to be the *immediate* wrapper — only whitespace and an opening
+ * `{` between its `>` and the call — because that is the shape every real
+ * call site uses. Widening it would start guessing which of several
+ * ancestors "the" wrapper is, which is exactly the kind of inference this
+ * rule exists not to need.
+ */
+const AMOUNT_CALL = /<([A-Za-z][\w.]*)\b([^>]*)>\s*\{?\s*(?:renderPrice|formatAmount)\(/g;
+
+function amountsSetInMono(source: string): string[] {
+  const offenders: string[] = [];
+  for (const match of codeOf(source).matchAll(AMOUNT_CALL)) {
+    if (/font-mono/.test(match[2])) offenders.push(match[0].trim());
+  }
+  return offenders;
+}
+
+/**
+ * `Previewed.rendered` is read in exactly one place in the app — the box
+ * captioned "What you are signing" — and mapped straight into one JSX
+ * element with no other element between the call and it. A fixed window
+ * after `.rendered.map(` is therefore enough to see that element's own
+ * className without having to balance the callback's parentheses to find
+ * where it ends.
+ */
+const RENDERED_SENTENCE = /\.rendered\.map\(/g;
+const RENDERED_SENTENCE_WINDOW = 400;
+
+function renderedSentenceSetInMono(source: string): string[] {
+  const code = codeOf(source);
+  const offenders: string[] = [];
+  for (const match of code.matchAll(RENDERED_SENTENCE)) {
+    const start = match.index ?? 0;
+    const window = code.slice(start, start + RENDERED_SENTENCE_WINDOW);
+    if (/font-mono/.test(window)) offenders.push(`.rendered.map( at index ${String(start)}`);
+  }
+  return offenders;
+}
+
 // --- rule: only the stream client names EventSource ------------------------
 
 /**
@@ -540,6 +621,85 @@ describe("the frontend's architecture", () => {
         hexes(`const url = "https://example.test/#abc123";`),
         "a scanner that mistook `//` in a URL for a comment would report nothing here",
       ).toEqual(["#abc123"]);
+    });
+  });
+
+  describe("monospace is for code, not for money or headings", () => {
+    it.each(APP_SOURCES)("%s sets no heading in mono", (_path, source) => {
+      expect(
+        headingsSetInMono(source),
+        "a heading is never a value the protocol computed; font-display is " +
+          "what a heading reaches for",
+      ).toEqual([]);
+    });
+
+    it.each(APP_SOURCES)("%s renders no amount in mono", (_path, source) => {
+      expect(
+        amountsSetInMono(source),
+        "#159's own example: 200.00 USD reads as money in the sans and as a " +
+          "field dump in mono",
+      ).toEqual([]);
+    });
+
+    it.each(APP_SOURCES)("%s signs no sentence in mono", (_path, source) => {
+      expect(
+        renderedSentenceSetInMono(source),
+        "previewed.rendered is what a person reads and signs; it is prose, " +
+          "even where the prose contains a number",
+      ).toEqual([]);
+    });
+
+    it("catches the violations it claims to catch", () => {
+      expect(
+        headingsSetInMono(`<h2 className="font-mono text-sm">Log</h2>`),
+        "the shape the rule is named for",
+      ).toEqual([`<h2 className="font-mono text-sm">`]);
+      expect(
+        headingsSetInMono(`<h2 className="font-display text-sm">Log</h2>`),
+        "font-display is the face a heading actually reaches for",
+      ).toEqual([]);
+
+      expect(
+        amountsSetInMono(`<span className="font-mono text-xs">{renderPrice(step.amount)}</span>`),
+        "the exact shape StepCard carried before #159's type half",
+      ).toHaveLength(1);
+      expect(
+        amountsSetInMono(`<td className="font-mono text-ink">{formatAmount(offer.price)}</td>`),
+        "the other of the app's two amount-formatting functions",
+      ).toHaveLength(1);
+      expect(
+        amountsSetInMono(`<span className="font-sans text-xs">{renderPrice(step.amount)}</span>`),
+        "the fixed shape",
+      ).toEqual([]);
+
+      const signedInMono =
+        `{previewed.rendered.map((sentence, index) => (\n` +
+        `  <p key={index} className="font-mono text-ink">{sentence}</p>\n` +
+        `))}`;
+      const signedInSans =
+        `{previewed.rendered.map((sentence, index) => (\n` +
+        `  <p key={index} className="font-sans text-ink">{sentence}</p>\n` +
+        `))}`;
+      expect(
+        renderedSentenceSetInMono(signedInMono),
+        "the exact shape Consent.tsx and Signing.tsx carried before #159's type half",
+      ).toHaveLength(1);
+      expect(renderedSentenceSetInMono(signedInSans), "the fixed shape").toEqual([]);
+
+      // …and does not flag what #159 leaves in mono: a digest, a key or raw
+      // JSON are still code, and a <code> tag is not a heading.
+      expect(
+        headingsSetInMono(`<code className="font-mono text-xs">{step.digest}</code>`),
+        "a <code> element is not a heading",
+      ).toEqual([]);
+      expect(
+        amountsSetInMono(`<span className="font-mono text-xs">{shortDigest(step.digest)}</span>`),
+        "a digest is not an amount",
+      ).toEqual([]);
+      expect(
+        renderedSentenceSetInMono(`<code className="font-mono text-xs">{step.digest}</code>`),
+        "no .rendered.map( at all, so nothing to flag",
+      ).toEqual([]);
     });
   });
 

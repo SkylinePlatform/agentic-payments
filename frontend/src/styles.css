@@ -4,11 +4,16 @@
  * `docs/specs/2026-08-06-three-lane-view-design.md` fixes seven colours — six
  * carried forward and `signal` added by #159, which moved the palette to navy
  * and cream. The same revision retires the monospace-as-protagonist inversion
- * this comment used to describe; that half is a `className` change on
- * components and lands on a separate branch, so the font faces below are
- * unchanged. This file is where the colours become something a machine can
- * check: every colour the app is allowed to use is declared once, in one
- * block, and `src/architecture.test.ts` reads that block back out.
+ * this comment used to describe. That half was a `className` change on
+ * components, on a branch of its own separate from the one that moved the
+ * colours — the face declarations below were never the part that had to
+ * change; which content reaches for which face is decided at each call site
+ * under `src/lanes`, `src/inspector`, `src/tracker` and `src/routes/consent`.
+ * This file is where the colours become something a machine can check: every
+ * colour the app is allowed to use is declared once, in one block, and
+ * `src/architecture.test.ts` reads that block back out — the same file also
+ * holds the two sharpest cases of the type change: a heading and a rendered
+ * amount may never carry `font-mono`.
  *
  * Tailwind v4, configured here rather than in a `tailwind.config.js` — v4 has
  * no such file, and every v3 tutorial that says otherwise will send you looking
@@ -151,9 +156,9 @@
    * The comment beside each face says what that face is *for*, which #159
    * revised: mono is a utility voice again and the sans is no longer support.
    * The declarations themselves are unchanged — which content asks for which
-   * face is a `className` on a component, and that half lands on its own
-   * branch, so what is written here is the spec's answer and not yet every
-   * call site's.
+   * face is a `className` on a component, and every call site under
+   * `src/lanes`, `src/inspector`, `src/tracker` and `src/routes/consent` now
+   * agrees with what is written here.
    */
   --font-*: initial;
 

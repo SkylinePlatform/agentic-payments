@@ -82,10 +82,10 @@ function StepCard({ step }: { readonly step: Step }) {
   return (
     <li className="flex flex-col gap-1 border border-graphite/40 bg-paper px-3 py-2">
       <div className="flex items-baseline justify-between gap-2">
-        <span className={`font-mono text-xs font-semibold tracking-tight ${toneOf(step)}`}>
+        <span className={`font-sans text-xs font-semibold tracking-tight ${toneOf(step)}`}>
           {KIND_WORDS[step.kind]}
         </span>
-        <span className="font-mono text-xs tabular-nums text-graphite">#{step.seq}</span>
+        <span className="font-sans text-xs tabular-nums text-graphite">#{step.seq}</span>
       </div>
 
       <span className="font-sans text-xs text-graphite">{titleOf(step.role)}</span>
@@ -106,7 +106,7 @@ function StepCard({ step }: { readonly step: Step }) {
         as a value rather than as "not applicable to this step".
       */}
       {step.amount !== undefined && (
-        <span className="font-mono text-xs tabular-nums text-ink">{renderPrice(step.amount)}</span>
+        <span className="font-sans text-xs tabular-nums text-ink">{renderPrice(step.amount)}</span>
       )}
 
       {/*
@@ -394,7 +394,7 @@ function PriceBadge({ attempt }: { readonly attempt: Attempt }) {
   if (amount === undefined) return null;
 
   return (
-    <span className="font-mono text-xs tabular-nums text-ink" title="the price this attempt is about">
+    <span className="font-sans text-xs tabular-nums text-ink" title="the price this attempt is about">
       {renderPrice(amount)}
     </span>
   );
