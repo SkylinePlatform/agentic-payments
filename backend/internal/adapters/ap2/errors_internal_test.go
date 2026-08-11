@@ -4,6 +4,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -23,60 +25,87 @@ import (
 // sdjwtCodeOf is precisely that switch. TestEverySDJWTSentinelIsMappedOrAllowlisted
 // below is what makes the next unmapped sentinel fail a test instead of
 // waiting to be found by hand a third time.
+//
+// # Why this scans declarations rather than error constructors
+//
+// The first version of this file parsed `Err* = errors.New(...)` out of
+// pkg/sdjwt/errors.go alone, and that had three blind spots, each of which is
+// the same defect this test exists to prevent one level along: a sentinel in a
+// second file of the package, one built with fmt.Errorf, and one whose name
+// does not begin with Err would all have been invisible. A totality test with a
+// blind spot is worse than none, because it is the thing everybody trusts
+// instead of reading the switch.
+//
+// So nothing here guesses at how an error is constructed or what it is called.
+// Every exported package-level var in pkg/sdjwt has to be accounted for, and
+// the only two ways to account for one are sdjwtSentinelValues — whose type
+// makes membership compile-time proof that the var is an error — and
+// sdjwtNonErrorVars, which is where an exported var that is not an error goes,
+// with a reason.
+//
+// The hole that remains, stated so nobody has to discover it: an error
+// expressed as an exported *type* checked with errors.As rather than as a
+// sentinel checked with errors.Is. pkg/sdjwt's own errors.go rules that out in
+// its first paragraph — "They are sentinels rather than typed values" — so the
+// day that changes is the day this test needs a second half, and this sentence
+// is the note saying so.
 
-// sdjwtErrorsSource is backend/pkg/sdjwt/errors.go, read from the file that
-// declares the sentinels this function maps — the same reason
-// golden_rejection_test.go's declaredCodes reads contracts/evidence/error_code.json
-// from the schema rather than from the generated Go constants it produces:
-// checking a mapping against a copy of its own source would agree with a stale
-// copy by construction.
-const sdjwtErrorsSource = "../../../pkg/sdjwt/errors.go"
+// sdjwtPackageDir is backend/pkg/sdjwt, read from the package that declares the
+// sentinels this function maps — the same reason golden_rejection_test.go's
+// declaredCodes reads contracts/evidence/error_code.json from the schema rather
+// than from the generated Go constants it produces: checking a mapping against a
+// copy of its own source would agree with a stale copy by construction.
+const sdjwtPackageDir = "../../../pkg/sdjwt"
 
-// declaredSDJWTSentinels parses every `Err* = errors.New(...)` declaration out
-// of sdjwtErrorsSource and returns their names, in declaration order.
+// exportedSDJWTVars parses every non-test file in sdjwtPackageDir and returns
+// the names of every exported package-level var, in file-then-declaration
+// order.
 //
 // The AST rather than a line-oriented search, because several of those
 // declarations sit under doc comments that themselves say "errors.New" and
 // name other sentinels in prose — a text search would have to out-guess
 // English to avoid matching those. The parser only ever sees Go.
-func declaredSDJWTSentinels(t *testing.T) []string {
+//
+// Nothing about the *value* is inspected. A test that only recognised
+// errors.New would be a test that a fmt.Errorf sentinel could walk past, and
+// deciding what counts as an error from the shape of an expression is exactly
+// the guess that produced the gap in the first place. What the declaration is
+// called and how it was built are both none of this function's business; that
+// it is exported and package-level is the whole of the criterion, because that
+// is the whole of what a caller of pkg/sdjwt can name.
+func exportedSDJWTVars(t *testing.T) []string {
 	t.Helper()
 
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, sdjwtErrorsSource, nil, 0)
-	require.NoError(t, err, "parsing %s", sdjwtErrorsSource)
+	entries, err := os.ReadDir(sdjwtPackageDir)
+	require.NoError(t, err, "reading the package whose sentinels this file maps")
 
+	fset := token.NewFileSet()
 	var names []string
-	for _, decl := range file.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.VAR {
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") ||
+			strings.HasSuffix(entry.Name(), "_test.go") {
 			continue
 		}
-		for _, spec := range gen.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok {
+
+		path := filepath.Join(sdjwtPackageDir, entry.Name())
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		require.NoError(t, err, "a file in pkg/sdjwt that does not parse would silently contribute no sentinels")
+
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.VAR {
 				continue
 			}
-			for i, name := range vs.Names {
-				if !strings.HasPrefix(name.Name, "Err") {
-					continue
-				}
-				if i >= len(vs.Values) {
-					continue
-				}
-				call, ok := vs.Values[i].(*ast.CallExpr)
+			for _, spec := range gen.Specs {
+				vs, ok := spec.(*ast.ValueSpec)
 				if !ok {
 					continue
 				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "New" {
-					continue
+				for _, name := range vs.Names {
+					if token.IsExported(name.Name) {
+						names = append(names, name.Name)
+					}
 				}
-				pkgIdent, ok := sel.X.(*ast.Ident)
-				if !ok || pkgIdent.Name != "errors" {
-					continue
-				}
-				names = append(names, name.Name)
 			}
 		}
 	}
@@ -84,19 +113,23 @@ func declaredSDJWTSentinels(t *testing.T) []string {
 }
 
 // sdjwtSentinelValues is the actual Go value behind every name
-// declaredSDJWTSentinels can produce. Parsing recovers the name pkg/sdjwt gave
-// a sentinel, never the value errors.New returned for it — nothing in the
+// exportedSDJWTVars can produce. Parsing recovers the name pkg/sdjwt gave a
+// sentinel, never the value errors.New returned for it — nothing in the
 // language exposes a package's variables by string name — so calling
 // sdjwtCodeOf on the real thing needs a literal reference somewhere, and this
 // is the one place that reference lives.
 //
+// The map type is doing work as well as holding values: an entry here is
+// compile-time proof that the var it names is an error, which is what lets
+// exportedSDJWTVars stay out of the business of deciding that for itself.
+//
 // This map is not trusted to be complete on its own. It is exactly the "second
 // list, free to drift" authzCodeOf's own comment warns about, and what closes
 // that gap is that TestEverySDJWTSentinelIsMappedOrAllowlisted checks it
-// against declaredSDJWTSentinels rather than assuming it: a name declared in
-// pkg/sdjwt/errors.go and missing here fails the test before sdjwtCodeOf is
-// ever asked about it, which is what makes an entry skipped here visible
-// rather than silently short.
+// against exportedSDJWTVars rather than assuming it: a name declared in
+// pkg/sdjwt and missing here fails the test before sdjwtCodeOf is ever asked
+// about it, which is what makes an entry skipped here visible rather than
+// silently short.
 var sdjwtSentinelValues = map[string]error{
 	"ErrMalformedSDJWT":         sdjwt.ErrMalformedSDJWT,
 	"ErrUnexpectedType":         sdjwt.ErrUnexpectedType,
@@ -127,6 +160,15 @@ var sdjwtSentinelValues = map[string]error{
 // That indistinguishability is exactly how both #147 and #162 survived: both
 // fell through the same default arm an allowlisted sentinel also reaches, and
 // nothing before this file could tell the two apart.
+//
+// What makes it a gate rather than a rubber stamp is the direction the test
+// checks. Membership here is not permission to answer verifier_unavailable; it
+// is the *only* way to, because a sentinel not named here must answer some
+// other code. So the shortest route past a failing test — an arm returning
+// verifier_unavailable, which is a valid code and would satisfy a mere
+// "non-empty" check — is the one route this file closes. Getting there still
+// requires writing the sentence below, in a reviewed file, next to two that
+// show what a real one looks like.
 var sdjwtVerifierUnavailableAllowlist = map[string]string{
 	"ErrInvalidOptions": "raised when Verify is handed a policy it cannot apply — " +
 		"no issuer verifier, no clock, or key binding requested with no nonce or " +
@@ -140,40 +182,75 @@ var sdjwtVerifierUnavailableAllowlist = map[string]string{
 		"counterparty's mandate.",
 }
 
-// TestEverySDJWTSentinelIsMappedOrAllowlisted is the durable fix: it fails on
-// the next pkg/sdjwt sentinel that reaches sdjwtCodeOf's default arm, rather
-// than waiting for a person to notice the gap by reading the switch.
+// sdjwtNonErrorVars is where an exported package-level var in pkg/sdjwt that is
+// not an error goes, with a reason.
 //
-// Every name declaredSDJWTSentinels parses out of pkg/sdjwt/errors.go has to
-// answer one of two ways: a non-empty code from sdjwtCodeOf, or a named
-// reason in sdjwtVerifierUnavailableAllowlist for why verifier_unavailable is
-// the true answer rather than a gap. A sentinel that is neither — the shape
-// both #147's ErrMalformedChain and #162's ErrDelegatePayloadInvalid were —
-// fails here, in this package's own tests, rather than reaching a signed
-// rejection receipt that blames this verifier for a shape only the presenter
-// controlled.
+// Empty today, and it still earns its place: exportedSDJWTVars deliberately
+// does not inspect what a var is initialised to, so this is the escape hatch
+// that keeps that refusal-to-guess cheap. Without it, the first exported
+// non-error var pkg/sdjwt declares — a default policy, a registry, an algorithm
+// list — would fail this test with no honest way to answer, and the tempting
+// repair would be to teach exportedSDJWTVars to recognise errors.New again,
+// which is the blind spot this file was rewritten to remove.
+var sdjwtNonErrorVars = map[string]string{}
+
+// TestEverySDJWTSentinelIsMappedOrAllowlisted is the durable fix: it fails on
+// the next pkg/sdjwt sentinel that reaches sdjwtCodeOf's default arm, or that
+// reaches verifier_unavailable without anybody saying why, rather than waiting
+// for a person to notice the gap by reading the switch.
+//
+// Every exported var pkg/sdjwt declares has to answer one of three ways: a code
+// from sdjwtCodeOf that is neither empty nor verifier_unavailable; a named
+// reason in sdjwtVerifierUnavailableAllowlist, in which case it must answer
+// verifier_unavailable exactly; or a named reason in sdjwtNonErrorVars for not
+// being an error at all. A sentinel that is none of the three — the shape both
+// #147's ErrMalformedChain and #162's ErrDelegatePayloadInvalid were — fails
+// here, in this package's own tests, rather than reaching a signed rejection
+// receipt that blames this verifier for a shape only the presenter controlled.
+//
+// The three-way split is the part worth keeping. A two-way one — mapped, or
+// allowlisted — reads the same and is not: verifier_unavailable is itself a
+// valid code, so an arm returning it satisfies "mapped" and needs no allowlist
+// entry, and the distinction between deliberate and forgotten quietly stops
+// existing again. Partitioning the answers is what stops the allowlist becoming
+// documentation nobody is obliged to write.
 func TestEverySDJWTSentinelIsMappedOrAllowlisted(t *testing.T) {
 	t.Parallel()
 
-	declared := declaredSDJWTSentinels(t)
+	declared := exportedSDJWTVars(t)
 	require.NotEmpty(t, declared,
-		"a parse that found no sentinels would make every assertion below vacuous")
+		"a parse that found no exported vars would make every assertion below vacuous")
 
 	for _, name := range declared {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
+			if reason, notAnError := sdjwtNonErrorVars[name]; notAnError {
+				assert.NotEmpty(t, reason,
+					"an entry excusing a var from this check with no reason is the excuse this file exists to stop being free")
+				_, alsoSentinel := sdjwtSentinelValues[name]
+				assert.False(t, alsoSentinel,
+					"one var cannot be both an error this adapter maps and a var it declines to map; the two lists disagreeing means one of them is stale")
+				return
+			}
+
 			value, ok := sdjwtSentinelValues[name]
 			require.True(t, ok,
-				"%s is declared in pkg/sdjwt/errors.go and sdjwtSentinelValues holds no value for it — the map has to name every sentinel the source declares before its code can even be checked", name)
+				"pkg/sdjwt exports this and neither list here accounts for it — an error belongs in sdjwtSentinelValues so its code can be checked, and anything that is not an error belongs in sdjwtNonErrorVars with a reason")
 
 			code := sdjwtCodeOf(value)
 			if reason, allowlisted := sdjwtVerifierUnavailableAllowlist[name]; allowlisted {
-				assert.Equal(t, generated.ErrorCodeVerifierUnavailable, code, reason)
+				assert.NotEmpty(t, reason,
+					"the reason is the entire difference between a deliberate verifier_unavailable and a forgotten one, so an entry without one buys nothing")
+				assert.Equal(t, generated.ErrorCodeVerifierUnavailable, code,
+					"this sentinel is allowlisted as the verifier's own fault, and an allowlist that did not have to agree with the switch would let the two drift into saying different things about the same failure")
 				return
 			}
+
 			assert.NotEmpty(t, code,
-				"%s has no arm in sdjwtCodeOf, so it falls through the default and CodeOf's own backstop answers verifier_unavailable — blaming this verifier for a shape only the presenter controlled, unless %s belongs on sdjwtVerifierUnavailableAllowlist with a reason", name, name)
+				"no arm in sdjwtCodeOf, so this falls through the default and CodeOf's backstop answers verifier_unavailable — blaming this verifier for a shape only the presenter controlled")
+			assert.NotEqual(t, generated.ErrorCodeVerifierUnavailable, code,
+				"verifier_unavailable is the one code that confesses about this verifier rather than judging a counterparty, so answering it needs a sentence in sdjwtVerifierUnavailableAllowlist saying why — otherwise a mapping gap and a considered decision look identical, which is how #147 and #162 both survived")
 		})
 	}
 
@@ -181,12 +258,27 @@ func TestEverySDJWTSentinelIsMappedOrAllowlisted(t *testing.T) {
 	for _, name := range declared {
 		known[name] = struct{}{}
 	}
-	for name := range sdjwtSentinelValues {
-		assert.Contains(t, known, name,
-			"%s is in sdjwtSentinelValues and pkg/sdjwt/errors.go no longer declares it; a stale entry outlives the sentinel it names", name)
+	for _, list := range []struct {
+		what    string
+		entries []string
+	}{
+		{"sdjwtSentinelValues", keysOf(sdjwtSentinelValues)},
+		{"sdjwtVerifierUnavailableAllowlist", keysOf(sdjwtVerifierUnavailableAllowlist)},
+		{"sdjwtNonErrorVars", keysOf(sdjwtNonErrorVars)},
+	} {
+		for _, name := range list.entries {
+			assert.Contains(t, known, name,
+				"%s names %s and pkg/sdjwt no longer exports it; a stale entry outlives the declaration it describes and goes on asserting something about a vocabulary that has moved", list.what, name)
+		}
 	}
-	for name := range sdjwtVerifierUnavailableAllowlist {
-		assert.Contains(t, known, name,
-			"%s is on sdjwtVerifierUnavailableAllowlist and pkg/sdjwt/errors.go no longer declares it; the allowlist has to describe sentinels that still exist", name)
+}
+
+// keysOf is the names in one of the three lists above, so the staleness check
+// can be written once over all three rather than three times over one each.
+func keysOf[V any](m map[string]V) []string {
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
 	}
+	return names
 }
