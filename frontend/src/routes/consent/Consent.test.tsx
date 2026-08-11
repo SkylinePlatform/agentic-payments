@@ -228,9 +228,9 @@ describe("the consent screen", () => {
     // The refusal is still in flight — `/authorise/refused` has not resolved.
     // A second click here, and a click on Sign, must both be no-ops: the
     // former would record one decision as two events under two idempotency
-    // keys, and the latter would mount `Signing` before the "no" is even
-    // recorded — inert today, but the one invariant the refuse path exists
-    // to hold once Task 10 wires it to /authorise.
+    // keys, and the latter would mount `Signing` — wired to `/authorise` —
+    // before the "no" is even recorded. That is the one invariant this test
+    // exists to hold.
     await userEvent.click(refuseButton);
     await userEvent.click(signButton);
 

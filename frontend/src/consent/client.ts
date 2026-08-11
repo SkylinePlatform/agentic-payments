@@ -27,10 +27,17 @@ import type { Authorised, Previewed, Proposal } from "./model";
  *
  * Per user action rather than per screen: retrying the same button repeats the
  * key and replays the first answer, which is what it is for; editing the prompt
- * and asking again is a different decision and takes a new one. Since every
- * call here is one action, minting per call is the same thing — with one
- * exception. `authorise`'s own doc comment says why a retry of *that* call is
- * not a fresh action and has to keep the key it started with.
+ * and asking again is a different decision and takes a new one. So every call
+ * here mints its own key, with one exception — `authorise`'s own doc comment
+ * says why a retry of *that* call is not a fresh action and has to keep the
+ * key it started with.
+ *
+ * That does not, on its own, stop a double-clicked *Interpret* from paying
+ * for two model calls: two clicks before the first `propose` resolves would
+ * still mint two different keys and dispatch two requests. What actually
+ * prevents it is `Console.tsx` disabling the button while a call is
+ * `pending` — the key is what makes a *retry* safe, not what makes a
+ * double-click safe.
  */
 function freshKey(): string {
   return crypto.randomUUID();

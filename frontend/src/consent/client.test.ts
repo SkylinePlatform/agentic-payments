@@ -23,10 +23,15 @@ describe("the client", () => {
     expect(calls[0].init.headers).toMatchObject({ "Idempotency-Key": expect.any(String) });
   });
 
-  it("mints a fresh key per call, so an edited prompt is a new decision", async () => {
+  it("mints a fresh key on every call, even when the prompt does not change", async () => {
+    // The honest statement of current behaviour: nothing here compares this
+    // call's prompt to the last one, so two calls with the *same* prompt
+    // still get different keys. What tells a retry from a new decision is
+    // never the prompt — it is which caller chose to reuse a key, which
+    // `authorise` alone does.
     const calls = capture({ prompt: "x", constraints: [], agent_key: {}, item: "i", offer: {}, watch_slots_free: 8 });
     await propose("buy a ladder");
-    await propose("buy a taller ladder");
+    await propose("buy a ladder");
     const keys = calls.map((c) => (c.init.headers as Record<string, string>)["Idempotency-Key"]);
     expect(keys[0]).not.toEqual(keys[1]);
   });

@@ -70,11 +70,11 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
   // sent, this screen is done — both buttons stay disabled rather than
   // reopening a decision that was already made. It also closes two races at
   // once: a second click here would send a second `/authorise/refused` under
-  // a second idempotency key (`client.ts`'s `key()` mints one per call), so
-  // one decision would record as two events; and a click on Sign while a
-  // refusal is still in flight would mount `Signing` — inert today, but the
-  // moment Task 10 wires it to `/authorise` this screen could authorise a
-  // purchase whose refusal is already on the wire.
+  // a second idempotency key (`client.ts`'s `freshKey()` mints one per call),
+  // so one decision would record as two events; and a click on Sign while a
+  // refusal is still in flight mounts `Signing`, which is wired to
+  // `/authorise` — this screen could authorise a purchase whose refusal is
+  // already on the wire.
   const [refusing, setRefusing] = useState(false);
 
   useEffect(() => {
