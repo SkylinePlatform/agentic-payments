@@ -184,9 +184,11 @@ type authorisation struct {
 // previewed is what comes back from POST /authorise/preview: the sentences, and
 // the name of the set they describe.
 //
-// No mandate, because nothing was signed. But the instrument and lifetime are
-// stated, because a consent screen needs to display the full scope of what the
-// user is about to authorise.
+// No mandate, because nothing was signed. But the instrument, the lifetime and
+// the bound on how much may be signed are stated, because a consent screen needs
+// to display the full scope of what the user is about to authorise — and, for
+// the last of the three, because a caller that learns a limit by being refused
+// learns it after the person has already read the sentences.
 type previewed struct {
 	// Rendered says what each constraint means, one sentence per constraint, in
 	// the order they would be signed. It is what POST /authorise returns for
@@ -222,6 +224,20 @@ type previewed struct {
 	// nanoseconds and reads as a defect, or a string, which would need a parser
 	// on the other side for a value with one use.
 	OpenMandateLifetimeSeconds int `json:"open_mandate_lifetime_seconds"`
+
+	// MaxRenderedSize is how much rendering this surface will sign in one
+	// decision, in bytes — the budget the sentences in Rendered are spent
+	// against. maxRenderedSize is the constant and carries the argument.
+	//
+	// Stated for the reason the instrument and the lifetime are: it is a term of
+	// what is about to be signed that the caller has no other way to learn. A
+	// screen assembling a set of limits can add up what it already holds and ask
+	// for a smaller interpretation, rather than finding out by being refused
+	// after the person has read them.
+	//
+	// A budget rather than what this set spent, which the caller can compute
+	// from Rendered and this surface would only be repeating back.
+	MaxRenderedSize int `json:"max_rendered_size"`
 }
 
 // authorised is what comes back: the two open mandates, signed by the user, and
@@ -367,6 +383,10 @@ func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 //   - The sentences returned are rendered from the parsed constraints, so what
 //     a consent screen shows is derived from what the signature covers rather
 //     than sent alongside it.
+//   - More rendering than a person could read is refused before any signature,
+//     so the answer is always one the idempotency middleware will remember — and
+//     a retry is therefore always replayed rather than signed again. The bound
+//     is maxRenderedSize and /authorise/preview states it.
 //   - A digest, where the caller presents one, is checked before anything is
 //     signed, so a caller that rendered one set of limits and is signing
 //     another is refused rather than answered with mandates.
@@ -550,19 +570,25 @@ func (s *Service) authorise(w http.ResponseWriter, r *http.Request) {
 // two attempts. It cannot: a failure early in the first attempt leaves nothing
 // behind, which is exactly the state in which signing afresh is correct.
 //
-// There is a second way one decision reaches two pairs, and it is not a failure
-// at all. transport.Idempotency remembers a response only up to
-// defaultMaxRemembered and gives up the record — never the answer — above it,
-// so a reply past a megabyte completes, answers 200 and is forgotten: the key
-// comes back and a retry signs afresh. This route reaches that size from a
+// There was a second way one decision reached two pairs, and it was not a
+// failure at all. transport.Idempotency remembers a response only up to
+// defaultMaxRemembered and gives up the record — never the answer — above it, so
+// a reply past a megabyte completed, answered 200 and was forgotten: the key
+// came back and a retry signed afresh. This route reached that size from a
 // request well inside the body cap, because every constraint is carried by both
-// mandates and rendered a third time. Neither attempt is wrong in itself, which
-// is why nothing above closes it, and the outcome is still this function's
-// leak one unit larger — a retry only happens if the first answer was lost, and
-// the first attempt therefore leaves behind a *complete* pair carrying the
-// user's key that nobody holds. Issue #223 is where bounding it is decided, and
-// TestTheSecondPairThisDoesNotStop asserts it as a passing test so that there
-// is something to invert rather than a paragraph to notice.
+// mandates and rendered a third time. Neither attempt was wrong in itself, which
+// is why nothing above closed it, and the outcome was this function's leak one
+// unit larger — a retry only happens if the first answer was lost, so the first
+// attempt left behind a *complete* pair carrying the user's key that nobody
+// holds.
+//
+// Issue #223 closed it, and not here: the size of the answer is decided by what
+// the route agrees to sign, so the bound is on the input and it is vetted that
+// applies it. maxRenderedSize carries the argument for why the bound is on the
+// rendering rather than on the number of limits, and for the number. Nothing in
+// transport moved — the middleware's rule about what it will remember is
+// unchanged, and what changed is that this route can no longer produce an answer
+// that trips it.
 func issueOpenPair(
 	ctx context.Context,
 	signer authz.Signer,
@@ -671,6 +697,7 @@ func (s *Service) preview(w http.ResponseWriter, r *http.Request) {
 		ConstraintsDigest:          digest,
 		PaymentInstrument:          instrument,
 		OpenMandateLifetimeSeconds: int(openMandateLifetime / time.Second),
+		MaxRenderedSize:            maxRenderedSize,
 	})
 }
 
@@ -750,6 +777,12 @@ type refusal struct {
 // or accepted one authorise refuses, would put a sentence on a consent screen
 // for a limit that is refused a moment later — and the user would have read a
 // limit nobody was ever going to enforce.
+//
+// The two refusals here are the same sentence from opposite ends. A set with
+// nothing in it cannot be shown to a person because there is nothing to show; a
+// set past maxRenderedSize cannot be shown to a person because there is more of
+// it than anybody would read. Both are refused before any signature, which is
+// the only moment at which refusing costs nothing.
 func vetted(w http.ResponseWriter, cs []generated.Constraint) (
 	sentences []string, checked []generated.Constraint, digest string, ok bool,
 ) {
@@ -771,6 +804,21 @@ func vetted(w http.ResponseWriter, cs []generated.Constraint) (
 		// verifier_unavailable — blaming this surface for the agent's
 		// interpretation.
 		roles.Fail(w, constraint.CodeOf(err), err.Error())
+		return nil, nil, "", false
+	}
+
+	// After the parse, because the sentences are what is measured, and before
+	// the digest, because a set this surface will not sign is not one worth
+	// naming.
+	if size := renderedSize(sentences); size > maxRenderedSize {
+		// request_malformed, the code the empty set is refused under, rather
+		// than request_too_large. The latter is the transport layer's word for a
+		// body larger than a handler will read, and this body was read: what is
+		// being refused is the mandate these limits would make, which is this
+		// role's own verdict about what it may put in front of a person.
+		roles.Fail(w, generated.ErrorCodeRequestMalformed, fmt.Sprintf(
+			"these limits take %d bytes to say and this surface signs at most %d: an open mandate "+
+				"nobody could read is not something a user can approve", size, maxRenderedSize))
 		return nil, nil, "", false
 	}
 
@@ -862,6 +910,90 @@ func render(cs []generated.Constraint) (sentences []string, checked []generated.
 	}
 	return out, cs, nil
 }
+
+// renderedSize is how much text a constraint set comes to, in bytes.
+//
+// Bytes rather than characters, and the difference is the whole reason this is
+// a function with a comment rather than a sum written inline. What the number
+// has to bound is the answer, and the answer is bytes: a rendering counted in
+// runes could be four times its own size on the wire, which would leave
+// maxRenderedSize's headroom a quarter of what it says. For the sentences this
+// renderer produces the two are almost always the same number — the phrases are
+// ASCII and only a value the caller supplied can be anything else — so the
+// budget still reads as "how much text", which is what a caller needs it to
+// mean.
+func renderedSize(sentences []string) int {
+	var n int
+	for _, s := range sentences {
+		n += len(s)
+	}
+	return n
+}
+
+// maxRenderedSize is how much rendering this surface will sign in one decision:
+// the total size, in bytes, of the sentences the user is shown.
+//
+// # What it is for
+//
+// Not resource limiting. transport.Idempotency remembers a response only up to
+// a megabyte and gives up the *record* — never the answer — above it, so a route
+// that can answer 200 with a larger body has a case where the answer completes,
+// is forgotten, and hands the key back for a retry to run the handler again.
+// On a route that signs, that retry reaches the user's key a second time, and
+// because nothing failed the first attempt leaves behind a **complete** open
+// pair carrying that key which nobody holds and nothing can revoke. Issue #223.
+//
+// So the bound this constant sets is what makes issueOpenPair's guarantee
+// hold at every size the route accepts, rather than only below the size at which
+// the middleware stops remembering.
+//
+// # Why the rendering, and not the number of limits
+//
+// The obvious bound is on how many constraints the list holds, and it does not
+// work. Each of these is a *single* top-level constraint that answers past a
+// megabyte on its own, measured against this handler:
+//
+//	one limit whose text value is 300 KB          1.10 MB
+//	one `all` group of six thousand children      1.22 MB
+//	one `in` list of twenty thousand operands     1.23 MB
+//
+// A count would have closed the shape the issue measured and left three open.
+// The rendering is the one quantity that moves with all four dimensions —
+// how many limits, how deeply nested, how many operands, how long a value —
+// because every one of them has to be said in a sentence somebody reads. It is
+// also already computed, before any signature, in the function both
+// authorisation routes share.
+//
+// # Why four kilobytes
+//
+// It is a statement about a person, checked against the mechanism rather than
+// derived from it.
+//
+// The largest interpretation this repository produces is the built scenario's
+// four limits, and they render to 165 bytes — the four sentences are in
+// contracts/testdata/render_vectors.json, so that number is measured rather than
+// estimated. Nothing in internal/agent/interpret can produce much more: the
+// model is instructed to answer with a flat list of leaves, one per fact the
+// sentence implies, over a vocabulary of seven closed fields and an open family
+// of item attributes. Four kilobytes is twenty-five times the built scenario,
+// about six hundred words, and already far more than anybody reads before
+// deciding. It is the same argument vetted makes for the empty set — "not
+// something a user can meaningfully be shown" — from the other end, and MaxDepth
+// is the same kind of number one package along.
+//
+// Then the check. Spent entirely on the shortest limits the vocabulary can say,
+// which is the shape that turns a byte of budget into the most answer, this
+// budget produces 125 KB — an eighth of the megabyte the middleware keeps. Eight
+// times over rather than sitting on the line, so a claim added to either mandate
+// cannot re-open the hole quietly. The ratio is what makes that headroom rather
+// than luck: the worst observed is 33 bytes of answer per byte of rendering,
+// because each limit costs a salted disclosure and a digest in each of the two
+// mandates however short its sentence is.
+//
+// TestOneDecisionSignsOnePairAtAnySize measures the answer at the budget rather
+// than trusting this paragraph, so a change that made the route amplify more
+// fails there.
+const maxRenderedSize = 4096
 
 // openMandateLifetime is how long a signed open mandate stays usable.
 //

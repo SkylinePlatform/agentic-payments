@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
@@ -53,6 +54,21 @@ import (
 // is that the half-pair is dropped rather than announced. It runs over both
 // routes because the rule is about signing two mandates for one decision and
 // not about which flow is doing it.
+//
+// TestOneDecisionSignsOnePairAtAnySize is the second door, which is not a
+// failure at all: an answer too large for the middleware to remember is
+// forgotten rather than refused, so the key comes back and a retry signs a
+// second *complete* pair. It was TestTheSecondPairThisDoesNotStop, a passing
+// test asserting the leak, until issue #223 bounded what the route will sign;
+// its own comment records the three assertions that were turned around.
+// TestASetTooLargeToBeReadIsRefusedBeforeTheKeyIsTouched is that bound from the
+// other side, and TestThePreviewStatesTheBoundBeforeAnythingIsSigned is the
+// caller being told about it in time to do something else.
+//
+// TestTheClosedPairThisDoesNotStop is the same door on /approve, which #223 does
+// not close and which has no issue of its own yet. It passes, on the terms the
+// test it is named after passed on, so that the limitation is something the next
+// reader inverts rather than discovers.
 //
 // The handler runs on the test goroutine here — these tests call ServeHTTP
 // directly rather than through a server — so a request's context is the test's
@@ -208,80 +224,361 @@ func TestAPairThatCannotBeFinishedLeavesNothingBehind(t *testing.T) {
 	}
 }
 
-// TestTheSecondPairThisDoesNotStop is the door the two tests above do not
-// close, asserted as a passing test rather than described in a comment.
+// TestOneDecisionSignsOnePairAtAnySize is TestTheSecondPairThisDoesNotStop
+// turned around, and issue #223 is the turn.
 //
-// Neither attempt below fails. transport.Idempotency remembers a response only
-// up to its own cap and gives up the record — never the answer — above it, so a
-// reply past a megabyte completes, answers 200, is forgotten, and hands the key
-// back for a retry to run the handler again. This route reaches that size from
-// a request well inside the body cap, because every constraint is carried by
-// both mandates and rendered a third time.
+// # What the old test asserted, and why it passed
 //
-// The outcome is the leak this file is about, one unit larger. A retry only
-// happens because the first answer was lost, so the attempt that was forgotten
-// leaves behind a *complete* pair carrying the user's key that nobody holds —
-// where the defect these tests were written against left half of one.
+// Neither attempt failed. transport.Idempotency remembers a response only up to
+// its own cap and gives up the record — never the answer — above it, so a reply
+// past a megabyte completed, answered 200, was forgotten, and handed the key
+// back for a retry to run the handler again. Three thousand constraints reached
+// that size from a request well inside the body cap, because every constraint is
+// carried by both mandates and rendered a third time. The outcome was the leak
+// this file is about, one unit larger: a retry only happens because the first
+// answer was lost, so the forgotten attempt left behind a *complete* pair
+// carrying the user's key that nobody holds. It asserted a body over the cap, an
+// answer that was not replayed, and four signatures for one decision.
 //
-// It passes on purpose, on the terms crypto.Challenger's
-// TestTheReplayThisDoesNotStop set in this repository: a limitation stated as a fact
-// in the suite is one issue #223 has to invert rather than a paragraph somebody
-// has to notice. The day the route bounds what it will sign, this test fails
-// and is rewritten as the assertion that it does.
-func TestTheSecondPairThisDoesNotStop(t *testing.T) {
+// # What this asserts instead
+//
+// The three inverted, on the largest decision this surface will now sign: a body
+// the middleware keeps, a retry that is replayed, and two signatures. The bound
+// is on the rendering rather than on the number of limits — service.go's
+// maxRenderedSize says why — so "the largest" means the constraint set that
+// renders to exactly the budget, whatever shape it took to get there.
+//
+// The size assertion and the replay assertion are not the same assertion twice.
+// The replay is the property: it is the middleware itself saying it kept the
+// answer, so it holds whatever the cap turns out to be, including a cap lowered
+// under our feet. The size is the *headroom*, and it is what fails first if the
+// route starts amplifying more — see maxRemembered.
+func TestOneDecisionSignsOnePairAtAnySize(t *testing.T) {
 	t.Parallel()
 
 	handler, signatures := surfaceThatSigns(t, nil, func(int64) error { return nil })
 
-	body := moreConstraintsThanTheAnswerCanRemember()
-	const key = "a decision whose answer is too large to be remembered"
+	body := asMuchAsThisSurfaceWillSign(t, handler)
+	const key = "a decision that says as much as it is allowed to"
 
 	first := answered(handler, asking(t.Context(), "/authorise", key, body))
+	require.Equal(t, http.StatusOK, first.Code,
+		"this is the largest decision the route accepts, so it has to be one it answers")
+	assert.Less(t, first.Body.Len(), maxRemembered,
+		"a 200 the middleware will not keep hands the key back and lets a retry sign a second "+
+			"complete pair, so the bound has to be low enough that the largest answer still fits")
+	t.Logf("the largest answer this route can give: %d bytes, %.0f%% of what the middleware keeps",
+		first.Body.Len(), 100*float64(first.Body.Len())/float64(maxRemembered))
+
+	retry := answered(handler, asking(t.Context(), "/authorise", key, body))
+	require.Equal(t, http.StatusOK, retry.Code, "the retry has to end with the pair, as any retry does")
+	assert.Equal(t, "true", retry.Header().Get(transport.ReplayedHeader),
+		"the middleware saying it kept the answer is the property this test is about; a retry "+
+			"that runs the handler again is one that reaches the user's key again")
+	assert.Equal(t, int64(2), signatures.Load(),
+		"one decision is one pair at any size the route accepts: a third and fourth signature are "+
+			"a complete open pair carrying the user's key that nobody holds and nothing can revoke")
+}
+
+// TestASetTooLargeToBeReadIsRefusedBeforeTheKeyIsTouched is the other half of
+// the bound, and the half that says where the refusal lands.
+//
+// Before the signature, not after it. A signature discarded is still one the
+// user's key made, and this surface can say no from the parsed constraints
+// alone — vetted renders before anything is signed, so the length of what a
+// person would have to read is known while the answer is still a refusal.
+//
+// # The four shapes, and why a count would have closed only one
+//
+// The issue proposed bounding how many constraints the list holds. Measured
+// against this handler, three of the four rows below are a *single* top-level
+// constraint that answers past the megabyte on its own, so a bound on the count
+// would have left the defect reachable three ways. That is the whole argument
+// for the bound being on the rendering, and it is kept here as rows rather than
+// as a sentence because a sentence cannot fail.
+func TestASetTooLargeToBeReadIsRefusedBeforeTheKeyIsTouched(t *testing.T) {
+	t.Parallel()
+
+	for _, shape := range []struct {
+		name string
+		body string
+	}{
+		{
+			"many small limits, which is the shape the issue measured",
+			authorisationOf(manyLimits(3000)),
+		},
+		{
+			"one limit whose value is enormous: one constraint, and 1.1 MB of answer",
+			authorisationOf(fmt.Sprintf(`{"op":"eq","field":"item.attr.note","value":%q}`,
+				strings.Repeat("a", 300_000))),
+		},
+		{
+			"one group with a great many children: still one constraint, and one sentence",
+			authorisationOf(`{"op":"all","of":[` + manyLimits(6000) + `]}`),
+		},
+		{
+			"one limit with a great many operands: one constraint, one sentence, 1.2 MB",
+			authorisationOf(`{"op":"in","field":"item.id","value":[` + manyIdentifiers(20000) + `]}`),
+		},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler, signatures := surfaceThatSigns(t, nil, func(int64) error { return nil })
+
+			answer := answered(handler,
+				asking(t.Context(), "/authorise", "a decision nobody could have read", shape.body))
+			require.Equal(t, http.StatusBadRequest, answer.Code,
+				"the caller sent limits nobody could be shown, which is the caller's mistake and "+
+					"not this surface failing — a 5xx would invite the retry the bound exists to stop")
+			assert.Contains(t, answer.Body.String(), string(generated.ErrorCodeRequestMalformed),
+				"the same code the empty set is refused under, because it is the same refusal from "+
+					"the other end: a set that cannot be put in front of a person")
+			assert.Zero(t, signatures.Load(),
+				"refused before the signature, so there is no discarded mandate carrying the "+
+					"user's key for anybody to wonder about")
+
+			// The preview is where a caller finds this out without spending a
+			// decision, so it has to refuse on the same terms. It signs nothing
+			// either way, which is why the count above is the assertion that
+			// matters and this one is about the two routes agreeing.
+			preview := answered(handler,
+				asking(t.Context(), "/authorise/preview", "the same set, previewed", shape.body))
+			assert.Equal(t, http.StatusBadRequest, preview.Code,
+				"a preview that rendered what authorise refuses would put sentences on a screen "+
+					"for limits that cannot be signed")
+		})
+	}
+}
+
+// TestThePreviewStatesTheBoundBeforeAnythingIsSigned is the third of the
+// preview's promises, beside the instrument and the lifetime.
+//
+// A caller assembling a screen has the sentences and can add them up; what it
+// cannot derive is what this surface will accept. Stating it is what makes the
+// refusal above something a caller can avoid rather than discover.
+func TestThePreviewStatesTheBoundBeforeAnythingIsSigned(t *testing.T) {
+	t.Parallel()
+
+	handler, signatures := surfaceThatSigns(t, nil, func(int64) error { return nil })
+
+	answer := answered(handler,
+		asking(t.Context(), "/authorise/preview", "what may I sign", authorisationBody))
+	require.Equal(t, http.StatusOK, answer.Code, "the ordinary preview")
+
+	var out struct {
+		Rendered        []string `json:"rendered"`
+		MaxRenderedSize int      `json:"max_rendered_size"`
+	}
+	require.NoError(t, json.Unmarshal(answer.Body.Bytes(), &out), "reading the preview")
+	require.NotEmpty(t, out.Rendered, "the preview this test is reading is of one real limit")
+
+	assert.Positive(t, out.MaxRenderedSize,
+		"a budget the caller cannot see is one it can only discover by being refused")
+	assert.Greater(t, out.MaxRenderedSize, len(out.Rendered[0]),
+		"the set being previewed is inside the budget it is being told about, which is the "+
+			"ordinary case and the one a screen has to be able to read")
+	assert.Zero(t, signatures.Load(), "a preview signs nothing")
+}
+
+// TestTheClosedPairThisDoesNotStop is the door #223 leaves open one route along,
+// asserted as a passing test rather than described in a comment.
+//
+// The bound above is on the rendering, and /approve renders nothing: it wraps a
+// merchant-signed offer the surface does not read, does not verify and has no
+// sentence for. So the shape #223 closed on /authorise is still reachable here,
+// and it is the shape rather than the route — PR #221 said so when it fixed
+// both, and this is the third time that sentence has been right.
+//
+// It is narrower, because the amplification is. Where /authorise turned 59 KB of
+// limits into 557 KB of answer, this is base64 over one string: an offer near the
+// megabyte the body caps allow answers just over the megabyte the middleware
+// keeps, so it takes a request between roughly 790 KB and 1 MiB to reach at all.
+// Reachable is reachable — nothing verifies the offer here, which this package's
+// own doc calls a deliberate division, so nothing stops one being that size —
+// and what is left behind is a *complete* pair of closed mandates signed by the
+// user that nobody holds.
+//
+// It has no issue yet, and this test is how that stays visible: the limitation is
+// a fact in the suite on the terms crypto.Challenger's TestTheReplayThisDoesNotStop
+// set, so the day it is closed this test fails and is turned around, exactly as
+// TestOneDecisionSignsOnePairAtAnySize was. Closing it is a different decision
+// from #223's: an offer is an opaque artefact of the merchant's rather than
+// limits a person reads, so the bound that fits it is not the bound that fits
+// them.
+func TestTheClosedPairThisDoesNotStop(t *testing.T) {
+	t.Parallel()
+
+	handler, signatures := surfaceThatSigns(t, nil, func(int64) error { return nil })
+
+	body := anOfferTooLargeToBeRemembered()
+	const key = "a purchase whose answer is too large to be remembered"
+
+	first := answered(handler, asking(t.Context(), "/approve", key, body))
 	require.Equal(t, http.StatusOK, first.Code, "the pair this surface exists to make")
 	require.Greater(t, first.Body.Len(), maxRemembered,
 		"the whole case is an answer the middleware will not keep, and one under the cap would "+
 			"be the ordinary replay this file already covers")
 
-	retry := answered(handler, asking(t.Context(), "/authorise", key, body))
+	retry := answered(handler, asking(t.Context(), "/approve", key, body))
 	require.Equal(t, http.StatusOK, retry.Code, "nothing here fails, which is what makes it the awkward case")
 	assert.Empty(t, retry.Header().Get(transport.ReplayedHeader),
 		"an answer that was never recorded cannot be replayed, and this is the step where the "+
 			"guarantee is lost rather than the one where it shows")
 	assert.Equal(t, int64(4), signatures.Load(),
-		"two complete pairs for one decision: the first is a pair nobody holds, and it carries "+
+		"two complete pairs for one purchase: the first is a pair nobody holds, and it carries "+
 			"the user's key exactly as the one they were given does")
+}
+
+// anOfferTooLargeToBeRemembered builds a Human Present approval whose answer is
+// over the cap while the request itself is inside the 1 MiB both the middleware
+// and roles.DecodeJSON read.
+//
+// The offer is not a real JWT and does not need to be: this surface wraps what it
+// is given without reading it, which is the property being measured. Nine hundred
+// kilobytes rather than the smallest number that works, for the reason the
+// constraint set next door used three thousand — a test sitting on the boundary
+// goes quiet the first time a claim is added to either mandate.
+func anOfferTooLargeToBeRemembered() string {
+	return fmt.Sprintf(`{
+		"checkout": %q,
+		"payment": {
+			"checkout_hash": "not-the-hash",
+			"payee": {"id":"air-serbia","name":"Air Serbia"},
+			"payment_amount": {"amount":18900,"currency":"USD"},
+			"payment_instrument": {"id":"card-4242","type":"CARD"}
+		}
+	}`, strings.Repeat("e", 900_000))
 }
 
 // maxRemembered is transport.Idempotency's cap on a response it will keep for
 // replay. Unexported over there, so it is restated here rather than reached for.
-// A rise in the real one that is not copied here fails the require below rather
-// than passing quietly, which is the direction that matters: it is the one that
-// would have closed this hole without anybody noticing.
+//
+// It is a floor in one test and a ceiling in the other, which is what makes a
+// stale copy of it catchable from both sides. TestTheClosedPairThisDoesNotStop
+// needs an answer above it and fails if the real cap rose without this one
+// following; TestOneDecisionSignsOnePairAtAnySize needs one below it, where a
+// *fall* in the real cap would leave the size assertion passing while the
+// middleware quietly forgot the answer — which is why the replay assertion is
+// beside it. The replay is the property, this is the margin, and they fail on
+// different changes on purpose.
 const maxRemembered = 1 << 20
 
-// moreConstraintsThanTheAnswerCanRemember builds an authorisation whose answer
-// is over the cap while the request itself is comfortably inside the 1 MiB both
-// the middleware and roles.DecodeJSON read.
+// asMuchAsThisSurfaceWillSign builds the largest authorisation the route
+// accepts: a constraint set whose rendering lands exactly on the budget.
 //
-// Three thousand rather than the smallest number that works. The crossing is
-// somewhere near two thousand — a thousand constraints answer in 557 KB and
-// replay normally — and a test sitting on the boundary would go quiet the first
-// time a claim was added to either mandate. Well past it is what keeps this
-// measuring the route's amplification rather than an arithmetic coincidence.
-func moreConstraintsThanTheAnswerCanRemember() string {
+// Exactly on it rather than comfortably under, because a test that sat in the
+// middle would say nothing about the boundary — and the boundary is where the
+// question "does the answer still fit" is actually decided.
+//
+// The budget is asked for rather than restated, through the same preview a
+// consent screen uses, and the sentences are measured with the renderer that
+// produces them. So nothing here is a copy of anything in the package under
+// test: a bound that moved takes this set with it, and the size assertion in
+// the caller is then what says whether the answer still fits.
+//
+// # The limits are the shortest ones the vocabulary can say, and that is the point
+//
+// Not the shape the issue measured. A budget spent on short sentences buys more
+// of them, and each one costs a salted disclosure and a digest in *each* of the
+// two mandates however short it is — so the smallest limit is the one that
+// converts the budget into the most answer. Measured, the difference is a
+// factor of two: the issue's `item.attr.tagN` limits amplify at 17 bytes of
+// answer per byte of rendering and these at 33. Filling the budget with the
+// comfortable shape would leave the headroom assertion passing on an input
+// nobody would send.
+func asMuchAsThisSurfaceWillSign(t *testing.T, handler http.Handler) string {
+	t.Helper()
+
+	budget := budgetThisSurfaceStates(t, handler)
+
+	var chosen []string
+	size := 0
+	for i := 0; ; i++ {
+		// `the item is "17"` — the shortest noun in the vocabulary, the
+		// shortest phrase, and the shortest value that keeps the limits
+		// distinct rather than one repeated.
+		c := fmt.Sprintf(`{"op":"eq","field":"item.id","value":"%d"}`, i)
+		next := size + renderedSizeOf(t, c)
+		if next > budget {
+			break
+		}
+		chosen = append(chosen, c)
+		size = next
+	}
+	require.NotEmpty(t, chosen, "a budget that fits no limit at all would make every assertion below vacuous")
+	return authorisationOf(strings.Join(chosen, ","))
+}
+
+// budgetThisSurfaceStates reads the bound off the preview, which is where a
+// caller with a screen reads it too.
+func budgetThisSurfaceStates(t *testing.T, handler http.Handler) int {
+	t.Helper()
+
+	answer := answered(handler,
+		asking(t.Context(), "/authorise/preview", "how much may I sign", authorisationBody))
+	require.Equal(t, http.StatusOK, answer.Code, "asking the surface what it will sign")
+
+	var out struct {
+		MaxRenderedSize int `json:"max_rendered_size"`
+	}
+	require.NoError(t, json.Unmarshal(answer.Body.Bytes(), &out), "reading the preview")
+	require.Positive(t, out.MaxRenderedSize, "the surface has to state a budget for one to be filled")
+	return out.MaxRenderedSize
+}
+
+// renderedSizeOf says how long one constraint's sentence is, through the
+// renderer that produces it rather than a copy of its arithmetic.
+//
+// The same call the surface makes — constraint.Parse then Render — so a limit
+// this file thinks costs sixteen bytes of budget costs the handler the same
+// sixteen. Reproducing the sentence here instead would be the second renderer
+// AGENTS.md forbids on the consent path, arriving through a test.
+func renderedSizeOf(t *testing.T, constraintJSON string) int {
+	t.Helper()
+
+	var c generated.Constraint
+	require.NoError(t, json.Unmarshal([]byte(constraintJSON), &c),
+		"a constraint this file wrote has to be one it can read back")
+	parsed, err := constraint.Parse(c)
+	require.NoError(t, err, "a constraint this file wrote has to be one the verifier can read")
+	return len(parsed.Render())
+}
+
+// manyLimits builds n distinct leaf constraints as JSON, without the brackets.
+//
+// item.attr.<name> is the one field name that is open without a source change,
+// which is what lets this be thousands of distinct limits rather than one
+// repeated — a set the parser accepts in full.
+func manyLimits(n int) string {
 	var b strings.Builder
-	b.WriteString(`{"prompt":"a great many limits","constraints":[`)
-	for i := range 3000 {
+	for i := range n {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		// item.attr.<name> is the one field name that is open without a source
-		// change, which is what lets this be three thousand distinct limits
-		// rather than one repeated — a set the parser accepts in full.
 		fmt.Fprintf(&b, `{"op":"eq","field":"item.attr.tag%d","value":"value-%d"}`, i, i)
 	}
-	b.WriteString(`],"agent_key":{"kty":"EC","crv":"P-256","kid":"the-agents-key","x":"MA","y":"MA"}}`)
 	return b.String()
+}
+
+// manyIdentifiers builds n distinct text operands for an `in` list.
+func manyIdentifiers(n int) string {
+	var b strings.Builder
+	for i := range n {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `"gtin:%08d"`, i)
+	}
+	return b.String()
+}
+
+// authorisationOf wraps a comma-separated constraint list in a request body the
+// route accepts in every other respect, so that what is being measured is the
+// constraint set and nothing beside it.
+func authorisationOf(constraints string) string {
+	return `{"prompt":"a great many limits","constraints":[` + constraints +
+		`],"agent_key":{"kty":"EC","crv":"P-256","kid":"the-agents-key","x":"MA","y":"MA"}}`
 }
 
 // surfaceThatSigns stands up a Trusted Surface whose Signer is the generated
