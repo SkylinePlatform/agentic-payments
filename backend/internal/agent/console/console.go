@@ -499,6 +499,7 @@ func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
 		AgentKey:       proposal.AgentKey,
 		Item:           proposal.Item,
 		Offer:          proposal.Offer,
+		Offers:         proposal.Offers,
 		WatchSlotsFree: s.free(),
 	})
 }

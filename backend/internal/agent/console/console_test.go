@@ -85,14 +85,20 @@ func anAuthorisationBody() map[string]any {
 // routes up would fail on sight rather than by coincidence.
 func proposal() agent.Proposal {
 	field := "item.id"
+	offer := agent.Offer{
+		ID:       item,
+		Title:    "Telescopic ladder, 3.8 m",
+		Retailer: "Balkan Hardware",
+		Price:    generated.Amount{Amount: 24999, Currency: "USD"},
+	}
 	return agent.Proposal{
-		Item: item,
-		Offer: agent.Offer{
-			ID:       item,
-			Title:    "Telescopic ladder, 3.8 m",
-			Retailer: "Balkan Hardware",
-			Price:    generated.Amount{Amount: 24999, Currency: "USD"},
-		},
+		Item:  item,
+		Offer: offer,
+		// One element today — the demo catalogue never gives settle more than
+		// one candidate to choose from — but a list, so the wire shape is the
+		// one #109's product table actually reads. See
+		// TestAProposalCarriesTheOffersTheSearchFound.
+		Offers: []agent.Offer{offer},
 		Constraints: []generated.Constraint{
 			{Op: "eq", Field: &field, Value: item},
 		},
@@ -302,6 +308,7 @@ type proposedBody struct {
 	AgentKey       generated.PublicKey    `json:"agent_key"`
 	Item           string                 `json:"item"`
 	Offer          agent.Offer            `json:"offer"`
+	Offers         []agent.Offer          `json:"offers"`
 	WatchSlotsFree int                    `json:"watch_slots_free"`
 }
 
@@ -616,6 +623,26 @@ func TestAProposalIsNotAWatch(t *testing.T) {
 	require.Equal(t, http.StatusOK, get(t, c.url+"/watches", &listed))
 	assert.Empty(t, listed.Watches,
 		"a proposal is not a watch; an agent that remembered one would have a third kind of bookkeeping to expire")
+}
+
+// TestAProposalCarriesTheOffersTheSearchFound is #109's seam made visible on
+// the wire: the console serves every offer agent.Client.Propose's search
+// found, not only the one it settled on, so the product table never has to
+// call the merchant — or decide which constraints are selective — itself.
+func TestAProposalCarriesTheOffersTheSearchFound(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, func(agent.Progress) (agent.Watched, error) { return agent.Watched{}, nil })
+
+	var got proposedBody
+	require.Equal(t, http.StatusOK, post(t, c.url+"/proposals", map[string]any{
+		"prompt": "find and buy telescopic ladders, cheapest",
+	}, &got))
+
+	assert.Equal(t, []agent.Offer{proposal().Offer}, got.Offers,
+		"the mocked Watcher's Offers, unaltered — a console that read only Offer would leave the table with nothing to show beyond the single settled row")
+	assert.Equal(t, got.Offer, got.Offers[0],
+		"the settled offer is the first of the offers the search found, not a value that could disagree with it")
 }
 
 // TestAProposalNeedsAnIdempotencyKey is the one route where the key is earned
