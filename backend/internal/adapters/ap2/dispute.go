@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/evidence"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
@@ -70,24 +71,42 @@ import (
 // own as it is to honour it; what the interface buys there is that the instant
 // was offered, not that it was used.
 //
-// This is Human Present evidence only. Under Human Not Present a closed mandate
-// is a Key Binding JWT inside a ~~-joined sdjwt.Chain, verified through
+// Verify below is Human Present evidence: it reads a closed mandate as a
+// directly-signed presentation, through CheckoutMandates and PaymentMandates.
+// Under Human Not Present a closed mandate is a Key Binding JWT inside a
+// ~~-joined sdjwt.Chain instead, verified through
 // MerchantRules.AuthoriseCheckoutChain and
 // CredentialProviderRules.AuthorisePaymentChain rather than through
-// VerifyCheckout and VerifyPayment. **A Human Not Present purchase now exists to
-// assemble a bundle from and there is still no way to assemble one**, which is
-// worth stating as the gap it is: internal/agent's watch loop produces four
-// chains per attempt rather than two mandates, agent.Delegated says in its own
-// comment why it does not reuse Purchase, and nothing turns those chains into a
-// Bundle. Bundle's fields are strings, and a chain is a compact serialisation
-// like a presentation is, so that arrives as a discrimination inside Verify
-// rather than as a change to the bundle — and choosing which of the three
-// payment chains a bundle carries is a decision nobody has needed to make yet.
-// It is deliberately not written ahead of a caller.
+// VerifyCheckout and VerifyPayment — and VerifyChain, below, is what reads
+// that shape, through the two chain-shaped fields CheckoutChains and
+// PaymentChains.
+//
+// **Bundle did not have to grow a field for it.** A chain and a presentation
+// are both compact serialisations, so which one a bundle carries is a
+// discrimination Verify performs on the string it was handed rather than a
+// property the type declares — see parsePresentation. What could not be
+// discriminated away is the two inputs AuthoriseCheckoutChain needs and a
+// bundle cannot supply: a constraint.Subject, because Bundle.Checkout is
+// opaque bytes to this package and there is nothing in it for a Subject to be
+// a pure function of, and the merchant's own remembered nonce, a fact about
+// one exchange that only the party who issued it holds. Both are the
+// arbiter's to bring, on the same reasoning that keeps the receipt keys and
+// the instant out of the bundle, so VerifyChain takes a third argument,
+// ChainDisputeOptions, rather than being reachable through Verify's own
+// two-argument signature. See that type for what it carries.
+//
+// The bundle's Payment Mandate chain is the one addressed to the processor,
+// on Purchase.Evidence's own reasoning for which Payment Receipt a bundle
+// carries: it is the answer that says whether money moved, which is the
+// question a dispute is opened about, and PaymentReceipts has to be the same
+// party's key the chain was minted for or the fourth link never has a
+// signature to check.
 type Dispute struct {
-	// CheckoutMandates is the Merchant's rule set, or its delegate's.
+	// CheckoutMandates is the Merchant's rule set, or its delegate's, for a
+	// directly-signed Checkout Mandate.
 	CheckoutMandates CheckoutVerifierAsOf
-	// PaymentMandates is the Credential Provider's rule set.
+	// PaymentMandates is the Credential Provider's rule set for a
+	// directly-signed Payment Mandate.
 	//
 	// The Credential Provider's rather than the Merchant Payment Processor's,
 	// which is worth stating because the obvious reading of AP2's fourth
@@ -100,6 +119,19 @@ type Dispute struct {
 	// the bundle at all, because the processor's verdict on it is already here
 	// as the Payment Receipt's result and error.
 	PaymentMandates PaymentVerifierAsOf
+
+	// CheckoutChains is the Merchant's rule set for a Checkout Mandate
+	// delegation chain — VerifyChain's counterpart to CheckoutMandates.
+	// Required only by VerifyChain; Verify never reads it.
+	CheckoutChains CheckoutChainVerifierAsOf
+	// PaymentChains is the Credential Provider's rule set for a Payment
+	// Mandate delegation chain, on CheckoutChains' own terms. The chain the
+	// bundle carries is the one addressed to the processor, so this rule set's
+	// Audience has to be the processor's identifier and not the Credential
+	// Provider's own — see the type's own doc comment for why the bundle's
+	// Payment Mandate is that chain.
+	PaymentChains PaymentChainVerifierAsOf
+
 	// CheckoutReceipts is the merchant's key.
 	CheckoutReceipts authz.Verifier
 	// PaymentReceipts is the key of whoever answered the Payment Mandate.
@@ -140,12 +172,18 @@ func (d Dispute) VerifyCheckoutMandate(
 }
 
 // VerifyCheckoutReceipt is the second link: the Checkout Receipt is the
-// merchant's, says it answers a Checkout Mandate, and answers this presentation.
+// merchant's, says it answers a Checkout Mandate, and answers this
+// presentation — or this delegation chain, since sd is Presented rather than
+// *sdjwt.SDJWT, on Presented's own reasoning: everything about a receipt is
+// the same either way, and the one thing that is not — which bytes the
+// reference is a digest of — is a question only sd itself can answer. Verify
+// calls this with a *sdjwt.SDJWT and VerifyChain with a *sdjwt.Chain; both
+// satisfy the interface unchanged.
 //
 // It does not require the receipt to say success. A rejection receipt is a valid
 // link — the bundle then proves the refusal, which is most of what a dispute is
 // for.
-func (d Dispute) VerifyCheckoutReceipt(token string, sd *sdjwt.SDJWT) (generated.Receipt, error) {
+func (d Dispute) VerifyCheckoutReceipt(token string, sd Presented) (generated.Receipt, error) {
 	return receiptAnswering(token, sd, d.CheckoutReceipts, generated.ReceiptMandateTypeCheckout)
 }
 
@@ -212,9 +250,45 @@ func (d Dispute) VerifySamePurchase(checkout, payment Binding, checkoutJWT strin
 }
 
 // VerifyPaymentReceipt is the fifth link: the Payment Receipt is the answerer's,
-// says it answers a Payment Mandate, and answers this presentation.
-func (d Dispute) VerifyPaymentReceipt(token string, sd *sdjwt.SDJWT) (generated.Receipt, error) {
+// says it answers a Payment Mandate, and answers this presentation or this
+// delegation chain — see VerifyCheckoutReceipt for why sd is Presented.
+func (d Dispute) VerifyPaymentReceipt(token string, sd Presented) (generated.Receipt, error) {
 	return receiptAnswering(token, sd, d.PaymentReceipts, generated.ReceiptMandateTypePayment)
+}
+
+// parsePresentation reads a bundle's mandate token as a Human Present
+// presentation, and turns a delegation chain's arrival there into a diagnosis
+// rather than a generic parse failure.
+//
+// This is the discrimination Verify performs: Bundle's fields are plain
+// strings that can carry either shape, and sdjwt.Parse alone cannot tell a
+// caller which one it was actually handed — a chain-shaped string always
+// fails sdjwt.Parse (the hop separator lands where a Disclosure would have to
+// be, which pkg/sdjwt refuses as empty), so without this the two look
+// identical: "malformed SD-JWT", naming neither what is wrong nor what to do
+// about it.
+//
+// It is a diagnosis and not a redirect. A chain-shaped bundle still cannot be
+// verified through Verify's own two arguments — AuthoriseCheckoutChain needs
+// a constraint.Subject and a remembered nonce that Verify has nowhere to take
+// them from — so this reports ErrMandateMalformed exactly as an unparseable
+// token would, with a message naming VerifyChain rather than leaving the
+// reader to guess from a parser's own vocabulary.
+//
+// token that is neither a presentation nor a chain returns sdjwt.Parse's own
+// error unchanged, which is what keeps every existing malformed-token test
+// answering exactly as it did before this existed.
+func parsePresentation(token string) (*sdjwt.SDJWT, error) {
+	sd, err := sdjwt.Parse(token)
+	if err == nil {
+		return sd, nil
+	}
+	if _, chainErr := sdjwt.ParseChain(token); chainErr == nil {
+		return nil, fmt.Errorf(
+			"%w: this is a Human Not Present delegation chain, not a presentation — VerifyChain reads it, and needs a subject and the remembered nonces Verify has no way to be given",
+			ErrMandateMalformed)
+	}
+	return nil, err
 }
 
 // Verify runs the whole chain and reports where it stopped.
@@ -273,7 +347,7 @@ func (d Dispute) Verify(b evidence.Bundle, at time.Time) evidence.Report {
 		return broken(rep, evidence.StepNone, err)
 	}
 
-	checkoutSD, err := sdjwt.Parse(b.CheckoutMandate)
+	checkoutSD, err := parsePresentation(b.CheckoutMandate)
 	if err != nil {
 		return broken(rep, evidence.StepCheckoutAuthorised, err)
 	}
@@ -290,7 +364,7 @@ func (d Dispute) Verify(b evidence.Bundle, at time.Time) evidence.Report {
 	rep.CheckoutReceipt = checkoutReceipt
 	rep.Held = append(rep.Held, evidence.StepCheckoutAnswered)
 
-	paymentSD, err := sdjwt.Parse(b.PaymentMandate)
+	paymentSD, err := parsePresentation(b.PaymentMandate)
 	if err != nil {
 		return broken(rep, evidence.StepPaymentAuthorised, err)
 	}
@@ -333,6 +407,183 @@ func (d Dispute) Verify(b evidence.Bundle, at time.Time) evidence.Report {
 	rep.Held = append(rep.Held, evidence.StepPaymentAnswered)
 
 	return rep
+}
+
+// VerifyCheckoutMandateChain is VerifyCheckoutMandate's Human Not Present
+// counterpart: the first link, established by reading a delegation chain
+// rather than a directly-signed presentation. See AuthoriseCheckoutChain for
+// what "genuine, live, of the right type, and binds the document" additionally
+// means once the closed mandate carries no signature of its own — it is a Key
+// Binding JWT the agent signed, so "genuine" here folds in that the purchase
+// it names actually falls inside what the open mandate's constraints allow.
+func (d Dispute) VerifyCheckoutMandateChain(
+	at time.Time,
+	c *sdjwt.Chain,
+	subject constraint.Subject,
+	checkoutJWT, nonce string,
+) (CheckoutAuthorisation, error) {
+	if d.CheckoutChains == nil {
+		return CheckoutAuthorisation{}, fmt.Errorf(
+			"%w: no rules to judge the Checkout Mandate chain under", ErrMisconfigured)
+	}
+	return d.CheckoutChains.AuthoriseCheckoutChainAsOf(at, c, subject, checkoutJWT, nonce)
+}
+
+// VerifyPaymentMandateChain is VerifyPaymentMandate's Human Not Present
+// counterpart: the third link, established by reading a delegation chain.
+//
+// It settles nothing about which purchase is being paid for, on
+// VerifyPaymentMandate's own reasoning: AuthorisePaymentChain runs no binding
+// check, so that is VerifySamePurchase's job below, fed by
+// PaymentAuthorisation.Binding rather than by BindingOf — there is no
+// *sdjwt.SDJWT here for BindingOf to read _sd_alg from.
+func (d Dispute) VerifyPaymentMandateChain(
+	at time.Time,
+	c *sdjwt.Chain,
+	nonce string,
+) (PaymentAuthorisation, error) {
+	if d.PaymentChains == nil {
+		return PaymentAuthorisation{}, fmt.Errorf(
+			"%w: no rules to judge the Payment Mandate chain under", ErrMisconfigured)
+	}
+	return d.PaymentChains.AuthorisePaymentChainAsOf(at, c, nonce)
+}
+
+// ChainDisputeOptions is what an arbiter brings to a Human Not Present
+// bundle, beyond what Verify needs for a Human Present one.
+//
+// Two things, and neither of them is in the bundle — the same shape Dispute's
+// own doc comment argues for the keys and the instant, applied to the two
+// values AuthoriseCheckoutChain needs that a presentation-only Verify never
+// had to supply.
+type ChainDisputeOptions struct {
+	// Subject describes the purchase the Checkout Mandate chain's constraints
+	// are evaluated against: the item, the quantity, the category, the price.
+	// Required.
+	//
+	// It cannot come from the bundle. Bundle.Checkout is opaque bytes to this
+	// package — hashed, never parsed, the same treatment that leaves the
+	// chain with no link over the offer's own provenance — so there is
+	// nothing in a bundle for a constraint.Subject to be a pure function of.
+	// It is the merchant's own reading of the offer it made, or a record of
+	// that reading, on the same reasoning that keeps the receipt keys out of
+	// the tokens: a Subject taken from an artefact belonging to a party to
+	// the dispute would let that party choose what its own purchase is
+	// judged against.
+	Subject constraint.Subject
+
+	// CheckoutNonce and PaymentNonce are the challenges the merchant and the
+	// payment verifier issued for this exchange and must have remembered —
+	// see MerchantRules.AuthoriseCheckoutChain's identical parameter for why
+	// this is not minted here. Both required.
+	//
+	// PaymentNonce answers for whichever payment chain the bundle carries,
+	// which Dispute's own doc comment says is the one addressed to the
+	// processor — so this is the processor's remembered nonce, not the
+	// Credential Provider's.
+	CheckoutNonce string
+	PaymentNonce  string
+}
+
+// VerifyChain runs the whole chain over a Human Not Present bundle and
+// reports where it stopped — Verify's counterpart for two delegation chains
+// rather than two presentations, over the same five links and the same
+// Report shape. See Dispute's own doc comment for why this needs a third
+// argument where Verify needs two.
+//
+// at is required on Verify's exact terms: a zero one is refused as
+// ErrMisconfigured at StepNone, never defaulted, because a real dispute is
+// heard long after every mandate in the bundle expired and judging as of now
+// would answer "expired" against a counterparty who did nothing.
+//
+// The five links run in order and stop at the first failure, for the same
+// cascading-reference reason Verify's own comment gives. There is still no
+// sixth link over the merchant's own signature on the Checkout JWT, and a
+// holding chain still asserts nothing about where Bundle.Checkout came from —
+// neither of those changes when the closed mandates are chains instead of
+// presentations.
+func (d Dispute) VerifyChain(b evidence.Bundle, at time.Time, opts ChainDisputeOptions) evidence.Report {
+	var rep evidence.Report
+
+	if err := d.chainUsable(at); err != nil {
+		return broken(rep, evidence.StepNone, err)
+	}
+	if err := b.Validate(); err != nil {
+		return broken(rep, evidence.StepNone, err)
+	}
+
+	checkoutChain, err := sdjwt.ParseChain(b.CheckoutMandate)
+	if err != nil {
+		return broken(rep, evidence.StepCheckoutAuthorised, err)
+	}
+	checkout, err := d.VerifyCheckoutMandateChain(at, checkoutChain, opts.Subject, b.Checkout, opts.CheckoutNonce)
+	if err != nil {
+		return broken(rep, evidence.StepCheckoutAuthorised, err)
+	}
+	rep.Held = append(rep.Held, evidence.StepCheckoutAuthorised)
+
+	checkoutReceipt, err := d.VerifyCheckoutReceipt(b.CheckoutReceipt, checkoutChain)
+	if err != nil {
+		return broken(rep, evidence.StepCheckoutAnswered, err)
+	}
+	rep.CheckoutReceipt = checkoutReceipt
+	rep.Held = append(rep.Held, evidence.StepCheckoutAnswered)
+
+	paymentChain, err := sdjwt.ParseChain(b.PaymentMandate)
+	if err != nil {
+		return broken(rep, evidence.StepPaymentAuthorised, err)
+	}
+	payment, err := d.VerifyPaymentMandateChain(at, paymentChain, opts.PaymentNonce)
+	if err != nil {
+		return broken(rep, evidence.StepPaymentAuthorised, err)
+	}
+	rep.Held = append(rep.Held, evidence.StepPaymentAuthorised)
+
+	// checkout.Binding and payment.Binding are AuthoriseCheckoutChain's and
+	// AuthorisePaymentChain's own recomputed checkout_hash / transaction_id,
+	// each paired with the algorithm its own delegating hop declared — there
+	// is no *sdjwt.SDJWT here for BindingOf to read _sd_alg from, which is
+	// exactly why both authorisations hand their Binding back rather than
+	// leaving a caller to reconstruct one.
+	if err := d.VerifySamePurchase(checkout.Binding, payment.Binding, b.Checkout); err != nil {
+		return broken(rep, evidence.StepOnePurchase, err)
+	}
+	rep.Held = append(rep.Held, evidence.StepOnePurchase)
+
+	paymentReceipt, err := d.VerifyPaymentReceipt(b.PaymentReceipt, paymentChain)
+	if err != nil {
+		return broken(rep, evidence.StepPaymentAnswered, err)
+	}
+	rep.PaymentReceipt = paymentReceipt
+	rep.Held = append(rep.Held, evidence.StepPaymentAnswered)
+
+	return rep
+}
+
+// chainUsable is usable's counterpart for VerifyChain: every collaborator
+// this arbiter was not given to judge a Human Not Present bundle with, in one
+// error. See usable for why all of them are reported at once.
+func (d Dispute) chainUsable(at time.Time) error {
+	var missing []string
+	for _, collaborator := range []struct {
+		name    string
+		present bool
+	}{
+		{"rules for the Checkout Mandate chain", d.CheckoutChains != nil},
+		{"rules for the Payment Mandate chain", d.PaymentChains != nil},
+		{"the merchant's key", d.CheckoutReceipts != nil},
+		{"the key of whoever answered the Payment Mandate", d.PaymentReceipts != nil},
+		{"the instant the transaction is judged as of", !at.IsZero()},
+	} {
+		if !collaborator.present {
+			missing = append(missing, collaborator.name)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: an arbiter brings its own keys and rules, and this one has no %s",
+		ErrMisconfigured, strings.Join(missing, ", no "))
 }
 
 // usable reports every collaborator this arbiter was not given, in one error.
@@ -394,7 +645,7 @@ func broken(rep evidence.Report, at evidence.Step, err error) evidence.Report {
 // ErrMisconfigured, which is the same sentinel a guard here would raise.
 func receiptAnswering(
 	token string,
-	sd *sdjwt.SDJWT,
+	sd Presented,
 	key authz.Verifier,
 	want generated.ReceiptMandateType,
 ) (generated.Receipt, error) {

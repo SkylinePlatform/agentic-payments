@@ -1,5 +1,5 @@
 {
-  "_comment": "Dispute evidence conformance vectors. Two implementations shown the same broken bundle must name the same link and the same reason, or one dispute reaches two verdicts depending on whose code heard it. `steps` is read by position as well as by name: a stored report holds an ordinal, so a reordering that kept every spelling would still change what a stored report means. `broken` maps a tampered Human Present bundle to the first link that must refuse and the contracts/evidence/error_code.json code the refusal carries. Every tamper leaves exactly one thing wrong and everything else genuine, so the link named is the earliest that can refuse rather than merely one that does. A bundle is judged as of the instant the transaction happened, which the arbiter supplies and no artefact in the bundle may choose; expiry rows therefore describe a mandate that was already dead when it was presented, which is a fault, and never one that merely lapsed between the purchase and the hearing, which is what every mandate does. Every row here is reproducible from the bundle alone, against an arbiter holding the ordinary Merchant and Credential Provider rules — a tamper that needs a differently configured arbiter to reach the link it names is not a vector and is not published, because an implementation applying it to the bundle would refuse earlier and be judged non-conformant for being right.",
+  "_comment": "Dispute evidence conformance vectors. Two implementations shown the same broken bundle must name the same link and the same reason, or one dispute reaches two verdicts depending on whose code heard it. `steps` is read by position as well as by name: a stored report holds an ordinal, so a reordering that kept every spelling would still change what a stored report means. `broken` maps a tampered Human Present bundle — two directly-signed presentations — to the first link that must refuse and the contracts/evidence/error_code.json code the refusal carries. `broken_chain` is #110's Human Not Present counterpart: the same table over a tampered bundle whose two closed mandates are delegation chains instead, verified through Dispute.VerifyChain rather than Dispute.Verify. The five links keep their meaning across both tables — see internal/core/evidence's own Step constants for what each one establishes, and note that under a chain 'genuine' additionally means the closed mandate was actually authorised against the open one's constraints, which is what AuthoriseCheckoutChain and AuthorisePaymentChain add over a presentation's plain signature check. Every tamper leaves exactly one thing wrong and everything else genuine, so the link named is the earliest that can refuse rather than merely one that does. A bundle is judged as of the instant the transaction happened, which the arbiter supplies and no artefact in the bundle may choose; expiry rows therefore describe a mandate that was already dead when it was presented, which is a fault, and never one that merely lapsed between the purchase and the hearing, which is what every mandate does. Every row here is reproducible from the bundle alone, against an arbiter holding the ordinary Merchant and Credential Provider rules — a tamper that needs a differently configured arbiter to reach the link it names is not a vector and is not published, because an implementation applying it to the bundle would refuse earlier and be judged non-conformant for being right.",
 
   "steps": [
     "none",
@@ -62,6 +62,33 @@
     "payment_receipt_mislabelled_as_checkout": {
       "step": "payment_answered",
       "code": "mandate_malformed"
+    }
+  },
+
+  "broken_chain": {
+    "checkout_chain_delegated_by_an_unendorsed_key": {
+      "step": "checkout_authorised",
+      "code": "signature_invalid"
+    },
+    "chain_bundle_carries_another_genuine_offer": {
+      "step": "checkout_authorised",
+      "code": "checkout_hash_mismatch"
+    },
+    "chain_checkout_receipt_signed_by_another_party": {
+      "step": "checkout_answered",
+      "code": "signature_invalid"
+    },
+    "chain_payment_mandate_expired_before_presentation": {
+      "step": "payment_authorised",
+      "code": "mandate_expired"
+    },
+    "chain_payment_mandate_bound_elsewhere": {
+      "step": "one_purchase",
+      "code": "payment_binding_mismatch"
+    },
+    "chain_payment_receipt_signed_by_the_merchant": {
+      "step": "payment_answered",
+      "code": "signature_invalid"
     }
   }
 }

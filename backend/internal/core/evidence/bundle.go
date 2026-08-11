@@ -43,11 +43,18 @@ type Bundle struct {
 	// are bound to by digest, and the only thing here that is not itself a
 	// mandate or a receipt.
 	Checkout string
-	// CheckoutMandate is the closed Checkout Mandate, as presented.
+	// CheckoutMandate is the closed Checkout Mandate: a directly-signed
+	// presentation under Human Present, or a delegation chain under Human Not
+	// Present (#110) — both are compact serialisations, so this field carries
+	// either without changing shape. Which one an adapter's Verifier is
+	// handed is not recorded here; a securing format tells the two apart on
+	// the wire, and internal/adapters/ap2.Dispute is where that happens.
 	CheckoutMandate string
 	// CheckoutReceipt is the merchant's signed answer to it.
 	CheckoutReceipt string
-	// PaymentMandate is the closed Payment Mandate, as presented.
+	// PaymentMandate is the closed Payment Mandate, on CheckoutMandate's exact
+	// terms: a presentation under Human Present, a delegation chain under
+	// Human Not Present.
 	PaymentMandate string
 	// PaymentReceipt is the signed answer to it from whoever was asked.
 	PaymentReceipt string

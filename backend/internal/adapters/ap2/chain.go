@@ -255,6 +255,23 @@ type CheckoutAuthorisation struct {
 	Open   generated.OpenCheckoutMandate
 	Closed generated.CheckoutMandate
 	Report constraint.Report
+
+	// Binding is the closed mandate's checkout_hash paired with the algorithm
+	// the delegating hop declared — PaymentAuthorisation.Binding's exact
+	// counterpart, populated the same way and at the same moment. See that
+	// field's own comment for why it is handed over rather than left for the
+	// caller to build: there is no unverified equivalent of *sdjwt.SDJWT's
+	// HashAlg to read the algorithm from otherwise.
+	//
+	// It did not exist before #110, and AuthorisePaymentChain's own comment
+	// named the gap precisely: "If such a caller arrives, the fix is to give
+	// CheckoutAuthorisation the same field from the same verified source,
+	// here." A dispute holding a checkout chain and a payment chain, needing
+	// to run VerifySamePurchase against both, is that caller —
+	// ap2.Dispute.VerifyChain. Binding's own fields are unexported, so there
+	// was no way to build one from outside this package before this field
+	// existed.
+	Binding Binding
 }
 
 // AuthoriseCheckoutChain reads a delegation chain as a closed Checkout
@@ -340,17 +357,23 @@ func AuthoriseCheckoutChain(
 	if err != nil {
 		return CheckoutAuthorisation{Open: open}, err
 	}
+	// Built here and not by the caller, on AuthorisePaymentChain's identical
+	// reasoning: this is the only place both halves — the claimed digest and
+	// the algorithm it was verified under — are in scope at once. decodeCheckout
+	// has already refused a mandate carrying no checkout_hash, so the hash is
+	// non-empty whenever this line runs.
+	binding := Binding{hash: closed.CheckoutHash, alg: verified.DelegatedHashAlg}
 
 	checkout, err := bindingSubject(closed.Checkout, checkoutJWT)
 	if err != nil {
-		return CheckoutAuthorisation{Open: open, Closed: closed}, err
+		return CheckoutAuthorisation{Open: open, Closed: closed, Binding: binding}, err
 	}
 	if err := verifyBinding(verified.DelegatedHashAlg, closed.CheckoutHash, checkout, ErrCheckoutHashMismatch); err != nil {
-		return CheckoutAuthorisation{Open: open, Closed: closed}, err
+		return CheckoutAuthorisation{Open: open, Closed: closed, Binding: binding}, err
 	}
 
 	report, err := authz.AuthoriseCheckout(open, subject, opts.Clock.Now())
-	result := CheckoutAuthorisation{Open: open, Closed: closed, Report: report}
+	result := CheckoutAuthorisation{Open: open, Closed: closed, Report: report, Binding: binding}
 	if err != nil {
 		return result, err
 	}
@@ -421,16 +444,17 @@ type PaymentAuthorisation struct {
 // today** — it runs Binding.PaysFor against that document, and
 // merchant.Service.decideChain is that caller.
 //
-// A caller holding the paired CheckoutAuthorisation and not the checkout cannot,
-// and the shape of that dead end is worth stating so nobody rediscovers it as a
-// missing feature. Binding.Same would be the comparison, and there is no second
-// Binding to pass it: CheckoutAuthorisation carries Open, Closed and Report and
-// no binding of its own, Binding's fields are unexported, and sdjwt.Chain
-// exposes no hop to read _sd_alg from. The two ways out of that are both wrong —
-// widening sdjwt.Chain undoes the encapsulation this field exists to preserve,
-// and recomputing under a hardcoded sha-256 is the bug Binding was introduced to
-// make unrepresentable. If such a caller arrives, the fix is to give
-// CheckoutAuthorisation the same field from the same verified source, here.
+// A caller holding the paired CheckoutAuthorisation and not the checkout used to
+// have no way to close the loop either: Binding.Same would be the comparison,
+// and there was no second Binding to pass it. **That caller has arrived — #110,
+// ap2.Dispute.VerifyChain, running VerifySamePurchase over a checkout chain and
+// a payment chain with no merchant-held checkoutJWT in scope at that point —
+// and CheckoutAuthorisation now carries the same field from the same verified
+// source, for the same reason: see its own comment.** The two ways out that
+// were rejected when this paragraph was written stay rejected — widening
+// sdjwt.Chain would have undone the encapsulation this field exists to
+// preserve, and recomputing under a hardcoded sha-256 is the bug Binding was
+// introduced to make unrepresentable.
 //
 // # It takes no subject, and that is not a convenience
 //

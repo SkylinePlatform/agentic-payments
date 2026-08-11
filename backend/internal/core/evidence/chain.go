@@ -41,15 +41,28 @@ const (
 	// mandate itself discloses would let a swapped Checkout JWT past this link.
 	// What refuses it then is StepOnePurchase's independent recompute, which is
 	// a check with other work to do rather than a link nobody could reach.
+	//
+	// Under Human Not Present — #110 — the Checkout Mandate arrives as a
+	// delegation chain rather than a direct signature, and "genuine" grows
+	// wider without changing name: a closed mandate the agent signed is only
+	// legitimate if it was actually authorised against the open mandate's
+	// constraints, so this link folds in the verdict AuthoriseCheckoutChain's
+	// own constraint evaluation reached. A purchase outside what the user
+	// approved breaks here, named constraint_violated, exactly as it would have
+	// been refused live.
 	StepCheckoutAuthorised
 
 	// StepCheckoutAnswered: the Checkout Receipt is signed by the key the
 	// arbiter brought for the merchant, is labelled as answering a Checkout
-	// Mandate, and answers *this* presentation.
+	// Mandate, and answers *this* presentation — or, under Human Not Present,
+	// this delegation chain; a receipt's reference names the digest of
+	// whichever it is, and the check does not otherwise change.
 	StepCheckoutAnswered
 
 	// StepPaymentAuthorised: the Payment Mandate is genuine, still live and of
-	// the right credential type.
+	// the right credential type — and, under Human Not Present, actually
+	// authorised against the open mandate's constraints, on
+	// StepCheckoutAuthorised's identical addition.
 	//
 	// Nothing about which purchase it pays for is settled here. A closed
 	// Payment Mandate never carries the document it binds to, so its verifier
