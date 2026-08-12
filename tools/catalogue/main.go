@@ -40,12 +40,14 @@
 // # What it will not touch
 //
 // The **hero offers**: see [Heroes]. They are copied through from whatever the
-// file already says, never restated here, so no re-run can move a price four
+// file already says, never restated here, so no re-run can move a price several
 // tests and every screenshot are written against.
 //
 // The **hand-drawn images**: only the `derived/` subdirectory of the image
 // directory is emptied and rewritten. The four illustrations issue #215 drew sit
-// beside it and are never opened.
+// beside it and are never opened — four rather than three because the concert's
+// survived issue #244 removing the offer it was drawn for, unreferenced and
+// untouched, which deploy/catalogue.json's own $comment records.
 package main
 
 import (

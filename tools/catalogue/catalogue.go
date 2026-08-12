@@ -55,7 +55,7 @@ var Heroes = []string{
 //
 // Comment and Offers are both json.RawMessage because both are text this
 // program is a custodian of rather than an author of. The comment is prose a
-// person owns; the offers include the four heroes, which have to come back out
+// person owns; the offers include the three heroes, which have to come back out
 // exactly as they went in.
 type file struct {
 	Comment  json.RawMessage `json:"$comment,omitempty"`
@@ -113,7 +113,7 @@ func readCatalogue(path string) (*file, error) {
 // The heroes come first and in the order [Heroes] names them, which is the order
 // the file already had. Ordering inside the file is presentational — the
 // merchant sorts by identifier when it builds a catalogue — but a diff is not,
-// and keeping the four that matter at the top is what stops a re-run's diff
+// and keeping the three that matter at the top is what stops a re-run's diff
 // burying them under sixty rows of stock.
 func (f *file) rewrite(derived []entry) (*file, error) {
 	byID := make(map[string]json.RawMessage, len(f.Offers))
@@ -138,7 +138,7 @@ func (f *file) rewrite(derived []entry) (*file, error) {
 			// it, and writing the file anyway would replace a loud failure here
 			// with a quiet one in front of whoever was about to take a
 			// screenshot.
-			return nil, fmt.Errorf("the file no longer lists %s, which is one of the four offers "+
+			return nil, fmt.Errorf("the file no longer lists %s, which is one of the three offers "+
 				"a scripted sentence goes looking for; rewriting it would drop that beat", id)
 		}
 		out.Offers = append(out.Offers, hero)

@@ -968,7 +968,7 @@ func TestAnOfferedQuantityIsWhatTheConstraintIsEvaluatedAgainst(t *testing.T) {
 		{
 			name:     "three, which is not",
 			quantity: 3,
-			because: "a cap on the total cannot tell one ladder at $278 from four at $70, so " +
+			because: "a cap on the total cannot tell one ladder at $417 from three at $139, so " +
 				"the count is part of what was approved and has to be evaluated",
 		},
 	} {
