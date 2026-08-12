@@ -221,9 +221,41 @@ demo: generate-go generate-disclosure generate-ts ## Bring up every role, the co
 # merchant rather than falling back to the file — an unset key is an answer, and
 # a shop asked for and not delivered is not — so this target needs a network
 # where `make demo` needs none.
+#
+# **It reads `.env`, and that is the one place in this tree that does.** The
+# target exists for the model, `.env` is where this repository tells you to put
+# the key, and until issue #296 nothing joined the two — so a shell that had not
+# run `set -a; source .env; set +a` got the scripted sentences from the target
+# whose whole point is that they are not needed. Nothing was red and nothing was
+# broken; the demonstration silently became the other one.
+#
+# Three rules, each of them one sentence, and the block below is deliberately one
+# block: the loading and the reporting cannot disagree if the same `if` decides
+# both, and a message that names a source it did not read is precisely the defect
+# this repository keeps finding.
+#
+#   * An already-exported GEMINI_API_KEY wins and `.env` is not read at all, so
+#     `GEMINI_API_KEY=… make demo-live` still works for a one-off and nobody's
+#     deliberate export is replaced by a file behind their back.
+#   * The name is printed and the value never is.
+#   * With no key anywhere it says so **and names the consequence**, because the
+#     console header saying the same thing scrolls past in a stack that prints
+#     several hundred lines — which is how #296 was found.
+#
+# `make demo` does not do this and must not: a run that needs no network, no key
+# and no ambient state is the whole of what that target is for. The binaries are
+# unchanged either way — they still read only the environment they are handed,
+# which is what the recorded decision in `.env.example` was actually protecting.
 .PHONY: demo-live
-demo-live: generate-go generate-disclosure generate-ts ## Same stack as `make demo`, with free text when GEMINI_API_KEY is set and a shop fetched at start-up (needs Node and a network)
+demo-live: generate-go generate-disclosure generate-ts ## Same stack as `make demo`, with free text when GEMINI_API_KEY is set — read from .env if the shell has none — and a shop fetched at start-up (needs Node and a network)
 	cd $(BACKEND) && $(GO) build -o bin/ ./cmd/...
+	@src=the\ environment; \
+	if [ -z "$${GEMINI_API_KEY:-}" ] && [ -f .env ]; then set -a; . ./.env; set +a; src=.env; fi; \
+	if [ -n "$${GEMINI_API_KEY:-}" ]; then \
+		echo "demo-live: GEMINI_API_KEY read from $$src — the agent reads free text"; \
+	else \
+		echo "demo-live: no GEMINI_API_KEY in the environment or in .env — the agent will answer only its scripted sentences"; \
+	fi; \
 	$(BACKEND)/bin/demo -manifest deploy/demo.json -root . \
 		-append agent-watch=-interpreter,auto \
 		-append merchant=-catalogue-live,dummyjson

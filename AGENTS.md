@@ -201,7 +201,9 @@ These are enforced, not advisory.
    `interpret.Demo()`; `-interpreter gemini` is a model behind the same
    interface and refuses to start without a key; `-interpreter auto` is the one
    `make demo-live` passes, and takes the model only when `GEMINI_API_KEY` is
-   set. Those three packages are the whole of the production import graph; tests
+   set — in the environment, or in `.env`, which that **target** reads on the
+   caller's behalf since #296 and which no *binary* has ever read.
+   Those three packages are the whole of the production import graph; tests
    in `internal/adapters/ap2`, `internal/agent` and `internal/agent/console`
    build one as well.
    Two files name the import path *without* importing it, each holding it as a
