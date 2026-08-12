@@ -78,7 +78,8 @@ import (
 
 // Watcher is the agent this console drives.
 //
-// Five methods. Three of them are moments: Propose inside one request,
+// Seven methods. Five of them are moments: Interpret inside one request,
+// ProposeFrom inside the next, Propose inside one request that is both,
 // Authorise inside another, Watch in the goroutine that one leaves behind.
 // Examples is not a moment at all — it is a static lookup with nothing to call
 // it at, answered from whatever the interpreter was built with. Describe is a
@@ -86,9 +87,27 @@ import (
 // port rather than a Proposer beside a Watcher: two fields would allow a
 // Service wired to propose from one agent and watch with another, which is a
 // state nobody wants and nothing would prevent.
+//
+// **Interpret and ProposeFrom are Propose with a seam in it**, and Propose stays
+// because it is what the command line and the watch path call — see
+// agent.Client.Propose. Issue #299 is why the seam exists: the reading is the
+// slow half, the search is the half that needs it, and a screen with a person
+// in front of it has to be able to show the first while the second runs.
 type Watcher interface {
 	// Propose reads the prompt and settles on an offer, signing nothing.
 	Propose(ctx context.Context, prompt, item string) (agent.Proposal, error)
+
+	// Interpret reads the prompt and stops there — the slow half of Propose.
+	// What comes back names no offer and pins nothing.
+	Interpret(ctx context.Context, prompt string) (interpret.Interpretation, error)
+
+	// ProposeFrom settles on an offer from a reading already made, signing
+	// nothing and reading no sentence. prompt is what that reading was made
+	// from, carried so the proposal can say what it was proposed for; item,
+	// when set, is an offer the caller has already chosen.
+	ProposeFrom(
+		ctx context.Context, prompt, item string, reading interpret.Interpretation,
+	) (agent.Proposal, error)
 
 	// Describe asks the merchant what one offer is, so that a row can be named
 	// by something a person can read rather than by the identifier a constraint
@@ -156,6 +175,19 @@ type Service struct {
 	pending int
 	order   []*Run
 	byID    map[string]*Run
+
+	// readingsMu guards the two fields below, which are readings.go's store: the
+	// interpretations POST /interpret has made and POST /candidates spends.
+	//
+	// A second mutex rather than a wider meaning for the one above, and the
+	// reason is that the two protect different lifetimes. A watch outlives the
+	// request that started it and is read by a goroutine; a reading is a scratch
+	// pad between two requests, evicted by age. Folding them together would make
+	// every list of watches contend with every interpretation, and would leave
+	// the comment above listing fields on two unrelated clocks.
+	readingsMu   sync.Mutex
+	readings     map[string]reading
+	readingOrder []string
 
 	// bootPrompt and bootErr are the watch this process was started with, when
 	// there was one and it did not start. See BootWatchFailed.
@@ -235,6 +267,21 @@ func (s *Service) Handler() (http.Handler, error) {
 	mux.HandleFunc("GET /watches/{id}", s.read)
 
 	mux.HandleFunc("POST /proposals", s.propose)
+
+	// The same work as POST /proposals with a seam in the middle of it — issue
+	// #299. Both are POSTs behind the idempotency middleware for the reason
+	// /proposals already was: a double-clicked *Interpret* must not pay for two
+	// model calls, and here that argument is sharper still, because the whole
+	// point of the split is that the model call is the leg somebody is waiting
+	// on.
+	//
+	// **/proposals is untouched and stays.** cmd/agent's -buy, the watch path
+	// and console.Agent.Propose all reach it, and a browser preferring two calls
+	// is not a reason to take the one-call entry point away from a command line
+	// that has nobody to show a progress line to.
+	mux.HandleFunc("POST /interpret", s.interpret)
+	mux.HandleFunc("POST /candidates", s.candidates)
+
 	// A GET, so it sits outside the idempotency middleware by method semantics
 	// rather than by a route exemption — the argument GET /watches/{id}/… above
 	// already makes here. It reads a table fixed at construction.
@@ -606,41 +653,132 @@ func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	proposal, err := s.Watcher.Propose(r.Context(), req.Prompt, req.Item)
-	switch {
-	case errors.Is(err, agent.ErrMerchantAnsweredDifferently):
-		// Same precedence reason as Service.start's arm of the same name: this
-		// also wraps agent.ErrNothingToBuy, so it has to be checked first or the
-		// case below would claim it and answer 422 for what is actually a
-		// merchant that did not answer the question asked.
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	case errors.Is(err, interpret.ErrNoScript),
-		errors.Is(err, interpret.ErrNoConstraints),
-		errors.Is(err, agent.ErrNothingToBuy):
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
-		return
-	case err != nil:
-		http.Error(w, err.Error(), http.StatusBadGateway)
+	if err != nil {
+		refuse(w, err)
 		return
 	}
 
-	// Zero means one, resolved at this edge and nowhere earlier — see
-	// proposed.Quantity and agent.Proposal.Quantity. The caller on the other
-	// side of this response is a browser, which has no number of its own to
-	// fall back to and will send this one straight back on POST /watches.
-	quantity := proposal.Quantity
-	if quantity < 1 {
-		quantity = 1
+	roles.OK(w, http.StatusOK, s.proposalOf(req.Prompt, proposal))
+}
+
+// interpret is POST /interpret: the slow half, on its own — issue #299.
+//
+// It reads the sentence, keeps the reading, and answers with an opaque name for
+// it plus the facts a screen can draw immediately. **No constraints**, and that
+// is not an economy: the set a person signs is the one narrowing pins to a
+// specific offer, which does not exist until POST /candidates has settled on one,
+// so sending the un-narrowed set here would put a constraint list in the browser
+// that nothing later uses. See readings.go for why the reading stays here and
+// what bounds it.
+//
+// The method is named for the route and the package `interpret` is a different
+// identifier in a different namespace; `interpret.ErrNoScript` below resolves to
+// the package exactly as it does in every other handler in this file.
+func (s *Service) interpret(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Prompt string `json:"prompt"`
+	}
+	if !roles.DecodeJSON(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Prompt) == "" {
+		http.Error(w, "console: a reading needs the sentence the user typed", http.StatusUnprocessableEntity)
+		return
 	}
 
-	roles.OK(w, http.StatusOK, proposed{
-		Prompt:      req.Prompt,
+	// r.Context() rather than context.WithoutCancel, for Service.propose's
+	// reason: nothing is signed and nothing is registered, so a caller that has
+	// gone away leaves nobody to answer. The reading this would have produced is
+	// the only thing lost, and it is what the next request makes again.
+	what, err := s.Watcher.Interpret(r.Context(), req.Prompt)
+	if err != nil {
+		refuse(w, err)
+		return
+	}
+
+	id, err := s.remember(req.Prompt, what)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	roles.OK(w, http.StatusOK, interpreted{
+		InterpretationID: id,
+		// This agent's own copy, not the request's. They are the same string
+		// today because remember was just handed it — the point is that every
+		// later answer about this reading comes from the store, so a caller
+		// cannot restate the sentence a proposal claims to have come from.
+		Prompt: req.Prompt,
+		// Zero means one at this edge, for proposed.Quantity's reason exactly: a
+		// browser has no fallback of its own, and the number it is shown here is
+		// the number the next screen will show it.
+		Quantity: resolved(what.Quantity),
+		Trigger:  what.Trigger,
+		Rank:     rankOf(what.Rank),
+		// Read before the search rather than after it, which is what lets a
+		// console refuse to spend a model call it can do nothing with. The value
+		// means what it means on a proposal — a fact at the time of asking, never
+		// a reservation. See proposed.WatchSlotsFree.
+		WatchSlotsFree: s.free(),
+	})
+}
+
+// candidates is POST /candidates: the search half, against a reading already made.
+//
+// The prompt comes out of the store and never off the request, and neither do the
+// constraints — the body carries a name for a reading and, optionally, an offer
+// the caller picked. That is issue #299's central constraint: today constraints
+// never come from the browser, and a route that took them back would be one where
+// the limits on a consent screen are limits this agent was told rather than ones
+// it read.
+//
+// What it answers with is byte for byte what POST /proposals answers with, which
+// is why the consent screen, POST /watches and every shape in view.go are
+// untouched by the split.
+func (s *Service) candidates(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		InterpretationID string `json:"interpretation_id"`
+		Item             string `json:"item"`
+	}
+	if !roles.DecodeJSON(w, r, &req) {
+		return
+	}
+
+	held, err := s.recall(req.InterpretationID)
+	if err != nil {
+		refuse(w, err)
+		return
+	}
+
+	proposal, err := s.Watcher.ProposeFrom(r.Context(), held.prompt, req.Item, held.what)
+	if err != nil {
+		refuse(w, err)
+		return
+	}
+
+	roles.OK(w, http.StatusOK, s.proposalOf(held.prompt, proposal))
+}
+
+// proposalOf is the response POST /proposals and POST /candidates both give.
+//
+// One function rather than two identical literals, because the two routes
+// answering with different shapes is exactly the drift the split could introduce
+// and nothing else would notice: the consent screen reads this, and a field
+// resolved on one path and passed through on the other would show up as a browser
+// bug one screen later.
+func (s *Service) proposalOf(prompt string, proposal agent.Proposal) proposed {
+	return proposed{
+		Prompt:      prompt,
 		Constraints: proposal.Constraints,
 		AgentKey:    proposal.AgentKey,
 		Item:        proposal.Item,
 		Offer:       proposal.Offer,
 		Offers:      proposal.Offers,
-		Quantity:    quantity,
+		// Zero means one, resolved at this edge and nowhere earlier — see
+		// proposed.Quantity and agent.Proposal.Quantity. The caller on the other
+		// side of this response is a browser, which has no number of its own to
+		// fall back to and will send this one straight back on POST /watches.
+		Quantity: resolved(proposal.Quantity),
 		// Unresolved, unlike the quantity above: there is no absence to stand
 		// in for, and a consent screen has to be able to say which of the two
 		// authorisations the person is signing. See proposed.Trigger.
@@ -649,7 +787,48 @@ func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
 		// rather than an absence to resolve — see proposed.Rank.
 		Rank:           rankOf(proposal.Rank),
 		WatchSlotsFree: s.free(),
-	})
+	}
+}
+
+// resolved turns the interpreter's "the sentence named no count" into the one a
+// browser has to be shown. See proposed.Quantity for why it happens here and
+// nowhere earlier.
+func resolved(quantity int) int {
+	if quantity < 1 {
+		return 1
+	}
+	return quantity
+}
+
+// refuse maps a discovery failure onto a status.
+//
+// One table for POST /proposals, POST /interpret and POST /candidates, and it is
+// Service.start's own — that switch carries the reasoning for every arm and a
+// second copy would be a second truth about the same errors. There is no
+// ErrTooManyWatches arm because none of these three reserves anything.
+func refuse(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrNoSuchReading):
+		// 410 rather than 404, and the reason is what a caller does next. Both
+		// would be honest — this store cannot tell an expired identifier from
+		// one that never existed — but a browser has to decide between *read the
+		// sentence again* and *something is misconfigured*, and 404 is
+		// indistinguishable from a dev-server proxy with no entry for this path.
+		// 410 cannot arrive from anywhere but here.
+		http.Error(w, err.Error(), http.StatusGone)
+	case errors.Is(err, agent.ErrMerchantAnsweredDifferently):
+		// Same precedence reason as Service.start's arm of the same name: this
+		// also wraps agent.ErrNothingToBuy, so it has to be checked first or the
+		// case below would claim it and answer 422 for what is actually a
+		// merchant that did not answer the question asked.
+		http.Error(w, err.Error(), http.StatusBadGateway)
+	case errors.Is(err, interpret.ErrNoScript),
+		errors.Is(err, interpret.ErrNoConstraints),
+		errors.Is(err, agent.ErrNothingToBuy):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+	default:
+		http.Error(w, err.Error(), http.StatusBadGateway)
+	}
 }
 
 // examples is GET /examples.

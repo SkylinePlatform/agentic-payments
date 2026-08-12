@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -161,6 +162,118 @@ func TestAShelfTheShopDoesNotStockStillLeavesTheMandatePinnedToOneOffer(t *testi
 		"and it is the offer this proposal actually settled on, not a class of them")
 }
 
+// TestTheShopsVocabularyIsAskedForOnceAndThenRemembered is issue #299's second
+// fix, and the reason it is a fix rather than an optimisation is *where* the
+// fetch sat.
+//
+// It ran on every Propose, in front of the model call, because the answer is
+// interpolated into the instruction that call carries. So the slowest step in the
+// flow had a network round trip bolted to the front of it — repeated, with the
+// error discarded, for a list that changes when a merchant restarts and at no
+// other time.
+//
+// Two proposals through **one** client, because that is where the memo lives. A
+// second Client is a second process's worth of ignorance and asks again, which is
+// correct.
+func TestTheShopsVocabularyIsAskedForOnceAndThenRemembered(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	var asked atomic.Int64
+	w.endpoints.Merchant = merchantCounting(t, w.endpoints.Merchant, &asked,
+		[]string{"ladders", "flights"})
+
+	reader := &recordingInterpreter{answer: interpret.Interpretation{
+		Constraints: []generated.Constraint{
+			{Op: "eq", Field: ptr("item.category"), Value: "ladders"},
+		},
+		Trigger: interpret.TriggerImmediate,
+	}}
+
+	key := newParty(t, "agent", w.clock)
+	agentKey, err := roles.PublicKey(t.Context(), key.keys)
+	require.NoError(t, err)
+
+	client := w.client()
+	for range 2 {
+		_, err = client.Propose(t.Context(), agent.Intent{
+			Prompt:      "find and buy telescopic ladders, cheapest",
+			Interpreter: reader,
+			AgentKey:    agentKey,
+		})
+		require.NoError(t, err, "both proposals should succeed; the ladders are in this catalogue")
+	}
+
+	assert.Equal(t, int64(1), asked.Load(),
+		"the shelves are asked for once per client, not once per sentence — a person waiting on an "+
+			"interpretation should not also be waiting on a list nobody has changed")
+	assert.Contains(t, reader.shelves, "ladders",
+		"and the second reading is shown the remembered vocabulary rather than an empty one, which "+
+			"is how a memo that cached the wrong thing would look")
+}
+
+// TestAShopThatWasNotUpYetIsAskedAgain is the other half of the memo, and it is
+// the half that decides its shape.
+//
+// Only a success is remembered. A merchant that is not listening when the agent
+// starts answers nothing, and caching *that* would lose the shop's whole
+// vocabulary for the life of the process — on the one path whose design is that an
+// unanswered question is not a failure. A transient miss must not become a
+// permanent one.
+func TestAShopThatWasNotUpYetIsAskedAgain(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	var asked atomic.Int64
+	// nil categories is the 404 a merchant with no catalogue gives, which is
+	// indistinguishable from one that is not up: both leave the memo empty.
+	w.endpoints.Merchant = merchantCounting(t, w.endpoints.Merchant, &asked, nil)
+
+	reader := &recordingInterpreter{answer: interpret.Interpretation{
+		Constraints: []generated.Constraint{
+			{Op: "eq", Field: ptr("item.category"), Value: "ladders"},
+		},
+		Trigger: interpret.TriggerImmediate,
+	}}
+
+	key := newParty(t, "agent", w.clock)
+	agentKey, err := roles.PublicKey(t.Context(), key.keys)
+	require.NoError(t, err)
+
+	client := w.client()
+	for range 2 {
+		_, err = client.Propose(t.Context(), agent.Intent{
+			Prompt:      "find and buy telescopic ladders, cheapest",
+			Interpreter: reader,
+			AgentKey:    agentKey,
+		})
+		require.NoError(t, err,
+			"a counterparty declining an optional question must not fail an authorisation")
+	}
+
+	assert.Equal(t, int64(2), asked.Load(),
+		"an agent started one second before its merchant would otherwise never learn what the "+
+			"shop calls anything, for as long as the process lives")
+}
+
+// merchantCounting is merchantPublishing with a tally of how many times GET
+// /shelves was asked for.
+//
+// A counter behind the same proxy rather than a second fixture, so the search,
+// the offer's description and the prices are still the real merchant's answers —
+// merchantPublishing's own argument, and a memoisation test resting on a fake
+// search would be measuring the fake.
+//
+// atomic rather than an int, because the increment happens on the server's
+// goroutine and the assertion on the test's. Nothing here asserts, for the reason
+// merchantPublishing's own handler gives.
+func merchantCounting(
+	t *testing.T, upstream string, asked *atomic.Int64, categories []string,
+) string {
+	t.Helper()
+	return merchantPublishingWith(t, upstream, categories, func() { asked.Add(1) })
+}
+
 // TestAVocabularyThatIsNotOneDoesNotReachTheModel is the bound on what this agent
 // will repeat into a language model's instruction.
 //
@@ -297,9 +410,22 @@ func merchantWithoutShelves(t *testing.T, upstream string) string {
 // what a shop publishes would then be resting on a fake one.
 func merchantPublishing(t *testing.T, upstream string, categories []string) string {
 	t.Helper()
+	return merchantPublishingWith(t, upstream, categories, nil)
+}
+
+// merchantPublishingWith is merchantPublishing with a hook that runs on every GET
+// /shelves, answered or not. It is what lets a test count the fetches without a
+// second proxy — see merchantCounting.
+func merchantPublishingWith(
+	t *testing.T, upstream string, categories []string, onShelves func(),
+) string {
+	t.Helper()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/shelves" {
+			if onShelves != nil {
+				onShelves()
+			}
 			if categories == nil {
 				// The route is registered only where there is a catalogue to ask.
 				http.NotFound(w, r)

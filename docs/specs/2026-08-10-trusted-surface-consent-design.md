@@ -48,10 +48,15 @@ sequenceDiagram
     participant S as Trusted Surface :8084
     participant M as Merchant :8081
 
-    B->>A: POST /proposals {prompt, item?}
+    B->>A: POST /interpret {prompt}
+    A->>M: GET /shelves (memoised, optional)
     A->>A: Interpret — the only model call
+    A-->>B: {interpretation_id, quantity, trigger, rank, watch_slots_free}
+    Note over B: what the agent understood is on screen from here
+
+    B->>A: POST /candidates {interpretation_id, item?}
     A->>M: GET /search?constraints= (identifying only)
-    A-->>B: {prompt, constraints, agent_key, item, offer, watch_slots_free}
+    A-->>B: {prompt, constraints, agent_key, item, offer, offers, watch_slots_free}
 
     Note over B: the surface's zone — nothing is signed yet
     B->>S: POST /authorise/preview {constraints}
@@ -93,6 +98,54 @@ because only the browser ever holds them; it only adds a third kind of
 bookkeeping beside `watches`, with its own expiry, its own limit and its own way
 to leak. What it buys is a shorter final request. That is not worth a new state
 machine.
+
+#### Issue #299 reversed that, and it is the same paragraph answered rather than ignored
+
+**The agent now holds one thing between two hops: the interpretation.** `POST
+/interpret` makes a reading and files it under an opaque name; `POST /candidates`
+spends that name. The store is `internal/agent/console/readings.go`, bounded by
+count and by age, and its identifiers are sixteen random bytes.
+
+The paragraph above is still the reason to be suspicious of this, and it is
+narrower than it first reads. Its objection was that a remembered intent *"does
+not avoid the mandates travelling back through the browser"* and buys only *"a
+shorter final request"*. Both remain true and neither is what this buys. The
+mandates still travel through the browser, `POST /watches` is unchanged, and what
+the split buys is the thing that paragraph was not weighing: **`POST /proposals`
+did three sequential network calls inside one request, one of them a model call
+with a 60-second ceiling, and the screen could draw nothing until all three were
+done.** The reading is the interesting half of that screen and it was arriving
+last.
+
+Three properties keep the new bookkeeping from being the leak the rejection
+predicted:
+
+- **It expires.** `readingLifetime` is fifteen minutes, chosen against
+  `openMandateLifetime`'s hour: a mandate carries authority through time and a
+  reading is a scratch pad in front of one.
+- **It is bounded.** `maxReadings` is 32, on `DefaultLimit`'s argument one
+  resource along — a page with a button on it must not be able to fill this
+  process's memory.
+- **Nothing about it is a state.** The package rule that no route accepts a state
+  is untouched: what `POST /candidates` accepts is a *name*, and what it answers
+  with is computed from a reading this agent made itself.
+
+**`POST /proposals` stays, unchanged.** `cmd/agent`'s `-buy`, the watch path and
+`console.Agent.Propose` all call the single entry point, and it is now literally
+`Interpret` followed by `ProposeFrom` — a composition rather than a copy, so the
+two cannot drift.
+
+### The browser cannot supply constraints, and that is what decides the design
+
+The reading could have been handed to the browser and sent back, saving a lookup.
+It is not, and the reason is the one property this whole flow rests on: **today
+constraints never come from the browser in either direction.** A `POST
+/candidates` that took an interpretation would be a route where the limits a
+person is asked to sign are limits this agent was *told* — and nothing downstream
+could tell, because nothing downstream sees the prompt.
+
+What that costs is a map lookup. What it keeps is that every constraint on a
+consent screen was proposed by the party that read the sentence.
 
 ### `/proposals`, not `/intents`
 
@@ -198,6 +251,57 @@ would be a second truth about the same errors.
 There is no `ErrTooManyWatches` arm: nothing is reserved here. The idempotency
 key is genuinely earned on this route — a double-clicked *Interpret* must not pay
 for two model calls.
+
+### Agent — `POST /interpret` and `POST /candidates` — issue #299
+
+The same work with a seam in the one place a caller can usefully wait. `POST
+/proposals` is untouched and still serves the callers with nobody to show a
+progress line to.
+
+```jsonc
+// → POST /interpret
+{ "prompt": "buy a flight to Palma when it drops below $200" }
+
+// ← 200
+{
+  "interpretation_id": "BR2Nz8p1TmuS8k4rQ0e_dA",
+  "prompt": "buy a flight to Palma when it drops below $200",
+  "quantity": 1,
+  "trigger": "conditional",
+  "rank": { "by": "price", "direction": "ascending" },   // absent when none was read
+  "watch_slots_free": 7
+}
+
+// → POST /candidates
+{ "interpretation_id": "BR2Nz8p1TmuS8k4rQ0e_dA", "item": "" }
+
+// ← 200 — byte for byte what POST /proposals answers with
+```
+
+**No constraints on the first response**, which is the shape of the change rather
+than an omission. The set a person signs is the *narrowed* one — `item.id eq …`,
+appended once an offer exists — so sending the un-narrowed set here would leave
+the browser holding a constraint list nothing downstream uses, and a browser
+holding one is a browser that could hand one back. What is left is the three
+facts a consent screen already shows **outside** its signed box: the quantity,
+the trigger and the preference, none of which any mandate carries.
+
+`watch_slots_free` is on both, and being on the first is the point of it: a
+console that sees zero has learnt it before the search rather than after, so
+nobody reads an interpretation they are then told to abandon.
+
+| cause | status |
+|---|---|
+| an `interpretation_id` that is unknown, expired or evicted | `410` |
+| everything else | `POST /proposals`'s table above, unchanged |
+
+**`410 Gone` rather than `404`**, and the choice is about what a caller does
+next. The store cannot tell an expired identifier from one it never minted, so
+either would be honest — but a browser has to distinguish *read the sentence
+again* from *something is misconfigured*, and `404` is exactly what a Vite dev
+server with no proxy entry for `/candidates` answers. A `410` can only have come
+from this handler. `Console.tsx` reads it and re-interprets **once**; a second
+refusal becomes the agent's own sentence on screen rather than a loop.
 
 ### Agent — `GET /examples`
 
@@ -398,7 +502,10 @@ src/consent/useProposal.ts          the calls to /examples, /proposals, /authori
 
 **#216 moved the console** to `src/routes/buying/Console.tsx` and added
 `src/routes/buying/Buying.tsx`, the screen that holds both stages. The consent
-files did not move.
+files did not move. The calls landed in `src/consent/client.ts` rather than in a
+hook, and since **#299** the agent's half of them is `interpret` and `candidates`
+where it was `propose` — the browser is the one caller that takes the split, and
+`POST /proposals` is served for the ones that do not.
 
 **No module that can render on a screen where a signature is collected may reach
 `constraint/render`, by any path.** That rule exists today and passes vacuously —
@@ -576,8 +683,10 @@ and made it honour the parameter.
 
 | where | what the user sees | what is signed |
 |---|---|---|
-| `POST /proposals` → `422` | the server's sentence, verbatim, beside the menu already on screen; the text stays in the box | nothing |
-| `POST /proposals` → `502` or network | which party did not answer, and a retry | nothing |
+| `POST /interpret` → `422` | the server's sentence, verbatim, beside the menu already on screen; the text stays in the box | nothing |
+| `POST /interpret` → `502` or network | which party did not answer, and a retry | nothing |
+| `POST /candidates` → `410` | the sentence is read again, once, with the live region saying so; a second `410` shows the agent's sentence and leaves the table on screen | nothing |
+| `POST /candidates` → `422`, `502` or network | the agent's sentence; the reading stays on screen, because it is still what the agent understood | nothing |
 | `POST /authorise/preview` refuses a constraint | the canonical code, and **no sign button** | nothing |
 | `POST /authorise/refused` fails | the refusal stands; a note that it was not recorded | nothing |
 | `POST /authorise` → `request_malformed` | shown plainly, with no retry — this one is our defect | nothing |
@@ -661,6 +770,28 @@ The `require`-off-the-test-goroutine rule applies throughout, and the testify
 `.Once()` hazard applies to `TestARepeatedKeyProposesOnce` specifically: the
 expectation stays permissive and the count is asserted from the test goroutine.
 
+**Issue #299 adds these**, in `internal/agent/console/split_test.go` for the
+routes, `readings_internal_test.go` for the bounds — which can name the
+unexported constants — and `internal/agent` for the two fixes underneath:
+
+| test | what it fails on |
+|---|---|
+| `TestTheReadingComesBackBeforeAnythingIsSearched` | `ProposeFrom` is never called, so the reading answers on its own |
+| `TestAReadingCarriesNoConstraintsOntoTheWire` | the raw body, read as text — a struct cannot assert that a key is absent |
+| `TestTheSplitAnswersWhatTheOneCallAnswers` | the two routes' bodies compared field for field against `POST /proposals`'s |
+| `TestOneReadingIsSearchedTwiceWithoutReadingTheSentenceAgain` | one `Interpret`, two `ProposeFrom` — a row click costs a search, not a model call |
+| `TestTheBrowserCannotSupplyTheLimitsOrTheSentence` | a request carrying `prompt` *and* `constraints`, neither of which reaches anything |
+| `TestAReadingThisConsoleNoLongerHoldsIsGone` / `…LeftOnScreenTooLong…` | `410`, and `ProposeFrom` not called, for an unknown and for an expired identifier |
+| `TestAReadingSurvivesUntilItsLifetimeIsUpAndNotPastIt` | the boundary from both sides, against a fake clock |
+| `TestTheOldestReadingIsTheOneEvictedWhenTheStoreIsFull` | `maxReadings + 1` filed, the first gone and the second still there |
+| `TestAnExpiredReadingIsDroppedRatherThanCountedAgainstTheBound` | the two bounds meeting: neither mechanism alone answers this one correctly |
+| `TestAReadingIsNamedBySomethingNobodyCanGuess` | length and distinctness over 64 draws — a counter passes the map check alone |
+| `TestARepeatedKeyReadsTheSentenceOnce` | the same identifier back, and one `Interpret` |
+| `TestTheShopsVocabularyIsAskedForOnceAndThenRemembered` | two `Propose`s through one `Client`, one `GET /shelves` |
+| `TestAShopThatWasNotUpYetIsAskedAgain` | the memo is success-only, so a transient miss does not become permanent |
+| `TestACallToACounterpartyIsBounded` | the default client is not `http.DefaultClient` and its `Timeout` is `counterpartyTimeout` |
+| `TestATimeoutEndsACallThatWouldOtherwiseHang` | a server that never answers, against `context.Background` — the ceiling and not the test's own context |
+
 **No new golden vectors, and the reason is worth recording.** The criterion is an
 artefact that travels and has a second implementation. `rendered` is one and is
 already covered by `render_vectors.json`. `open_mandate_lifetime_seconds` is a
@@ -688,6 +819,16 @@ produces the retry screen. The last of them — *a reload with no router state
 produces the resting state* — went with #216: the proposal is a required prop of
 a zone rather than router state, so the state the resting screen existed for is
 unreachable and both are gone.
+
+**Issue #299 adds five, all in `routes/buying/Console.test.tsx`**: the reading is
+on screen while `/candidates` is deliberately left unsettled; the `role="status"`
+line names each of the two waits in turn and the box is inert for both; a click on
+an unchosen row names the reading already made, so the sentence is read exactly
+once; a `410` on that click reads the sentence again and signs the row that was
+clicked; and a second `410` gives up with the table still on screen rather than
+looping. The Interpret button is asserted disabled in the window the split adds —
+the reading drawn, the search still running — beside #301's own window, which is
+unchanged.
 
 Gates: `make check` and `make frontend-check`.
 
@@ -721,7 +862,9 @@ Gates: `make check` and `make frontend-check`.
   The surface does *not* render the basket size, and could not honestly be made
   to: it signs constraints, and a count is not one — nothing puts a quantity in
   a mandate and no verifier is ever asked about it. So the number is the
-  agent's, carried by the browser from `POST /proposals` to `POST /watches`,
+  agent's, carried by the browser from discovery — `POST /candidates` since
+  #299, and `POST /proposals` for every caller that is not a browser — to `POST
+  /watches`,
   and the screen shows it **outside** the signed box under a label of its own.
   That placement is the part worth keeping in a spec rather than only in a
   component: this design's standard is that what a person reads inside that box

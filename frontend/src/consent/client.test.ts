@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchExamples, propose, refuse, RequestFailed, startWatch } from "./client";
+import { candidates, fetchExamples, interpret, refuse, RequestFailed, startWatch } from "./client";
 import type { Authorised, Proposal } from "./model";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -16,7 +16,7 @@ function capture(response: unknown, status = 200) {
 describe("the client", () => {
   it("sends an idempotency key on every unsafe call", async () => {
     const calls = capture({ prompt: "x", constraints: [], agent_key: {}, item: "i", offer: {}, watch_slots_free: 8 });
-    await propose("buy a ladder");
+    await interpret("buy a ladder");
     // Idempotency-Key is not a simple request header, which is why the dev
     // server proxies rather than the roles growing CORS. Without one the
     // middleware answers idempotency_key_missing.
@@ -30,8 +30,8 @@ describe("the client", () => {
     // never the prompt — it is which caller chose to reuse a key, which
     // `authorise` alone does.
     const calls = capture({ prompt: "x", constraints: [], agent_key: {}, item: "i", offer: {}, watch_slots_free: 8 });
-    await propose("buy a ladder");
-    await propose("buy a ladder");
+    await interpret("buy a ladder");
+    await interpret("buy a ladder");
     const keys = calls.map((c) => (c.init.headers as Record<string, string>)["Idempotency-Key"]);
     expect(keys[0]).not.toEqual(keys[1]);
   });
@@ -40,7 +40,51 @@ describe("the client", () => {
     capture("interpret: no script for this prompt: \"buy a boat\"", 422);
     // The screen renders what the agent said rather than a sentence of its
     // own: only the agent knows which interpreter is wired.
-    await expect(propose("buy a boat")).rejects.toThrow(/no script for this prompt/);
+    await expect(interpret("buy a boat")).rejects.toThrow(/no script for this prompt/);
+  });
+
+  it("asks the agent to read the sentence and nothing else — issue #299", async () => {
+    // The slow leg on its own. The body carries the prompt and no item, because
+    // there is nothing to pin to yet: choosing a row happens against the reading
+    // this call answers with.
+    const calls = capture({ interpretation_id: "r1", prompt: "buy a ladder", quantity: 1, trigger: "immediate", watch_slots_free: 8 });
+    await interpret("buy a ladder");
+
+    expect(calls.map((c) => c.url)).toEqual(["/interpret"]);
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({ prompt: "buy a ladder" });
+  });
+
+  it("names the reading rather than sending it back — issue #299", async () => {
+    // The property the split exists for. Constraints have never come from this
+    // browser and this is the call that could have made them: a body carrying the
+    // interpretation would let a caller send a *different* one, and the limits on
+    // the consent screen would then be limits the agent was told rather than ones
+    // it read.
+    const calls = capture({ prompt: "x", constraints: [], agent_key: {}, item: "i", offer: {}, watch_slots_free: 8 });
+    await candidates("r1", "gtin:0002");
+
+    expect(calls.map((c) => c.url)).toEqual(["/candidates"]);
+    const body = JSON.parse(String(calls[0].init.body)) as Record<string, unknown>;
+    expect(body).toEqual({ interpretation_id: "r1", item: "gtin:0002" });
+    expect(Object.keys(body), "no key for the limits, under any spelling").not.toContain(
+      "constraints",
+    );
+  });
+
+  it("carries the status a caller has to branch on, where no code exists to", async () => {
+    // The agent answers `http.Error`'s plain text, deliberately: a canonical
+    // error code is a verifier's vocabulary about a mandate, and no mandate
+    // exists here. So `410 Gone` — a reading this agent no longer holds — reaches
+    // a caller as a status and by no other route. `Console` reads exactly this to
+    // decide between reading the sentence again and giving up.
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve(new Response("console: this reading is not one this agent still holds\n", { status: 410 })),
+    );
+    const failure: unknown = await candidates("stale").catch((err: unknown) => err);
+
+    expect(failure).toBeInstanceOf(RequestFailed);
+    expect((failure as RequestFailed).status).toBe(410);
+    expect((failure as RequestFailed).code, "plain text carries no code").toBeUndefined();
   });
 
   it("refuses without ever calling authorise", async () => {
@@ -142,7 +186,7 @@ describe("the client", () => {
         new Response('interpret: no script for this prompt: "buy a boat"\n', { status: 422 }),
       ),
     );
-    await expect(propose("buy a boat")).rejects.toThrow(/no script for this prompt/);
+    await expect(interpret("buy a boat")).rejects.toThrow(/no script for this prompt/);
   });
 
   it("carries the Problem Details code alongside its sentence", async () => {
@@ -161,7 +205,7 @@ describe("the client", () => {
       },
       400,
     );
-    const failure: unknown = await propose("buy a boat").catch((err: unknown) => err);
+    const failure: unknown = await interpret("buy a boat").catch((err: unknown) => err);
     expect(failure).toBeInstanceOf(RequestFailed);
     expect((failure as RequestFailed).message).toBe(
       "these constraints are not the ones that digest was issued for",
@@ -179,7 +223,7 @@ describe("the client", () => {
         new Response('interpret: no script for this prompt: "buy a boat"\n', { status: 422 }),
       ),
     );
-    const failure: unknown = await propose("buy a boat").catch((err: unknown) => err);
+    const failure: unknown = await interpret("buy a boat").catch((err: unknown) => err);
     expect(failure).toBeInstanceOf(RequestFailed);
     expect((failure as RequestFailed).code).toBeUndefined();
   });
@@ -192,7 +236,7 @@ describe("the client", () => {
     // name which one rather than repeat the browser's own wording.
     vi.stubGlobal("fetch", () => Promise.reject(new TypeError("Failed to fetch")));
 
-    await expect(propose("buy a boat")).rejects.toThrow(/the shopping agent did not answer/i);
+    await expect(interpret("buy a boat")).rejects.toThrow(/the shopping agent did not answer/i);
     await expect(fetchExamples()).rejects.toThrow(/the shopping agent did not answer/i);
     await expect(refuse({ constraints: [], prompt: "x" } as never, "d")).rejects.toThrow(
       /the trusted surface did not answer/i,
