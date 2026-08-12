@@ -48,12 +48,50 @@
 //     demand edits in code somebody else is holding is a rule that gets
 //     switched off.
 //
-// So that half stays what it already is here: a hand-written
-// `require.NotEmpty(t, found, "the walk found nothing at all, so it is checking
-// nothing")` in the tests whose subject is a scan — `reach_test.go` and
-// `problem_test.go` both carry one — and review everywhere else. This file
-// eats that dog food: `TestTheWalkReadsThisModule` is what stops the rule below
-// from passing because it read no files.
+// So that half stays what it already is here: a hand-written non-vacuity check
+// in the tests whose subject is a scan, and review everywhere else.
+// `reach_test.go:102` is `require.NotEmpty(t, found, "the walk found nothing at
+// all, so it is checking nothing")`; `problem_test.go:37` asks the same
+// question of the schema it derives its table from, as `if len(schema.Enum) ==
+// 0 { t.Fatalf("%s declares no codes", …) }` inside `declaredCodes`. Same
+// property, two spellings — worth writing down as two, because a reader sent
+// looking for the first line in the second file finds nothing and concludes the
+// rule has already lapsed. This file eats that dog food:
+// `TestTheWalkReadsThisModule` is what stops the rule below from passing
+// because it read no files.
+//
+// # What it cannot see
+//
+// Four limits, stated because a rule whose blind spots are undocumented is one
+// the next person trusts further than it deserves.
+//
+//   - **An arm that delegates its whole assertion to a closure bound in the
+//     parent** — `tamper := func(t *testing.T, …) { require.… }` called as
+//     `tc.tamper(t, …)` from inside a `t.Run`, or the same thing as a table
+//     field. The closure is lexical to the parent, so the parent counts it and
+//     the arm does not, and the arm is reported. Thirteen table-driven tests
+//     here already carry a `func(t *testing.T)` field; none is currently in the
+//     shape where the closure carries the *whole* assertion. Resolving locals
+//     and struct-literal keys is another layer of heuristic of exactly the kind
+//     declined above for the derived-list half, and the failure mode is a red
+//     test with an obvious cause rather than a silent pass — so it stays out.
+//   - **A subtest registered anywhere but in the test function's own body** —
+//     a helper that takes a `*testing.T` and calls `Run` itself, or
+//     `t.Run(name, someFunc)` with a function value rather than a literal.
+//     `arms` reads `fn.Body`, and the parent still passes because `Run` counts.
+//     Neither shape exists in this module.
+//   - **Another module.** `moduleRoot` is `backend/`, so
+//     `tools/catalogue/generate_test.go` and
+//     `contracts/tools/disclosure/main_test.go` are not walked.
+//   - **Its own vacuity.** `TestTheAllowListStillDescribesTheTree` asserts
+//     inside a loop over `mayAssertNothing`, so an empty allow-list makes it
+//     pass having checked nothing — and the rule below cannot say so, because
+//     the `assert` sits lexically in the loop body whether the loop runs or
+//     not. The frontend half counts assertions at runtime and would catch the
+//     equivalent; this half reads source and never can. An empty allow-list has
+//     nothing to describe, so this is a limit rather than a hole, and the
+//     direction that would matter is covered: a walk that collapsed makes that
+//     test red on the entry it can no longer find.
 package suite
 
 import (
@@ -185,6 +223,9 @@ func TestTheWalkCatchesWhatItClaimsTo(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		src  string
+		// also is a second file in the same directory, for the cases whose
+		// whole subject is that one file can see a declaration in another.
+		also string
 		want []string
 	}{
 		{
@@ -225,6 +266,54 @@ func TestTheChainVerifies(t *testing.T) {
 func assertChainHolds(t *testing.T, c chain) {
 	t.Helper()
 	require.NoError(t, c.Verify())
+}`,
+			want: nil,
+		},
+		{
+			// The same delegation across the internal/external test package
+			// split, which eleven directories in this module have and which is
+			// one test binary rather than two scopes. A rule keyed on the
+			// package name reports every crossing as silent — and the crossing
+			// is not rare, because mockery writes its constructors into the
+			// internal package and `export_test.go` exists for nothing else.
+			name: "a test whose helper is in the other test package in the same directory",
+			src: `package x_test
+import "testing"
+func TestTheChainVerifies(t *testing.T) {
+	x.AssertChainHolds(t, aChain())
+}`,
+			also: `package x
+import "testing"
+func AssertChainHolds(t *testing.T, c chain) {
+	t.Helper()
+	require.NoError(t, c.Verify())
+}`,
+			want: nil,
+		},
+		{
+			// The style AGENTS.md requires of an interaction double, and it
+			// contains no assert and no require: the expectation is the
+			// assertion, and what fails the test is the cleanup the generated
+			// constructor registered. Reporting this would mean the rule's
+			// first act was to fire on the way the repository says to write it.
+			name: "a test whose only check is a mock expectation",
+			src: `package x_test
+import "testing"
+func TestTheEmitterIsToldAboutTheReceipt(t *testing.T) {
+	sink := x.NewMockSink(t)
+	sink.EXPECT().Send(mock.Anything).Return(nil).Once()
+	issue(sink, aReceipt())
+}`,
+			also: `package x
+import "testing"
+func NewMockSink(t interface {
+	mock.TestingT
+	Cleanup(func())
+}) *MockSink {
+	m := &MockSink{}
+	m.Mock.Test(t)
+	t.Cleanup(func() { m.AssertExpectations(t) })
+	return m
 }`,
 			want: nil,
 		},
@@ -326,6 +415,9 @@ func TestTheHubRunsAHandler(t *testing.T) {
 
 			dir := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "a_test.go"), []byte(tc.src), 0o600))
+			if tc.also != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "b_test.go"), []byte(tc.also), 0o600))
+			}
 
 			var got []string
 			for _, f := range silent(t, dir) {
@@ -366,6 +458,17 @@ func TestLoud(t *testing.T) { require.True(t, ok()) }`
 
 // pkg is one directory's worth of test files, which is the scope in which a
 // helper can be resolved by name.
+//
+// **One directory, not one Go package.** Eleven directories in this module hold
+// both `package x` and `package x_test`, and they compile into a single test
+// binary: mockery writes its generated constructors into the internal one and
+// every external test names them, `export_test.go` exists for exactly this, and
+// a helper declared either side is called from the other. Keying the scope on
+// the package name would make each of those eleven directories two scopes and
+// report the crossings as silent. The cost is that a name declared on both
+// sides resolves to whichever file sorts last, which can only ever turn a
+// reported test into an unreported one — the same direction the looseness below
+// already accepts.
 type pkg struct {
 	files map[string]*ast.File
 	// funcs is every plain function and every method, by name. Methods are
@@ -430,7 +533,7 @@ func eachTest(t *testing.T, root string, visit func(*pkg, string, *ast.FuncDecl,
 		if parseErr != nil {
 			return parseErr
 		}
-		key := filepath.Dir(path) + "|" + f.Name.Name
+		key := filepath.Dir(path)
 		p, seen := pkgs[key]
 		if !seen {
 			p = &pkg{files: map[string]*ast.File{}, funcs: map[string]*ast.FuncDecl{}}
@@ -501,11 +604,18 @@ func takesATestingT(sig *ast.FuncType) bool {
 	return ok && pkgName.Name == "testing"
 }
 
-// receiverName is the name the function gave its *testing.T.
+// receiverName is the name of the signature's first parameter.
 //
-// Read from the signature rather than assumed to be `t`, because nothing
-// obliges an arm to call it that and an arm that does not is the one a rule
-// keyed on the literal name would silently skip.
+// For a test or an arm that is the name it gave its *testing.T, because
+// takesATestingT has already run — and it is read rather than assumed to be
+// `t`, since nothing obliges an arm to call it that and an arm that does not is
+// the one a rule keyed on the literal name would silently skip. For a helper
+// reached through resolves it is only parameter zero, so a helper written
+// `func send(url string, t *testing.T)` that fails through `t.Error` would not
+// be recognised as asserting. None exists — `t` is first everywhere in this
+// module — and AGENTS.md requires assertions to be testify calls rather than
+// hand-rolled `if` blocks, which is what makes the shortcut safe rather than
+// lucky.
 func receiverName(sig *ast.FuncType) string {
 	if sig.Params == nil || len(sig.Params.List) == 0 || len(sig.Params.List[0].Names) == 0 {
 		return ""
@@ -618,6 +728,10 @@ func asserts(p *pkg, body *ast.BlockStmt, subject string, seen map[string]bool) 
 					}
 				}
 			}
+			if mockAssertion(fun.Sel.Name) {
+				found = true
+				return false
+			}
 			// A method on a fixture — s.assertForwarded(t) — resolved by name.
 			if resolves(p, fun.Sel.Name, subject, seen) {
 				found = true
@@ -653,6 +767,31 @@ func resolves(p *pkg, name, subject string, seen map[string]bool) bool {
 		inner = subject
 	}
 	return asserts(p, decl.Body, inner, seen)
+}
+
+// mockAssertion reports whether a method name is one of testify's own, on any
+// receiver.
+//
+// The receiver is deliberately not checked, because there is nothing to check
+// it against: these are methods on an embedded `mock.Mock`, so the receiver is
+// whatever the double was called, and no other type in this tree declares a
+// method with any of these names.
+//
+// It is here because AGENTS.md's "Interaction doubles are generated" section
+// makes an expectation *the* assertion for a whole class of test — the
+// generated constructor registers `t.Cleanup(func() { m.AssertExpectations(t)
+// })`, which is a real thing that fails the test and contains no `assert` and
+// no `require`. Without this, a test that builds a mock, sets an expectation
+// and drives the subject reads as silent, which is the rule firing on the
+// style the repository requires. `internal/platform/transport` and
+// `internal/platform/obs` are where that style is densest, and they are the two
+// packages #128 and #106 are open against.
+func mockAssertion(method string) bool {
+	switch method {
+	case "AssertExpectations", "AssertCalled", "AssertNotCalled", "AssertNumberOfCalls":
+		return true
+	}
+	return false
 }
 
 // failsTheTest reports whether a *testing.T method can make the test red, or

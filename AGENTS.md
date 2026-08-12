@@ -317,9 +317,9 @@ backend/                ⬅ the Go module root. go.mod lives here, not at the to
                         project does not control — agent/interpret is the other
                         one — and only under `make demo-live`
     platform/           crypto, store, clock, obs — implements core ports
-    suite/              one rule about every other _test.go file: no test and
-                        no t.Run arm may assert nothing. Test files only, no
-                        source, nothing imports it
+    suite/              one rule about every other _test.go file in this
+                        module: no test and no t.Run arm may assert nothing.
+                        Test files only, no source, nothing imports it
   pkg/
     httpsig/            RFC 9421 — public standard, externally importable
     sdjwt/              SD-JWT — public standard, externally importable
@@ -701,10 +701,14 @@ reconcile against the code for no benefit.
   measurement is in `internal/suite`'s package comment. `for _, x := range
   derived { t.Run(…) }` needed four layers of heuristic to get from 172
   candidates to 10, which makes it a guard needing a guard. That one stays what
-  it already is: a hand-written `require.NotEmpty(t, found, "the walk found
-  nothing at all, so it is checking nothing")` in the tests whose subject is a
-  scan — `interpret/reach_test.go` and `platform/problem/problem_test.go` both
-  carry one — and review everywhere else.
+  it already is: a hand-written non-vacuity check in the tests whose subject is
+  a scan, and review everywhere else. `interpret/reach_test.go` spells it
+  `require.NotEmpty(t, found, "the walk found nothing at all, so it is checking
+  nothing")`; `platform/problem/problem_test.go` asks it of the schema its table
+  is derived from, as `if len(schema.Enum) == 0 { t.Fatalf(…) }`. Two spellings
+  of one property, and worth naming as two — this paragraph said "both carry
+  one" of the first spelling until review went and looked, which is the rule
+  above failing on the rule above.
 
 Run everything from the repository root:
 

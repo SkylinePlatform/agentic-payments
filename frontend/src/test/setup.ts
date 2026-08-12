@@ -32,8 +32,13 @@ guardTables("describe", describe);
  * detached. `expect` counts its own calls per test, so this costs a comparison
  * and needs nothing from the tests themselves.
  *
- * It runs before `cleanup` below only by registration order, which does not
- * matter — neither hook can affect what the other reads.
+ * It runs *after* `cleanup` below, which is worth stating precisely because the
+ * obvious guess is the other way round: Vitest resolves `sequence.hooks` to
+ * `"stack"` unless told otherwise, and vite.config.ts does not, so `afterEach`
+ * hooks run in reverse registration order. Nothing here depends on that —
+ * neither hook can affect what the other reads, and unmounting a React tree
+ * cannot change an assertion count — but a comment that had the order backwards
+ * would be this file's own subject wearing a different hat.
  */
 afterEach((ctx) => {
   const complaint = unassertedPass(

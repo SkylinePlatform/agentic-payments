@@ -135,6 +135,27 @@ export function guardTables(name: string, target: Tabulated): void {
  * collaborator it wired up still asserted something, and this will not notice.
  * What it does notice is the arm that checks nothing at all, which is the one
  * that went green with the collaborator detached — twice.
+ *
+ * **Vitest ships this rule as `test.expect.requireAssertions`**, and the reason
+ * to hand-roll it anyway is not that nobody looked. The built-in throws
+ * *"expected any number of assertion, but got none"*, which states the symptom
+ * and leaves the reader to work out that a test whose subject really is *this
+ * does not throw* should say so with `expect(() => …).not.toThrow()`. That
+ * sentence is most of the value of the rule, and a config flag has nowhere to
+ * put it. Being a function of two numbers also means `vacuity.test.ts` can
+ * drive the rule without a runner, and can drive the *wiring* separately
+ * through `it.fails` — one flag switched off is invisible, one deleted
+ * `afterEach` is red.
+ *
+ * The built-in is better in exactly one respect, and it is the limit here:
+ * Vitest reads the test's *local* expect state when there is one, and this
+ * reads the global. A test written `it("x", ({ expect }) => …)` counts its
+ * assertions locally, so this would report it as silent. Nothing in this
+ * package uses the context `expect` today. **Do not close it by reading
+ * `ctx.expect` from the hook** — that property is a lazy getter which
+ * *constructs* a local expect on first access, so touching it from `afterEach`
+ * would mint a fresh zero-count state for every test and turn this guard into a
+ * false positive on all of them.
  */
 export function unassertedPass(
   state: string | undefined,
