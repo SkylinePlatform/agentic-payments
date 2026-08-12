@@ -35,25 +35,19 @@ const sunglassesUnderThirty = `[
 	{"op":"lte","field":"amount","value":{"amount":3000,"currency":"USD"}}
 ]`
 
-// extended is the shipped catalogue with a recorded shop's stock added to it,
-// minus the one category that really does collide with it.
+// extended is the shipped catalogue with a recorded shop's stock added to it.
 //
 // stock.Snapshot rather than the shop: hard rule 4 forbids a test reaching the
 // network, and the recording runs through the same decoder the live path uses —
 // see that type, which is deliberately not in a _test.go file so this package
 // can name it.
 //
-// # Why "minus smartphones"
-//
-// The recorded snapshot is not a fixture built to avoid this problem — it is
-// what DummyJSON actually answered, and it actually sells "smartphones", which
-// is also one of tools/catalogue's derived shelves. Extend now refuses that
-// collision (issue #250; see
-// TestAFetchedOfferMayNotTakeACategoryTheCommittedShelfSells, where the
-// collision is the point), so a helper that fed the raw recording to every
-// other test in this file would make all of them about that refusal instead
-// of about whatever they are named for. Filtering it out here is what lets the
-// rest of this file go on being a claim about a mixed shelf.
+// The recorded snapshot is the real DummyJSON response, unfiltered — it really
+// does sell "smartphones", which is also one of tools/catalogue's derived
+// shelves, and Extend merges it without complaint (issue #250: a category
+// collision joins the shelf rather than being refused). See
+// TestASmartphoneFromTheShopJoinsRatherThanCollides for that collision
+// measured on its own.
 func extended(t *testing.T) (*merchant.CatalogueFile, int) {
 	t.Helper()
 
@@ -61,32 +55,9 @@ func extended(t *testing.T) (*merchant.CatalogueFile, int) {
 	require.NoError(t, err, "the recorded shop has to decode, or nothing below tests a live catalogue")
 
 	f := shippedCatalogue(t)
-	added, err := f.Extend(t.Context(), withoutCategory{Fetcher: snapshot, exclude: "smartphones"})
+	added, err := f.Extend(t.Context(), snapshot)
 	require.NoError(t, err, "the recorded shop's stock has to be sellable beside the committed offers, which is the whole claim of a mixed shelf")
 	return f, added
-}
-
-// withoutCategory wraps a Fetcher and drops every product in one category, so
-// a test whose subject is something other than the reserved-category rule can
-// still merge the recorded shop without being refused by it.
-type withoutCategory struct {
-	stock.Fetcher
-	exclude string
-}
-
-func (w withoutCategory) Fetch(ctx context.Context) ([]stock.Product, error) {
-	all, err := w.Fetcher.Fetch(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]stock.Product, 0, len(all))
-	for _, p := range all {
-		if p.Category == w.exclude {
-			continue
-		}
-		out = append(out, p)
-	}
-	return out, nil
 }
 
 // fetchedPrototype hands back a function returning one offer exactly as Extend
@@ -392,7 +363,7 @@ func (r refusing) Name() string { return "a shop that is not answering" }
 
 func (r refusing) Fetch(context.Context) ([]stock.Product, error) { return nil, r.err }
 
-// TestAFetchedOfferMayNotBeSomethingTheFileAlreadySells covers the four things
+// TestAFetchedOfferMayNotBeSomethingTheFileAlreadySells covers the three things
 // a shop is not allowed to put on this shelf, each of which is a rule about the
 // *merged* set and therefore invisible to either half alone.
 func TestAFetchedOfferMayNotBeSomethingTheFileAlreadySells(t *testing.T) {
@@ -441,21 +412,12 @@ func TestAFetchedOfferMayNotBeSomethingTheFileAlreadySells(t *testing.T) {
 			wantErr: true, mentions: "one price that never moves",
 			why: "GET /checkout?from=&to= quotes a route on that offer's own prices, so a shop's placeholder row would be sold as a seat",
 		},
-		{
-			// issue #250. "ladders" is the category "find and buy telescopic
-			// ladders, cheapest" narrows on and nothing else, so a second
-			// offer there would not fail to load and would not fail to
-			// search — it would sort ahead of gtin:05014477390221 and settle
-			// would buy it instead. See TestASecondLadderWouldOutrankTheRealOne
-			// for that mechanism measured directly, and
-			// TestAFetchedOfferMayNotTakeACategoryTheCommittedShelfSells for
-			// the same refusal against a real collision rather than this
-			// fixture's manufactured one.
-			name:    "a product claiming the category a committed shelf sells",
-			fetcher: sound(func(p *stock.Product) { p.Category = "ladders" }),
-			wantErr: true, mentions: "ladders",
-			why: "settle takes the first candidate a search returns without ranking, and NewCatalogue sorts by identifier, so a colliding category would take first place rather than merely join the results",
-		},
+		// A product claiming a category the committed shelf already sells is
+		// deliberately not a row here — issue #250. It is not refused: it joins
+		// the shelf, and NewCatalogue's ordering is what stops it from winning a
+		// search a committed offer also matches. See that function's doc, and
+		// TestTheCommittedLadderOutranksAColludingFetchedOne below for the
+		// mechanism measured directly.
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -575,21 +537,28 @@ func TestAFetchedOfferMakesNoClaimAboutAScriptedSentence(t *testing.T) {
 		"a fetched offer states a scenario, which is a claim about a scripted sentence that was never written")
 }
 
-// TestASecondLadderWouldOutrankTheRealOne is the defect issue #250 names,
-// measured directly rather than inferred from Extend's refusal.
+// TestTheCommittedLadderOutranksAColludingFetchedOne is the defect issue #250
+// names, measured directly against NewCatalogue's ordering rather than
+// inferred from a refusal.
 //
-// It builds the mixed shelf by hand — CatalogueFile.Validate and
-// CatalogueFile.Catalogue, not Extend — specifically so the reserved-category
-// guard is not in the way: this test is not about whether Extend refuses the
-// collision, it is about what would happen if nothing did. "find and buy
-// telescopic ladders, cheapest" reaches the merchant as
+// # The history this test still proves
+//
+// "find and buy telescopic ladders, cheapest" reaches the merchant as
 // `item.category eq "ladders"` and nothing else — see
 // TestTheLiveHalfChangesNoScriptedAnswer for where that query comes from —
-// and NewCatalogue sorts by identifier, so a `dummyjson:` offer sorts ahead of
-// `gtin:05014477390221`. settle (internal/agent/authorise.go) then takes
-// found[0] and ranks nothing, so the offer this test shows sorting first is
-// the offer a Human Not Present run would buy.
-func TestASecondLadderWouldOutrankTheRealOne(t *testing.T) {
+// and settle (internal/agent/authorise.go) takes found[0] without ranking.
+// Before this fix, NewCatalogue sorted purely by identifier, and
+// "dummyjson:1" sorts ahead of "gtin:05014477390221" — so a colliding fetched
+// offer would not have joined the results, it would have taken first place
+// and become what a Human Not Present run bought. The identifier below is
+// chosen for exactly that reason: it is not "whichever happens to be first",
+// it is the one a naive sort would have picked wrongly, which is what makes
+// the assertion below non-trivial rather than incidental.
+//
+// NewCatalogue now sorts committed offers ahead of fetched ones, so the
+// colliding offer still joins the search — it is not refused, not dropped —
+// but it can no longer win one the real ladder also matches.
+func TestTheCommittedLadderOutranksAColludingFetchedOne(t *testing.T) {
 	t.Parallel()
 
 	real := entryFor(t, shippedCatalogue(t), merchant.DemoLadderID)
@@ -613,39 +582,54 @@ func TestASecondLadderWouldOutrankTheRealOne(t *testing.T) {
 	results, err := cat.Search(constraintsFrom(t, `[{"op":"eq","field":"item.category","value":"ladders"}]`))
 	require.NoError(t, err)
 
-	require.NotEmpty(t, results.Offers,
-		"the query the agent actually sends for this prompt has to find something, or the collision below is moot")
-	assert.Equal(t, "dummyjson:1", results.Offers[0].ID,
-		"a colliding fetched offer sorted ahead of %q rather than merely joining the results — this is "+
-			"what makes the defect worse than a search returning too much: settle takes found[0] "+
-			"without ranking, so this is the offer a Human Not Present run would buy", real.ID)
+	require.Len(t, results.Offers, 2,
+		"the colliding offer has to actually join the results, or this is not testing a tie-break at all")
+	assert.Equal(t, real.ID, results.Offers[0].ID,
+		"the committed ladder has to win found[0] over %q despite sorting after it alphabetically, "+
+			"or settle would buy the offer nobody scripted", colliding.ID)
 }
 
-// TestAFetchedOfferMayNotTakeACategoryTheCommittedShelfSells is issue #250's
-// regression test against a real collision rather than a manufactured one.
-//
-// The recorded DummyJSON snapshot really does sell "smartphones", and
-// tools/catalogue really did derive ten offers under that same category into
-// the committed file. Nothing narrows on smartphones alone today, which is
-// exactly why nothing before this rule existed ever caught it — the review of
-// #248 measured the same fact and called it "safe today, by data rather than
-// by rule." This is the rule.
-func TestAFetchedOfferMayNotTakeACategoryTheCommittedShelfSells(t *testing.T) {
+// TestASmartphoneFromTheShopJoinsRatherThanCollides is issue #250's finding,
+// kept as a test rather than left as a comment: the recorded DummyJSON
+// snapshot really does sell "smartphones", and tools/catalogue really did
+// derive ten offers under that same category into the committed file. An
+// earlier version of this fix refused that collision outright, which would
+// have failed `-catalogue-live dummyjson` against the real shop over a
+// category no scripted sentence narrows by. This is the replacement claim:
+// the fetch succeeds, both halves are sellable, and a category-only search
+// still resolves deterministically in the committed shelf's favour.
+func TestASmartphoneFromTheShopJoinsRatherThanCollides(t *testing.T) {
 	t.Parallel()
 
 	snapshot, err := stock.NewSnapshot()
 	require.NoError(t, err, "the recorded shop has to decode, or this test is not exercising a real collision")
 
 	f := shippedCatalogue(t)
-	was := slices.Clone(f.Offers)
+	added, err := f.Extend(t.Context(), snapshot)
+	require.NoError(t, err,
+		"a category the committed shelf also sells must not stop a live fetch from merging — "+
+			"refusing it would break -catalogue-live against the real shop over a category "+
+			"nothing narrows by")
+	require.Positive(t, added)
 
-	_, err = f.Extend(t.Context(), snapshot)
-	require.ErrorIs(t, err, merchant.ErrNoLiveCatalogue,
-		"the recorded shop offers smartphones, and the committed file already sells ten of them under "+
-			"the same category — a search narrowing on category alone cannot tell the two halves apart, "+
-			"and settle would buy whichever sorts first")
-	assert.Contains(t, err.Error(), "smartphones",
-		"whoever reads this refusal needs to know which category collided, to decide whether to change the shelf or the sentence")
-	assert.Equal(t, was, f.Offers,
-		"a refused shop still changed the file, so a caller ignoring the error would be selling a category it just refused to merge")
+	fetchedSmartphones := 0
+	for _, o := range f.Offers {
+		if o.Source == merchant.SourceLive && o.Category == "smartphones" {
+			fetchedSmartphones++
+		}
+	}
+	require.Positive(t, fetchedSmartphones,
+		"the recorded shop has to actually carry smartphones, or this test is not exercising the real overlap")
+
+	cat, err := f.Catalogue(clock.NewFake(base), demoMerchantID, base, merchant.DefaultStep)
+	require.NoError(t, err)
+
+	results, err := cat.Search(constraintsFrom(t, `[{"op":"eq","field":"item.category","value":"smartphones"}]`))
+	require.NoError(t, err)
+
+	require.Greater(t, len(results.Offers), 10,
+		"both halves have to be present, or the ordering assertion below is not about a real tie")
+	assert.True(t, strings.HasPrefix(results.Offers[0].ID, "wd:"),
+		"the committed shelf's smartphones are wd:-prefixed, and one of them has to win found[0] over "+
+			"every dummyjson: offer despite sorting after some of them alphabetically")
 }

@@ -81,6 +81,14 @@ type Offer struct {
 	// NewSchedule, NewJitteredSchedule or NewCyclingJitteredSchedule for the
 	// reasons Inventory.New gives.
 	Schedule *Schedule `json:"-"`
+
+	// Source is where this offer came from — the file, or a shop fetched at
+	// start-up — carried through from CatalogueEntry.Source by
+	// CatalogueFile.catalogue. Not on the wire: no screen and no verifier reads
+	// it, only NewCatalogue's own ordering does. See that function's doc for
+	// why sorting is where a fetched offer's category is answered rather than
+	// refusing the fetch — issue #250.
+	Source Source `json:"-"`
 }
 
 // copy returns an Offer that shares nothing mutable with the receiver.
@@ -153,13 +161,38 @@ type Catalogue struct {
 	// a mandate naming its own merchant.
 	merchant constraint.Party
 
-	// offers is sorted by ID, so that a result set and a screenshot of it do
-	// not vary with Go's map iteration.
+	// offers is sorted committed-before-fetched, then by ID — see NewCatalogue.
 	offers []Offer
 }
 
 // NewCatalogue returns a catalogue of offers sold by merchant, priced against
 // clk.
+//
+// # Why the sort carries a second key now
+//
+// Issue #250: Client.candidates sends the *narrowing* fields of a constraint
+// set — for "find and buy telescopic ladders, cheapest" that is
+// `item.category eq "ladders"` and nothing else — and settle takes found[0]
+// without ranking; its own comment says the merchant's catalogue order is what
+// makes that choice "stable rather than considered." A fetched offer sharing a
+// category the committed shelf sells therefore was not a search returning too
+// much: sorted by identifier alone, `dummyjson:` sorts ahead of `gtin:`, `wd:`,
+// `event:` and `route:`, so a colliding fetched offer would not join the
+// results, it would take first place and become what settle bought.
+//
+// The fix is here rather than a refusal in CatalogueFile.Extend. A refusal has
+// to know in advance which categories are dangerous, and the only honest way
+// to compute that from data the merchant can see — every category the
+// committed shelf currently sells — reserves categories nothing narrows by
+// too far: "smartphones" is one of tools/catalogue's derived shelves, the
+// recorded DummyJSON snapshot really does sell it, and no scripted sentence
+// narrows on smartphones alone, so refusing that collision would fail
+// `-catalogue-live dummyjson` against the real shop over a category that costs
+// nothing. Sorting fixes the mechanism `settle` actually depends on — which
+// offer is first — rather than forbidding an input on a guess about which
+// categories a sentence nobody has written yet might narrow by. A fetched
+// offer still joins every search it matches; it can no longer *win* one a
+// committed offer also matches.
 func NewCatalogue(clk authz.Clock, merchant constraint.Party, offers ...Offer) (*Catalogue, error) {
 	if clk == nil {
 		return nil, errors.New("merchant: a clock is required — a moving price is a function of time")
@@ -187,7 +220,19 @@ func NewCatalogue(clk authz.Clock, merchant constraint.Party, offers ...Offer) (
 		seen[o.ID] = struct{}{}
 		own = append(own, o.copy())
 	}
-	slices.SortFunc(own, func(a, b Offer) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(own, func(a, b Offer) int {
+		// Committed offers first, regardless of identifier — see the doc
+		// comment above for why. SourceFile is the zero value, so this is
+		// "false sorts before true" spelled out rather than leaned on.
+		al, bl := a.Source == SourceLive, b.Source == SourceLive
+		if al != bl {
+			if al {
+				return 1
+			}
+			return -1
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
 
 	return &Catalogue{clock: clk, merchant: merchant, offers: own}, nil
 }
