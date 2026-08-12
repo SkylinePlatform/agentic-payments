@@ -252,7 +252,7 @@ func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 				}
 				require.NotNil(t, interpreter, "the rig returned neither an interpreter nor an error")
 
-				got, err := interpreter.Interpret(t.Context(), conformancePrompt)
+				got, err := interpreter.Interpret(t.Context(), conformancePrompt, nil)
 
 				if tc.want != nil {
 					require.Error(t, err, tc.why)

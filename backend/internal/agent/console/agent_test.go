@@ -29,6 +29,6 @@ func TestAnAgentWithAScriptedInterpreterHasAMenu(t *testing.T) {
 // of a method, and mockery cannot express that.
 type interpreterWithoutPrompts struct{}
 
-func (interpreterWithoutPrompts) Interpret(context.Context, string) (interpret.Interpretation, error) {
+func (interpreterWithoutPrompts) Interpret(context.Context, string, interpret.Shelves) (interpret.Interpretation, error) {
 	return interpret.Interpretation{}, nil
 }

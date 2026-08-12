@@ -230,6 +230,33 @@ func exactText(s string) (value, bool) {
 // language.
 func fold(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
+// FoldText is how this verifier compares a text value, published for a caller
+// that has to decide whether two labels are the same one before a constraint
+// exists to evaluate.
+//
+// It is fold, forwarded rather than described, and that is the whole of why it is
+// exported. The comment above anticipates exactly this caller: "an allow-list
+// written 'Flights' by the interpreter and sent 'flights' by the merchant would
+// otherwise refuse a purchase the user approved, and the failure would look like
+// a policy decision rather than a spelling one." Issue #254 is that allow-list
+// arriving — a merchant publishes the categories it sells and
+// internal/agent/interpret checks a proposed item.category against them before
+// the constraint is written — and a second spelling of this rule there would
+// drift in the direction that drops a category the verifier would have matched.
+//
+// The precedent is Selective and Narrowing: the verifier's own answer about its
+// own vocabulary, forwarded to the one caller that needs it, rather than
+// reproduced. What is published here is the comparison and nothing else — no
+// value is read out of a Subject, no expression is built, and no verdict about a
+// purchase is reachable through it.
+//
+// **It is deliberately not a comparison of two strings.** EqualFold would be a
+// smaller surface and a worse one: a caller holding a set to check against wants
+// to fold the set once and index it, and one that could only ask "are these two
+// the same" would fold the same twenty strings for every constraint. Handing back
+// the folded form lets the caller do either.
+func FoldText(s string) string { return fold(s) }
+
 // lookupField resolves a field name, including the item-attribute form.
 func lookupField(name string) (Field, error) {
 	if f, ok := fields[name]; ok {

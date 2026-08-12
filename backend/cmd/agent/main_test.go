@@ -446,7 +446,8 @@ func TestAfterWatchSaysWhatEndedTheWatch(t *testing.T) {
 }
 
 // aMerchantThatSellsNothing is the merchant a boot watch cannot find its offer
-// at: it answers the search, and the search matches.
+// at: it publishes an empty shop, answers the search, and the search matches
+// nothing.
 //
 // A server rather than a closed port, because the two are different failures and
 // only one of them is issue #252's. A refused connection would fail this process
@@ -454,16 +455,34 @@ func TestAfterWatchSaysWhatEndedTheWatch(t *testing.T) {
 // that is up, answers, and has nothing that matches — which is exactly what
 // agent.ErrNothingToBuy means and what a live run against a wider catalogue
 // produced.
+//
+// Two paths since issue #254, and the shelf list is the reason the assertion is a
+// membership rather than an equality: Client.Propose asks which categories a
+// merchant sells before it reads the sentence. A shop with nothing on any shelf
+// answers with none, which is the honest answer for this fixture and the one that
+// leaves the scripted interpreter reading exactly the prompt it read before.
 func aMerchantThatSellsNothing(t *testing.T) string {
 	t.Helper()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// assert rather than require: this runs on the server's goroutine, not
-		// the test's.
-		assert.Equal(t, "/search", r.URL.Path,
-			"a boot watch that failed before the search would make this test about a different failure")
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"offers":[]}`))
+		switch r.URL.Path {
+		// Literals rather than the merchant's own constants, because the buyer's
+		// binary has no business importing the seller to read two strings —
+		// internal/agent's TestTheAgentSpellsTheMerchantsQueryParameters is where
+		// the two spellings are held in step, and a rename lands here as the
+		// assert.Fail below.
+		case "/shelves":
+			_, _ = w.Write([]byte(`{"categories":[]}`))
+		case "/search":
+			_, _ = w.Write([]byte(`{"offers":[]}`))
+		default:
+			// assert rather than require: this runs on the server's goroutine,
+			// not the test's.
+			assert.Fail(t, "the boot watch asked this merchant something else",
+				"a boot watch that failed before the search would make this test about a "+
+					"different failure; it asked for %s", r.URL.Path)
+		}
 	}))
 	t.Cleanup(server.Close)
 	return server.URL

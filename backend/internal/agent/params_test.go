@@ -30,6 +30,16 @@ import (
 // `?offer=` instead of `?item=` quotes a route rather than a catalogue offer,
 // and the merchant refuses the delegation that follows for want of an item — a
 // refusal three files away from its cause.
+//
+// **The fourth spelling is a path rather than a parameter, and it is the one that
+// most needs this.** Every failure above is a refusal somebody can read; a
+// misspelled shelves path produces silence, because Client.shelves reads an
+// unanswered fetch as a merchant that publishes no categories and carries on —
+// which is the right behaviour for a counterparty that does not offer the endpoint
+// and the wrong one for a typo here. The two are indistinguishable at run time, so
+// this comparison is the only thing that tells them apart, and what it prevents is
+// issue #254 quietly reopening: the model guessing at a vocabulary that was
+// published all along.
 func TestTheAgentSpellsTheMerchantsQueryParameters(t *testing.T) {
 	t.Parallel()
 
@@ -39,4 +49,6 @@ func TestTheAgentSpellsTheMerchantsQueryParameters(t *testing.T) {
 		"and says how many with this one")
 	assert.Equal(t, merchant.SearchParam, searchParam,
 		"and carries the constraint set a search filters on in this one")
+	assert.Equal(t, merchant.ShelvesPath, shelvesPath,
+		"and asks which categories the shop sells at this path, where a mismatch is silent")
 }

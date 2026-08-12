@@ -1224,7 +1224,7 @@ func TestTheAgentValidatesWhatItsInterpreterReturned(t *testing.T) {
 // double returning canned values would delete what this test proves.
 type drifted struct{}
 
-func (drifted) Interpret(context.Context, string) (interpret.Interpretation, error) {
+func (drifted) Interpret(context.Context, string, interpret.Shelves) (interpret.Interpretation, error) {
 	item, price := "item.id", "price"
 	return interpret.Interpretation{Constraints: []generated.Constraint{
 		{Op: "eq", Field: &item, Value: merchant.DemoBicycleID},
@@ -1444,7 +1444,7 @@ func TestEveryScriptedPromptFindsOneCandidate(t *testing.T) {
 			// says nothing about how many there were — add a second offer in
 			// category "ladders" and the first still wins and the old assertion
 			// still passed, while the sentence it was cited for became false.
-			interpretation, err := interpret.Demo().Interpret(t.Context(), prompt)
+			interpretation, err := interpret.Demo().Interpret(t.Context(), prompt, nil)
 			require.NoError(t, err, "the scripted interpreter has to answer its own prompt")
 
 			found, err := w.client().Discover(t.Context(), interpretation.Constraints)

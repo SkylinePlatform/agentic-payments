@@ -69,7 +69,7 @@ func ladders(merchant string, price int) constraint.Subject {
 func TestTheBuiltScenarioIsInterpretedIntoTheMandateBeats5And6Judge(t *testing.T) {
 	t.Parallel()
 
-	interpretation, err := interpret.Demo().Interpret(t.Context(), builtScenarioPrompt)
+	interpretation, err := interpret.Demo().Interpret(t.Context(), builtScenarioPrompt, nil)
 	require.NoError(t, err, "beat 1 of the built scenario is not interpretable")
 
 	for _, tc := range []struct {
@@ -130,7 +130,7 @@ func TestEachScenarioAuthorisesWhatItsSentenceSaid(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			interpretation, err := interpret.Demo().Interpret(t.Context(), tc.prompt)
+			interpretation, err := interpret.Demo().Interpret(t.Context(), tc.prompt, nil)
 			require.NoError(t, err, "a documented scenario is not in the script")
 
 			report, err := constraint.Evaluate(interpretation.Constraints, tc.subject)
@@ -163,7 +163,7 @@ func TestASentenceNamingNoCountProposesNoBasketSize(t *testing.T) {
 		t.Run(script.Prompt, func(t *testing.T) {
 			t.Parallel()
 
-			interpretation, err := interpret.Demo().Interpret(t.Context(), script.Prompt)
+			interpretation, err := interpret.Demo().Interpret(t.Context(), script.Prompt, nil)
 			require.NoError(t, err, "a scenario this package publishes is not in its own script")
 			assert.Zero(t, interpretation.Quantity,
 				"nothing in this sentence names a count, and answering one anyway would outrank every caller that has a number of its own")
@@ -201,7 +201,7 @@ func TestEachScenarioSaysWhenItsSentenceWantedToBuy(t *testing.T) {
 				"a prompt this package publishes with nothing here saying whether it asked to buy "+
 					"now or to wait; the agent has to act on one of the two either way")
 
-			interpretation, err := interpret.Demo().Interpret(t.Context(), script.Prompt)
+			interpretation, err := interpret.Demo().Interpret(t.Context(), script.Prompt, nil)
 			require.NoError(t, err, "a scenario this package publishes is not in its own script")
 			assert.Equal(t, expected, interpretation.Trigger,
 				"answering this sentence with the other behaviour is either a purchase it asked "+
@@ -236,7 +236,7 @@ func TestEveryScenarioCanBeSaidToTheUser(t *testing.T) {
 		t.Run(script.Prompt, func(t *testing.T) {
 			t.Parallel()
 
-			interpretation, err := interpret.Demo().Interpret(t.Context(), script.Prompt)
+			interpretation, err := interpret.Demo().Interpret(t.Context(), script.Prompt, nil)
 			require.NoError(t, err, "a scenario this package publishes is not in its own script")
 
 			for _, c := range interpretation.Constraints {
@@ -262,7 +262,7 @@ func TestEveryScenarioCanBeSaidToTheUser(t *testing.T) {
 func TestAnUnscriptedPromptIsRefusedRatherThanAnswered(t *testing.T) {
 	t.Parallel()
 
-	got, err := interpret.Demo().Interpret(t.Context(), "buy me a house in Palma")
+	got, err := interpret.Demo().Interpret(t.Context(), "buy me a house in Palma", nil)
 
 	require.ErrorIs(t, err, interpret.ErrNoScript, "a prompt nobody scripted was answered anyway")
 	assert.Empty(t, got.Constraints, "an unbounded mandate would have been built from this")
@@ -295,7 +295,7 @@ func TestMatchingIgnoresCaseAndSpacingAndNothing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := interpret.Demo().Interpret(t.Context(), tc.prompt)
+			_, err := interpret.Demo().Interpret(t.Context(), tc.prompt, nil)
 			if tc.want {
 				assert.NoError(t, err, "a sentence differing only in case or spacing was not recognised")
 				return
@@ -319,7 +319,7 @@ func TestInterpretingTwiceReturnsIndependentTrees(t *testing.T) {
 
 	interpreter := interpret.Demo()
 
-	first, err := interpreter.Interpret(t.Context(), builtScenarioPrompt)
+	first, err := interpreter.Interpret(t.Context(), builtScenarioPrompt, nil)
 	require.NoError(t, err, "the built scenario")
 
 	first.Constraints[0].Op = "gte"
@@ -327,7 +327,7 @@ func TestInterpretingTwiceReturnsIndependentTrees(t *testing.T) {
 	require.True(t, ok, "the amount bound is the first constraint and carries an object")
 	amount["amount"] = float64(1)
 
-	second, err := interpreter.Interpret(t.Context(), builtScenarioPrompt)
+	second, err := interpreter.Interpret(t.Context(), builtScenarioPrompt, nil)
 	require.NoError(t, err, "the built scenario, a second time")
 
 	report, err := constraint.Evaluate(second.Constraints, flight(21000))
@@ -447,11 +447,11 @@ func TestTwoWordingsOfOneIntentReachOneInterpretation(t *testing.T) {
 	)
 	require.NoError(t, err, "two wordings of one intent are two entries, and a script has to accept them")
 
-	first, err := interpreter.Interpret(t.Context(), wordedOneWay)
+	first, err := interpreter.Interpret(t.Context(), wordedOneWay, nil)
 	require.NoError(t, err, "the first wording")
-	second, err := interpreter.Interpret(t.Context(), wordedTheOther)
+	second, err := interpreter.Interpret(t.Context(), wordedTheOther, nil)
 	require.NoError(t, err, "the second wording")
-	other, err := interpreter.Interpret(t.Context(), aDifferentIntent)
+	other, err := interpreter.Interpret(t.Context(), aDifferentIntent, nil)
 	require.NoError(t, err, "the control")
 
 	assert.Equal(t, first, second,
