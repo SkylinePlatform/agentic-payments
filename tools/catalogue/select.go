@@ -22,7 +22,7 @@ var data embed.FS
 // The agent takes the first candidate a search returns and asks nobody —
 // `settle` in backend/internal/agent/authorise.go — which is defensible only
 // while every scripted sentence narrows the catalogue to exactly one offer.
-// Three of the five narrow on something a derived offer could collide with:
+// All three narrow on something a derived offer could collide with:
 //
 //   - **the category `ladders`**, which is the whole of what "find and buy
 //     telescopic ladders, cheapest" sends to the merchant. A second ladder would
@@ -32,13 +32,19 @@ var data embed.FS
 //   - **the route BEG→PMI**, which is what "a flight to Palma" narrows on. Other
 //     routes are welcome and the point — see the flights shelf — but this one
 //     belongs to the hero.
-//   - **the two identifiers** the bicycle and the concert sentences name
-//     outright. Nothing derived here could reach them, since a derived
-//     identifier is a Wikidata Q-number or a route, but a shelf added later
-//     might, and the list is the place that would be read first.
+//   - **the one identifier** the bicycle sentence names outright. Nothing
+//     derived here could reach it, since a derived identifier is a Wikidata
+//     Q-number or a route, but a shelf added later might, and the list is the
+//     place that would be read first.
+//
+// **A second identifier used to sit in this list**: the concert ticket's,
+// `event:vlado-georgijev-2026-11-14`. Issue #244 removed both the offer and its
+// scripted prompt, so there is nothing left narrowing on that identifier for a
+// derived offer to collide with — reserving it here after the fact would be
+// reserving a name nothing uses.
 //
 // Widening the catalogue is what issue #160 is for; widening it *into* one of
-// these three is how a wide catalogue would break the demonstration it exists to
+// these is how a wide catalogue would break the demonstration it exists to
 // dress.
 var Reserved = struct {
 	Categories  []string
@@ -47,7 +53,7 @@ var Reserved = struct {
 }{
 	Categories:  []string{"ladders"},
 	Routes:      [][2]string{{"BEG", "PMI"}},
-	Identifiers: []string{"gtin:05012345678900", "event:vlado-georgijev-2026-11-14"},
+	Identifiers: []string{"gtin:05012345678900"},
 }
 
 // A shelf is one CSV turned into one catalogue category.

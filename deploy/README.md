@@ -37,7 +37,7 @@ catalogue was ever the obstacle: `item.attr.<name>` is open by construction, the
 constraint field registry names nothing aviation, and search evaluates
 constraints against an offer without knowing what it is selling.
 
-**Most of the file is derived**, since issue #160. The first four offers are the
+**Most of the file is derived**, since issue #160. The first three offers are the
 demonstration's own; the sixty after them are written by `tools/catalogue` from
 a CC0 snapshot of Wikidata committed inside that module, and so are the pictures
 under `frontend/public/images/catalogue/derived`.
@@ -58,7 +58,7 @@ queries.
 
 **Which is also where a new product goes now.** A row added to this file by hand
 fails that same test, because the next re-derivation would drop an offer the
-generator did not produce — so a sixty-fifth product is a shelf in
+generator did not produce — so a sixty-fourth product is a shelf in
 `tools/catalogue/select.go`, or an entry in `Heroes` if a scripted sentence is
 meant to find it. A catalogue the generator does not own, handed to
 `cmd/merchant -catalogue`, is still just a file somebody wrote, and
@@ -85,7 +85,7 @@ malformed file stops the process rather than producing a merchant that answers
   rather than quietly producing a search box that answers nothing.
 
 And one rule that is not the loader's, because nothing could enforce it there.
-Two of the five scripted sentences find their offer by something other than an
+Two of the three scripted sentences find their offer by something other than an
 identifier — the ladders by category alone, the flight by its two route codes —
 and the agent buys the first candidate a search returns without ranking. A
 second offer on either of those two hooks loads, validates and searches
