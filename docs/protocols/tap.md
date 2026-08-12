@@ -74,7 +74,7 @@ decides whether the request reaches the merchant backend at all.
 ```mermaid
 sequenceDiagram
     participant A as Agent
-    participant P as Verifying proxy<br/>(merchant edge)
+    participant P as Verifying proxy (merchant edge)
     participant R as Agent registry
     participant M as Merchant backend
     A->>P: HTTP request + Signature-Input + Signature
@@ -112,7 +112,8 @@ or otherwise; the protocol itself does not care which.
 
 ```mermaid
 flowchart LR
-    KID["keyid from Signature-Input"] --> C{"in cache<br/>and not expired?"}
+    KID["keyid from Signature-Input"] --> C{"`in cache
+    and not expired?`"}
     C -->|yes| K["public key"]
     C -->|no| REG["registry lookup"]
     REG -->|found| K
@@ -152,7 +153,8 @@ flowchart TB
     C3["@authority — binds to merchant domain"] --> SB
     C4["content-digest"] --> SB
     C5["signature params: created, expires, nonce, keyid, tag"] --> SB
-    SB["signature base<br/><i>component order is part of the signature</i>"]
+    SB["`signature base
+    *component order is part of the signature*`"]
     SB --> SIG["Ed25519 signature"]
 ```
 

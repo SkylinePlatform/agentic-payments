@@ -507,7 +507,14 @@ request body wherever they apply, and GitHub renders both natively:
   or the shape of an object. Mermaid is already this repository's diagram
   language — `make diagrams` exports the inline mermaid in `docs/` to SVG, and
   the protocol documentation is built around it — so a ` ```mermaid ` fence in a
-  pull request costs nothing to write and nothing to host.
+  pull request costs nothing to write and nothing to host. **GitHub strips HTML
+  out of a mermaid label and substitutes nothing**: `<br/>`, `<i>` and `<b>` all
+  vanish and the words either side glue together, so a multi-line flowchart node
+  or edge label is a markdown string — backtick-quoted, with a real newline,
+  `*italic*` and `**bold**` — and sequence-diagram text is one line, or carries
+  `:wrap:` where it is long enough to stretch the diagram. `make diagrams`
+  honours the HTML and always did, so the exported SVG cannot show you this one;
+  only the rendering a reader arrives at can, and #263 has the measurement.
 - **A table of the old behaviour against the new**, one row per case rather than
   per file, wherever behaviour changed.
 

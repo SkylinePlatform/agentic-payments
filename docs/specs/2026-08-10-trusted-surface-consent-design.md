@@ -43,10 +43,10 @@ three true of something.
 
 ```mermaid
 sequenceDiagram
-    participant B as Browser<br/>Console + Consent
-    participant A as Shopping Agent<br/>:8086
-    participant S as Trusted Surface<br/>:8084
-    participant M as Merchant<br/>:8081
+    participant B as Browser — Console + Consent
+    participant A as Shopping Agent :8086
+    participant S as Trusted Surface :8084
+    participant M as Merchant :8081
 
     B->>A: POST /proposals {prompt, item?}
     A->>A: Interpret — the only model call
