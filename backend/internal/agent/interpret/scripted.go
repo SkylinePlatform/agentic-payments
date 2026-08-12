@@ -140,7 +140,25 @@ func NewScripted(scripts ...Script) (*ScriptedInterpreter, error) {
 // there is nothing to cancel because nothing leaves the process. An
 // implementation that called a model would use it, and a test that used *that*
 // would depend on a live model, which hard rule 4 forbids.
-func (s *ScriptedInterpreter) Interpret(_ context.Context, prompt string) (Interpretation, error) {
+//
+// # The shelves are ignored too, and that is a stronger claim than the context
+//
+// A merchant publishing what it sells is what stops a *model* narrowing by a word
+// the shop does not use — issue #254, and see Shelves. This table needs none of
+// it, because the vocabulary is already in it: flightToPalma says `"PMI"` and
+// never `"Palma"`, telescopicLadders says `"ladders"`, and each was written with
+// the catalogue open.
+//
+// **So a shelf list must not be allowed to edit this table, and that is the
+// decision rather than an omission.** ground drops a category the shop does not
+// stock out of a *model's* answer, where it is one guess among several and
+// declining to propose it is a proposer's job. The same act here would silently
+// rewrite something a person wrote down and NewScripted already checked, on the
+// word of a counterparty fetched a moment ago — and the demo's own beats are
+// asserted against that text character for character, in this package and in
+// internal/core/authz. A scripted prompt that has stopped matching the catalogue
+// is a defect to fix in the table, in a pull request, where `grep BEG` finds it.
+func (s *ScriptedInterpreter) Interpret(_ context.Context, prompt string, _ Shelves) (Interpretation, error) {
 	i, ok := s.byPrompt[normalise(prompt)]
 	if !ok {
 		return Interpretation{}, fmt.Errorf("%w: %q; this interpreter is scripted for %d prompts, which Prompts lists",

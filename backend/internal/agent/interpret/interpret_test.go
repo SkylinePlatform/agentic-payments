@@ -178,7 +178,7 @@ func TestValidateRefusesAnInterpretationThatDoesNotSayWhenItWantedToBuy(t *testi
 func TestValidateAcceptsTheBuiltScenario(t *testing.T) {
 	t.Parallel()
 
-	interpretation, err := interpret.Demo().Interpret(t.Context(), builtScenarioPrompt)
+	interpretation, err := interpret.Demo().Interpret(t.Context(), builtScenarioPrompt, nil)
 	require.NoError(t, err, "the built scenario is what every other test here builds on")
 	assert.NoError(t, interpret.Validate(interpretation),
 		"the interpreter's own output failed the check it is supposed to have applied")

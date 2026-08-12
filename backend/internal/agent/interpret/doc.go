@@ -104,10 +104,33 @@
 //
 // ModelInterpreter is the other one. It calls a Model, the narrower port inside
 // this package over which nothing about a provider crosses, decodes the answer
-// with the same decode the scripted one uses, and calls Validate. Gemini is that
-// port's one implementation: one POST, no SDK. Adding a second provider is a
-// file beside it and a case in cmd/agent's flag — nothing outside this package
-// changes, which is the third box on issue #17.
+// with the same decode the scripted one uses, calls Validate, and declines to
+// propose a category the shop has no shelf for. Gemini is that port's one
+// implementation: one POST, no SDK. Adding a second provider is a file beside it
+// and a case in cmd/agent's flag — nothing outside this package changes, which is
+// the third box on issue #17.
+//
+// # The shop's own vocabulary is an input, and only the closed half of it
+//
+// Interpret takes the categories the merchant says it sells — see Shelves. Issue
+// #254 is what it is for: nobody had told the model what the shop calls things,
+// so it read "buy a flight to Palma" into `item.category eq "flight"` at a shop
+// whose shelf is `flights`, which is a perfect reading of the sentence and
+// matches nothing. The scripted table never had that problem because a person
+// wrote it with the catalogue open, and this is the same knowledge arriving as
+// data.
+//
+// It is data and it arrives per call, because the constructors here perform no
+// I/O — internal/agent's Client.Propose is what fetches it, once per
+// authorisation, from a merchant it already holds the endpoint for.
+//
+// Two properties of it are the design rather than details. **Only the categories
+// travel**, because their number is bounded by how many shelves a shop has while
+// every item.attr.<name> value is bounded by its stock, and an instruction that
+// grew with the catalogue would stop being an instruction. And **being told is
+// not the same as obeying**: nothing can hold a live model to an instruction and
+// no test may drive one to find out, so the same list is checked against on the
+// way back, which is the half a test can drive.
 //
 // The obligation to call Validate used to be exactly that — an obligation. It
 // could not be enforced while ScriptedInterpreter was the only implementation:

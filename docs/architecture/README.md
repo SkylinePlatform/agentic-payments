@@ -119,11 +119,30 @@ flowchart LR
         **non-agentic by specification**`"]
     end
     P["user prompt"] --> I
+    SH["`merchant's published shelves
+    the categories it sells`"] --> I
     I -->|"`typed constraints,
     schema-validated`"| TS
     TS -->|"user signature"| SIGN
     SIGN --> VER
 ```
+
+The shelves are the second arrow in, and they are data rather than a judgement:
+`GET /shelves` on the merchant answers with the categories it sells, the agent
+fetches it once per authorisation, and the interpreter is told what the shop
+calls things instead of guessing. Issue #254 is why — a model read *"buy a
+flight to Palma when it drops below $200"* into `item.category eq "flight"` at a
+shop whose shelf is called `flights`, which is a perfect reading of the sentence
+and matches nothing. Telling it the vocabulary makes the right answer likely
+rather than certain, so the same list is used a second time on the way back: a
+category the merchant does not sell is not proposed as a constraint at all.
+Both uses sit inside the box above, before the surface is reached and before
+anything is signed, which is what makes them a proposer's business and never a
+verifier's. Only the *closed* half of the vocabulary travels — a shop has about
+as many shelves as it has aisles, while the values under `item.attr.<name>` are
+bounded by the stock, so publishing those would grow with the catalogue.
+`../specs/2026-08-12-publishing-the-shops-vocabulary.md` is the decision in
+full.
 
 The interpreter runs once, before anything is signed. After that the system is
 deterministic, and stronger than "no model call": the agent compares no money at

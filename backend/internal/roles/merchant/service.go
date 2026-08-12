@@ -461,6 +461,12 @@ func (s *Service) Handler() (http.Handler, error) {
 	mux.HandleFunc("POST /checkout", s.settle)
 	if s.Catalogue != nil {
 		mux.HandleFunc("GET /search", s.search)
+		// The same condition rather than one of its own, because both endpoints
+		// are questions about the catalogue and a merchant that cannot answer
+		// "what is there" cannot answer "what shelves are there" either. See
+		// Shelves for what is published and why the open half of the vocabulary
+		// is not.
+		mux.HandleFunc("GET "+ShelvesPath, s.shelves)
 	}
 	if s.Challenge != nil {
 		mux.Handle("GET "+roles.NoncePath, roles.Nonce(s.Challenge))

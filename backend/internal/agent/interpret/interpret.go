@@ -22,8 +22,21 @@ import (
 // The context is here for the implementation that calls a model over a network.
 // The scripted one ignores it, and that difference between the two is the point
 // of having the scripted one at all.
+//
+// # Shelves are here on exactly the context's terms
+//
+// They are what the merchant this sentence will be searched against says it
+// sells, and the model-backed implementation is the one that needs them: nobody
+// had told it what the shop calls things, so it narrowed by the word a person
+// would use and found nothing — issue #254, and see Shelves. The scripted one
+// ignores them, because a person wrote its table with the catalogue open.
+//
+// A parameter rather than a constructor argument, and Shelves says why at length:
+// the constructors perform no I/O on purpose, the agent has not waited for its
+// peers by the time it builds one, and a merchant's shelves widen at the
+// merchant's own start-up. Empty is ordinary and never an error.
 type IntentInterpreter interface {
-	Interpret(ctx context.Context, prompt string) (Interpretation, error)
+	Interpret(ctx context.Context, prompt string, shelves Shelves) (Interpretation, error)
 }
 
 // Interpretation is what one call to Interpret answers with: the limits a
@@ -71,6 +84,25 @@ type Interpretation struct {
 	// interpretation states one; Validate refuses an interpretation that
 	// does not.
 	Trigger Trigger
+
+	// DeclinedCategories are the categories the reading narrowed by that this
+	// merchant has no shelf for, and which therefore did not become constraints.
+	//
+	// **It is diagnostic and nothing acts on it.** Issue #254: a category the
+	// shop does not stock selects nothing, so the honest thing is not to propose
+	// it — see ground — and the honest thing after that is to be able to say so.
+	// Without this, an operator whose sentence narrowed only by an unstocked
+	// shelf reads agent.ErrNothingToBuy's "the interpretation names nothing to go
+	// looking for", which is true of the set that survived and misattributes the
+	// cause. agent.Propose puts these in that error text and does nothing else
+	// with them.
+	//
+	// Empty is the ordinary case and means what it says: nothing was declined.
+	// Nothing signs it, no verifier sees it, and it is deliberately not on
+	// Proposal or Authorisation — it is an account of a reading rather than a
+	// fact about a purchase, and a screen showing it would be showing the
+	// buyer's own working.
+	DeclinedCategories []string
 }
 
 // Trigger is what a sentence said about *when* to buy, which is a fact about

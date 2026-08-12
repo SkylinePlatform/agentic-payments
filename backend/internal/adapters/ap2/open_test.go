@@ -41,7 +41,7 @@ const flightToPalmaPrompt = "buy a flight to Palma when it drops below $200, thi
 
 func demoConstraints(t *testing.T) []generated.Constraint {
 	t.Helper()
-	interpretation, err := interpret.Demo().Interpret(t.Context(), flightToPalmaPrompt)
+	interpretation, err := interpret.Demo().Interpret(t.Context(), flightToPalmaPrompt, nil)
 	require.NoError(t, err, "the built scenario is one of interpret.Demo's own scripts")
 	return interpretation.Constraints
 }

@@ -52,19 +52,21 @@ type Model interface {
 
 // ModelInterpreter reads a sentence with a language model.
 //
-// It does three things and deliberately nothing else: it asks the Model, it
-// decodes the answer with the same decode ScriptedInterpreter uses, and it calls
-// Validate. Script's own doc comment promised the middle one — the scripted
+// It does four things and deliberately nothing else: it asks the Model, it
+// decodes the answer with the same decode ScriptedInterpreter uses, it calls
+// Validate, and it declines to propose a narrowing the shop it is reading against
+// cannot satisfy. Script's own doc comment promised the second one — the scripted
 // constraints are written as JSON "because it is the form a model would answer
 // in, which keeps both implementations of IntentInterpreter going through the
 // same decoding rather than the scripted one having a private route into the
-// type" — and this is the type that makes the sentence true.
+// type" — and this is the type that makes the sentence true. The fourth is issue
+// #254 and is argued at ground.
 //
 // # What it does not do, and why each one is a refusal
 //
-// It does not repair, retry or drop. A constraint naming a field the verifier
-// does not know comes back as an error from Interpret, and the three obvious
-// alternatives are all worse:
+// It does not repair or retry, and a constraint naming a field the verifier does
+// not know comes back as an error from Interpret rather than being dropped. The
+// three obvious alternatives are all worse:
 //
 //   - **Dropping the offending constraint is the dangerous one.** It converts "a
 //     limit the user described that nobody can enforce" into "a mandate with
@@ -79,9 +81,19 @@ type Model interface {
 //   - **Retrying** is one more draw from the same distribution, for a demo that
 //     has a deterministic path a flag away. One call, and a visible failure.
 //
+// **The fourth step removes a constraint, and the first bullet is why that needs
+// saying rather than hiding.** It is a different input and a different act: the
+// bullet is about a limit the *verifier cannot read*, which Validate still
+// refuses outright and which ground never sees, since it runs afterwards on a set
+// the verifier's own parser has accepted. What it removes is a category the shop
+// has no shelf for — readable, enforceable, and matching nothing — and nothing is
+// widened by removing it, because agent.Propose pins the set to one item.id
+// before the surface is asked for a signature. ground carries the argument in
+// full, including the two things it refuses to touch.
+//
 // A value is safe to share between goroutines once built: nothing mutates it
 // after NewModel returns, and Interpret builds the instruction from an immutable
-// string and a clock reading.
+// string, a clock reading and its caller's argument.
 type ModelInterpreter struct {
 	model Model
 
@@ -155,7 +167,25 @@ func NewModel(model Model, clk authz.Clock) (*ModelInterpreter, error) {
 // unmarshalled directly, precisely so that both implementations of
 // IntentInterpreter still decode a constraint list through one function. What
 // changed is the shape one level up, not how a leaf becomes a generated.Constraint.
-func (m *ModelInterpreter) Interpret(ctx context.Context, prompt string) (Interpretation, error) {
+//
+// # The shelves are used twice, and the second use is the one a test can drive
+//
+// They go into the instruction, so the model is told what the shop calls things
+// rather than left to guess — which is the whole of issue #254. That makes the
+// right answer *likely* and cannot make it certain, and no test may drive a live
+// model to find out. So ground runs afterwards on what came back: a category the
+// merchant does not sell does not become a constraint. Necessary and sufficient
+// are different halves and only the second is checkable, which is what
+// TestAHumanWordForAShelfDoesNotBecomeAConstraintTheShopCannotSatisfy drives.
+//
+// **The order is Validate, then ground, then the emptiness check**, and it is not
+// interchangeable. Validate first means every refusal this type already made
+// happens exactly as it did, in the same order and with the same error, so
+// grounding cannot turn a constraint the verifier could not read into one quietly
+// removed. ground therefore only ever sees a set the verifier's own parser has
+// accepted, and it only removes, so what survives still parses and there is
+// nothing to check a second time.
+func (m *ModelInterpreter) Interpret(ctx context.Context, prompt string, shelves Shelves) (Interpretation, error) {
 	if strings.TrimSpace(prompt) == "" {
 		// The same refusal ScriptedInterpreter makes for an unscripted prompt,
 		// one step earlier. An empty sentence has no limits in it, so anything
@@ -163,7 +193,7 @@ func (m *ModelInterpreter) Interpret(ctx context.Context, prompt string) (Interp
 		return Interpretation{}, errors.New("interpret: there is no sentence to read")
 	}
 
-	answer, err := m.model.Complete(ctx, m.instruction(), prompt, m.schema)
+	answer, err := m.model.Complete(ctx, m.instruction(shelves), prompt, m.schema)
 	if err != nil {
 		return Interpretation{}, fmt.Errorf("interpret: asking the model to read %q: %w", prompt, err)
 	}
@@ -184,9 +214,9 @@ func (m *ModelInterpreter) Interpret(ctx context.Context, prompt string) (Interp
 			prompt, err, excerpt(answer))
 	}
 
-	// The interface's contract. It is the whole reason this type is only three
-	// steps long: what a model returns is the one input in this system nobody
-	// can predict, so it is the one that must be run past the verifier's parser
+	// The interface's contract. It is the whole reason this type is as short as it
+	// is: what a model returns is the one input in this system nobody can
+	// predict, so it is the one that must be run past the verifier's parser
 	// before a user is shown it.
 	//
 	// **The trigger is checked by the same call and refused on the same terms.**
@@ -204,20 +234,148 @@ func (m *ModelInterpreter) Interpret(ctx context.Context, prompt string) (Interp
 		return Interpretation{}, fmt.Errorf("interpret: the model's reading of %q is not something a verifier could read: %w; it said: %s",
 			prompt, err, excerpt(answer))
 	}
+
+	// Issue #254. Every constraint above is one a verifier can read; this asks the
+	// narrower question of whether one that selects by category selects anything
+	// this shop stocks, and declines to propose the ones that cannot. See ground
+	// for why this is not the drop the doc comment on this type forbids.
+	out.Constraints, out.DeclinedCategories = ground(out.Constraints, shelves)
+	if len(out.Constraints) == 0 {
+		// Wrapping ErrNoConstraints rather than minting a sentinel, because that
+		// is what is now true of this reading and the callers that translate it
+		// already say the right thing: console maps it to 422, and the message
+		// below is what names the cause. A reading whose *only* narrowing was a
+		// shelf this shop does not stock has nothing left to put in front of
+		// anybody, and returning it would be an unbounded mandate with a blank
+		// space where the limits should be — which is the one misreading the
+		// Trusted Surface cannot catch.
+		return Interpretation{}, fmt.Errorf(
+			"interpret: the model's reading of %q narrows only by categories %s does not sell: %w; it said: %s",
+			prompt, shelvesOrNone(shelves), ErrNoConstraints, excerpt(answer))
+	}
 	return out, nil
 }
 
-// instruction is what the model is told: the job, the vocabulary and the shapes,
-// plus the instant a relative date is read against.
+// shelvesOrNone names the published shelves for an error message.
 //
-// Built per call rather than once, because only the date moves. A process that
-// stayed up over midnight and kept telling the model it was yesterday would
-// resolve "tomorrow" to today, and the mandate would be signed before anybody
-// noticed the date on the screen was the wrong one.
-func (m *ModelInterpreter) instruction() string {
-	return m.vocabulary + "\n\nThe current date and time is " +
+// The list rather than a count, because the whole failure is a vocabulary
+// mismatch and the reader's next question is which words were available. Bounded
+// by the same argument Shelves is: a shop has shelves, not offers, so this is a
+// line and not a page.
+func shelvesOrNone(shelves Shelves) string {
+	if len(shelves) == 0 {
+		// Unreachable from the caller above — ground returns its input untouched
+		// when nothing was published, so an empty reading there was already empty
+		// and Validate refused it. Kept because a message reading "categories
+		// does not sell" would be worse than one line of defence.
+		return "this merchant"
+	}
+	return "this merchant (it sells " + strings.Join(shelves, ", ") + ")"
+}
+
+// instruction is what the model is told: the job, the vocabulary and the shapes,
+// plus the shop's own shelves and the instant a relative date is read against.
+//
+// Built per call rather than once, because the fixed half is the registry's and
+// the other two move. A process that stayed up over midnight and kept telling the
+// model it was yesterday would resolve "tomorrow" to today, and the mandate would
+// be signed before anybody noticed the date on the screen was the wrong one. The
+// shelves move for a smaller reason and a more mundane one: they are a
+// counterparty's answer, fetched per authorisation, and a merchant serving a live
+// catalogue publishes a wider list than the same merchant did before it fetched
+// one.
+//
+// A merchant that published nothing contributes nothing, rather than an empty
+// heading. Telling a model that the shop sells no categories is worse than not
+// raising the subject: the honest reading of the sentence is then whatever the
+// model would have said anyway, and ground leaves it alone to match.
+func (m *ModelInterpreter) instruction(shelves Shelves) string {
+	return m.vocabulary + shelfInstruction(shelves) + "\n\nThe current date and time is " +
 		m.clock.Now().UTC().Format("2006-01-02T15:04:05Z") +
 		". Resolve every relative date — \"this summer\", \"next month\", \"by Friday\" — against it.\n"
+}
+
+// shelfInstruction is what the model is told about the shop it is reading against.
+//
+// # The two halves say opposite things, and that is the design
+//
+// **Categories are closed, so narrow by one.** The list is here, it is the shop's
+// own spelling, and the model's job is to pick the shelf that covers what the
+// sentence asked for — "a flight" is `flights`, "mascara" is `beauty`. That last
+// pair is why the list has to be *given* rather than guessed at: `flight` →
+// `flights` is a plural a stemmer could reach, and `mascara` → `beauty` is a
+// taxonomy nothing but the list can answer, which is also why the deterministic
+// half of this can only drop and never repair. See ground.
+//
+// **Attribute values are open, so narrow only where the sentence hands you one.**
+// Nothing publishes them — Shelves says why an endpoint that did would grow with
+// the shop — so the instruction asks for confidence rather than for a lookup: a
+// brand or a model name is in the sentence as the shop would file it, and "to
+// Palma" is a city where the shop may hold an airport code. Issue #254 measured
+// both: `item.attr.brand eq "Essence"` matched, `item.attr.route.destination eq
+// "Palma"` matched nothing while the shop said `PMI`.
+//
+// This half is prose and nothing checks it, which is stated here rather than left
+// to be discovered. There is no bounded set to check a route against, so an
+// uncertain attribute value is exactly the thing this design gives up on being
+// certain about — and the reason that is affordable is that the cost of leaving
+// one out is a wider candidate list, while the cost of inventing one is a search
+// that matches nothing at all.
+//
+// # It contradicts the paragraph above it unless it says so, and it does
+//
+// vocabulary() ends by telling the model to say everything the sentence implies,
+// and its own example is "a destination with no origin" — because beat 3 of the
+// built scenario is a user reading `from Belgrade` on an approval screen and
+// disagreeing with it. Read beside this, that is two orders: infer the origin, and
+// do not invent a code you cannot ground. So this text names the collision and
+// bounds it. What still has to be stated is anything in a vocabulary the model was
+// given in full — a date worked out from "this summer", a bound worked out from
+// "cheapest" — and what may be left out is only a fact whose *spelling* belongs to
+// the shop.
+//
+// **What that costs is worth being exact about.** On a model-backed run the route
+// no longer reaches the mandate, so the user does not read `from Belgrade` as a
+// constraint. They are not left guessing: Propose narrows to one offer and appends
+// item.id, so the screen names one flight and shows the merchant's own title for
+// it. The inference is still visible — as an identifier and a caption rather than
+// as two route constraints — and the scripted table, which is what the
+// documentation's beats are asserted against, is untouched and still says BEG.
+func shelfInstruction(shelves Shelves) string {
+	if len(shelves) == 0 {
+		return ""
+	}
+
+	return `
+The shop this sentence will be searched against sells these categories, and they
+are the only values item.category may take. They are the shop's own spellings,
+which are usually not the word a person would use:
+
+` + shelves.listing() + `
+Pick the one that covers what the sentence asked for — "a flight" is a category
+above, and so is "mascara", though neither is spelled the way the sentence spells
+it. If none of them covers it, do not constrain item.category at all: a category
+this shop has no shelf for matches nothing, every constraint in the answer has to
+hold at once, and one invented category therefore throws away a reading that was
+otherwise right.
+
+Nobody has told you what values item.attr.<name> holds. So narrow by one only
+where the sentence hands you the value the shop itself would file the object
+under — a brand, a model name, a code. Where you would have to translate the
+sentence's word to get there, leave that attribute out and let the other limits
+do the work: "to Palma" is a city, and a shop may file the same flight under an
+airport code, so a route destination is a guess.
+
+This is the one place the instruction to say everything the sentence implies
+stops, and it stops narrowly. It is not a licence to drop a date or a price you
+worked out — those are values in a vocabulary you have been given in full, and
+they still belong in the answer. It is only about facts whose spelling belongs to
+the shop, and the origin of a flight is the example above being caught by it:
+state a route only in the shop's own codes or not at all.
+
+Leaving a fact out costs a longer list of candidates for the person to be shown.
+Inventing one costs the whole search.
+`
 }
 
 // excerpt is as much of a model's answer as belongs in an error message.

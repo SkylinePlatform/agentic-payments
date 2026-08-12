@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
@@ -46,6 +47,18 @@ const (
 	quantityParam = "quantity"
 	searchParam   = "constraints"
 )
+
+// shelvesPath is where the merchant publishes the categories it sells.
+//
+// A fourth copy on the same terms as the three parameters above, and the one that
+// most needs the test holding it in step. A misspelled parameter produces a
+// refusal three files from its cause; a misspelled path here produces *nothing*,
+// because Client.shelves treats an unanswered fetch as a merchant that publishes
+// no shelves and carries on. That is the right behaviour for a counterparty which
+// does not offer the endpoint and the wrong one for a typo, so what tells the two
+// apart is TestTheAgentSpellsTheMerchantsQueryParameters comparing this against
+// merchant.ShelvesPath.
+const shelvesPath = "/shelves"
 
 // itemIDField is the one field this file writes.
 //
@@ -401,9 +414,13 @@ type Proposal struct {
 //
 // # The order, and why each step needs the one before it
 //
-// The interpretation is what the user is shown, so it has to exist before the
-// surface is called. The search is what turns "a flight to Palma" into a
-// specific thing this merchant sells, so it has to run before the narrowing.
+// The merchant's shelves come first, because they are what the sentence is read
+// *against*: issue #254 is a model narrowing by `item.category eq "flight"` at a
+// shop whose shelf is called `flights`, and nobody had told it. See shelves for
+// why the agent is the party that asks, and why an unanswered question is not a
+// failure here. The interpretation is what the user is shown, so it has to exist
+// before the surface is called. The search is what turns "a flight to Palma" into
+// a specific thing this merchant sells, so it has to run before the narrowing.
 // Intent.Item changes what that search asks for — one identifier instead of
 // the interpretation — but never skips it; see settle and Intent.Item for why
 // the merchant is still asked. And the narrowing has to happen before the
@@ -463,7 +480,11 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 		return out, errors.New("agent: no interpreter to read the prompt with")
 	}
 
-	interpretation, err := in.Interpreter.Interpret(ctx, in.Prompt)
+	// Asked before the sentence is read, because reading it is what the answer is
+	// for. The error is dropped on purpose — see shelves.
+	shelves, _ := c.shelves(ctx)
+
+	interpretation, err := in.Interpreter.Interpret(ctx, in.Prompt, shelves)
 	if err != nil {
 		return out, fmt.Errorf("interpreting %q: %w", in.Prompt, err)
 	}
@@ -474,7 +495,7 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 
 	item, offer, offers, err := c.settle(ctx, interpretation.Constraints, in.Item)
 	if err != nil {
-		return out, err
+		return out, declined(err, interpretation.DeclinedCategories)
 	}
 
 	return Proposal{
@@ -682,6 +703,167 @@ func (c *Client) candidates(
 	}
 	return results.Offers, nil
 }
+
+// shelves asks the merchant which categories it sells, for the interpreter to
+// read the sentence against.
+//
+// # Why the agent fetches this and the interpreter does not
+//
+// interpret.NewModel and interpret.NewGemini perform no I/O, which is what makes
+// cmd/agent's TestInterpreterFor legal under hard rule 4, and it is not a property
+// to spend: a constructor that dialled would put a live model one careless test
+// away. The agent already holds the merchant's endpoint, already calls the
+// interpreter exactly once per authorisation, and is the party that knows *which*
+// merchant this sentence will be searched against — so this is where the fetch
+// belongs, and interpret.Shelves arrives there as data.
+//
+// # An answer nobody gave is not an error, and the next call is what makes that safe
+//
+// Every failure here — no endpoint, a 404, a body that will not decode, a
+// merchant that is not listening — comes back as no shelves, and Propose carries
+// on. Two reasons, and the second is the one that settles it.
+//
+// A merchant that does not publish its shelves is a merchant the model has to
+// guess at, which is exactly where issue #254 found things; that is a worse
+// reading of the sentence and not a broken flow, and failing an authorisation
+// because a counterparty declined an optional question would leave this agent able
+// to shop at precisely one shop. The precedent is -interpreter auto's, read one
+// party along: an unset key is an answer and falls back, a broken one stops the
+// process.
+//
+// And a merchant that is *genuinely* unreachable still fails loudly, a few lines
+// later and for a better reason: candidates asks the same host for a search, and
+// that call is not optional. So the only case this silence covers is a merchant
+// that is up and does not publish — which is the case it is for.
+//
+// **What it cannot cover is a typo in the path**, since that is indistinguishable
+// from a merchant which does not publish. shelvesPath is held against
+// merchant.ShelvesPath by a test for exactly that reason.
+//
+// # The answer is bounded, and this is the one call where that is about a model
+//
+// maxTitle's argument, one endpoint along and with a sharper edge. That constant
+// bounds a name this agent republishes onto a screen; this bounds a list this
+// agent puts into a language model's *instruction*, which is a path from a
+// counterparty's bytes to the constraints proposed for a user to sign. The
+// interpretation still reaches a person and then a verifier, so the blast radius
+// is the one this whole design rests on — but a shop that answered with a
+// megabyte of prose would be writing part of that instruction, and there is no
+// reason to let it.
+//
+// So the answer has to look like a vocabulary: no more entries than a shop has
+// aisles, each a short label with no control characters in it. **Refused whole
+// rather than filtered**, because a filtered vocabulary is worse than none — a
+// model shown half a shop's shelves narrows confidently by the wrong one, and
+// editing a counterparty's list would be this agent deciding what the shop meant.
+func (c *Client) shelves(ctx context.Context) (interpret.Shelves, error) {
+	var answer struct {
+		Categories []string `json:"categories"`
+	}
+	url := strings.TrimSuffix(c.Endpoints.Merchant, "/") + shelvesPath
+	if err := c.call(ctx, http.MethodGet, url, nil, &answer); err != nil {
+		return nil, fmt.Errorf("asking the merchant which categories it sells: %w", err)
+	}
+
+	if len(answer.Categories) > maxShelves {
+		return nil, fmt.Errorf(
+			"agent: the merchant published %d categories and a shop's vocabulary is bounded at %d",
+			len(answer.Categories), maxShelves)
+	}
+	// Trimmed on the way through, so that what is checked is what is repeated.
+	// Surrounding space is "transport noise, not identity" — constraint's own
+	// exactText says exactly that of an identifier, and constraint.FoldText trims
+	// before comparing a category, so nothing is lost and the alternative is a
+	// bound measured on one string and a listing printed from another.
+	shelves := make(interpret.Shelves, 0, len(answer.Categories))
+	for _, shelf := range answer.Categories {
+		trimmed := strings.TrimSpace(shelf)
+		if err := labelled(trimmed); err != nil {
+			return nil, fmt.Errorf("agent: the merchant published a category that is not a label: %w", err)
+		}
+		shelves = append(shelves, trimmed)
+	}
+	return shelves, nil
+}
+
+// declined adds the categories the interpreter would not propose to a discovery
+// failure, and leaves every other failure alone.
+//
+// Issue #254's legibility half, one hop from where it is decided. A reading that
+// narrowed only by a shelf this shop does not stock arrives here with nothing
+// selective left in it, and nothingIdentifies then says "the interpretation names
+// nothing to go looking for" — which is true of the set that survived and
+// misattributes the cause, since the interpretation named something and
+// interpret.ground removed it. That sentence is the whole of what an operator has
+// to act on, and #254's complaint is precisely a demonstration that *reads as* a
+// broken interpreter.
+//
+// **Only on the way out, and only on a failure.** A successful proposal says
+// nothing about this: it found the offer, the surface will render what was signed,
+// and the buyer's own working is not something a screen should carry — see
+// interpret.Interpretation.DeclinedCategories. The error is wrapped rather than
+// replaced, so errors.Is still reaches ErrNothingToBuy and console's 422 mapping
+// is untouched.
+func declined(err error, categories []string) error {
+	if err == nil || len(categories) == 0 {
+		return err
+	}
+	return fmt.Errorf("%w; the interpreter also declined to narrow by %s, which this merchant has no shelf for",
+		err, strings.Join(categories, ", "))
+}
+
+// labelled reports whether one published category, already trimmed, is shaped like
+// a shelf name.
+//
+// The line-break check is the one worth naming: the instruction lists these one per
+// line, so a break inside an entry is a shop writing lines of its own into the text
+// that tells a model what its job is. Bounded in runes rather than bytes for
+// maxTitle's reason — the question is how much of a label a reader, human or
+// otherwise, is being handed.
+func labelled(shelf string) error {
+	switch {
+	case shelf == "":
+		return errors.New("it is blank, and no offer can be filed under nothing")
+	case utf8.RuneCountInString(shelf) > maxShelfName:
+		return fmt.Errorf("%q is %d characters and a shelf name is bounded at %d",
+			shelf, utf8.RuneCountInString(shelf), maxShelfName)
+	case strings.ContainsFunc(shelf, breaksALine):
+		return fmt.Errorf("%q carries a line break, and these are listed one per line "+
+			"in the text that tells a model what its job is", shelf)
+	default:
+		return nil
+	}
+}
+
+// breaksALine reports whether a rune would start a new line in the text a category
+// is listed in.
+//
+// unicode.IsControl on its own is the check that looks right and is not: U+2028
+// LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR are categories Zl and Zp rather
+// than Cc, so a category joining "ladders" to a second line with one of those
+// carries no control character at all and is two lines to anything that renders
+// or tokenises it. Naming them is cheaper than reasoning about which consumer
+// honours which, and they are written as escapes below because a literal one in
+// this file would be a character no reviewer can see.
+func breaksALine(r rune) bool {
+	return unicode.IsControl(r) || r == '\u2028' || r == '\u2029'
+}
+
+// maxShelves and maxShelfName are how much of a shop's vocabulary this agent will
+// repeat to a model.
+//
+// Bounds on this agent's willingness to repeat, not claims about how a shop may
+// organise itself — maxTitle draws the same distinction in the same words. What
+// sets the numbers is what a vocabulary is: deploy/catalogue.json has 7
+// categories, the recorded shop snapshot has 24, and the two together come to 30,
+// so 128 is four times the widest shop this repository has ever served and still
+// refuses a catalogue dumped in whole. The longest of those 30 names is
+// `kitchen-accessories` at 19 characters, and 48 leaves room for a longer one
+// while refusing a sentence.
+const (
+	maxShelves   = 128
+	maxShelfName = 48
+)
 
 // Discover asks the merchant what it sells that an interpretation describes, in
 // catalogue order.

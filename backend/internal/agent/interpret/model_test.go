@@ -100,7 +100,7 @@ func TestTheModelIsAskedExactlyOnce(t *testing.T) {
 	interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))
 	require.NoError(t, err)
 
-	_, err = interpreter.Interpret(t.Context(), builtScenarioPrompt)
+	_, err = interpreter.Interpret(t.Context(), builtScenarioPrompt, nil)
 	require.Error(t, err, "an unknown field has to be a refusal, which is what makes the count below meaningful")
 
 	// Counted from the test goroutine after the call has returned, rather than
@@ -194,7 +194,7 @@ func TestAModelAnswerNobodyCanReadIsQuotedBack(t *testing.T) {
 			interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))
 			require.NoError(t, err)
 
-			_, err = interpreter.Interpret(t.Context(), builtScenarioPrompt)
+			_, err = interpreter.Interpret(t.Context(), builtScenarioPrompt, nil)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.quote, tc.why)
 		})
@@ -215,7 +215,7 @@ func TestTheModelsQuantityReachesTheInterpretation(t *testing.T) {
 	interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))
 	require.NoError(t, err)
 
-	interpretation, err := interpreter.Interpret(t.Context(), builtScenarioPrompt)
+	interpretation, err := interpreter.Interpret(t.Context(), builtScenarioPrompt, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, interpretation.Quantity,
 		"the model named a count and this is the one field it has to reach the caller through")
@@ -240,7 +240,7 @@ func TestTheProvidersFailureReachesTheCaller(t *testing.T) {
 	interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))
 	require.NoError(t, err)
 
-	_, err = interpreter.Interpret(t.Context(), builtScenarioPrompt)
+	_, err = interpreter.Interpret(t.Context(), builtScenarioPrompt, nil)
 	assert.ErrorIs(t, err, unreachable,
 		"wrapping rather than replacing is what lets a caller tell a provider that is down"+
 			" from a model that read the sentence badly")
@@ -264,7 +264,7 @@ func TestAnEmptySentenceIsRefusedBeforeTheModelIsCalled(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, prompt := range []string{"", "   \n\t "} {
-		_, err := interpreter.Interpret(t.Context(), prompt)
+		_, err := interpreter.Interpret(t.Context(), prompt, nil)
 		assert.Error(t, err, "a blank sentence is a caller defect, not something to ask a model about")
 	}
 }
@@ -322,7 +322,7 @@ func completionArguments(t *testing.T) (string, []byte) {
 	interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))
 	assert.NoError(t, err, "building an interpreter over a double is what every test here starts from")
 
-	_, err = interpreter.Interpret(t.Context(), builtScenarioPrompt)
+	_, err = interpreter.Interpret(t.Context(), builtScenarioPrompt, nil)
 	assert.NoError(t, err, "the built scenario is what the rest of this repository asserts on")
 
 	assert.NotEmpty(t, strings.TrimSpace(instruction), "the model was handed no instruction at all")
