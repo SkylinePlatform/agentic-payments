@@ -137,6 +137,30 @@ globalThis.matchMedia ??= (query: string) =>
  */
 
 /*
+ * `localStorage` needs nothing here either, and the reason is neither of the two
+ * above.
+ *
+ * It is the one global in this file that a reader arrives at with a failure in
+ * hand: on Node 26 the two theme suites lost fourteen tests to `Cannot read
+ * properties of undefined (reading 'clear')`, and the shortest way to make that
+ * stop is four lines assigning a Map-backed stub to `globalThis.localStorage`.
+ * Do not. **jsdom implements `localStorage` correctly and Vitest is discarding
+ * it** — see `execArgv` in vite.config.ts, which turns off the Node 26 global
+ * that causes the discard, and #269 for the mechanism.
+ *
+ * So this is not `ResizeObserver`'s case and not `EventSource`'s. There is
+ * nothing to stand in for, because the environment has a real implementation;
+ * and there is nothing to inject, because `index.html`'s no-flash script is a
+ * string that cannot import and reads the global directly — a seam is not
+ * available to the one test that most needs the real thing. What a stub would
+ * buy instead is a `Storage` whose prototype is not the `Storage` the tests can
+ * see, which is how `src/theme/noflash.test.ts`'s `Storage.prototype` spy stops
+ * intercepting anything while its test goes on passing.
+ * `src/test/webstorage.test.ts` asserts that property outright, so this
+ * paragraph cannot quietly stop being true.
+ */
+
+/*
  * `crypto.subtle` needs nothing here either, and that is measured rather than
  * assumed.
  *
