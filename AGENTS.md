@@ -661,8 +661,11 @@ reconcile against the code for no benefit.
   `unexpected EOF`, which blames the sender for a cut this side made. Neither
   failure sends anybody to the limit. `transport.RefusingOver` is the reader to
   use — it fails with `transport.ErrTooLarge` naming the number — and after issue
-  #251 there is no `io.LimitReader` call site left in the module, so a new one is
-  a regression rather than a style choice. Inbound request bodies already refuse,
+  #251 there is no `io.LimitReader` call site left in the module. **`forbidigo`
+  bans the function outright**, on the same footing as `time.Now`: with no
+  legitimate instance left to grandfather, the next one would be a
+  reintroduction, and a rule this file states while nothing enforces it is the
+  advice this file says it does not carry. Inbound request bodies already refuse,
   through `http.MaxBytesReader`.
 
   Each cap is a **named constant carrying its measured worst case**, because the

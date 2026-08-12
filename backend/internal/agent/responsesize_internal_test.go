@@ -31,12 +31,14 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant/shop"
 )
 
-// searchAnswerOf is a well-formed answer to GET /search of exactly size bytes.
+// searchAnswerOf is a well-formed answer to GET /search whose JSON document is
+// exactly size bytes.
 //
 // The padding is an unknown member, so the shape the agent decodes is untouched
-// and the closing brace is the last byte: a document one byte short of it cannot
-// parse, which is what makes "at the cap" and "one over it" distinguishable at
-// all. size must be at least as long as the shell, which every caller satisfies.
+// and the closing brace is the document's last byte: a document one byte short of
+// it cannot parse, which is what makes "at the cap" and "one over it"
+// distinguishable at all. size must be at least as long as the shell, which every
+// caller satisfies.
 func searchAnswerOf(size int) string {
 	const head = `{"offers":[{"id":"x"}],"pad":"`
 	const tail = `"}`
@@ -46,19 +48,30 @@ func searchAnswerOf(size int) string {
 // TestASearchAnswerOverTheCapIsRefusedRatherThanShortened is the refusal, driven
 // through the call path that reads it.
 //
-// # Three rows, because two of them are the off-by-one in either direction
+// # The rows are the off-by-one in either direction, twice
 //
 // The row *exactly* on the cap is the one that costs something to get wrong.
 // maxResponse is what may be read, so an answer of precisely that many bytes has
 // to arrive whole — a reader that refused it would be a cap one byte smaller than
 // the one written down, and nothing would say so. The row one byte over is the
 // refusal itself. The row one byte under is neither, and it is here so that a
-// failure of the other two can be read as a boundary problem rather than as the
-// path being broken.
+// failure of the other two reads as a boundary problem rather than as the path
+// being broken.
+//
+// Each boundary appears twice because **roles.OK writes the document and then a
+// newline** — json.NewEncoder appends one — so a real answer of n bytes of JSON is
+// n+1 bytes on the wire. A fixture ending on `}` is therefore a framing the
+// merchant never sends, and at a json.Decoder that missing byte is exactly the
+// byte that decides refuse from accept: the decoder stops when its value closes,
+// so trailing whitespace past the cap is tolerated and a *document* past the cap
+// is not. Both halves are asserted rather than one, because the tolerance is a
+// property worth knowing about and not a leak — nothing the caller needed was
+// dropped — and a suite that only ever sent the tidy framing would be pinning a
+// boundary one byte away from the live one.
 //
 // # The mutation this is written against
 //
-// Put io.LimitReader back in Client.call and the over-the-cap row still fails —
+// Put io.LimitReader back in Client.call and the over-the-cap rows still fail —
 // with io.ErrUnexpectedEOF, which says the merchant sent a document that stopped
 // in the middle. It did not; this side cut it. So the assertion is not that an
 // error arrived but that it names the cap, and the second one below is what makes
@@ -66,30 +79,44 @@ func searchAnswerOf(size int) string {
 func TestASearchAnswerOverTheCapIsRefusedRatherThanShortened(t *testing.T) {
 	t.Parallel()
 
+	// What roles.OK puts after the document, and what every fixture below that
+	// claims to be a real answer has to carry.
+	const framing = "\n"
+
 	for _, tc := range []struct {
-		name    string
-		size    int
-		refused bool
-		why     string
+		name     string
+		size     int
+		trailing string
+		refused  bool
+		why      string
 	}{
 		{
-			name: "one byte under the cap", size: maxResponse - 1,
+			name: "one byte under the cap", size: maxResponse - 1, trailing: framing,
 			why: "an answer inside the limit is the ordinary case, and a row that failed here would mean the path itself is broken rather than its boundary",
 		},
 		{
-			name: "exactly the cap", size: maxResponse,
+			name: "exactly the cap, and nothing after it", size: maxResponse,
 			why: "the limit is what may be read, not what may not — refusing an answer of exactly this size would be a cap a byte smaller than the constant, with nothing saying so",
+		},
+		{
+			name: "exactly the cap, as roles.OK frames it", size: maxResponse, trailing: framing,
+			why: "the newline puts the wire body one byte past the cap while the document still ends on it; the decoder wanted nothing past the limit, so this is an answer arriving whole rather than a limit being exceeded",
 		},
 		{
 			name: "one byte over the cap", size: maxResponse + 1, refused: true,
 			why: "one byte more than may be read is an answer this client cannot have whole, and handing on the part of it that fits is the defect #251 removed",
 		},
+		{
+			name: "one byte over the cap, as roles.OK frames it", size: maxResponse + 1, trailing: framing, refused: true,
+			why: "the framing must not buy a document any room — this is the row a merchant would actually send, and the previous row would pass on its own while this one failed",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			answer := searchAnswerOf(tc.size)
-			require.Len(t, answer, tc.size, "the fixture has to be exactly the size the row is named for, or the boundary being tested is not the boundary")
+			document := searchAnswerOf(tc.size)
+			require.Len(t, document, tc.size, "the fixture's document has to be exactly the size the row is named for, or the boundary being tested is not the boundary")
+			answer := document + tc.trailing
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")

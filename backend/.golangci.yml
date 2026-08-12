@@ -163,6 +163,23 @@ linters:
         # channel. Enforcing it costs nothing now and everything later.
         - pattern: ^time\.Sleep$
           msg: advance the fake clock or wait on a channel; a sleeping test is a flaky test
+        # A limit that reports EOF at its cap hands the caller a shortened
+        # document. io.ReadAll over one returns it with no error at all, and
+        # json.Decoder over one reports "unexpected EOF" — blaming the sender for a
+        # cut this side made. Neither failure sends anybody to the limit, which is
+        # issue #251. transport.RefusingOver refuses instead, naming the number.
+        #
+        # Banned rather than discouraged because #251 removed the last call site,
+        # so there is no legitimate instance left to grandfather and the next one
+        # would be a reintroduction. forbidigo matches expressions and not
+        # comments, so the discussion of io.LimitReader in limit.go's own doc
+        # comment does not trip it.
+        # The message is quoted, which the two above do not have to be: an
+        # unquoted YAML scalar ends at a ` #`, so an issue number written bare is
+        # silently dropped and the message stops mid-sentence. Confirmed by
+        # reading it back out of a deliberate violation.
+        - pattern: ^io\.LimitReader$
+          msg: "a limit that reports EOF at its cap hands on a shortened document; use transport.RefusingOver, which refuses — see AGENTS.md and issue #251"
 
     revive:
       rules:

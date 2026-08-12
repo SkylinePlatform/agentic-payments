@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -96,7 +97,7 @@ func TestABodyOverTheCapIsRefusedRatherThanShortened(t *testing.T) {
 				got, err := io.ReadAll(transport.RefusingOver(r.wrap(filling(size)), limit))
 
 				require.ErrorIs(t, err, transport.ErrTooLarge,
-					"a %d-byte body under a %d-byte limit has to be refused; io.LimitReader answers "+
+					"a %d-byte body over a %d-byte limit has to be refused; io.LimitReader answers "+
 						"this case with the first %d bytes and no error at all, which is a truncated "+
 						"document handed on as a whole one", size, limit, limit)
 				assert.Contains(t, err.Error(), fmt.Sprintf("%d bytes", limit),
@@ -175,16 +176,32 @@ func TestReadingOnAfterARefusalKeepsRefusing(t *testing.T) {
 	assert.ErrorIs(t, err, transport.ErrTooLarge, "the second read has to refuse for the same reason as the first")
 }
 
-// TestANegativeLimitRefusesEverything pins the clamp.
+// TestALimitAtEitherEndOfInt64IsNotAPanic is the two ends of the range, and both
+// rows exist because both used to panic inside Read with a message about slice
+// arithmetic in a package the caller never named.
 //
-// Nothing in this module passes a negative limit and nothing should. What makes
-// it worth a test is the failure mode without the clamp: a negative slice bound
-// inside Read, panicking about slice arithmetic in a package the caller never
-// named. Refusing every byte is the answer a caller can act on.
-func TestANegativeLimitRefusesEverything(t *testing.T) {
+// Nothing in this module passes either value. What makes them worth pinning is
+// that neither is an absurd thing for a future call site to pass: math.MaxInt64
+// is the idiomatic "no limit", and io.LimitReader takes it happily, so a site
+// migrating from one to the other would arrive with it in hand.
+func TestALimitAtEitherEndOfInt64IsNotAPanic(t *testing.T) {
 	t.Parallel()
 
-	_, err := io.ReadAll(transport.RefusingOver(strings.NewReader("x"), -1))
-	assert.ErrorIs(t, err, transport.ErrTooLarge,
-		"a limit of less than nothing permits nothing, and it has to say so rather than panic")
+	t.Run("less than nothing", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := io.ReadAll(transport.RefusingOver(strings.NewReader("x"), -1))
+		assert.ErrorIs(t, err, transport.ErrTooLarge,
+			"a limit of less than nothing permits nothing, and it has to say so rather than panic")
+	})
+
+	t.Run("everything", func(t *testing.T) {
+		t.Parallel()
+
+		body := filling(4 * limit)
+		got, err := io.ReadAll(transport.RefusingOver(strings.NewReader(body), math.MaxInt64))
+
+		require.NoError(t, err, "a limit no body can reach refuses nothing, and computing it must not overflow")
+		assert.Equal(t, body, string(got), "the whole body arrives, because the limit is larger than it")
+	})
 }

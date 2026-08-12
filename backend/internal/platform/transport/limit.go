@@ -50,6 +50,18 @@ var ErrTooLarge = errors.New("transport: the body is longer than the reader acce
 // A body of exactly limit bytes is therefore read whole and never refused, which
 // is the boundary worth stating: the limit is what may be read, not what may not.
 //
+// The refusal fires when something *asks* for a byte past the limit, and at a
+// json.Decoder that is not quite the same as "the body was longer". A decoder
+// stops as soon as its top-level value closes, so a document that ends exactly on
+// the limit followed by trailing bytes is accepted, error unraised — which is the
+// case roles.OK produces on every answer, since json.NewEncoder appends a
+// newline. That tolerance is one byte of whitespace and it is correct: nothing the
+// caller needed was dropped. What it means for a test is that the fixture has to
+// carry the newline the real handler writes, or the row exercises a framing
+// production never sends — see TestASearchAnswerOverTheCapIsRefusedRatherThanShortened,
+// which has a row each way for exactly that reason. At an io.ReadAll site there is
+// no such tolerance: one byte past the limit is refused, full stop.
+//
 // # Why this is not a RoundTripper
 //
 // A round-tripper wrapping every response body would mean no call site could
@@ -87,7 +99,14 @@ func (f *refusing) Read(p []byte) (int, error) {
 		return 0, f.tooLarge()
 	}
 
-	if int64(len(p)) > f.room+1 {
+	// Written as a subtraction on the left rather than an addition on the right,
+	// which is not a style choice: f.room+1 overflows for a limit near
+	// math.MaxInt64 — the idiomatic "no limit" value, which io.LimitReader accepts
+	// happily — and the negative bound that comes out of it panics inside a
+	// purchase, about slice arithmetic, in a package the caller never named. This
+	// form only computes room+1 once it is known to be smaller than len(p), and it
+	// is the same comparison for every value that does not overflow.
+	if int64(len(p))-1 > f.room {
 		p = p[:f.room+1]
 	}
 	n, err := f.r.Read(p)
