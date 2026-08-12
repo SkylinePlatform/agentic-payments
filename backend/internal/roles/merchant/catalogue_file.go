@@ -51,11 +51,11 @@ type Found string
 
 const (
 	// FoundAlways is in range at every price the offer steps through — the
-	// concert tickets and the ladders, whose prices still move (see issue #192)
-	// but never leave the cap their own prompt names. Both prompts are
-	// instructions since issue #198, so the agent buys at the first of those
-	// prices rather than at the second; what this constant says is unchanged
-	// either way, because it is about the offer and not about the run.
+	// ladders, whose price still moves (see issue #192) but never leaves the
+	// cap its own prompt names. That prompt is an instruction since issue
+	// #198, so the agent buys at the first of those prices rather than at the
+	// second; what this constant says is unchanged either way, because it is
+	// about the offer and not about the run.
 	FoundAlways Found = "always"
 
 	// FoundAtTheLastPrice is above the cap at the opening price and inside it
@@ -146,15 +146,15 @@ type CatalogueEntry struct {
 	// legitimate on its own terms, but a Human Not Present *watch* attempts only
 	// on a step change (see agent.Watch), so an offer with nothing else to say
 	// is also an offer no watch can ever act on. Issue #192 is what that cost
-	// the concert and the ladders, and every offer this file ships has at least
-	// two entries because of it.
+	// the ladders, and every offer this file ships has at least two entries
+	// because of it.
 	//
 	// **A run started from a sentence with no condition in it is not a watch**,
-	// and since issue #198 those two prompts are exactly that: the agent buys at
-	// the first price it is quoted, so a flat schedule would no longer strand
-	// them. The second entries stay because a browser that has not been taught
-	// to send the trigger still starts a watch, and because moving a price moves
-	// what four tests and every screenshot assert. The rule above therefore
+	// and since issue #198 that prompt is exactly that: the agent buys at the
+	// first price it is quoted, so a flat schedule would no longer strand it.
+	// The second entry stays because a browser that has not been taught to
+	// send the trigger still starts a watch, and because moving a price moves
+	// what several tests and every screenshot assert. The rule above therefore
 	// still holds for every *conditional* prompt, which is what it was always
 	// about.
 	Prices []int `json:"prices"`

@@ -98,7 +98,7 @@ func DemoPrices() []generated.Amount {
 	}
 }
 
-// The other three offers' numbers, and the caps the scripted prompts in
+// The other two offers' numbers, and the caps the scripted prompts in
 // internal/agent/interpret/scenarios.go place on them.
 //
 // The caps are not inventory and the merchant never enforces one — a constraint
@@ -109,34 +109,33 @@ func DemoPrices() []generated.Amount {
 // price in deploy/catalogue.json and quietly making a prompt find nothing.
 //
 // Every offer moves at least once. Issue #192 is why that started, and issue
-// #198 is why only half of them still need it.
+// #198 is why only one of them still needs it.
 //
 // A Human Not Present *watch* attempts only on a step change — see agent.Watch's
 // own doc — so a schedule that never moved left a prompt with nothing to act
-// on. The concert and the ladders used to be exactly that: one flat price,
-// already inside the cap their own prompt names, so a browser starting either
-// from GET /examples took a baseline that could never step and polled for the
-// life of the process, only ever ending an hour later when the open mandate
-// pair itself expired — a state about the clock, not about the purchase.
+// on. The ladders used to be exactly that: one flat price, already inside the
+// cap their own prompt names, so a browser starting from GET /examples took a
+// baseline that could never step and polled for the life of the process, only
+// ever ending an hour later when the open mandate pair itself expired — a state
+// about the clock, not about the purchase.
 //
 // **#198 answered that one level up, and it is why the second price is no
-// longer what makes those two work.** Their sentences carry no condition —
-// "two tickets... up to $160 all in" and "find and buy telescopic ladders,
-// cheapest" are instructions — so the interpretation says so and the agent buys
-// at the opening price without waiting for anything. The prices below are kept
-// rather than removed: a browser that has not been taught to send the trigger
-// still starts a watch, and moving an opening figure moves what several tests
-// and every screenshot are written against. Deleting them is a decision on its
-// own terms rather than a tidy-up this leaves behind.
+// longer what makes that one work.** Its sentence carries no condition — "find
+// and buy telescopic ladders, cheapest" is an instruction — so the
+// interpretation says so and the agent buys at the opening price without
+// waiting for anything. The prices below are kept rather than removed: a
+// browser that has not been taught to send the trigger still starts a watch,
+// and moving an opening figure moves what several tests and every screenshot
+// are written against. Deleting them is a decision on its own terms rather than
+// a tidy-up this leaves behind.
 //
-// The four still split into two pairs, and what tells them apart is now *what
-// the sentence asked for*. The bicycle steps across the cap its own prompt
-// names, the same shape as the flight, one vertical over — "buy me this bicycle
-// when it drops below $400" has nothing to demonstrate if the bicycle is
-// already below $400 when the demonstration starts. The concert and the ladders
-// were never outside their cap and never asked to wait: nothing is ever refused
-// on either of those two, and the purchase completes at the first price the
-// merchant quotes.
+// The two still tell apart on *what the sentence asked for*. The bicycle steps
+// across the cap its own prompt names, the same shape as the flight, one
+// vertical over — "buy me this bicycle when it drops below $400" has nothing to
+// demonstrate if the bicycle is already below $400 when the demonstration
+// starts. The ladders were never outside their cap and never asked to wait:
+// nothing is ever refused on them, and the purchase completes at the first
+// price the merchant quotes.
 const (
 	// The bicycle steps across the $400 its prompt names: $450.00, then
 	// $380.00. The same shape as the flight, one vertical over — "buy me this
@@ -145,19 +144,6 @@ const (
 	DemoBicycleWatched  = 45000
 	DemoBicycleAccepted = 38000
 	DemoBicycleCap      = 40000
-
-	// One concert ticket at $75.00, then $79.00 — both inside the $160.00 all
-	// in the prompt approves for two. The quantity is what makes that prompt
-	// interesting; the price was never the obstacle.
-	//
-	// The second figure existed only so a watch had a step to act on. Since
-	// issue #198 the prompt is an instruction and the purchase happens at
-	// $75.00 each — which is also what stopped the demonstration reading as
-	// *saw $150.00 for two, declined it, paid $158.00*. The figure stays for
-	// the reason the block comment above gives.
-	DemoConcertPrice         = 7500
-	DemoConcertPriceRepriced = 7900
-	DemoConcertCap           = 16000
 
 	// Telescopic ladders at $139.00, then $135.00 — both inside the $150.00
 	// bound "cheapest" became. A flat schedule made the point about the
@@ -172,38 +158,62 @@ const (
 	DemoLadderPrice         = 13900
 	DemoLadderPriceRepriced = 13500
 	DemoLadderCap           = 15000
+
+	// One concert ticket at $75.00, then $79.00 — both inside the $160.00 all
+	// in a prompt this package no longer names.
+	//
+	// **Issue #244 removed the offer these three named.** The prompt — "two
+	// tickets... up to $160 all in" — and its deploy/catalogue.json entry are
+	// gone; TestTheCatalogueFileIsTheDocumentedScenario no longer asserts on
+	// them, and shippedCatalogue(t) no longer lists DemoConcertID. What these
+	// three are not is deleted along with it: backend/internal/agent — a
+	// package this branch's scope does not reach, with a pull request in
+	// review there — still names DemoConcertID and DemoConcertPrice as Go
+	// symbols in its own tests, so removing them here would take an unrelated
+	// package's build down rather than one test in it. Coordinate their actual
+	// removal with whoever lands that work; until then these three describe a
+	// figure and an identifier this file no longer sells.
+	DemoConcertPrice         = 7500
+	DemoConcertPriceRepriced = 7900
+	DemoConcertCap           = 16000
 )
 
-// The catalogue's four identifiers, as deploy/catalogue.json states them.
+// The catalogue's three identifiers, as deploy/catalogue.json states them.
 //
-// Two of them are load-bearing: the bicycle and the concert are named
-// character for character by the constraint sets in
-// internal/agent/interpret/scenarios.go, because those prompts approve one
-// specific object rather than a class of object. Nothing enforces the match —
-// core-isolation keeps that package and this one from sharing a table, and the
-// symptom of a divergence is not a failing test but a demo where the prompt
-// finds nothing. Grep for the identifier before changing either side.
+// One of them is load-bearing: the bicycle is named character for character by
+// the constraint set in internal/agent/interpret/scenarios.go, because that
+// prompt approves one specific object rather than a class of object. Nothing
+// enforces the match — core-isolation keeps that package and this one from
+// sharing a table, and the symptom of a divergence is not a failing test but a
+// demo where the prompt finds nothing. Grep for the identifier before changing
+// either side.
 //
 // The flight and the ladders are matched on their attributes and their category
 // instead, so their identifiers are the file's own business.
 //
-// These four are constants for the same reason the prices above are: they are
+// These three are constants for the same reason the prices above are: they are
 // what tests written against the built scenario name, and
 // TestTheCatalogueFileIsTheDocumentedScenario is what keeps the file agreeing
-// with them. A fifth product acquires no constant here.
+// with them. A fourth product acquires no constant here.
+//
+// DemoConcertID sits with DemoConcertPrice above rather than here, for the same
+// reason: it no longer names anything deploy/catalogue.json lists, and stays
+// only because backend/internal/agent still compiles against it.
 const (
 	DemoFlightID  = "route:BEG-PMI"
 	DemoBicycleID = "gtin:05012345678900"
-	DemoConcertID = "event:vlado-georgijev-2026-11-14"
 	DemoLadderID  = "gtin:05014477390221"
+
+	// DemoConcertID no longer names a listed offer. See DemoConcertPrice.
+	DemoConcertID = "event:vlado-georgijev-2026-11-14"
 )
 
 // DemoMerchantCategory is the MCC the demo merchant trades under.
 //
 // 5399 is miscellaneous general merchandise, which is what a shop selling
-// flights, bicycles, concert tickets and ladders from one counter would carry.
-// A merchant per vertical would be more realistic and would cost the
-// demonstration four processes to make one point.
+// flights, bicycles and ladders from one counter would carry. A merchant per
+// vertical would be more realistic and would cost the demonstration several
+// processes to make one point.
 //
 // The running merchant reads it from deploy/catalogue.json; this is the figure
 // that file has to agree with.
