@@ -267,14 +267,14 @@ sequenceDiagram
     participant C as Credential Provider
     participant M as Merchant
     U->>S: approve constraints: BEG→PMI, max USD 20000, Jun–Aug
-    S-->>A: open Checkout + Payment Mandate — user-signed, carrying agent cnf key
+    S-->>A:wrap: open Checkout + Payment Mandate — user-signed, carrying agent cnf key
     loop deterministic polling — no model
         A->>M: quote route:BEG-PMI
         M-->>A: 24000, step 0
     end
     A->>M: quote route:BEG-PMI
     M-->>A: 21000, step 1
-    Note over A: the step moved — the agent signs one closed Checkout and three closed Payment Mandates
+    Note over A,C:wrap: the step moved — sign four closed mandates with the agent key: the Checkout for the merchant, the Payment for each of its three verifiers
     A->>C: delegated Payment Mandate
     C->>C: does the closed mandate satisfy every constraint?
     C-->>A: rejected — the amount bound is exceeded + rejection receipt
@@ -338,8 +338,8 @@ boundary sits in the module layout.
 
 ### The delegation mechanism
 
-`A->>A: assemble closed mandates, sign with agent key`, in the diagram above,
-names one step and stays silent on how — and how is where the costliest
+The note in the diagram above — *sign four closed mandates with the agent key*
+— names one step and stays silent on how, and how is where the costliest
 mistake on this issue was found (the full account is
 `../specs/2026-08-06-open-mandates-and-the-delegation-chain.md`). The obvious
 reading is that the agent issues a **second, separate SD-JWT**, signs it with
