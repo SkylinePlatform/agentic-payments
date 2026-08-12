@@ -244,19 +244,27 @@ func narrowing(t *testing.T, constraints []generated.Constraint) []generated.Con
 // assertion is not that the flight is still listed — it is that the sequence of
 // prices it steps through is the documented one, read off a catalogue built from
 // a file a shop has just been merged into.
+//
+// Three heroes rather than four since issue #244: the concert left the file when
+// the menu stopped showing the same purchase twice, and one hero per surviving
+// scripted sentence is what is left. The list is written out rather than derived
+// from the file because that is the point — these are the offers the
+// documentation is written against, and a list that read itself off the shelf
+// would agree with whatever the shelf happened to say.
 func TestTheHeroesBeatsSurviveALiveCatalogue(t *testing.T) {
 	t.Parallel()
 
 	before := shippedCatalogue(t)
-	heroes := make(map[string]merchant.CatalogueEntry, 4)
-	for _, id := range []string{merchant.DemoFlightID, merchant.DemoBicycleID, merchant.DemoConcertID, merchant.DemoLadderID} {
+	ids := []string{merchant.DemoFlightID, merchant.DemoBicycleID, merchant.DemoLadderID}
+	heroes := make(map[string]merchant.CatalogueEntry, len(ids))
+	for _, id := range ids {
 		heroes[id] = entryFor(t, before, id)
 	}
 
 	f, _ := extended(t)
 	for id, was := range heroes {
 		assert.Equal(t, was, entryFor(t, f, id),
-			"a hero changed when a shop was merged in, and every screenshot in docs/ is written against these four exactly as the file states them")
+			"a hero changed when a shop was merged in, and every screenshot in docs/ is written against these three exactly as the file states them")
 	}
 
 	clk := clock.NewFake(base)
