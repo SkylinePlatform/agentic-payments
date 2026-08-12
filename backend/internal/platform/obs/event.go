@@ -272,10 +272,17 @@ type Authorisation struct {
 	// Nil is a legitimate state and is not defaulted: an authorisation whose open
 	// Checkout Mandate carries no `iat`, or which no reader could parse, arrives
 	// here as an absence. agent.reportSignedAt is where that happens and prints
-	// the reason beside the event; obs.Validate deliberately does not require this
+	// the reason beside the event; Validate deliberately does not *require* this
 	// field, because refusing the event would take every step of every attempt off
 	// the three-lane view to hide one missing label — Watch.under's own reasoning
 	// for the two members it does gate on.
+	//
+	// **The pointer alone does not close the "0001-01-01" hole, and Validate is
+	// what does.** A nil pointer cannot be drawn as a date; a pointer to the zero
+	// time can, and `iat: -62135596800` is a syntactically perfect NumericDate
+	// that decodes to exactly it. So Validate refuses a *stated* zero instant, on
+	// the same terms it refuses a missing expiry — see the case, and
+	// TestAnAuthorisationCannotStateTheZeroInstantAsWhenItWasSigned.
 	SignedAt *time.Time `json:"signed_at"`
 
 	// ExpiresAt is when the open mandate pair stops authorising anything.
@@ -418,8 +425,8 @@ type Event struct {
 	Mandate *Mandate `json:"mandate,omitempty"`
 
 	// Authorisation is the open mandate pair this step was taken under — see
-	// Authorisation above for what the three members are and why there is no
-	// fourth.
+	// Authorisation above for what its four members are and which of them a
+	// signature covers.
 	//
 	// Issue #213's field, on the precedent #201 and #174 set: a fact the screen
 	// needs in order to make a true claim, carried as a typed nested object
@@ -612,6 +619,20 @@ func (e Event) Validate() error {
 			ErrInvalidEvent)
 	case e.Authorisation != nil && e.Authorisation.ExpiresAt.IsZero():
 		return fmt.Errorf("%w: an authorisation with no expiry cannot be placed in time, and the Trusted Surface always computes one",
+			ErrInvalidEvent)
+	case e.Authorisation != nil && e.Authorisation.SignedAt != nil && e.Authorisation.SignedAt.IsZero():
+		// Not the same rule as the two above, and the difference is which of them
+		// nil satisfies. An absent signing instant is legitimate and goes through —
+		// see the field. A *stated* one that is the zero time is not an absence, it
+		// is the one value the pointer exists to keep off a card: it marshals as
+		// "0001-01-01T00:00:00Z" and renders as a moment somebody signed at. Two
+		// spellings of "no instant" would mean a consumer had to know that one of
+		// them is not a time, which is the whole reason the other spelling is null.
+		//
+		// agent.reportSignedAt collapses it before it ever gets here, on
+		// Watch.under's split: the emitter states the fact only when it has one,
+		// and this catches a call site that got that invariant wrong.
+		return fmt.Errorf("%w: an authorisation stating the zero instant as when it was signed is naming a moment nobody signed at; absent is null",
 			ErrInvalidEvent)
 	}
 	return nil

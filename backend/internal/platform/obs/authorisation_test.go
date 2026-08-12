@@ -169,6 +169,36 @@ func TestAnAuthorisationThatCannotSayWhenItWasSignedIsStillDrawn(t *testing.T) {
 			"is #213 reappearing through the fix for it")
 }
 
+// TestAnAuthorisationCannotStateTheZeroInstantAsWhenItWasSigned is the other side
+// of the test above, and the pair of them is the whole rule: absent is null, and
+// null is the only way to say it.
+//
+// A pointer keeps "nobody said" off the card only while nil is the one spelling of
+// it. A *stated* zero time is not an absence — it marshals as
+// "0001-01-01T00:00:00Z", which the frontend's own guard accepts as a non-empty
+// string and the card formats into a time — so a second spelling would put a
+// moment nobody signed at onto the screen through the encoding rather than through
+// a clock, which is the failure the whole of #245 is arranged around.
+//
+// It is reachable without anything being malformed: `iat: -62135596800` is a
+// syntactically perfect NumericDate that decodes to exactly this instant, so
+// ap2.IssuedAtOfMandate has nothing to refuse and does not.
+// agent.reportSignedAt collapses it to nil before this point, and this is the
+// backstop for a call site that did not — the same split Watch.under has with the
+// two members Validate gates on.
+func TestAnAuthorisationCannotStateTheZeroInstantAsWhenItWasSigned(t *testing.T) {
+	t.Parallel()
+
+	dated := underAnOpenMandate(obs.KindMandateConstructed)
+	dated.Authorisation.SignedAt = &time.Time{}
+
+	err := dated.Validate()
+	require.Error(t, err,
+		"the first second of year one is not a moment a user signed at, and a card drawing one "+
+			"is indistinguishable from a card drawing the signature")
+	assert.ErrorIs(t, err, obs.ErrInvalidEvent)
+}
+
 // TestWithAuthorisationCopiesWhatItWasHanded is the concurrency half of the
 // option's contract.
 //

@@ -1,6 +1,7 @@
 package ap2_test
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -170,6 +171,43 @@ func TestTheOpenAndClosedShapesAreBothReadable(t *testing.T) {
 	}
 }
 
+// TestTheZeroInstantIsReadBackRatherThanRefused pins where this reader's
+// judgement stops, and it is the premise agent.reportSignedAt's own collapse
+// depends on.
+//
+// `iat: -62135596800` is a syntactically perfect NumericDate — a whole number of
+// seconds, in range — that decodes to the first second of year one, which is
+// Go's zero time.Time and marshals as "0001-01-01T00:00:00Z". No screen can tell
+// that from an instant somebody signed at, so something has to stop it; this
+// function is deliberately not that something. Refusing it here would be an
+// adapter judging whether a well-formed date is *plausible*, which is a line
+// with no natural end — 1970 next, then any instant in the future — where
+// refusing a fraction or an out-of-range value is a judgement about form.
+//
+// So the reading comes back as the zero instant with no error, and
+// TestTheOnlyTwoSpellingsOfNoInstantBothBecomeNil in internal/agent is what turns
+// it into an absence. If this test ever goes red because the adapter started
+// refusing it, that one is where the duplicate rule now lives.
+func TestTheZeroInstantIsReadBackRatherThanRefused(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	m := openCheckout(t, signedAtInstant)
+	m.IssuedAt = &time.Time{}
+
+	sd, err := ap2.IssueOpenCheckout(t.Context(), f.signer, m, f.blinder)
+	require.NoError(t, err, "the zero instant is a whole number of seconds like any other")
+
+	got, err := ap2.IssuedAtOfMandate(sd.String())
+	require.NoError(t, err,
+		"a well-formed NumericDate is one this reader decodes; whether the moment it names is "+
+			"one anybody could have signed at is a question about plausibility, and answering it "+
+			"here would start a line with no end")
+	assert.True(t, got.IsZero(),
+		"and it comes back as exactly what was signed, so the party that does refuse it can "+
+			"recognise it — see agent.reportSignedAt")
+}
+
 // TestIssuedAtOfMandateRefusesSomethingThatIsNotAMandate is
 // TestTheMandateDigestAccessorsRefuseSomethingThatIsNotAMandate's counterpart
 // for this reader, over the same inputs and for the same reason: a string this
@@ -201,16 +239,25 @@ func TestIssuedAtOfMandateRefusesSomethingThatIsNotAMandate(t *testing.T) {
 // this package will write either claim: IssueOpenCheckout takes a time.Time and
 // calls Unix() on it.
 //
-// The rows are the two ways the claim can be a number and not a NumericDate, and
-// the second is the one a weaker reader would pass. A guard that only rejected
-// non-numbers would take the fraction and truncate it; one that took a float64
-// would take the oversized value and hand back a year no calendar has.
+// The three rows are three different branches of epochSeconds and each is a
+// different weakening of the reader. The fraction and the oversized value both
+// arrive as json.Number — pkg/sdjwt decodes with UseNumber — and are refused by
+// Int64() for two different reasons, which is what a reader taking float64
+// instead would get wrong in two different ways: it would truncate the first and
+// hand back a year no calendar has for the second. The sentence is the default
+// branch, and it is here because `iat` written the way a canonical model writes
+// `issued_at` is the plausible mistake rather than an exotic one.
+//
+// json.Number for the oversized row rather than a Go string, which is the trap
+// this table fell into once: a string marshals as a JSON string and lands on the
+// default branch, so the row read as though it covered the numeric overflow while
+// duplicating the row below it.
 func TestAnInstantThisPackageWouldNeverWriteIsRefusedRatherThanRounded(t *testing.T) {
 	t.Parallel()
 
 	for name, iat := range map[string]any{
 		"half a second past the moment it was signed": 1_777_326_189.5,
-		"more seconds than a NumericDate holds":       "9007199254740993000",
+		"more seconds than a NumericDate holds":       json.Number("99999999999999999999"),
 		"a date written out as a sentence":            "2026-08-10T19:04:31Z",
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -16,19 +16,41 @@ import (
 // Issue #245 weighed the two ways of getting this onto the User lane's card and
 // chose this one. The other was to have POST /authorise answer an issuance
 // instant, ride it through Client.sign into a field here, and forward it from
-// there — which works, and adds a value that four hops could drop, arrive
-// without, or be handed by a caller that made it up. There is nothing to drop
-// here: the mandates are the one thing an Authorisation cannot be without —
-// Watch.valid refuses a watch missing either — and the instant is inside them,
-// under the user's signature, wherever the Authorisation itself came from. An
+// there — which works, and adds a value that four hops could drop or arrive
+// without. There is nothing to drop here: the mandates are the one thing an
+// Authorisation cannot be without — Watch.valid refuses a watch missing either —
+// and the instant is inside them wherever the Authorisation itself came from. An
 // authorisation assembled field by field by a browser posting to POST /watches
-// answers this identically to one Client.sign built, and neither of them can
-// answer it with something the surface did not sign.
+// answers this identically to one Client.sign built.
 //
 // That is also why there is no `signed_at` on this type's JSON. It is a wire
-// shape — console.Watching decodes one from a browser — and a member there
-// would be the browser stating the instant, which is exactly what must be
-// impossible. The browser does send the mandates, and this reads them.
+// shape — console.Watching decodes one from a browser — and a member there would
+// be a caller stating the instant directly, with no document behind it at all.
+//
+// # What this buys, and what it does not — stated exactly
+//
+// It buys that the value's origin is a document under a signature rather than a
+// hop or a clock, and in particular that this agent never states its own clock.
+//
+// It does **not** buy that the signature is the user's, because nothing here
+// checks one. A caller that posts an open Checkout Mandate it signed itself to
+// POST /watches gets a card drawn from whatever `iat` it wrote, and it looks
+// exactly like a genuine one. An earlier version of this comment said no caller
+// could answer with something the surface did not sign; that was wrong, and it is
+// the kind of overclaim the observability argument below exists precisely so as
+// not to need. The bound on the damage is the one internal/adapters/ap2's digest
+// readers already stand on, and it is not "nobody can lie" but "nothing
+// downstream believes this": the card is a screenshot, and the purchase it is
+// about is judged by three verifiers that check the user's signature over the
+// very same mandate before anything happens. A forged `iat` buys a mislabelled
+// card on a transaction that then fails.
+//
+// console.Watching's own comment stays true through all of this — "this package
+// does not parse them, evaluate them or believe anything about them" is about
+// internal/agent/console, which still carries the pair to the parties whose job
+// that is. This method is one package along, and what it does with what it parses
+// is put a caption on an event log ADR 0003 calls observability and never
+// evidence.
 //
 // # Why this is not the argument surface.authorised makes for the expiry
 //
@@ -91,10 +113,29 @@ func (a Authorisation) SignedAt() (time.Time, error) {
 // three-lane view exists to make impossible, and a card drawing it would look
 // exactly like one drawn from the signature. So an unreadable instant is an
 // absence that travels as an absence, and the card says what it can.
+// # Why a zero instant is an absence too
+//
+// obs.Authorisation.SignedAt's contract is that nil means nobody said, and the
+// reason it is a pointer at all is that a zero time.Time marshals as
+// "0001-01-01T00:00:00Z" — a date every screen will format. A mandate carrying
+// `iat: -62135596800` decodes to exactly that instant without being malformed in
+// any way ap2.IssuedAtOfMandate could refuse: it is a syntactically perfect
+// NumericDate, and an adapter turning it down would be judging plausibility
+// rather than form, which is a line it should not start walking. So the collapse
+// happens here, in the function whose job is to produce what an obs.Event can
+// carry, and it is about the representation rather than about the value: two
+// spellings of "no instant" cannot both travel, because a consumer would have to
+// know that one of them is not a time.
 func reportSignedAt(at time.Time, err error) *time.Time {
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"agent: reading the moment the user signed, for the event log: %v\n", err)
+		return nil
+	}
+	if at.IsZero() {
+		fmt.Fprintln(os.Stderr,
+			"agent: the open Checkout Mandate dates itself to the zero instant, which is not a "+
+				"moment anybody signed at; the card will say nothing about signing")
 		return nil
 	}
 	return &at

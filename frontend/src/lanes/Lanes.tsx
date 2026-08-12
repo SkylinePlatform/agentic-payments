@@ -245,8 +245,18 @@ function TicketCard({ ticket }: { readonly ticket: Ticket }) {
  * mandates when it signed them — `contracts/authz/checkout_mandate_open.json`
  * declares it as `issued_at` — read back out of the mandate by the party holding
  * it, `ap2.IssuedAtOfMandate`, and put on the one wire between the agent and this
- * screen. So it comes from the signed document, and nothing between the signature
- * and this line had a chance to invent it.
+ * screen. So it comes from a signed document rather than from a hop that filled a
+ * gap with a clock.
+ *
+ * **That is not the same as unforgeable, and the difference belongs here rather
+ * than in a reader's assumptions.** Nothing verifies the signature before this
+ * instant is read — `agent.Authorisation.SignedAt` says so at length — so a caller
+ * posting a self-signed open mandate to `POST /watches` gets a card drawn from
+ * whatever `iat` it wrote, looking exactly like a genuine one. What bounds that is
+ * what this card is: `obs.Event` is observability and never evidence, and the
+ * purchase it describes is judged by three verifiers that do check the user's
+ * signature over the same mandate. A forged instant buys a mislabelled card on a
+ * transaction that then fails.
  *
  * An earlier version of this card said only *"authorises until"*, on the reading
  * that no hop carried a signing instant. The hops still do not — `POST

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
@@ -227,6 +228,24 @@ type Watch struct {
 	// attempt goes. Nil is the ordinary case and records nothing — cmd/agent
 	// without -addr prints what Run returned and nobody watches it in between.
 	Progress Progress
+
+	// signedOnce and signedAt memoise the one thing this type reads out of its
+	// own authorisation: the moment the user signed it. See under and
+	// signedInstant.
+	//
+	// **Not a field a caller fills, which is the distinction signed.go's argument
+	// turns on.** These are unexported and there is no way to set them; the value
+	// is derived from the open Checkout Mandate the Authorisation above already
+	// carries, once, the first time a step needs it. A caller-supplied field would
+	// be the hop that could hold a different instant from the signed one, and that
+	// is what the derivation exists to rule out. Memoising the derivation rules out
+	// nothing, because the document it reads does not change while a watch runs.
+	//
+	// Once rather than a plain bool, so that a caller driving Attempt from its own
+	// goroutine while the loop runs cannot race the read. The zero value is usable,
+	// so nothing about constructing a Watch changes.
+	signedOnce sync.Once
+	signedAt   *time.Time
 }
 
 // Progress is told what the watch is looking at and where each attempt stands,
@@ -441,15 +460,29 @@ func (w *Watch) under(opts ...obs.EventOpt) []obs.EventOpt {
 		// console/view.go already uses for it.
 		Typed:  w.Authorisation.Prompt,
 		Signed: w.Authorisation.Rendered,
-		// Read out of the open Checkout Mandate on every event rather than once
-		// into a field of this struct, which is signed.go's argument arriving at
-		// its call site: a value cached here would be a hop that could hold the
-		// wrong instant, and re-reading a document this watch is already carrying
-		// costs one base64 decode. reportSignedAt is what makes an unreadable one
-		// an absence instead of this agent's own clock.
-		SignedAt:  reportSignedAt(w.Authorisation.SignedAt()),
+		// Derived from the open Checkout Mandate this watch already carries rather
+		// than taken from a field somebody filled — signed.go is where that is
+		// argued — and derived **once**, which is what the memo on Watch is for. A
+		// read per event would be a base64 decode per event of a document that
+		// cannot change and, more to the point, reportSignedAt's diagnostic per
+		// event: an undated mandate would print the same line four times an attempt
+		// for as long as a poll watch lived. reportDigest, whose reasoning this
+		// inherits, is called once per artefact read, and this is one artefact.
+		SignedAt:  w.signedInstant(),
 		ExpiresAt: w.Authorisation.ExpiresAt,
 	}))
+}
+
+// signedInstant is the memoised read behind under's SignedAt.
+//
+// Nil when the mandate cannot answer, on reportSignedAt's terms, and nil stays
+// nil — Once runs the body once whether or not it produced a value, so a mandate
+// that could not be read is not retried and does not print again.
+func (w *Watch) signedInstant() *time.Time {
+	w.signedOnce.Do(func() {
+		w.signedAt = reportSignedAt(w.Authorisation.SignedAt())
+	})
+	return w.signedAt
 }
 
 // Watched is what one run of the watch did.
