@@ -119,14 +119,14 @@ afterEach(() => {
 });
 
 describe("signing", () => {
-  it("signs, starts the watch, and goes to the lanes", async () => {
+  it("signs, starts the watch, and goes to the protocol screen at that run", async () => {
     const calls = stubFetch({
       "/authorise": { body: anAuthorised() },
       "/watches": { status: 201, body: { id: "w-1", correlation_id: "6f2a1c" } },
     });
     renderSigning();
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/lanes?run=6f2a1c" }]));
+    await waitFor(() => expect(navigations).toEqual([{ to: "/protocol?run=6f2a1c" }]));
     expect(calls.map((c) => c.url)).toEqual(["/authorise", "/watches"]);
   });
 
@@ -140,7 +140,7 @@ describe("signing", () => {
     });
     renderSigning({ ...aProposal(), quantity: 2 });
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/lanes?run=c9" }]));
+    await waitFor(() => expect(navigations).toEqual([{ to: "/protocol?run=c9" }]));
 
     const watchCall = calls.find((c) => c.url === "/watches");
     const body = JSON.parse(watchCall?.init?.body as string) as {
@@ -280,7 +280,7 @@ describe("signing", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /try again/i }));
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/lanes?run=c" }]));
+    await waitFor(() => expect(navigations).toEqual([{ to: "/protocol?run=c" }]));
 
     const watchCalls = calls.filter((c) => c.url === "/watches");
     expect(watchCalls).toHaveLength(2);
@@ -465,7 +465,7 @@ describe("signing", () => {
     expect(await screen.findByText(/the surface did not answer/)).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: /try again/i }));
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/lanes?run=c2" }]));
+    await waitFor(() => expect(navigations).toEqual([{ to: "/protocol?run=c2" }]));
     expect(calls.filter((c) => c.url === "/authorise")).toHaveLength(2);
   });
 
@@ -498,7 +498,7 @@ describe("signing", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /try again/i }));
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/lanes?run=c3" }]));
+    await waitFor(() => expect(navigations).toEqual([{ to: "/protocol?run=c3" }]));
 
     const authoriseCalls = calls.filter((c) => c.url === "/authorise");
     expect(authoriseCalls).toHaveLength(2);
@@ -538,7 +538,7 @@ describe("signing", () => {
       </StrictMode>,
     );
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/lanes?run=c5" }]));
+    await waitFor(() => expect(navigations).toEqual([{ to: "/protocol?run=c5" }]));
 
     // Two calls here would mean the phantom, cancelled invocation of the
     // mount effect still reached the network before its cleanup could stop

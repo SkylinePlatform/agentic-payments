@@ -1,8 +1,10 @@
 # Three-lane view: the digest as spine
 
 **Date:** 2026-08-06
-**Status:** the screen is built. `/lanes` draws the three columns, the digest
-spine and the event log beneath them; the *Tokens* revision landed with #159.
+**Status:** the screen is built. `/protocol` draws the three columns, the digest
+spine and the event log beneath them — `/lanes` until #216, which also folded the
+Mandate Inspector into it as a panel an attempt opens, and made the screen honour
+`?run=`; the *Tokens* revision landed with #159.
 Human Present is the half that will not be built — see *What this is not*.
 *Indicators*, below, is the one section that is approved and not yet built:
 #183, #184 and #186 are what build it.
@@ -420,7 +422,7 @@ therefore not a `cross`.
 **Half of that enclosure exists and half of it does not, and no queued issue
 builds the missing half.** `routes/consent/Consent.tsx` and
 `routes/consent/Signing.tsx` both draw the box as `border border-graphite/40`
-with no fill, in every state. On `/consent` that is already right — nothing is
+with no fill, in every state. In the consent zone that is already right — nothing is
 ever signed on that screen, so the box is an outline throughout. It is
 `Signing.tsx` that has the transition to make, and today it does not: the box
 looks identical either side of `POST /authorise`. So that clause is a
@@ -565,8 +567,8 @@ collector, and ADR 0003 makes the collector observability and never evidence. So
 any mark drawn for the difference would attach to the decision, which did not
 change, and would read as though the refusal itself were in question, which it
 never is. The only honest carrier of *"your refusal stands, and the record of it
-did not reach the surface"* is that sentence, and `frontend/src/routes/Console.tsx`
-already has it. **This is not an oversight to be tidied up by a later issue**:
+did not reach the surface"* is that sentence, and
+`frontend/src/routes/buying/Console.tsx` already has it. **This is not an oversight to be tidied up by a later issue**:
 specifying a glyph here to satisfy the pattern would say something untrue in
 order to look consistent, which is the opposite of what a vocabulary is for.
 

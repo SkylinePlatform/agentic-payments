@@ -8,12 +8,41 @@ import { codeOf } from "../test/source";
  * Three of them, and all three exist because the mistake they prevent compiles,
  * renders and looks right on a screenshot:
  *
- * 1. **No consent route may reach this module, by any path.** The Trusted
- *    Surface exposes `/authorise/preview` precisely so that the sentences a user
- *    reads before signing come from its own `Render()`. A second renderer there
- *    would mean the sentence the user read is not the one the signature covers —
- *    the failure `roles/surface`'s package doc claims is unexpressible, walked
- *    back in across a language boundary.
+ * 1. **No module that can render on a screen where a signature is collected may
+ *    reach this module, by any path.** The Trusted Surface exposes
+ *    `/authorise/preview` precisely so that the sentences a user reads before
+ *    signing come from its own `Render()`. A second renderer there would mean
+ *    the sentence the user read is not the one the signature covers — the
+ *    failure `roles/surface`'s package doc claims is unexpressible, walked back
+ *    in across a language boundary.
+ *
+ *    **Which screens those are is derived, not listed**, and that is the half
+ *    worth reading. The rule used to key on `routes/consent/`, which was the
+ *    whole screen while the consent screen was a route of its own; #216 folded
+ *    the console and the surface's zone into one screen, and the obvious repair
+ *    was a second prefix. A list of two is a list that rots: a third route
+ *    holding a consent zone would need a third entry, nothing would say so, and
+ *    the rule would go on reporting success over a set that had quietly stopped
+ *    being the answer. So the set is computed from what the app is, in two
+ *    steps a rename cannot break — {@link SCREEN_ROOTS} is whatever
+ *    `src/surfaces.tsx` routes to, and a screen is governed when something in
+ *    its own import closure draws `previewed.rendered`, which is the app's only
+ *    spelling of *"the sentences the Trusted Surface will sign are on this
+ *    page"*.
+ *
+ *    Two things follow that a prefix could not say. A screen that grows a
+ *    signed box is governed on the day it grows one rather than on the day
+ *    somebody remembers this file. And the converse holds too: putting a signed
+ *    box on the protocol screen would fail here immediately, because
+ *    `inspector/model.ts` is in that screen's closure and legitimately imports
+ *    this module — a signature may not be collected on a screen that renders
+ *    its own sentences, which is the rule stated as a property rather than as a
+ *    directory.
+ *
+ *    It also closes a line `constraint/render.ts`'s own header used to carry:
+ *    that "the agent console shows what a prompt would authorise before
+ *    anything is signed" is a legitimate second use. It was, on a screen where
+ *    nothing was about to be signed. That screen no longer exists.
  * 2. **This module may not reach `formatAmount`.** It divides and hands the
  *    result to `Intl`, which is right for a price tag and disagrees with Go
  *    already: `1000.00 USD` against `$1,000.00`, and `1.89 JPY` against `¥189`.
@@ -74,8 +103,34 @@ const APP_SOURCES = [...SOURCES].filter(
   ([path]) => !/\.test\.tsx?$/.test(path) && !path.startsWith("test/"),
 );
 
-const CONSENT = "routes/consent/";
 const RENDERER = "constraint/";
+
+/** The one module that says which screens this app has, and what each one renders. */
+const ROUTE_TABLE = "surfaces.tsx";
+
+/**
+ * How the app spells *"the sentences the Trusted Surface will sign are on this
+ * page"*.
+ *
+ * `Previewed.rendered` is what `POST /authorise/preview` answers, and mapping
+ * it is the only way a sentence from the signing party reaches the screen.
+ * `src/architecture.test.ts` already keys #159's flagship monospace rule on the
+ * same expression, and carries the note that matters to both: folding the
+ * signed box into a shared component would move this call site rather than
+ * delete it, and the component would still be in the screen's closure — so the
+ * detector follows the box wherever it goes.
+ *
+ * Read over `codeOf` rather than over the raw source, which is the opposite of
+ * what {@link SPECIFIER} does below, and both directions are deliberate. An
+ * over-approximated *import graph* can only report an edge that is not there,
+ * which is fixed by rewording a sentence; an over-approximated *classification*
+ * would put a screen under this rule because a comment somewhere in its closure
+ * quoted the expression, and on the protocol screen that is a build failure
+ * with no offending code to point at. The risk it takes on is a strip that goes
+ * out of phase and sees no signed box at all, and `knows which of those screens
+ * collects a signature` below is what turns that into a red test.
+ */
+const SIGNED_SENTENCE = /\.rendered\.map\(/;
 
 // --- the import graph ------------------------------------------------------
 
@@ -140,7 +195,47 @@ function reachedFrom(graph: ReadonlyMap<string, string>, start: string): Set<str
   return seen;
 }
 
-// --- rule: no consent route reaches the renderer ---------------------------
+// --- which screens collect a signature -------------------------------------
+
+/**
+ * Every screen the app can route to, as the module that draws it.
+ *
+ * Read out of `src/surfaces.tsx` rather than written down, because that file is
+ * already the app's single answer to "what can this be showing" — App turns it
+ * into routes and Shell turns it into links. Taking the *direct* imports rather
+ * than the closure is what makes these roots rather than the whole tree, and
+ * `specifiers` matches `import(` as well as `import … from`, so a screen moved
+ * behind `React.lazy` is still found.
+ */
+const SCREEN_ROOTS: readonly string[] = specifiers(SOURCES.get(ROUTE_TABLE) ?? "")
+  .map((specifier) => resolve(ROUTE_TABLE, specifier, SOURCES))
+  .filter((path): path is string => path !== null && path.startsWith("routes/"));
+
+/** A screen and everything it can reach, which is everything it can draw. */
+function closureOf(root: string): string[] {
+  return [root, ...reachedFrom(SOURCES, root)];
+}
+
+/**
+ * The screens on which a signature is collected.
+ *
+ * A screen qualifies when anything in its own closure draws the sentences the
+ * signing party produced. That is the honest test: the console is unmounted
+ * while the surface asks, but it is the same route and one edit away from being
+ * on screen beside the signed box, and a rule that tried to reason about which
+ * *stage* of a screen is showing would be reasoning about state a static scan
+ * cannot see.
+ */
+const CONSENT_SCREENS: readonly string[] = SCREEN_ROOTS.filter((root) =>
+  closureOf(root).some((path) => drawsASignedSentence(SOURCES.get(path) ?? "")),
+);
+
+/** Whether a module draws the sentences the signing party produced. */
+function drawsASignedSentence(source: string): boolean {
+  return SIGNED_SENTENCE.test(codeOf(source));
+}
+
+// --- rule: no screen that collects a signature reaches the renderer --------
 
 describe("the consent path renders nothing of its own", () => {
   it("is reading the app's own sources", () => {
@@ -154,30 +249,99 @@ describe("the consent path renders nothing of its own", () => {
     expect(paths.length).toBeGreaterThan(10);
   });
 
-  it("has no path from a consent route to the renderer", () => {
-    const routes = APP_SOURCES.filter(([path]) => path.startsWith(CONSENT));
-
-    // The loop below is a negative assertion over `routes`. An empty set makes
-    // it pass without looking at anything, which is what it did while no
-    // consent route existed — the fixtures below were the only thing keeping
-    // the walker honest. Now that the routes are here, their absence is a
-    // failure rather than a vacuum: renaming the directory must break this
-    // test rather than quietly disarm it.
+  it("routes to screens this file can find", () => {
+    // The derivation's first step, pinned. `surfaces.tsx` renamed, or its
+    // imports written some way `specifiers` does not read, would leave
+    // `SCREEN_ROOTS` empty — and every assertion below is a negative one over
+    // a set derived from it, so the whole suite would go green having looked
+    // at nothing.
     expect(
-      routes.map(([path]) => path),
-      "the consent routes this rule governs; an empty set would make every assertion below vacuous",
-    ).toEqual(expect.arrayContaining(["routes/consent/Consent.tsx"]));
+      SCREEN_ROOTS,
+      `no screen was found in ${ROUTE_TABLE}; every rule below is asserted over what it routes to`,
+    ).toEqual(
+      expect.arrayContaining(["routes/buying/Buying.tsx", "routes/protocol/Protocol.tsx"]),
+    );
+  });
 
-    for (const [path] of routes) {
-      const reached = [...reachedFrom(SOURCES, path)].filter((p) => p.startsWith(RENDERER));
+  it("knows which of those screens collects a signature", () => {
+    // The second step, pinned for the same reason and against a sharper
+    // failure. `SIGNED_SENTENCE` is what classifies a screen, and a change to
+    // how the signed box is drawn — the shared component `src/architecture.test.ts`
+    // warns about is the standing example — would classify nothing, leaving the
+    // rule below iterating over an empty list while reporting success.
+    expect(
+      CONSENT_SCREENS,
+      "the Buying screen draws the sentences POST /authorise/preview answered, " +
+        "so it is the screen this rule exists for; finding none means the " +
+        "detector has stopped seeing the signed box rather than that the box is gone",
+    ).toContain("routes/buying/Buying.tsx");
+  });
+
+  it("has no path from a screen that collects a signature to the renderer", () => {
+    for (const screen of CONSENT_SCREENS) {
+      const closure = closureOf(screen);
+      const reached = closure.filter((path) => path.startsWith(RENDERER));
+      // Which module in the closure pulled it in, so a failure points at the
+      // import to delete rather than at the screen that happens to contain it.
+      const importers = closure.filter((path) =>
+        specifiers(SOURCES.get(path) ?? "").some(
+          (specifier) => resolve(path, specifier, SOURCES)?.startsWith(RENDERER) ?? false,
+        ),
+      );
       expect(
         reached,
-        `${path} reaches the constraint renderer. The consent screen must show the ` +
-          `sentences the Trusted Surface's own Render produced, through ` +
-          `/authorise/preview — a second renderer here means the sentence the user ` +
-          `read is not the one their signature covers`,
+        `the ${screen} screen reaches the constraint renderer, through ` +
+          `${importers.join(", ") || "a path this message could not name"}. A screen that ` +
+          `collects a signature must show the sentences the Trusted Surface's own Render ` +
+          `produced, through /authorise/preview — a second renderer anywhere on it means a ` +
+          `sentence the user read is not one their signature covers`,
       ).toEqual([]);
     }
+  });
+
+  it("leaves a screen that signs nothing alone, and governs one that starts to", () => {
+    // The classification, against both of its answers. Without this the two
+    // pins above say the real app is classified correctly and nothing says the
+    // rule would move if the app did.
+    const bearing = (graph: ReadonlyMap<string, string>, roots: readonly string[]) =>
+      roots.filter((root) =>
+        [root, ...reachedFrom(graph, root)].some((path) =>
+          drawsASignedSentence(graph.get(path) ?? ""),
+        ),
+      );
+
+    const reading = new Map([
+      ["routes/protocol/Protocol.tsx", `import { Inspector } from "../../inspector/Inspector";`],
+      ["inspector/Inspector.tsx", `import { render } from "../constraint/render";`],
+      ["constraint/render.ts", ""],
+    ]);
+    expect(
+      bearing(reading, ["routes/protocol/Protocol.tsx"]),
+      "a read-only screen may render a constraint itself — that is what the " +
+        "Inspector is for, and it is why this rule cannot simply forbid the " +
+        "import everywhere",
+    ).toEqual([]);
+
+    const signing = new Map([
+      ["routes/protocol/Protocol.tsx", `import { Box } from "../../signed/Box";`],
+      ["signed/Box.tsx", `previewed.rendered.map((s) => s)`],
+      ["inspector/Inspector.tsx", ""],
+    ]);
+    expect(
+      bearing(signing, ["routes/protocol/Protocol.tsx"]),
+      "the same screen, once a signed box appears anywhere in its closure: " +
+        "governed on the day it arrives, with no prefix to remember",
+    ).toEqual(["routes/protocol/Protocol.tsx"]);
+
+    const quoted = new Map([
+      ["routes/protocol/Protocol.tsx", `// previewed.rendered.map( is what the consent zone does\nconst x = 1;`],
+    ]);
+    expect(
+      bearing(quoted, ["routes/protocol/Protocol.tsx"]),
+      "a comment naming the expression is prose about the consent zone, not a " +
+        "signed box on this screen; classifying it would fail the rule with no " +
+        "offending code to point at",
+    ).toEqual([]);
   });
 
   it("catches the path it claims to catch, direct and transitive", () => {

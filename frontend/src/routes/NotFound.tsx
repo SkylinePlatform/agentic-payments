@@ -9,7 +9,7 @@ export function NotFound() {
       <p className="mt-1 font-sans text-sm text-graphite">
         That route does not exist.{" "}
         <Link className="text-ink underline underline-offset-2" to="/">
-          Back to the three lanes
+          Back to buying
         </Link>
         .
       </p>

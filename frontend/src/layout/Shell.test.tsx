@@ -10,24 +10,26 @@ import { Shell } from "./Shell";
 
 /**
  * The nav as a reader of the app would describe it: what each link says, where
- * it goes, in what order, and under which heading.
+ * it goes, and in what order.
  *
  * Written out rather than derived from SURFACES, which is the whole difference
  * between a test and a tautology. A version that mapped SURFACES through
  * `hrefOf` would agree with the list by construction — rename a path and both
  * sides move together — and the only thing left under test would be that
- * `Array.prototype.map` works. These four rows are the routes as README.md
+ * `Array.prototype.map` works. These two rows are the routes as README.md
  * states them and as every link into this app assumes them, so a path that
  * changes without a decision fails here.
  *
- * The console is `/` because it is where a buyer starts; the lanes moved off
- * the index route to make room for it.
+ * **Two rows where there were four**, which is #216. The sidebar's two headings
+ * — *Buying* and *The protocol* — used to sit above two links each while the
+ * routes underneath did not honour them; each heading is a screen now, so the
+ * headings are gone and the links carry their words. `Buying` is `/` because it
+ * is where a buyer starts, and it is the one route in this app that anything
+ * outside it links to.
  */
 const NAV = [
-  { group: "Buying", label: "Shopping console", href: "/" },
-  { group: "Buying", label: "Trusted Surface", href: "/consent" },
-  { group: "The protocol", label: "Three lanes", href: "/lanes" },
-  { group: "The protocol", label: "Mandate Inspector", href: "/inspector" },
+  { label: "Buying", href: "/" },
+  { label: "The protocol", href: "/protocol" },
 ];
 
 /** NotFound's heading — the thing a nav link must never reach. */
@@ -61,29 +63,20 @@ describe("Shell", () => {
     ).toEqual(NAV.map(({ label, href }) => ({ label, href })));
   });
 
-  it("files each link under the heading that says what kind of surface it is", () => {
+  it("lists the screens in one column, with no heading left over them", () => {
     renderShell();
-    const nav = within(screen.getByRole("navigation"));
-
-    const headings = [...new Set(NAV.map((entry) => entry.group))];
-    for (const heading of headings) {
-      // The list is named by its own heading, so this asks the question the
-      // way a screen reader does rather than by walking the DOM.
-      const listed = within(nav.getByRole("list", { name: heading }))
-        .getAllByRole("link")
-        .map((link) => link.textContent);
-
-      expect(
-        listed,
-        `a surface under the wrong heading tells a reader it is a different ` +
-          `kind of thing than it is, which is the only job a heading has`,
-      ).toEqual(NAV.filter((entry) => entry.group === heading).map((entry) => entry.label));
-    }
+    const nav = within(screen.getByRole("navigation", { name: "Screens" }));
 
     expect(
       nav.getAllByRole("list"),
-      "one list per heading, and no heading without a list under it",
-    ).toHaveLength(headings.length);
+      "two headings with one link under each would be a sidebar sorting " +
+        "nothing; #216 turned each heading into the screen it named",
+    ).toHaveLength(1);
+    expect(
+      nav.queryAllByRole("heading"),
+      "a heading here would be a third thing to name a screen, beside the " +
+        "link and the h1 on the screen itself",
+    ).toEqual([]);
   });
 
   it("has no nav link that lands on the not-found route", async () => {

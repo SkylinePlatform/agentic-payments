@@ -1,92 +1,58 @@
 import type { ReactElement } from "react";
 
-import { Consent } from "./routes/consent/Consent";
-import { Console } from "./routes/Console";
-import { MandateInspector } from "./routes/MandateInspector";
-import { ThreeLanes } from "./routes/ThreeLanes";
+import { Buying } from "./routes/buying/Buying";
+import { Protocol } from "./routes/protocol/Protocol";
 
 /**
- * What kind of surface this is, which is what the sidebar's headings say.
+ * One screen of the app: where it lives, what it is called, and what renders.
  *
- * Four items in one flat column say nothing about which of them a person is
- * meant to *use* and which explain what using them produced. **Buying** is the
- * path a buyer walks: choose something, then sign for it on a surface the
- * agent does not control. **The protocol** is what that leaves behind, read
- * afterwards by somebody working out how it went — the lanes while it runs, the
- * Inspector once it has.
+ * **Two, and the pairing is by who the screen is for** — issue #216. It used to
+ * be four, under two headings: *Shopping console* and *Trusted Surface* filed
+ * under **Buying**, *Three lanes* and *Mandate Inspector* under **The
+ * protocol**. A person following one purchase had to visit all four in order,
+ * losing their place at every step, and nothing on any of them said which one
+ * they should be looking at now.
  *
- * A union rather than a list of strings: a mistyped group name would otherwise
- * grow a third heading with one item under it, and a sidebar is exactly the
- * place nobody looks twice. Here it does not compile.
- */
-export type Group = "Buying" | "The protocol";
-
-/**
- * One surface of the app: where it lives, what it is called, what kind of thing
- * it is, and what renders.
+ * The headings were already the right answer and the routes did not honour
+ * them. Now each heading *is* a screen: **Buying** is the path a buyer walks —
+ * choose something, then sign for it on a surface the agent does not control —
+ * and **The protocol** is what that leaves behind, read afterwards by somebody
+ * working out how it went.
+ *
+ * There is no `group` field any more for the same reason there is no third
+ * screen: a heading with exactly one item under it is a heading pretending to
+ * sort something. `docs/specs/2026-08-06-three-lane-view-design.md`'s *Two
+ * voices, one brand* is the sentence this list makes structural — the lanes
+ * teach a protocol, the console serves a buyer — and two voices need two
+ * screens, not four routes and a nav that groups them.
+ *
+ * **What merging must not merge is the trust boundary**, and that is
+ * `routes/buying/Buying.tsx`'s whole job rather than this file's: the Trusted
+ * Surface is a separate party the browser talks to, and a screen that blurred
+ * it into the agent would be a worse lie than four tabs.
  */
 export interface Surface {
   /** Route path. "" is the index route. */
   path: string;
-  /** Which heading the nav files it under. */
-  group: Group;
   /** What the nav calls it. */
   label: string;
   element: ReactElement;
 }
 
 /**
- * Every surface the app can show, in the order the nav lists them.
+ * Every screen the app can show, in the order the nav lists them.
  *
  * This is one list because it used to be two: the nav had its own copy and the
- * route table had another, so adding a surface meant editing both, and
+ * route table had another, so adding a screen meant editing both, and
  * forgetting one gave you either a nav link that 404s or a route nobody can
  * reach. Neither failure announces itself.
  *
- * App turns this into routes and Shell turns it into links. Adding a surface is
- * one entry here and nothing else — including its heading, which is a field
- * rather than a second list.
+ * App turns this into routes and Shell turns it into links.
  */
 export const SURFACES: readonly Surface[] = [
-  { path: "", group: "Buying", label: "Shopping console", element: <Console /> },
-  { path: "consent", group: "Buying", label: "Trusted Surface", element: <Consent /> },
-  { path: "lanes", group: "The protocol", label: "Three lanes", element: <ThreeLanes /> },
-  {
-    path: "inspector",
-    group: "The protocol",
-    label: "Mandate Inspector",
-    element: <MandateInspector />,
-  },
+  { path: "", label: "Buying", element: <Buying /> },
+  { path: "protocol", label: "The protocol", element: <Protocol /> },
 ];
-
-/** A heading and the surfaces under it. */
-export interface SurfaceGroup {
-  readonly group: Group;
-  readonly surfaces: readonly Surface[];
-}
-
-/**
- * The surfaces gathered under their headings, each heading in the order it
- * first appears in the list above.
- *
- * Derived rather than declared, for the reason the list itself is one list. A
- * separate array of headings in render order would be a second thing to keep in
- * step, and its failure would be a heading with nothing under it or a surface
- * with nowhere to go. Gathering by first appearance also merges entries that
- * are not adjacent, so a surface inserted in the wrong place comes out in an
- * odd position rather than under a second copy of its own heading.
- */
-export function groupSurfaces(surfaces: readonly Surface[]): readonly SurfaceGroup[] {
-  const gathered = new Map<Group, Surface[]>();
-  for (const surface of surfaces) {
-    const under = gathered.get(surface.group);
-    if (under) under.push(surface);
-    else gathered.set(surface.group, [surface]);
-  }
-  return [...gathered].map(([group, under]) => ({ group, surfaces: under }));
-}
-
-export const SURFACE_GROUPS = groupSurfaces(SURFACES);
 
 /** The href a nav link needs for a surface. */
 export function hrefOf(surface: Surface): string {

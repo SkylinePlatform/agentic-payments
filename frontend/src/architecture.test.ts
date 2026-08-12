@@ -557,7 +557,7 @@ describe("the frontend's architecture", () => {
         "./components/ui/button.tsx",
         "./components/ui/dialog.tsx",
         "./components/ui/tooltip.tsx",
-        "./routes/ThreeLanes.tsx",
+        "./routes/protocol/Protocol.tsx",
       ]),
     );
     expect(paths.length).toBeGreaterThan(10);
