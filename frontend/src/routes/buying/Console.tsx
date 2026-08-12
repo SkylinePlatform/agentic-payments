@@ -1,38 +1,45 @@
 import { useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
 
-import { Table } from "../catalogue/Table";
-import { fetchExamples, propose } from "../consent/client";
-import type { Proposal } from "../consent/model";
-import { Tracker } from "../tracker/Tracker";
+import { Table } from "../../catalogue/Table";
+import { fetchExamples, propose } from "../../consent/client";
+import type { Proposal } from "../../consent/model";
+import { Tracker } from "../../tracker/Tracker";
 
 /**
- * What `Consent`'s `onRefuse` hands back in router state — see that file's
- * own comment on why `prompt` travels alongside the other two.
+ * What `Consent`'s `onRefused` hands back — see that file's own comment on why
+ * the prompt travels alongside it.
+ *
+ * **A prop rather than router state, since #216.** It used to arrive on
+ * `location.state`, because refusing meant navigating from `/consent` back to
+ * `/`. The two are one screen now: `Buying` holds the stage, and a refusal is
+ * a value it hands down rather than a history entry it makes.
  */
-interface RefusalState {
-  readonly refused: boolean;
+export interface Refusal {
   readonly recorded: boolean;
   readonly prompt: string;
 }
 
 /**
- * The shopping console, and the app's index route.
+ * The shopping console: the Shopping Agent's half of the Buying screen.
  *
- * It is the index because it is where a buyer starts: everything else in this
- * app either follows from something bought here or explains it.
+ * It is where a buyer starts, and it is the *agent's* area — everything on it
+ * is the agent proposing, and nothing on it collects a signature. What does is
+ * the Trusted Surface, which `Buying` renders in place of this component and
+ * inside a frame of its own. That sequence is the whole of #216: the console
+ * proposes, and then it is finished and a different party asks.
  *
  * **Three pieces, and the seam between the first two is exactly where #22
  * left it.** The prompt box, `POST /proposals` and the hand-off to the
  * Trusted Surface are #22's first slice, unchanged. What #109 adds sits
- * entirely between having a `Proposal` and reaching `/consent`: the product
- * table (`../catalogue/Table`) replaces the immediate navigation with a row
- * per offer the agent's search found, a quantity to type into it, and a *Buy*
- * that appends `quantity lte n` and *then* navigates — the click signs an open
- * mandate and the user leaves, never a live "watching" screen kept open here.
- * The mandate tracker (`../tracker/Tracker`) is independent of the table: it
- * reads whatever this console has already started, so it is worth showing
- * regardless of whether a proposal is on screen.
+ * entirely between having a `Proposal` and the surface being asked: the
+ * product table (`../../catalogue/Table`) replaces the immediate hand-off with
+ * a row per offer the agent's search found, a quantity to type into it, and a
+ * *Buy* that appends `quantity lte n` and *then* calls {@link Console.onBuy} —
+ * the click ends this component's part and hands the proposal to the surface,
+ * never a live "watching" screen kept open here. The mandate tracker
+ * (`../../tracker/Tracker`) is independent of the table: it reads whatever
+ * this console has already started, so it is worth showing regardless of
+ * whether a proposal is on screen.
  *
  * **The refusal is the state this screen shows most often, on purpose.**
  * `make demo` runs `-interpreter scripted` — hard rule 4 forbids a
@@ -45,20 +52,26 @@ interface RefusalState {
  * because with a model there is no boundary and a menu would be the wrong
  * thing to draw.
  *
- * **A refusal that landed here says so.** `Consent`'s `onRefuse` never calls
+ * **A refusal that landed here says so.** `Consent`'s `onRefused` never calls
  * `authorise` either way, so `recorded` only ever distinguishes whether the
  * *record* of the "no" reached the collector — never whether the "no" itself
  * holds, which it always does. Losing that distinction silently would make a
  * refusal the surface failed to record indistinguishable from one it kept,
  * which is exactly the gap #22's design calls out.
  */
-export function Console() {
-  const navigate = useNavigate();
-  // `useLocation().state` is read once, into a lazy initialiser, rather than
-  // watched with an effect: this route mounts exactly once (the comment below
-  // on `fetchExamples` already relies on that), so the router state present
-  // at that first render is the only one this screen will ever see.
-  const refusal = useLocation().state as RefusalState | null;
+export function Console({
+  refusal,
+  onBuy,
+}: {
+  /** The decision the Trusted Surface came back from, when this is a return. */
+  readonly refusal: Refusal | null;
+  /** Hands the signed-quantity proposal to the Trusted Surface's zone. */
+  readonly onBuy: (proposal: Proposal) => void;
+}) {
+  // Read once, into a lazy initialiser, rather than watched with an effect:
+  // `Buying` mounts this component afresh on each return from the surface (the
+  // comment below on `fetchExamples` relies on that too), so the refusal
+  // present at the first render is the only one this component will ever see.
   const [prompt, setPrompt] = useState(() => refusal?.prompt ?? "");
   // `null` is not "no menu" — it is "this screen has not been told". The two
   // were the same thing while `examples` only decided whether to draw a picker;
@@ -74,8 +87,9 @@ export function Console() {
   const [proposal, setProposal] = useState<Proposal | null>(null);
 
   useEffect(() => {
-    // Not cancelled on unmount: the index route mounts once, and a lost race
-    // with navigation just sets state nobody reads again.
+    // Not cancelled on unmount: this component is mounted afresh each time
+    // `Buying` returns to the console stage, and a lost race with the hand-off
+    // to the surface just sets state nobody reads again.
     //
     // A failed fetch is still swallowed rather than surfaced the way a failed
     // /proposals is — the box still takes text, and the reader learns what this
@@ -117,18 +131,14 @@ export function Console() {
   }
 
   return (
+    // No heading of its own, and that is #216 removing a stack rather than a
+    // fact. This used to open with *Shopping console* and a line saying what
+    // was on it — right for a route with a nav entry above it, and one
+    // description too many now that the screen's `<h1>` says *Buying* and the
+    // party band directly above says whose area this is. Three stacked
+    // subtitles is the "raštrkano" the issue was filed on, in miniature.
     <section className="flex flex-col gap-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="font-display text-3xl leading-tight tracking-tight text-ink">
-          Shopping console
-        </h1>
-        <p className="font-sans text-sm text-graphite">
-          What the buyer asked for, what the merchant sells, and where every
-          mandate stands.
-        </p>
-      </header>
-
-      {refusal?.refused === true &&
+      {refusal !== null &&
         (refusal.recorded ? (
           <p className="font-sans text-sm text-ink" data-testid="refusal-acknowledgement">
             Your refusal was recorded. Nothing was signed.
@@ -238,12 +248,7 @@ export function Console() {
           <h2 className="font-display text-sm font-medium uppercase tracking-widest text-ink">
             What the merchant sells
           </h2>
-          <Table
-            proposal={proposal}
-            onBuy={(signed) => {
-              navigate("/consent", { state: signed });
-            }}
-          />
+          <Table proposal={proposal} onBuy={onBuy} />
         </div>
       )}
 

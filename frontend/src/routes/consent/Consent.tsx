@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
 
 import { Button } from "../../components/ui/button";
 import { preview, refuse } from "../../consent/client";
@@ -7,24 +6,34 @@ import { canSign, whenItBuys } from "../../consent/model";
 import type { Previewed, Proposal } from "../../consent/model";
 import type { Amount, PaymentInstrument } from "../../protocol";
 import { lifetime } from "./format";
-import { Resting } from "./Resting";
 import { Signing } from "./Signing";
 
 /**
- * The Trusted Surface consent screen — #22's central decision made visible.
+ * The Trusted Surface's consent zone — #22's central decision made visible.
+ *
+ * **A zone rather than a route, since #216.** It used to be `/consent`, reached
+ * by navigating away from the console with the proposal on `location.state`,
+ * and a reload that lost that state fell to a resting screen saying nothing was
+ * waiting for approval. Both are gone: the proposal is a required prop, the
+ * component cannot be mounted without one, and the state that needed a resting
+ * screen is unreachable. What did **not** move is the boundary the route used
+ * to carry — `routes/buying/Buying.tsx` draws this component inside a frame
+ * naming the Trusted Surface as a separate party, and the console is not on
+ * screen beside it.
  *
  * Five zones, and only one of them is what the signature covers:
  *
  * 1. **What you asked for** — the user's own words. This is the one screen
- *    where that is literally true, because they were typed into the box on
- *    the previous screen in this browser, rather than reported by an agent
- *    somewhere else.
+ *    where that is literally true, because they were typed into the console's
+ *    own box in this browser, rather than reported by an agent somewhere else.
  * 2. **What you are signing** — `previewed.rendered`, the sentences the
  *    Trusted Surface's own `Render()` produced from the interpretation. Never
  *    the prompt, and never a second renderer: `constraint/architecture.test.ts`
- *    forbids anything under `routes/consent/` from reaching `../../constraint`,
- *    because the sentence a signature covers has to be the one this screen
- *    showed.
+ *    forbids anything under `routes/consent/` **or `routes/buying/`** from
+ *    reaching `../../constraint`, because the sentence a signature covers has
+ *    to be the one this zone showed. The second prefix is #216's: the console
+ *    is on the same screen now, and a sentence it rendered itself would be one
+ *    a person read on the way to a signature that does not cover it.
  * 3. **When the agent will buy** — `proposal.trigger`, issue #198. Two shapes
  *    of sentence reach the interpreter, and they authorise different
  *    behaviour: one asks for a purchase now, on the terms below it, and the
@@ -75,26 +84,17 @@ import { Signing } from "./Signing";
  * and it is what keeps the zones built from `previewed` from ever appearing
  * half-populated.
  */
-export function Consent() {
-  const proposal = useLocation().state as Proposal | undefined;
-
-  // `!proposal` rather than `=== undefined`: react-router's `useLocation`
-  // answers `null` for a history entry with no state, not `undefined`, and a
-  // reload is exactly that case.
-  if (!proposal) return <Resting />;
-
-  // Delegated to a component taking `proposal` as a required prop, rather
-  // than reading it from a closure below this line: TypeScript narrows a
-  // local variable across a guard like the one above, but not into a nested
-  // function declared afterwards — `onRefuse` would see the pre-guard
-  // `Proposal | undefined` again. A prop is narrowed once, by the type
-  // itself, everywhere the component uses it.
-  return <Proposed proposal={proposal} />;
-}
-
-function Proposed({ proposal }: { readonly proposal: Proposal }) {
-  const navigate = useNavigate();
-
+export function Consent({
+  proposal,
+  onRefused,
+}: {
+  readonly proposal: Proposal;
+  /**
+   * The person said no. `recorded` is whether `POST /authorise/refused`
+   * answered — never whether the refusal holds, which it always does.
+   */
+  readonly onRefused: (recorded: boolean) => void;
+}) {
   const [previewed, setPreviewed] = useState<Previewed | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [signing, setSigning] = useState(false);
@@ -125,27 +125,26 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
     // A refusal is never conditional on the network: the user's "no" holds
     // whether or not the record of it reaches the collector, because
     // /authorise was never called either way — nothing was signed. So the
-    // navigation happens regardless, and `recorded` carries which case this
-    // was. Rendering that fact is `Console`'s job, not this file's: React 19
-    // batches this `setState` with the `navigate` below into one commit, and
-    // the router swaps this screen out for `Console` in that same commit —
-    // there is no paint in between for a message here to appear in.
+    // hand-back happens regardless, and `recorded` carries which case this
+    // was. Rendering that fact is `Console`'s job, not this file's: `Buying`
+    // takes this zone off the screen in the same commit, so there is no paint
+    // in between for a message here to appear in.
     //
-    // `prompt` travels too, in both branches, so a user who caught a
-    // misinterpretation does not have to retype it — `Console` reads it back
-    // into the box it came from. It is `proposal.prompt`, not a copy typed
-    // twice, so there is nothing here that could disagree with what was
-    // actually typed.
+    // The prompt does not travel with it any more, and that is #216 removing a
+    // copy rather than dropping a fact: `Buying` is holding the same
+    // `Proposal` this component was handed, so it reads `proposal.prompt`
+    // itself and puts it back in the box. One object, one prompt, nothing that
+    // could disagree with what was actually typed.
     try {
       await refuse(proposal, previewed.constraints_digest);
-      navigate("/", { state: { refused: true, recorded: true, prompt: proposal.prompt } });
+      onRefused(true);
     } catch {
-      navigate("/", { state: { refused: true, recorded: false, prompt: proposal.prompt } });
+      onRefused(false);
     }
   }
 
   const heading = (
-    <h1 className="font-display text-3xl tracking-tight text-ink">Confirm what the agent may do</h1>
+    <h2 className="font-display text-xl tracking-tight text-ink">Confirm what the agent may do</h2>
   );
 
   // Read once, above the early returns, because both the zone below and the
@@ -180,17 +179,17 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
       {heading}
 
       <section className="flex flex-col gap-1" aria-labelledby="asked">
-        <h2 id="asked" className="font-sans text-sm text-graphite">
+        <h3 id="asked" className="font-sans text-sm text-graphite">
           What you asked for
-        </h2>
+        </h3>
         <p className="font-sans text-graphite">{proposal.prompt}</p>
         <p className="font-sans text-sm text-graphite">This text is not what you sign.</p>
       </section>
 
       <section className="flex flex-col gap-2 border border-graphite/40 px-4 py-3" data-testid="signed-box" aria-labelledby="signing">
-        <h2 id="signing" className="font-sans text-sm text-ink">
+        <h3 id="signing" className="font-sans text-sm text-ink">
           What you are signing
-        </h2>
+        </h3>
         {previewed.rendered.map((sentence, index) => (
           <p key={index} className="font-sans text-ink">
             {sentence}
@@ -219,9 +218,9 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
         the two this is.
       */}
       <section className="flex flex-col gap-1" data-testid="when" aria-labelledby="when">
-        <h2 id="when" className="font-sans text-sm text-graphite">
+        <h3 id="when" className="font-sans text-sm text-graphite">
           When the agent will buy
-        </h2>
+        </h3>
         <p className="font-sans text-ink">{buying.sentence}</p>
         {buying.raw !== undefined && buying.raw !== "" && (
           // The wire value, in mono, on #159's rule that monospace is for code
@@ -253,9 +252,9 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
         prompt and the offer card use: a label saying which kind of fact it is.
       */}
       <section className="flex flex-col gap-1" data-testid="basket" aria-labelledby="basket">
-        <h2 id="basket" className="font-sans text-sm text-graphite">
+        <h3 id="basket" className="font-sans text-sm text-graphite">
           How many the agent will buy
-        </h2>
+        </h3>
         <p className="font-sans text-ink">Quantity {proposal.quantity}</p>
         <p className="font-sans text-sm text-graphite">
           The agent&rsquo;s reading of your sentence, and not part of what you sign. Whatever it
@@ -264,9 +263,9 @@ function Proposed({ proposal }: { readonly proposal: Proposal }) {
       </section>
 
       <section className="flex flex-col gap-1" data-testid="offer-card" aria-labelledby="what-it-is">
-        <h2 id="what-it-is" className="font-sans text-sm text-graphite">
+        <h3 id="what-it-is" className="font-sans text-sm text-graphite">
           What {proposal.item} is
-        </h2>
+        </h3>
         {/* Decorative: the title beside it already says what this is. */}
         <img src={proposal.offer.image_url} alt="" className="max-w-xs" />
         <p className="font-sans text-ink">{proposal.offer.title}</p>

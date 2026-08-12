@@ -119,7 +119,7 @@ issue that will build each of the rest:
     [ up ]    collector     gathers protocol events and streams them to the frontend over SSE
 
   Interface
-    [ up ]    frontend      three lanes, the Mandate Inspector and the Trusted Surface consent screen
+    [ up ]    frontend      two screens: Buying, where a purchase is proposed and signed for, and The protocol, which explains what that produced
 
   7 up, 2 not built yet.
 ```

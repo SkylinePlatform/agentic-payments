@@ -377,7 +377,7 @@
     {
       "name": "frontend",
       "kind": "ui",
-      "summary": "three lanes, the Mandate Inspector and the Trusted Surface consent screen",
+      "summary": "two screens: Buying, where a purchase is proposed and signed for, and The protocol, which explains what that produced",
       "issue": "20",
       "implemented": true,
       "dir": "frontend",

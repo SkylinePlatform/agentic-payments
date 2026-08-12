@@ -1,9 +1,15 @@
 # The Trusted Surface consent screen, and the hop that stopped being one call
 
 **Date:** 2026-08-10
-**Status:** the screen is built — `/consent` is the Trusted Surface route #22
-closed with. #193 is the gap left on it: the decision axis is carried by a
-heading where the indicator vocabulary says enclosure.
+**Status:** the screen is built, and **#216 moved it**: it was `/consent`, the
+route #22 closed with, and it is now a *zone* of the Buying screen at `/` —
+`routes/consent/` is unchanged and `routes/buying/Buying.tsx` draws it, inside a
+frame naming the Trusted Surface as a separate party, with the shopping console
+unmounted while it asks. Everything below about what the zone shows, what the
+signature covers and what may not reach it still holds; where it says `/consent`,
+read *the surface's zone*, and where it says `/lanes`, read `/protocol`. #193 was
+the gap left on it: the decision axis was carried by a heading where the
+indicator vocabulary says enclosure.
 **Issues:** #22. First slice of #109. Follows #15, #16, #17, #20, #21.
 Bounded by #133 and #160, both of which it makes visible and neither of which it
 fixes — see *What this does not do*.
@@ -47,7 +53,7 @@ sequenceDiagram
     A->>M: GET /search?constraints= (identifying only)
     A-->>B: {prompt, constraints, agent_key, item, offer, watch_slots_free}
 
-    Note over B: /consent — nothing is signed yet
+    Note over B: the surface's zone — nothing is signed yet
     B->>S: POST /authorise/preview {constraints}
     S-->>B: {rendered, digest, payment_instrument, lifetime}
 
@@ -60,7 +66,7 @@ sequenceDiagram
         S-->>B: {open mandates, expires_at, payment_instrument}
         B->>A: POST /watches {prompt, authorisation, quantity}
         A-->>B: 201 {id, correlation_id}
-        Note over B: → /lanes?run=…
+        Note over B: → /protocol?run=…
     end
 ```
 
@@ -369,12 +375,21 @@ src/routes/consent/model.ts
 src/consent/useProposal.ts          the calls to /examples, /proposals, /authorise*
 ```
 
-**No module under `routes/consent/` may reach `constraint/render`, by any path.**
-That rule exists today and passes vacuously — its own comment admits *"Zero
-consent routes exist today, so this loop is currently empty and proves nothing on
-its own."* This is the change that fills it, and it also adds the line the rule
-was missing: an assertion that the loop is **not empty**, so the guard cannot
-quietly return to proving nothing if the directory is ever renamed.
+**#216 moved the console** to `src/routes/buying/Console.tsx` and added
+`src/routes/buying/Buying.tsx`, the screen that holds both stages. The consent
+files did not move.
+
+**No module that can render on a screen where a signature is collected may reach
+`constraint/render`, by any path.** That rule exists today and passes vacuously —
+its own comment admits *"Zero consent routes exist today, so this loop is
+currently empty and proves nothing on its own."* This is the change that fills
+it, and it also adds the line the rule was missing: an assertion that the loop is
+**not empty**, so the guard cannot quietly return to proving nothing if the
+directory is ever renamed. **#216 is where the directory stopped being how the
+rule finds its subject**: it reads `src/surfaces.tsx` for the screens the app can
+route to and governs any whose import closure draws `previewed.rendered`, because
+a prefix list would have needed a third entry the day a third route held a
+consent zone, and nothing would have said so.
 
 **The palette and the type are the ones pinned today**, and #22 must not
 pre-empt either: `palette.test.ts` pins the hexes and says in as many words that
@@ -423,7 +438,7 @@ admissible.
 The seam is exactly here: everything between the proposal and the consent screen
 is #109's, and nothing built now has to move for it.
 
-### `/consent` — the Trusted Surface
+### The Trusted Surface's zone — `/consent` when this was written, a zone of `/` since #216
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -526,8 +541,9 @@ survive it, at the cost of a constraint set outliving the decision it belongs to
 
 **After signing the screen does not jump.** `POST /authorise` and `POST /watches`
 are two round trips. `Signing.tsx` holds an intermediate state with the signed
-sentences still on screen, and navigates to `/lanes?run=<correlation_id>` only on
-`201`.
+sentences still on screen, and navigates to `/protocol?run=<correlation_id>` only
+on `201` — `/lanes?run=` when this was written, and #216 both renamed the route
+and made it honour the parameter.
 
 ## Failure
 
@@ -640,8 +656,11 @@ and what the merchant says the identifier refers to — three zones, asserted as
 elements rather than as colours, with the offer card **outside** the signed box;
 *Sign* is disabled when `rendered.length !== constraints.length`; *Refuse*
 calls `refused` and **never** `authorise`; a `refused` that fails still returns;
-the full path lands on `/lanes?run=`; a `/watches` failure after signing produces
-the retry screen; a reload with no router state produces the resting state.
+the full path lands on `/protocol?run=`; a `/watches` failure after signing
+produces the retry screen. The last of them — *a reload with no router state
+produces the resting state* — went with #216: the proposal is a required prop of
+a zone rather than router state, so the state the resting screen existed for is
+unreachable and both are gone.
 
 Gates: `make check` and `make frontend-check`.
 
