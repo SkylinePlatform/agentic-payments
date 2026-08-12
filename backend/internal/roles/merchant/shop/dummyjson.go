@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/transport"
 )
 
 // DummyJSONHost is the shop this fetcher reads, and the default -catalogue-live
@@ -87,10 +88,20 @@ const DummyJSONTimeout = 15 * time.Second
 
 // dummyJSONMaxBody is the most this will read from the shop.
 //
-// The recorded snapshot of the whole catalogue is 62 KB, so this is roughly
-// thirty times the expected size — enough that a shop which grew tenfold still
-// works, and small enough that a misconfigured -catalogue-live pointed at
-// something enormous fails rather than filling memory.
+// The recorded snapshot of the whole catalogue is 62 KB — 62,169 bytes, and the
+// live shop answered the same request with exactly that many on 12 August 2026,
+// so the recording is not a historical figure — making this roughly thirty times
+// the expected size: enough that a shop which grew tenfold still works, and small
+// enough that a misconfigured -catalogue-live pointed at something enormous fails
+// rather than filling memory.
+//
+// **The "fails" in that sentence was not true until issue #251.** io.ReadAll over
+// an io.LimitReader returns the first 2 MiB of something enormous with no error
+// at all, so the sentence above described a check nothing performed: what actually
+// happened was that decodeDummyJSON met a document cut mid-object and reported it
+// as the shop's malformed JSON. transport.RefusingOver is what makes the claim
+// hold, and TestAShopThatAnswersMoreThanTheLimitIsRefused is what would fail if
+// it were reverted.
 const dummyJSONMaxBody = 2 << 20
 
 // Name is the shop, as the merchant's startup line names it.
@@ -141,7 +152,7 @@ func (d *DummyJSON) Fetch(ctx context.Context) ([]Product, error) {
 		return nil, fmt.Errorf("%w: %s answered %s", ErrFetch, d.Name(), resp.Status)
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, dummyJSONMaxBody))
+	raw, err := io.ReadAll(transport.RefusingOver(resp.Body, dummyJSONMaxBody))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s: reading the catalogue: %w", ErrFetch, d.Name(), err)
 	}

@@ -68,6 +68,13 @@ func OK(w http.ResponseWriter, status int, body any) {
 // maxBody is the largest request this project will read. A mandate with its
 // disclosures is a few kilobytes; anything approaching this is a mistake or an
 // attempt to make one.
+//
+// A *request*, and only that. jwks.go's read of a counterparty's key set shared
+// this constant until issue #251 and now has maxJWKS of its own: that is an
+// answer rather than a request, coming the other way, and it is bounded by
+// transport.RefusingOver rather than by http.MaxBytesReader. Recombining them
+// would mean widening one limit widened the other, which is how a limit stops
+// meaning anything.
 const maxBody = 1 << 20
 
 // DecodeJSON reads a JSON request body, answering the caller directly when it

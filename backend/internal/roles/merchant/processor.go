@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -179,6 +178,21 @@ func (p *HTTPProcessor) InitiatePaymentChain(
 	})
 }
 
+// maxProcessorAnswer is the largest answer the merchant will read from the
+// processor, and it is a refusal rather than a truncation — see
+// transport.RefusingOver, and issue #251 for why a limit that quietly shortens a
+// document is the wrong failure to build on.
+//
+// A number rather than the bare `1<<20` it replaced, because a limit with no name
+// has nowhere to record what it was chosen against. The answer here is one signed
+// receipt, or Problem Details when there is no verdict to sign: a single token
+// and not a list, so unlike the agent's own maxResponse this one is not on a
+// growth path. For scale, the largest SD-JWT in this repository's golden vectors
+// is the 2,440-byte delegated Checkout Mandate in
+// internal/adapters/ap2/testdata, so a receipt-carrying answer sits three orders
+// of magnitude under this.
+const maxProcessorAnswer = 1 << 20
+
 // present posts one settlement body and reads the processor's answer.
 //
 // Shared by the two entry points because nothing about the call differs between
@@ -225,7 +239,7 @@ func (p *HTTPProcessor) present(
 		Code    generated.ErrorCode `json:"code"`
 		Detail  string              `json:"detail"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+	if err := json.NewDecoder(transport.RefusingOver(resp.Body, maxProcessorAnswer)).Decode(&out); err != nil {
 		return "", false, fmt.Errorf("decoding the processor's answer: %w", err)
 	}
 

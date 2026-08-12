@@ -339,7 +339,7 @@ type proposedBody struct {
 func decode(t *testing.T, resp *http.Response) object {
 	t.Helper()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(transport.RefusingOver(resp.Body, 1<<20))
 	assert.NoError(t, err, "reading the answer")
 
 	out := object{}
@@ -1684,7 +1684,7 @@ func body(t *testing.T, url string) string {
 
 	resp := doRequest(t, http.MethodGet, url, "", nil)
 	defer func() { _ = resp.Body.Close() }()
-	read, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	read, err := io.ReadAll(transport.RefusingOver(resp.Body, 1<<20))
 	require.NoError(t, err, "reading the answer")
 	return string(read)
 }
