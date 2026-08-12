@@ -117,6 +117,11 @@ func TestHTTPSinkSendsNothingForAnEmptyBatch(t *testing.T) {
 // needs a privilege no test here has or wants. A connection to it is refused by
 // the loopback stack immediately, which is exactly what an absent collector
 // looks like, and is why the twenty sends below cost nothing.
+//
+// It is also already this module's spelling for an address nothing answers,
+// rather than a new invention to take on faith: internal/demo's manifest and
+// runner tests point a health check at http://127.0.0.1:1/healthz, and CI runs
+// every job on ubuntu-latest, where the range above is the kernel default.
 const absentCollector = "http://127.0.0.1:1"
 
 // TestAnAbsentCollectorNeitherBlocksNorFails is the constraint ADR 0003 states

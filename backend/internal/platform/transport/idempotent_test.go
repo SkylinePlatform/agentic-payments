@@ -607,6 +607,20 @@ func TestHijackIsNotRemembered(t *testing.T) {
 // than told it made a mistake. What it must never be given is the empty 200 the
 // recorder is holding, which is the failure TestHijackIsNotRemembered names.
 //
+// # The window is not unique to hijack, only unbounded there
+//
+// Worth stating, because the tidier sentence — Complete runs inside the handler
+// chain, before net/http writes the terminating bytes, so no client can hold a
+// complete answer while the key is claimed — is true of the plain case and too
+// strong as a rule. A handler that sets Content-Length, flushes and then keeps
+// working has already given its client the whole answer, and a retry arriving
+// before it returns is answered 409 here too; measured, not reasoned. What
+// hijack changes is duration: an ordinary handler's gap ends when it returns,
+// a hijacked one's lasts as long as the stream. Nothing in this repository is
+// in the first shape — the only flushing handler is the collector's SSE stream,
+// which is a GET and never reaches this middleware — and if one were, the
+// answer below would still be the true one for it.
+//
 // Nothing here is timed. The first handler is parked on a channel the test
 // closes, so the key is provably still held when the second request arrives.
 func TestAHijackKeepsItsKeyWhileItRuns(t *testing.T) {
