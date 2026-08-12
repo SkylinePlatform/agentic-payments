@@ -103,13 +103,27 @@ const (
 // out because it is the page behind the card, and wash is the card itself.
 //
 // Which of the four an offer draws in is seeded on its identifier, and issue
-// #236 is where that was decided: it was seeded on the category, six shelves
-// collided over four accents, and graphite — the quietest of them, in the sense
-// that file measures rather than the one the word usually means — drew a third
-// of the shop. The argument for scattering rather than for giving each shelf a
-// colour of its own is written out once, beside the seeding in
-// tools/catalogue/mark.go's accentOf, and deliberately not restated here. Two
-// copies of a decision drift; two copies of a *drawing* are held to the byte by
+// #236 is where that was decided: it was seeded on the category, and a category
+// is something a whole shelf shares, so every shelf came out in one colour.
+//
+// # The numbers for this shelf, which are not the catalogue's
+//
+// Measured over the recording at shop/data — 194 products across 24 categories,
+// which is what the live shop answered when it was taken. Under the category
+// seeding, **24 of the 24 categories drew in a single accent**, and seal carried
+// 68 of the 194. Seeding on the identifier makes it 0 of 24, with the largest
+// share 54.
+//
+// Issue #279 is why that is spelled out rather than borrowed. The wording here
+// used to quote tools/catalogue's figures — six shelves over four accents,
+// graphite on a third of sixty — beside a drawing for a different shop, where
+// graphite never carried a third and was not even the accent that monopolised.
+// The catalogue's numbers are true where they are written and were false here.
+//
+// The argument for scattering rather than for giving each shelf a colour of its
+// own is written out once, beside the seeding in tools/catalogue/mark.go's
+// accentOf, and deliberately not restated here. Two copies of a decision drift;
+// two copies of a *drawing* are held to the byte by
 // TestALiveMarkIsTheMarkThisShopAlreadyDraws, which is why the duplication below
 // is safe and this paragraph is a pointer.
 var markAccents = []string{markSignal, markSeal, markBroken, markGraphite}

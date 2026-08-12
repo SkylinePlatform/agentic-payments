@@ -141,18 +141,30 @@ func TestALiveMarkSaysWhereItCameFrom(t *testing.T) {
 // sixty — thirty-nine, as this snapshot falls — and markSVG has no category
 // parameter to reach for, so it does not compile either.
 //
-// What is left is the claim the test always made, and the pair below no longer
-// has to share a shelf to make it, because there is no shelf to share: the
-// `"sunglasses"` both offers used to carry went with the parameter. Two
-// identifiers draw two pictures; one identifier drawn twice draws one.
+// What is left is the claim the test always made, and issue #279 is what made it
+// falsifiable. Two calls to markDataURI with different identifiers **cannot**
+// return the same string whatever the grid does: liveMarkNote embeds the
+// identifier in the SVG comment and the title goes into a <title> element, so a
+// markSVG that drew one identical grid for all 194 fetched offers passed this
+// happily — which is precisely "a fetched shelf would be one picture repeated",
+// the assertion's own message.
+//
+// So both offers below are drawn with one title and one note, and the identifier
+// is the only thing left that differs. Anything that comes back different is the
+// grid, which is the thing the claim is about.
 func TestTwoOffersGetTwoMarks(t *testing.T) {
 	t.Parallel()
 
-	first := markDataURI("dummyjson:154", "Black Sun Glasses")
-	second := markDataURI("dummyjson:155", "Classic Sun Glasses")
+	// Not liveMarkNote's text, because that is the half of the picture that
+	// carries the identifier and would answer the question for the grid.
+	const note = "    One note for both, so only the grid can differ.\n"
+	first := string(markSVG("dummyjson:154", "Sun Glasses", note))
+	second := string(markSVG("dummyjson:155", "Sun Glasses", note))
 
 	assert.NotEqual(t, first, second,
-		"two offers drew the same mark, so a fetched shelf would be one picture repeated")
-	assert.Equal(t, first, markDataURI("dummyjson:154", "Black Sun Glasses"),
+		"two offers drew the same grid, so a fetched shelf would be one picture repeated with "+
+			"nothing but its comment to tell the rows apart")
+	assert.Equal(t, markDataURI("dummyjson:154", "Black Sun Glasses"),
+		markDataURI("dummyjson:154", "Black Sun Glasses"),
 		"a mark that varied between calls would give one offer two pictures across two searches in one run")
 }
