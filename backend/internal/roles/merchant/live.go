@@ -78,7 +78,7 @@ var ErrNoLiveCatalogue = errors.New("merchant: no live catalogue")
 //
 // # What a fetched offer may not do
 //
-// Three things, each refused rather than corrected, and each because correcting
+// Four things, each refused rather than corrected, and each because correcting
 // it would mean this function quietly deciding something the demonstration is
 // about.
 //
@@ -94,6 +94,18 @@ var ErrNoLiveCatalogue = errors.New("merchant: no live catalogue")
 //     route.destination is a flight the Human Present checkout would then quote,
 //     on the single held-still price a fetched offer has. GET /checkout would
 //     start selling somebody else's placeholder data as a seat.
+//   - **Take a category the committed shelf already sells.** Issue #250: a
+//     search narrowing on category alone — "find and buy telescopic ladders,
+//     cheapest" reaches the merchant as `item.category eq "ladders"` and
+//     nothing else — takes the first candidate a search returns and ranks
+//     nothing, and NewCatalogue sorts by identifier, so `dummyjson:` sorts
+//     ahead of `gtin:`, `wd:`, `event:` and `route:`. A colliding offer would
+//     not join the results; it would take first place, and the demonstration
+//     would buy it. reservedCategories reads the set off f as it stands before
+//     this call, rather than naming the categories a second time — see the
+//     function's own doc for why, and for the contrast with tools/catalogue's
+//     Reserved, which this reasoning is one role along from rather than a copy
+//     of.
 func (f *CatalogueFile) Extend(ctx context.Context, fetcher shop.Fetcher) (int, error) {
 	if fetcher == nil {
 		return 0, fmt.Errorf("%w: no shop to fetch one from", ErrNoLiveCatalogue)
@@ -115,6 +127,7 @@ func (f *CatalogueFile) Extend(ctx context.Context, fetcher shop.Fetcher) (int, 
 	for _, o := range f.Offers {
 		listed[o.ID] = struct{}{}
 	}
+	reserved := reservedCategories(f.Offers)
 
 	added := make([]CatalogueEntry, 0, len(products))
 	for _, p := range products {
@@ -127,6 +140,13 @@ func (f *CatalogueFile) Extend(ctx context.Context, fetcher shop.Fetcher) (int, 
 			return 0, fmt.Errorf("%w: %s offers %q, which this catalogue already lists; item.id is "+
 				"what a mandate names, so two offers under one identifier make the approval ambiguous",
 				ErrNoLiveCatalogue, fetcher.Name(), p.ID)
+		}
+		if _, taken := reserved[p.Category]; taken {
+			return 0, fmt.Errorf("%w: %s offers %q in category %q, which the committed catalogue "+
+				"already sells; a search narrowing on category alone takes the first candidate "+
+				"without ranking, and NewCatalogue sorts by identifier, so a colliding offer would "+
+				"not join the results — it would take first place, and the demonstration would buy it",
+				ErrNoLiveCatalogue, fetcher.Name(), p.ID, p.Category)
 		}
 		listed[p.ID] = struct{}{}
 		added = append(added, entryFor(p))
@@ -145,6 +165,37 @@ func (f *CatalogueFile) Extend(ctx context.Context, fetcher shop.Fetcher) (int, 
 
 	f.Offers = candidate.Offers
 	return len(added), nil
+}
+
+// reservedCategories is the set of categories offers already carry, read off
+// them rather than named a second time.
+//
+// # Why this is read rather than typed
+//
+// tools/catalogue's own Reserved is the precedent for *why* a reserved set
+// exists at all, not for *how* to build one: that one is a literal, and being
+// a literal is correct there — the generator runs against a shop it chose
+// (Wikidata, queried once and committed) and derives from data that does not
+// change between one run of `make catalogue` and the next. Extend runs against
+// a shop it did not choose. DummyJSON can add a category between one run of
+// `make demo-live` and the next, and a second list of names here would have to
+// be updated by hand every time the committed file gained a shelf — the exact
+// drift issue #250 is about, one level up: nothing constrained a fetched
+// offer's category at all, and a hand-maintained list would only have moved
+// the same failure mode from "unconstrained" to "constrained by a list that
+// forgot to grow."
+//
+// Reading it instead means a shelf added to deploy/catalogue.json tomorrow is
+// reserved the moment it is committed, with nothing in this file to remember
+// to change. Extend calls this before adding anything, so what it reads is
+// exactly the committed shelf — see SourceFile's own doc for why that is the
+// only thing f.Offers holds at this point in production.
+func reservedCategories(offers []CatalogueEntry) map[string]struct{} {
+	reserved := make(map[string]struct{}, len(offers))
+	for _, o := range offers {
+		reserved[o.Category] = struct{}{}
+	}
+	return reserved
 }
 
 // entryFor turns a fetched product into an entry this catalogue can list.
