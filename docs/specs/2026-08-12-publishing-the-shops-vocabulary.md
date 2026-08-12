@@ -225,18 +225,40 @@ without ranking — its own comment says catalogue order is what makes that choi
 arbitrary. #262 is what makes the agent rank a candidate set, and this change is
 what gives it a set to rank.
 
-**It does not make an uncertain attribute value work.** The destination is left
-out rather than guessed at, which finds a shelf instead of nothing. Recovering it
-would need the shop to publish a synonym table for the open half of the
-vocabulary, and that is the thing bounded by the stock.
+**It does not make an uncertain attribute value work.** The instruction asks for
+the destination to be left out rather than guessed at, so that a reading finds a
+shelf instead of nothing. Recovering it would need the shop to publish a synonym
+table for the open half of the vocabulary, and that is the thing bounded by the
+stock.
 
 **And it costs the route on a model-backed run, which is worth being exact
 about.** The instruction already told the model to *say everything the sentence
 implies*, with "a destination with no origin" as its own example — because beat 3
 of the built scenario is a user reading `from Belgrade` on an approval screen and
 being able to disagree with it. Told also not to invent a code it cannot ground,
-the model now leaves the route out, so that pair of constraints no longer reaches a
-model-read mandate.
+the instruction asks the model to leave the route out, so that pair of constraints
+would no longer reach a model-read mandate.
+
+**Written in that register on purpose, because the deterministic half cannot do
+it.** `ground` only ever *deletes* a category constraint. There is no code path
+anywhere that turns `flight` into `flights` or `mascara` into `beauty` — the
+mapping is the model's, prompted with the shelf list, and the half this repository
+can test can only make a query smaller. So what happens to #254's own measured
+readings depends on whether the model obeys, and both outcomes are worth stating:
+
+| what the model answers | what happens | guaranteed by |
+|---|---|---|
+| `category eq "flights"` + amount | the flights shelf, 13 offers | the shop's list being in the instruction — a model behaviour |
+| `category eq "flight"` + `route.destination eq "Palma"` + amount — **what `gemini-flash-latest` actually answered in #254** | the category is declined, the route still matches nothing, the search finds **0** | the code, and it is the same 0 as before |
+| `category eq "flight"` + amount, the route omitted as asked | nothing selective survives, and discovery refuses with `ErrNothingToBuy` naming `flight` | the code |
+| `category eq "mascara"` + `brand eq "Essence"` | the category is declined and the **brand** narrows, 0 → 1 | the code |
+
+The mascara row resolves without the model changing anything, but by the brand
+rather than by the shelf — a sentence with no brand in it would gain nothing.
+The flight rows are the demo's own built-in prompt, and neither of the two the
+model is likelier to produce finds it. **A reader taking the first row as
+measured would run `make demo-live`, watch it find nothing, and go looking for a
+regression in `ground`, which is the one part behaving exactly as specified.**
 
 The user is not left guessing. `Propose` narrows to one offer and appends
 `item.id`, so the screen names one flight and shows the merchant's own title for

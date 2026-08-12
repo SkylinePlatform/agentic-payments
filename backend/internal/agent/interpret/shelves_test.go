@@ -160,6 +160,20 @@ func TestAHumanWordForAShelfDoesNotBecomeAConstraintTheShopCannotSatisfy(t *test
 				"one thing this function must never do",
 		},
 		{
+			name: "an exclusion naming only shelves that do not exist",
+			said: `[{"op":"nin","field":"item.category","value":["flight","aeroplane"]},
+			        {"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}]`,
+			shelves: published,
+			want: `[{"op":"nin","field":"item.category","value":["flight","aeroplane"]},
+			        {"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}]`,
+			why: "the row above keeps a nin because one of its members is a real shelf, which " +
+				"unsatisfiableCategories answers before the operator is ever consulted — so it " +
+				"holds the rule for eq and in and says nothing about nin. Here every member is " +
+				"invented, so the only thing that can keep the constraint is the operator gate " +
+				"itself: an exclusion selects nothing, and a function that removed it would be " +
+				"deleting a limit the user agreed to rather than one the shop cannot answer",
+		},
+		{
 			name: "a merchant that published nothing",
 			said: `[{"op":"eq","field":"item.category","value":"flight"},
 			        {"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}]`,

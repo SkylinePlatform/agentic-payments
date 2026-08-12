@@ -1,6 +1,7 @@
 package agent_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -710,4 +711,80 @@ func TestDescribeRefusesANameTooLongToBeACaption(t *testing.T) {
 					"travel in a log line instead of in a heading")
 		})
 	}
+}
+
+// TestAShelfTheShopLacksIsNamedInTheRefusalRatherThanOnlyDropped is the guard on
+// agent.declined, and it exists because that function is the difference between a
+// message an operator can act on and one that sends them looking in the wrong place.
+//
+// The shape it protects is issue #254's own complaint arriving as a *sentence*. A
+// reading whose only narrowing was a shelf this merchant does not stock is grounded
+// down to nothing selective, and nothingIdentifies then says "the interpretation
+// names nothing to go looking for" — which is true of the set that survived and
+// wrong about the cause. The reading named something; the shop simply has no such
+// shelf. Without the second clause the operator is told the model produced nothing,
+// when what happened is that the model produced a word the shop does not use.
+//
+// **Both assertions are load-bearing and neither implies the other.** The wrap is
+// what keeps errors.Is reaching ErrNothingToBuy, which is what console maps to a
+// 422 rather than a 500 — replace the error instead of wrapping it and the status
+// changes while the text stays perfect. The text is the whole of what a person
+// acts on — drop the clause and every status is still right while the sentence
+// blames the wrong party. #286 is the issue: before this test, making declined a
+// no-op left internal/agent, internal/roles/merchant and cmd/agent all green.
+//
+// declinedFlight rather than interpret.Demo(): the scripted menu cannot produce
+// this state, because ground only declines a category the shop lacks and the demo
+// merchant stocks every category its own prompts name. What is under test is what
+// Propose does with a grounded interpretation, so the interpretation is stated
+// directly.
+func TestAShelfTheShopLacksIsNamedInTheRefusalRatherThanOnlyDropped(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	client := w.client()
+
+	key := newParty(t, "agent", w.clock)
+	agentKey, err := roles.PublicKey(t.Context(), key.keys)
+	require.NoError(t, err, "reading the key the open mandates will endorse")
+
+	_, err = client.Propose(t.Context(), agent.Intent{
+		Prompt:      "buy a flight to Palma when it drops below $200, this summer",
+		Interpreter: declinedFlight{},
+		AgentKey:    agentKey,
+	})
+
+	require.Error(t, err, "an interpretation with nothing selective left in it cannot become a proposal")
+	assert.ErrorIs(t, err, agent.ErrNothingToBuy,
+		"the wrap has to survive, because console maps this sentinel to 422 — a replaced error "+
+			"turns a merchant that sells nothing matching into a fault of the agent's")
+	assert.ErrorContains(t, err, "flight",
+		"the refusal has to name the shelf the reading asked for and this shop does not have; "+
+			"without it the operator is told the interpreter produced nothing, when it produced a "+
+			"word the shop does not use")
+}
+
+// declinedFlight is an interpreter answering as ModelInterpreter does once ground
+// has run over a reading that narrowed by a shelf this merchant has no aisle for.
+//
+// The category constraint is **absent rather than present**, which is the state
+// under test: ground removes it, and DeclinedCategories is the only record left
+// that it was ever there. The amount bound stays because it is a term — evaluated
+// at checkout, never sent as a query — so what reaches discovery narrows nothing,
+// which is exactly how the misleading message arises.
+//
+// Hand-rolled on the terms AGENTS.md draws, and for drifted's reason one file
+// along: it computes one specific answer rather than recording that it was called,
+// so a generated double returning canned values would delete what this test proves.
+type declinedFlight struct{}
+
+func (declinedFlight) Interpret(context.Context, string, interpret.Shelves) (interpret.Interpretation, error) {
+	amount := "amount"
+	return interpret.Interpretation{
+		Constraints: []generated.Constraint{
+			{Op: "lt", Field: &amount, Value: map[string]any{"amount": 20000, "currency": "USD"}},
+		},
+		Trigger:            interpret.TriggerConditional,
+		DeclinedCategories: []string{"flight"},
+	}, nil
 }
