@@ -231,13 +231,29 @@ func PaymentDigestOfMandate(mandate string) (string, error) {
 // without checking its signature. See CheckoutDigestOfMandate's doc comment
 // for why that is sound for the one claim this is used for.
 func mandateClaim(mandate, claim string) (string, error) {
+	claims, err := mandateClaims(mandate)
+	if err != nil {
+		return "", err
+	}
+	return requireString(claims, claim)
+}
+
+// mandateClaims parses a bare mandate and hands back its Issuer-signed claims,
+// without checking the signature over them.
+//
+// One function rather than the same four lines in each reader, so that there is
+// exactly one place in this package where a mandate is decoded without being
+// verified — which is the property CheckoutDigestOfMandate's doc comment argues
+// the soundness of, and a second unverified parse elsewhere would be a second
+// thing to argue about. issued.go's IssuedAtOfMandate is the other caller.
+func mandateClaims(mandate string) (map[string]any, error) {
 	sd, err := sdjwt.Parse(mandate)
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrMandateMalformed, err)
+		return nil, fmt.Errorf("%w: %w", ErrMandateMalformed, err)
 	}
 	claims, err := sd.SignedClaims()
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrMandateMalformed, err)
+		return nil, fmt.Errorf("%w: %w", ErrMandateMalformed, err)
 	}
-	return requireString(claims, claim)
+	return claims, nil
 }

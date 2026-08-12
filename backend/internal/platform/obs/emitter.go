@@ -202,10 +202,18 @@ func WithMandate(mandate MandateType, state MandateState) EventOpt {
 // A copy is taken, so nothing downstream holds a pointer into the caller's own
 // authorisation. Signed is copied too: it is the caller's slice, the emitter
 // hands the event to a sender on another goroutine, and an alias would let the
-// two race.
+// two race. SignedAt is copied for the same reason and not because a time is
+// large — the struct copy above duplicates the *pointer*, so without this the
+// emitter and the caller would share one time.Time however small it is, and the
+// sentence about nothing downstream holding a pointer into the caller's
+// authorisation would stop being true of the one member that is one.
 func WithAuthorisation(auth Authorisation) EventOpt {
 	return func(e *Event) {
 		auth.Signed = append([]string(nil), auth.Signed...)
+		if auth.SignedAt != nil {
+			at := *auth.SignedAt
+			auth.SignedAt = &at
+		}
 		e.Authorisation = &auth
 	}
 }

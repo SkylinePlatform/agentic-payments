@@ -499,11 +499,12 @@ describe("the authorisation a step was taken under", () => {
     });
   }
 
-  it("comes through with all three members", () => {
+  it("comes through with all four members", () => {
     const parsed = parseRecord(
       frameWith({
         typed: "kupi merdevine, najjeftinije",
         signed: ["the amount is at most 200.00 USD"],
+        signed_at: "2026-08-10T19:04:31Z",
         expires_at: "2026-08-10T20:04:31Z",
       }),
     );
@@ -513,6 +514,7 @@ describe("the authorisation a step was taken under", () => {
     expect(parsed.record.event.authorisation).toEqual({
       typed: "kupi merdevine, najjeftinije",
       signed: ["the amount is at most 200.00 USD"],
+      signed_at: "2026-08-10T19:04:31Z",
       expires_at: "2026-08-10T20:04:31Z",
     });
   });
@@ -521,31 +523,98 @@ describe("the authorisation a step was taken under", () => {
     // A watch assembled by a caller with no sentence to report is still a watch,
     // and the half that matters — what the Trusted Surface rendered — is there.
     const parsed = parseRecord(
-      frameWith({ typed: "", signed: ["the amount is at most 200.00 USD"], expires_at: "2026-08-10T20:04:31Z" }),
+      frameWith({
+        typed: "",
+        signed: ["the amount is at most 200.00 USD"],
+        signed_at: "2026-08-10T19:04:31Z",
+        expires_at: "2026-08-10T20:04:31Z",
+      }),
     );
     expect(parsed.ok).toBe(true);
+  });
+
+  it("comes through with a null signing instant, and keeps it null", () => {
+    // The case `agent.reportSignedAt` produces: an open Checkout Mandate with no
+    // `iat`, or one no reader could parse. It has to survive the decoder, because
+    // refusing it would take every step of the attempt off the screen to hide one
+    // absent label — and it has to stay `null` rather than becoming anything a
+    // card could draw as a time.
+    const parsed = parseRecord(
+      frameWith({
+        typed: "kupi merdevine, najjeftinije",
+        signed: ["the amount is at most 200.00 USD"],
+        signed_at: null,
+        expires_at: "2026-08-10T20:04:31Z",
+      }),
+    );
+    expect(parsed.ok, "an authorisation nobody can date is still an authorisation").toBe(true);
+    if (!parsed.ok) return;
+
+    expect(
+      parsed.record.event.authorisation?.signed_at,
+      "the absence travels as an absence; a decoder substituting anything here " +
+        "would hand the card a moment nobody signed at",
+    ).toBeNull();
   });
 
   it.each([
     [
       "no sentence the surface rendered",
-      { typed: "buy me a ladder", signed: [], expires_at: "2026-08-10T20:04:31Z" },
+      { typed: "buy me a ladder", signed: [], signed_at: null, expires_at: "2026-08-10T20:04:31Z" },
       "a card saying the user approved something, with nothing under it saying what",
     ],
     [
       "no expiry",
-      { typed: "buy me a ladder", signed: ["the amount is at most 200.00 USD"] },
+      { typed: "buy me a ladder", signed: ["the amount is at most 200.00 USD"], signed_at: null },
       "limits a reader cannot tell a live authorisation from a spent one by",
     ],
     [
       "a sentence that is not a sentence",
-      { typed: "", signed: [42], expires_at: "2026-08-10T20:04:31Z" },
+      { typed: "", signed: [42], signed_at: null, expires_at: "2026-08-10T20:04:31Z" },
       "a lane rendering a number where a sentence belongs",
     ],
     [
       "a prompt that is not a string",
-      { typed: null, signed: ["the amount is at most 200.00 USD"], expires_at: "2026-08-10T20:04:31Z" },
+      {
+        typed: null,
+        signed: ["the amount is at most 200.00 USD"],
+        signed_at: null,
+        expires_at: "2026-08-10T20:04:31Z",
+      },
       "quotation marks around `null`, which puts words in the user's mouth",
+    ],
+    [
+      "no signing instant at all, not even a stated absence",
+      {
+        typed: "buy me a ladder",
+        signed: ["the amount is at most 200.00 USD"],
+        expires_at: "2026-08-10T20:04:31Z",
+      },
+      "a member typed `string | null` that is `undefined` at runtime — the Go side " +
+        "is a pointer with no omitempty, so the key is always on the wire, and " +
+        "accepting a shape neither side produces is how a type becomes a lie",
+    ],
+    [
+      "an empty string where the signing instant belongs",
+      {
+        typed: "buy me a ladder",
+        signed: ["the amount is at most 200.00 USD"],
+        signed_at: "",
+        expires_at: "2026-08-10T20:04:31Z",
+      },
+      "`timeOf` printing an empty string onto the card, which is neither an instant " +
+        "nor an honest way of saying there is none",
+    ],
+    [
+      "a signing instant that is not a string",
+      {
+        typed: "buy me a ladder",
+        signed: ["the amount is at most 200.00 USD"],
+        signed_at: 1_777_326_189,
+        expires_at: "2026-08-10T20:04:31Z",
+      },
+      "epoch seconds rendered as a date, which is what `iat` looks like before the " +
+        "adapter decodes it",
     ],
     ["not an object at all", "approved", "a string where a nested object belongs"],
   ])("refuses a record whose authorisation carries %s", (_name, authorisation, because) => {

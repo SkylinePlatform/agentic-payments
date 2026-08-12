@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import type { EventRecord, ProtocolEvent } from "../sse";
+import type { AuthorisationRef, EventRecord, ProtocolEvent } from "../sse";
 
 import { Lanes } from "./Lanes";
 import { group } from "./model";
@@ -823,15 +823,33 @@ describe("opening what each reader saw", () => {
  * What the Trusted Surface signed, as an attempt of a browser-signed purchase
  * carries it — `obs.Authorisation`, one wire across.
  *
- * The expiry is written in UTC and the suite's zone is pinned to UTC at the top
- * of the block below, so the string the card renders is the one written here on
- * a machine of any zone.
+ * Both instants are written in UTC and the suite's zone is pinned to UTC at the
+ * top of the block below, so the strings the card renders are the ones written
+ * here on a machine of any zone.
+ *
+ * **`signed_at` is an hour before `expires_at` on purpose.** They are different
+ * facts rendered by one formatter, so a card that drew the wrong one would still
+ * produce a plausible time; two values an hour apart are what tell the mistake
+ * from the intent. The hour is the surface's own `openMandateLifetime`, which is
+ * what a real pair looks like.
  */
 const APPROVED = {
   typed: "kupi merdevine, najjeftinije",
   signed: ["the amount is at most 200.00 USD", "the item is gtin:05014477390221"],
+  signed_at: "2026-08-10T19:04:31Z",
   expires_at: "2026-08-10T20:04:31Z",
 } as const;
+
+/**
+ * The same authorisation with no readable signing instant — `signed_at: null`.
+ *
+ * Not a hypothetical. `agent.reportSignedAt` hands the wire a `null` whenever the
+ * open Checkout Mandate carries no `iat` at all — AP2 marks it optional — or
+ * whenever the mandate an `agent.Authorisation` was assembled with is not one this
+ * project's own reader can parse, which is what a browser posting a hand-built
+ * authorisation to `POST /watches` can produce.
+ */
+const APPROVED_WITHOUT_INSTANT = { ...APPROVED, signed_at: null } as const;
 
 const CLOSED_CHECKOUT = { type: "checkout", state: "closed" } as const;
 const CLOSED_PAYMENT = { type: "payment", state: "closed" } as const;
@@ -851,29 +869,36 @@ const CLOSED_PAYMENT = { type: "payment", state: "closed" } as const;
  * signs through the agent's own client, so the surface's steps land inside the
  * same correlation and the lane fills up by accident. That is the gap this
  * fixture exists to close.
+ *
+ * The authorisation is a parameter so that the one case with no readable signing
+ * instant runs through the identical stream. Passing it per step rather than
+ * building a second fixture is what keeps the two cases differing in exactly the
+ * member under test.
  */
-function browserSigned(): readonly EventRecord[] {
+function browserSigned(
+  authorisation: AuthorisationRef = APPROVED,
+): readonly EventRecord[] {
   return [
     record({
       kind: "mandate_constructed",
       role: "agent",
       digest: DIGEST,
       mandate: CLOSED_CHECKOUT,
-      authorisation: APPROVED,
+      authorisation,
     }),
     record({
       kind: "mandate_constructed",
       role: "agent",
       digest: DIGEST,
       mandate: CLOSED_PAYMENT,
-      authorisation: APPROVED,
+      authorisation,
     }),
     record({
       kind: "mandate_presented",
       role: "agent",
       digest: DIGEST,
       mandate: CLOSED_PAYMENT,
-      authorisation: APPROVED,
+      authorisation,
     }),
     // The verifier states no authorisation: it is shown a minimised
     // presentation and never the prompt or the surface's sentences.
@@ -946,7 +971,7 @@ describe("the user's lane on a purchase they signed for earlier", () => {
     ).not.toBeNull();
   });
 
-  it("says how long the authorisation lasts, and never when it was signed", () => {
+  it("says when the user signed, and how long what they signed lasts", () => {
     seq = 0;
     showing(browserSigned());
 
@@ -954,20 +979,51 @@ describe("the user's lane on a purchase they signed for earlier", () => {
       "authorisation",
     );
     expect(
+      within(card).queryByText(/signed 19:04:31/),
+      "#213's approved sketch asked for the moment the user signed and this is it: " +
+        "the iat the Trusted Surface stamped into both open mandates, read back out " +
+        "of one of them by the agent holding it. A card without it is quieter than " +
+        "the design asked for, and a card that filled it from a clock would be a " +
+        "buyer claiming to have witnessed a moment it was not present at",
+    ).not.toBeNull();
+    expect(
       within(card).queryByText(/authorises until 20:04:31/),
-      "no hop between the signature and this card carries a signing instant — " +
-        "POST /authorise answers an expiry and no issuance moment, and neither " +
-        "agent.Authorisation nor GET /watches/{id} has a field for one — so a card " +
-        "drawing one would be inventing it. The surface does stamp an iat into both " +
-        "open mandates; carrying it this far is a change of its own. The expiry is " +
-        "the instant the wire has, and it is the one that says whether these limits " +
-        "are still live",
+      "and the expiry stays, because it answers a different question — whether the " +
+        "limits on screen are still live — rather than standing in for the one above",
     ).not.toBeNull();
     expect(
       card.textContent,
       "the card is not a step in this correlation, so it takes no sequence number — " +
         "one would claim it happened between two of the steps beside it",
     ).not.toMatch(/#\d/);
+  });
+
+  it("draws an authorisation with no readable instant, and invents no time for it", () => {
+    seq = 0;
+    showing(browserSigned(APPROVED_WITHOUT_INSTANT));
+
+    const card = within(screen.getByRole("region", { name: "User" })).getByTestId(
+      "authorisation",
+    );
+    expect(
+      within(card).queryByText(/authorises until 20:04:31/),
+      "the card still draws and says what it can: losing it would take the User " +
+        "lane back to Nothing yet. over one absent label, which is #213 reappearing",
+    ).not.toBeNull();
+
+    // The whole of the negative property, and it is deliberately about *any*
+    // time rather than about the word `signed`. The fallback that would be wrong
+    // is a clock — the agent's, or this browser's — and either would render
+    // through the same formatter and read exactly like the signature. Counting
+    // the clock times on the card is what catches that; an assertion that the
+    // word is missing would pass on a card that drew `new Date()` under some
+    // other label.
+    expect(
+      card.textContent?.match(/\d\d:\d\d:\d\d/g),
+      "one instant on the card, and it is the expiry. A second one here could only " +
+        "have come from a clock that was not at the Trusted Surface when the user " +
+        "signed, and it would be indistinguishable from the signature's own",
+    ).toEqual(["20:04:31"]);
   });
 
   it("draws no approval card on a Human Present purchase, and lets the mandates travel", () => {

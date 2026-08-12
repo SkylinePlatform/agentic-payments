@@ -14,11 +14,16 @@ import (
 // mandate's in two directions at once — see issue #213.
 
 // anAuthorisation is a well-formed pair: a sentence the user typed, a sentence
-// the surface rendered, and an expiry.
+// the surface rendered, the moment it was signed and an expiry.
+//
+// The signing instant is `base` and the expiry an hour past it, so the two are
+// never the same value in any assertion below.
 func anAuthorisation() obs.Authorisation {
+	signedAt := base
 	return obs.Authorisation{
 		Typed:     "find and buy telescopic ladders, cheapest",
 		Signed:    []string{"the amount is at most 200.00 USD"},
+		SignedAt:  &signedAt,
 		ExpiresAt: base.Add(time.Hour),
 	}
 }
@@ -135,28 +140,72 @@ func TestAHalfStatedAuthorisationIsRefusedRatherThanDrawn(t *testing.T) {
 	timeless := underAnOpenMandate(obs.KindMandateConstructed)
 	timeless.Authorisation = &obs.Authorisation{Signed: []string{"the amount is at most 200.00 USD"}}
 	assert.Error(t, timeless.Validate(),
-		"the expiry is the one instant an authorisation carries, and a lane that could not "+
+		"the expiry is the instant every authorisation carries, and a lane that could not "+
 			"place it in time would be showing limits with no way to tell a live one from a spent one")
+}
+
+// TestAnAuthorisationThatCannotSayWhenItWasSignedIsStillDrawn is the deliberate
+// gap in the rule above, and it is a decision rather than an omission — issue
+// #245.
+//
+// The two members Validate does gate on are ones the Trusted Surface always
+// produces, so an event missing either is an emitter that got the invariant
+// wrong. This one is different: AP2 marks `iat` optional, and an
+// agent.Authorisation assembled somewhere other than that surface can carry a
+// mandate with none — so nil is an ordinary state rather than a bug, and
+// agent.reportSignedAt hands one over on purpose rather than substituting a clock.
+// Refusing it here would cost the whole event, which means every step of every
+// attempt off the three-lane view to hide one absent label. Watch.under's own
+// comment is where that trade is argued for the two members it does gate on; this
+// is the third, on the other side of it.
+func TestAnAuthorisationThatCannotSayWhenItWasSignedIsStillDrawn(t *testing.T) {
+	t.Parallel()
+
+	undated := underAnOpenMandate(obs.KindMandateConstructed)
+	undated.Authorisation.SignedAt = nil
+	assert.NoError(t, undated.Validate(),
+		"a mandate that names no issuance instant is well formed under AP2, and the card it "+
+			"draws still says what the user approved and how long for — losing the step instead "+
+			"is #213 reappearing through the fix for it")
 }
 
 // TestWithAuthorisationCopiesWhatItWasHanded is the concurrency half of the
 // option's contract.
 //
 // The emitter hands an event to a sender on its own goroutine, so an event
-// aliasing the caller's slice would let the two race — and the caller here is a
-// watch that holds one Authorisation for every attempt it ever makes.
+// aliasing anything of the caller's would let the two race — and the caller here
+// is a watch that holds one Authorisation for every attempt it ever makes.
+//
+// **Two members are reachable through a pointer and both are asserted.** The
+// struct copy in WithAuthorisation duplicates the slice header and the
+// *time.Time, neither of which is the thing behind it, so a version of this test
+// that only checked the sentences would pass on an implementation that shared one
+// instant with its caller. Both writes below are what a caller reusing its own
+// authorisation across attempts does, and neither may reach a step that has
+// already happened.
 func TestWithAuthorisationCopiesWhatItWasHanded(t *testing.T) {
 	t.Parallel()
 
 	sentences := []string{"the amount is at most 200.00 USD"}
+	signedAt := base
 	e := anEvent(obs.KindMandatePresented)
 	obs.WithAuthorisation(obs.Authorisation{
-		Typed: "buy me a ladder", Signed: sentences, ExpiresAt: base.Add(time.Hour),
+		Typed:     "buy me a ladder",
+		Signed:    sentences,
+		SignedAt:  &signedAt,
+		ExpiresAt: base.Add(time.Hour),
 	})(&e)
 
 	require.NotNil(t, e.Authorisation)
+
 	sentences[0] = "the amount is at most 5.00 USD"
 	assert.Equal(t, []string{"the amount is at most 200.00 USD"}, e.Authorisation.Signed,
 		"the event has to hold what was true when it was emitted; a caller reusing its own "+
 			"slice must not be able to rewrite a step that has already happened")
+
+	signedAt = base.Add(24 * time.Hour)
+	require.NotNil(t, e.Authorisation.SignedAt, "the instant was stated, so it has to be here")
+	assert.Equal(t, base, *e.Authorisation.SignedAt,
+		"and the moment the user signed is the one member of this type a caller reaches through "+
+			"a pointer, so it is the one that would still be shared after the struct was copied")
 }

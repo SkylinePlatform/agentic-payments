@@ -238,23 +238,34 @@ function TicketCard({ ticket }: { readonly ticket: Ticket }) {
  * carried on the wire, and `Lanes.test.tsx` holds the import rule against the
  * module graph.
  *
- * # The expiry, and the instant that has not been carried this far
+ * # Two instants: when they signed, and how long it lasts
  *
- * *"Authorises until"* rather than *"signed at"* — and the reason is that no hop
- * between the signature and this card carries a signing instant, not that none
- * was ever taken. #213's approved sketch asked for *signed 19:04*, and it can
- * have it: the Trusted Surface stamps one clock into both open mandates as `iat`
- * when it signs them, which `contracts/authz/checkout_mandate_open.json` declares
- * as `issued_at`. What has no room for it today is the path between — `POST
- * /authorise` answers an expiry and no issuance moment, `agent.Authorisation`
- * has no field, and `GET /watches/{id}` is likewise `typed` / `signed` /
- * `expires_at` — so a card drawing one would have to invent it. See
- * `AuthorisationRef` for what carrying it properly would cost, and note the one
- * thing that stays wrong regardless: an *agent* stamping its own clock, which on
- * this path was not present when the user signed. Until then the expiry is the
- * instant the wire has, it is the `exp` both open mandates carry, and it answers
- * the question a reader of this card actually has — whether these limits are
- * still live.
+ * **The signed instant is the one #213's sketch asked for and #245 is what
+ * carries it here.** It is the `iat` the Trusted Surface stamped into both open
+ * mandates when it signed them — `contracts/authz/checkout_mandate_open.json`
+ * declares it as `issued_at` — read back out of the mandate by the party holding
+ * it, `ap2.IssuedAtOfMandate`, and put on the one wire between the agent and this
+ * screen. So it comes from the signed document, and nothing between the signature
+ * and this line had a chance to invent it.
+ *
+ * An earlier version of this card said only *"authorises until"*, on the reading
+ * that no hop carried a signing instant. The hops still do not — `POST
+ * /authorise` answers an expiry and no issuance moment, and `agent.Authorisation`
+ * has no such field — but they never needed to, because the instant was inside
+ * the mandates the whole time.
+ *
+ * **`signed_at` may be `null`, and then this card says only what it can.** An
+ * authorisation whose mandate named no `iat`, or whose `iat` no reader could
+ * parse, draws the expiry alone. What it must never do is fall back to a clock:
+ * the only ones running near this screen belong to the agent and to the browser,
+ * and neither was present at the Trusted Surface when the user signed. A card
+ * drawing one of those would be indistinguishable from a card drawing the
+ * signature, which is the confusion the whole screen exists to prevent.
+ *
+ * **The expiry stays on the card either way**, and is not a substitute that got
+ * left behind. It is the `exp` both open mandates carry and it answers a different
+ * question from the one above — whether the limits on screen are still live — and
+ * it is the fact the `expired` row of the status vocabulary is about.
  */
 function Approval({ authorisation }: { readonly authorisation: AuthorisationRef }) {
   return (
@@ -282,6 +293,15 @@ function Approval({ authorisation }: { readonly authorisation: AuthorisationRef 
           </li>
         ))}
       </ul>
+
+      {authorisation.signed_at !== null && (
+        <span
+          className="font-sans text-xs tabular-nums text-graphite"
+          title={authorisation.signed_at}
+        >
+          signed {timeOf(authorisation.signed_at)}
+        </span>
+      )}
 
       <span
         className="font-sans text-xs tabular-nums text-graphite"

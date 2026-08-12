@@ -439,8 +439,15 @@ func (w *Watch) under(opts ...obs.EventOpt) []obs.EventOpt {
 		// set the user's key went over. obs.Authorisation's own comment is where
 		// that distinction is argued, and the two field names are the ones
 		// console/view.go already uses for it.
-		Typed:     w.Authorisation.Prompt,
-		Signed:    w.Authorisation.Rendered,
+		Typed:  w.Authorisation.Prompt,
+		Signed: w.Authorisation.Rendered,
+		// Read out of the open Checkout Mandate on every event rather than once
+		// into a field of this struct, which is signed.go's argument arriving at
+		// its call site: a value cached here would be a hop that could hold the
+		// wrong instant, and re-reading a document this watch is already carrying
+		// costs one base64 decode. reportSignedAt is what makes an unreadable one
+		// an absence instead of this agent's own clock.
+		SignedAt:  reportSignedAt(w.Authorisation.SignedAt()),
 		ExpiresAt: w.Authorisation.ExpiresAt,
 	}))
 }

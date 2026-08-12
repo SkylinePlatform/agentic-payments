@@ -118,8 +118,8 @@ export interface MandateRef {
 
 /**
  * The open mandate pair a step was taken under — what the user typed, what the
- * Trusted Surface said each limit means, and when the pair stops authorising
- * anything.
+ * Trusted Surface said each limit means, when they signed it and when the pair
+ * stops authorising anything.
  *
  * Issue #213's field. The three-lane view groups by correlation ID, which is
  * correct; the consequence is that a purchase made an hour after the user
@@ -137,20 +137,27 @@ export interface MandateRef {
  * second is covered by a signature, and only the second may be drawn as if it
  * were.
  *
- * **There is no signed-at member, because nothing carries that instant forward
- * — not because no such instant exists.** The Trusted Surface stamps one into
- * both open mandates as `iat` when it signs them, and
- * `contracts/authz/checkout_mandate_open.json` declares it as `issued_at`; it is
- * a plain claim rather than a disclosable one, so the holder of a mandate can
- * read it out. What has no field for it is every hop after that: `POST
- * /authorise` answers an expiry and no issuance moment, `agent.Authorisation`
- * carries none, and `GET /watches/{id}` is likewise `typed` / `signed` /
- * `expires_at`. A member here would need one at each of those, which is its own
- * change and its own issue. What would be wrong is an *agent* stamping its own
- * clock — on this path it demonstrably was not present when the user signed —
- * and the user's own signed `iat` is not that. Until the hops carry it, the
- * expiry is the instant this type has, it is the `exp` both open mandates carry,
- * and it answers what a reader needs: whether these limits are still live.
+ * **`signed_at` is the user's own signed instant, and `null` when there is
+ * none.** Issue #245's member. An earlier version of this comment said no
+ * signed-at member existed because nothing carried the instant forward, and
+ * concluded that a member here would need one at each of four hops. It does not:
+ * the Trusted Surface stamps the moment it signs into both open mandates as
+ * `iat` — `contracts/authz/checkout_mandate_open.json` declares it as
+ * `issued_at` — as a plain claim rather than a disclosable one, so the agent
+ * reads it out of a mandate it is already holding and `POST /authorise`,
+ * `agent.Authorisation` and `GET /watches/{id}` are all untouched.
+ * `ap2.IssuedAtOfMandate` is the reader and `obs.Authorisation.SignedAt` is the
+ * one hop this crosses, because the collector and the browser are separate
+ * processes.
+ *
+ * The thing that would be wrong is an *agent* stamping its own clock — on this
+ * path it demonstrably was not present when the user signed — so a card drawing
+ * one would look exactly like a card drawing the signature. `null` is therefore a
+ * value this type has to be able to carry and a consumer has to handle: it says
+ * the mandate named no instant or none could be read, and the card falls back to
+ * the expiry rather than to any clock. It is `string | null` rather than optional
+ * for that reason — the Go side is a pointer with no `omitempty`, so the key is
+ * always present and "absent" is a stated answer instead of a missing one.
  *
  * Named for `MandateRef`'s symmetry — both are one nested object the wire
  * carries and this module reads straight through — rather than because either
@@ -159,6 +166,7 @@ export interface MandateRef {
 export interface AuthorisationRef {
   readonly typed: string;
   readonly signed: readonly string[];
+  readonly signed_at: string | null;
   readonly expires_at: string;
 }
 
@@ -477,6 +485,17 @@ function optionalMandate(value: unknown): value is MandateRef | undefined {
  * a screen drawing `undefined` in quotes would be putting words in the user's
  * mouth.
  *
+ * `signed_at` is checked differently from both, and the difference is the point
+ * of issue #245: it has to be **present** and it is allowed to be `null`. Present
+ * because the Go member is a pointer with no `omitempty`, so the key is on the
+ * wire whether or not there is an instant in it — accepting an absent key would
+ * mean typing it `string | null` while it could be `undefined` at runtime, which
+ * is the lie this whole function exists to refuse. `null` because an
+ * authorisation whose open Checkout Mandate named no `iat`, or whose `iat` no
+ * reader could parse, is a real case that must still draw. What is refused is the
+ * empty string, because that is neither an instant nor an honest way to say there
+ * is none, and `timeOf` would print it verbatim onto the card.
+ *
  * Refusing the record rather than the field is `optionalAmount`'s and
  * `optionalMandate`'s trade, made here for the same reason and with the same
  * cost: this field rides on every step of every attempt, so a half-stated one
@@ -493,6 +512,8 @@ function optionalAuthorisation(value: unknown): value is AuthorisationRef | unde
     Array.isArray(value.signed) &&
     value.signed.length > 0 &&
     value.signed.every((sentence: unknown) => typeof sentence === "string") &&
+    (value.signed_at === null ||
+      (typeof value.signed_at === "string" && value.signed_at !== "")) &&
     typeof value.expires_at === "string" &&
     value.expires_at !== ""
   );
