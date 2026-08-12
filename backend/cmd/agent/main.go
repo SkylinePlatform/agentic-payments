@@ -106,6 +106,12 @@
 // -watch still runs one watch on startup from -prompt, registered in the console
 // so that a first load has something to show.
 //
+// **That startup watch failing does not stop the console** — issue #252 — and
+// the argument for it is in serveConsole. It is reported loudly and the console
+// says so on GET /watches; what it does not do is take away the surface a person
+// is about to type into. -watch with no -addr is the other path and still exits,
+// because it has nothing else to be.
+//
 // -once with -addr is refused at parse time. The two ask for opposite things: a
 // server that exits after its first watch is a server nobody can use, and
 // answering that with a precedence rule would leave whoever passed both to find
@@ -128,6 +134,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -173,7 +180,7 @@ func run() error {
 	// character for character, because internal/agent/interpret is scripted on it
 	// — an unscripted prompt is refused rather than guessed at, which is that
 	// package's whole character.
-	prompt := flag.String("prompt", "buy a flight to Palma when it drops below $200, this summer",
+	prompt := flag.String("prompt", defaultPrompt,
 		"what the user typed, for the interpreter to read")
 	// A fallback rather than the source, and it still has a path that reaches
 	// it. The interpretation proposes a basket size only when the sentence
@@ -328,6 +335,17 @@ const (
 
 	geminiKeyVar = "GEMINI_API_KEY"
 )
+
+// defaultPrompt is the sentence this process boots a watch with when nobody
+// names another, and it is the built scenario's own — character for character,
+// because internal/agent/interpret is scripted on it.
+//
+// A constant rather than a literal in the flag declaration so that a test can
+// drive the boot path with the sentence the process actually boots with, rather
+// than with a copy of it that would keep passing after the flag's default
+// changed. TestABootWatchThatFindsNothingStillLeavesAConsoleServing is that
+// test.
+const defaultPrompt = "buy a flight to Palma when it drops below $200, this summer"
 
 // interpreterFor builds the IntentInterpreter this process was asked for.
 //
@@ -530,28 +548,77 @@ func afterWatch(out io.Writer, err error, once bool) error {
 // get a context of their own that outlives their request; Service.Start argues
 // why the caller decides.
 //
-// # A startup watch that cannot be authorised is fatal
+// # A boot watch that cannot start does not take the console with it
 //
-// The same as without -addr, and deliberately not softened into a console that
-// comes up empty. ready has already confirmed the Trusted Surface is listening,
-// so a refusal here is a real failure of the flow this process exists to run,
-// and demo.Runner reporting a process that exited during startup is how anybody
-// finds out.
+// It used to, and that is issue #252. service.Start returning stopped run before
+// roles.Run was ever reached, so a stack whose boot watch found no offer served
+// nothing at all: the frontend proxies to this address and answered `connect
+// ECONNREFUSED 127.0.0.1:8086` for a sentence a person had just typed, with
+// every other role in the stack up.
+//
+// The console is what a person is about to use; the boot watch is a scripted
+// convenience so that a fresh stack has something on screen. The second failing
+// must not deny the first.
+//
+// **That is -interpreter auto's rule read one file along**, not a new one.
+// interpreterFor distinguishes *asked for and could not have* — -interpreter
+// gemini with no key, which refuses to start — from *did not ask*, which carries
+// on. A boot watch is the second kind: nobody typed it, it is -prompt's default,
+// and the person who is about to type something is on the other side of a
+// browser that needs this process listening.
+//
+// **It is reported and not swallowed**, in two places because they have two
+// readers: loudly on out, for whoever is watching the terminal, and through
+// console.Service.BootWatchFailed, so that GET /watches says so too. A boot
+// watch that silently did not exist would be worse than one that stopped the
+// process, because the next person debugs the frontend.
+//
+// **-watch with no -addr still exits.** That invocation has no console to fall
+// back to, so there is nothing else for it to be — run's own branch calls
+// watchOnce, whose failure reaches afterWatch's default arm and is returned.
+// TestAWatchWithNoConsoleStillStopsTheProcess is the pair to this file's
+// TestABootWatchThatFindsNothingStillLeavesAConsoleServing, and between them
+// they are what keeps the two paths from being flattened into one.
 func serveConsole(
 	ctx context.Context, e agent.Endpoints, events *obs.Emitter,
 	addr string, cfg watching, initial bool,
 ) error {
-	identity, err := roles.NewIdentity("agent")
+	handler, err := consoleFor(ctx, e, events, addr, cfg, initial, os.Stderr)
 	if err != nil {
 		return err
 	}
+
+	fmt.Printf("  console    http://%s/watches\n", addr)
+	return roles.Run("agent", addr, handler)
+}
+
+// consoleFor builds the console this process serves and starts the watch it was
+// configured with, writing anything a reader has to see about that watch to out.
+//
+// Split from serveConsole so that the decision above is assertable without a
+// process, which is the same reason flagsAgree and interpreterFor are functions:
+// roles.Run binds a port and blocks until a signal, so a test that had to go
+// through it could not ask the one question worth asking — whether there is a
+// handler to hand it at all. That question is this function's return value.
+//
+// **The error it returns is never the boot watch's.** Everything it can fail on
+// is this process being unable to be a console: no key, no blinder, no routes.
+// A boot watch that could not start comes back as a handler and a report.
+func consoleFor(
+	ctx context.Context, e agent.Endpoints, events *obs.Emitter,
+	addr string, cfg watching, initial bool, out io.Writer,
+) (http.Handler, error) {
+	identity, err := roles.NewIdentity("agent")
+	if err != nil {
+		return nil, err
+	}
 	agentKey, err := roles.PublicKey(ctx, identity.Keys)
 	if err != nil {
-		return fmt.Errorf("reading the key the open mandates will endorse: %w", err)
+		return nil, fmt.Errorf("reading the key the open mandates will endorse: %w", err)
 	}
 	blinder, err := sdjwt.NewBlinder()
 	if err != nil {
-		return fmt.Errorf("building the blinder: %w", err)
+		return nil, fmt.Errorf("building the blinder: %w", err)
 	}
 
 	service := &console.Service{
@@ -577,7 +644,7 @@ func serveConsole(
 
 	handler, err := service.Handler()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if initial {
@@ -587,7 +654,7 @@ func serveConsole(
 		// matched to a lane on another.
 		watchCtx, id, err := obs.EnsureCorrelationID(ctx, nil)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "agent: minting a correlation ID: %v\n", err)
+			_, _ = fmt.Fprintf(out, "agent: minting a correlation ID: %v\n", err)
 		}
 		if id != "" {
 			fmt.Printf("\n  corr       %s\n", id)
@@ -598,14 +665,20 @@ func serveConsole(
 			Quantity: cfg.quantity,
 		})
 		if err != nil {
-			return fmt.Errorf("starting the watch this process was asked for: %w", err)
+			// Reported twice, at two readers, and returned to neither. See this
+			// function's own comment and serveConsole's above it.
+			service.BootWatchFailed(cfg.prompt, err)
+			_, _ = fmt.Fprintf(out, "agent: the watch this process was asked for did not start: %v\n", err)
+			_, _ = fmt.Fprintf(out, "agent:   typed %q\n", cfg.prompt)
+			_, _ = fmt.Fprintf(out, "agent: the console is serving regardless, and says so"+
+				" — GET http://%s/watches carries it.\n", addr)
+		} else {
+			fmt.Printf("  typed      %q\n", cfg.prompt)
+			fmt.Printf("  watch      %s — GET http://%s/watches/%s\n", run.ID(), addr, run.ID())
 		}
-		fmt.Printf("  typed      %q\n", cfg.prompt)
-		fmt.Printf("  watch      %s — GET http://%s/watches/%s\n", run.ID(), addr, run.ID())
 	}
 
-	fmt.Printf("  console    http://%s/watches\n", addr)
-	return roles.Run("agent", addr, handler)
+	return handler, nil
 }
 
 // watching is what the Human Not Present run is configured with.

@@ -1761,3 +1761,77 @@ func TestTheNameIsAskedForRatherThanTakenFromTheBrowser(t *testing.T) {
 			"somebody else's purchase")
 	watcher.AssertNumberOfCalls(t, "Authorise", 0)
 }
+
+// TestAConsoleWhoseBootWatchFailedSaysSoToABrowser is the browser half of issue
+// #252's first decision.
+//
+// A stack whose boot watch failed and a stack that was never given a prompt draw
+// the same empty list, and the difference between them is the difference between
+// "nothing has been asked for yet" and "what was asked for did not happen".
+// cmd/agent says it in the terminal; a person looking at a browser is not
+// looking at that terminal. The frontend's interpreter mode line is the
+// precedent — a fact about how this process was configured that a screen has to
+// be able to state — and this is that kind of fact one step along.
+func TestAConsoleWhoseBootWatchFailedSaysSoToABrowser(t *testing.T) {
+	t.Parallel()
+
+	const typed = "buy a flight to Palma when it drops below $200, this summer"
+	const because = "agent: nothing in this merchant's catalogue matches what the user " +
+		"described: the search matched no offer"
+
+	c := newConsole(t, nothing)
+	c.service.BootWatchFailed(typed, errors.New(because))
+
+	status, list := c.get(t, "/watches")
+	require.Equal(t, http.StatusOK, status, "the console still serves, which is the whole of #252")
+
+	watches, ok := list["watches"].([]any)
+	require.True(t, ok, "the list is still a list, whatever else the answer has grown")
+	assert.Empty(t, watches,
+		"a boot watch that never started is not a row — there is no authorisation for one to be about")
+
+	boot := list.nested(t, "boot")
+	assert.Equal(t, typed, boot["prompt"],
+		"the reason alone says a search matched nothing and not what was searched for")
+	assert.Equal(t, because, boot["error"],
+		"it travels verbatim, because a browser saying only that something failed sends the "+
+			"reader back to a terminal they may not have")
+}
+
+// TestAConsoleNobodyGaveAPromptSaysNothingAboutOne is the control on the test
+// above, and it is the one a field that is always populated would fail.
+//
+// `boot` is served on every answer, on summary.Title's reasoning — so a consumer
+// can tell "nothing failed" from "this build does not serve the field" — and it
+// is null unless a boot watch actually failed, so that "nothing failed" is what
+// it says.
+func TestAConsoleNobodyGaveAPromptSaysNothingAboutOne(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, nothing)
+
+	status, list := c.get(t, "/watches")
+	require.Equal(t, http.StatusOK, status)
+
+	value, present := list["boot"]
+	assert.True(t, present,
+		"a consumer cannot tell 'nothing failed' from 'this build does not say' unless the field is always there")
+	assert.Nil(t, value,
+		"inventing a failure for a console nobody gave a prompt is the mirror image of the defect")
+}
+
+// TestABootWatchThatStartedIsNotAFailure pins the other half of the recorder: it
+// is told about failures and about nothing else.
+//
+// A nil error is what the caller has in hand on the path where the watch did
+// start, and a recorder that stored it anyway would put an empty sentence and an
+// empty reason on the list of every successful run.
+func TestABootWatchThatStartedIsNotAFailure(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, nothing)
+	c.service.BootWatchFailed("buy a flight to Palma when it drops below $200, this summer", nil)
+
+	_, list := c.get(t, "/watches")
+	assert.Nil(t, list["boot"], "a watch that started is not something to report going wrong")
+}
