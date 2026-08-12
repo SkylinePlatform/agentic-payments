@@ -35,8 +35,19 @@ type Run struct {
 	typed         string
 	signed        []string
 	item          string
-	quantity      int
-	expiresAt     time.Time
+	// title is the merchant's own name for item, read back at the moment this
+	// run began — see Service.Start, which is also where the argument for
+	// asking rather than being told lives.
+	//
+	// **Empty is a legitimate state and is not defaulted.** A merchant that
+	// could not be reached, an offer delisted between the signature and the
+	// watch, and a counterparty answering nonsense all land here as a row with
+	// no name, which is what it is. Nothing invents one: `gtin:05012345678900`
+	// substituted for a title would be the identifier wearing the name's
+	// clothes, and a screen has the identifier already.
+	title     string
+	quantity  int
+	expiresAt time.Time
 
 	mu       sync.Mutex
 	state    runState

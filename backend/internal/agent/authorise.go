@@ -699,6 +699,61 @@ func (c *Client) Discover(ctx context.Context, constraints []generated.Constrain
 	return out, nil
 }
 
+// Describe asks the merchant to publish what one offer is, by identifier.
+//
+// It is settle's description half with the interpretation taken out. A caller
+// that already holds an identifier and needs the words a person can read has no
+// prompt to re-interpret and no business inventing one — a console listing a
+// watch it started an hour ago is the case this was added for, and issue #242 is
+// where it came from: `gtin:05012345678900` is the string a constraint carries,
+// and candidate's own comment already says it "is nothing anybody can act on".
+//
+// **Asked rather than remembered, which is settle's rule read literally**: "the
+// description has to come from the party that publishes it, and inventing one
+// here would put the shop's own words in the buyer's mouth." The alternative
+// considered and rejected was a title travelling on Authorisation — that type is
+// also a wire shape a browser posts, so the name would then be one this agent
+// republished on the word of whoever made the request, and the two ways into a
+// watch would differ in who said it.
+//
+// **Nothing about the answer is signed, and nothing about it can be.** Offer's
+// own comment is that no verifier sees a title and no constraint addresses one.
+// So a caller that draws this has to say whose word it is; a caller that
+// *decides* anything from it has misread what it is for, exactly as with
+// Offer itself.
+func (c *Client) Describe(ctx context.Context, item string) (Offer, error) {
+	if item == "" {
+		// QuoteItem guards the same argument the same way. Without it the query
+		// falls back to identifying(nil), which is empty, and the merchant is
+		// asked a malformed question this package should never have put to it.
+		return Offer{}, errors.New("agent: no item to ask the merchant to describe")
+	}
+
+	// nil constraints, because a named item is what candidates queries on: the
+	// interpretation plays no part once an identifier is in hand, which is the
+	// same substitution settle relies on.
+	found, err := c.candidates(ctx, nil, item)
+	if err != nil {
+		return Offer{}, err
+	}
+	if len(found) == 0 {
+		return Offer{}, fmt.Errorf("%w: the merchant lists no offer identified as %q",
+			ErrNothingToBuy, item)
+	}
+	// settle's refusal, one call along and for the same reason — a search on
+	// item.id has exactly one honest answer. It matters more here than there:
+	// a constraint naming the wrong item is refused by a verifier at the moment
+	// of purchase, and a *name* taken from the wrong offer is a screen calmly
+	// telling somebody they bought something they did not, with every signature
+	// in the transaction still valid.
+	if found[0].ID != item {
+		return Offer{}, fmt.Errorf(
+			"%w: %w: asked the merchant to describe the offer identified as %q and it answered with %q instead",
+			ErrMerchantAnsweredDifferently, ErrNothingToBuy, item, found[0].ID)
+	}
+	return Offer(found[0]), nil
+}
+
 // identifying returns the constraints that say what to go looking for.
 //
 // A leaf whose field the registry calls selective — item.id, item.category,

@@ -71,6 +71,18 @@ func (a *Agent) Propose(ctx context.Context, prompt, item string) (agent.Proposa
 	})
 }
 
+// Describe asks the merchant to say what one offer is.
+//
+// No interpreter and no key: naming a thing is a read of the shop's own
+// catalogue, and there is nothing about it for a user to approve. That is why
+// it sits beside Propose rather than inside it — see agent.Client.Describe.
+func (a *Agent) Describe(ctx context.Context, item string) (agent.Offer, error) {
+	if a.Client == nil {
+		return agent.Offer{}, errors.New("console: this agent has no client to reach its counterparties with")
+	}
+	return a.Client.Describe(ctx, item)
+}
+
 // Examples asks the interpreter for its menu, if it has one.
 //
 // An optional-interface probe rather than a method on IntentInterpreter, because

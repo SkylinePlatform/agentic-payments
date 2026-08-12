@@ -50,6 +50,19 @@ var signed = []string{
 
 const item = "gtin:05012345678900"
 
+// title is the merchant's own name for item, as a mocked Describe answers it.
+//
+// Deliberately not proposal().Offer.Title: the two reach a console by different
+// routes — one through POST /proposals, one through the call Service.Start
+// makes — and a console that drew the wrong one would otherwise pass every test
+// here.
+const title = "Vitesse Urbain 7"
+
+// described is what a mocked Describe answers with.
+func described() agent.Offer {
+	return agent.Offer{ID: item, Title: title, Retailer: "Sever Cycles"}
+}
+
 // expiry is when the canned authorisation stops authorising anything. A fixed
 // instant rather than a computed one: it goes onto the wire and back, and a test
 // comparing it against a value it computed twice would be comparing two clocks.
@@ -132,6 +145,11 @@ func newConsole(t *testing.T, watch func(agent.Progress) (agent.Watched, error))
 		Return(proposal(), nil).Maybe()
 	watcher.EXPECT().Authorise(mock.Anything, mock.Anything, mock.Anything).
 		Return(authorised(), nil).Maybe()
+	// Permissive for the same reason as the rest: Service.Start calls this on
+	// the request goroutine, and the tests that care which item it was asked
+	// about assert that afterwards rather than by expectation.
+	watcher.EXPECT().Describe(mock.Anything, mock.Anything).
+		Return(described(), nil).Maybe()
 	watcher.EXPECT().Watch(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		RunAndReturn(func(
 			_ context.Context, _ agent.Authorisation, _ int, p agent.Progress,
@@ -467,6 +485,11 @@ func TestTheAuthorisationsQuantityWinsOverTheRequests(t *testing.T) {
 	t.Parallel()
 
 	watcher := console.NewMockWatcher(t)
+	// Named on every route into Start — see Service.Start, which asks rather
+	// than being told so the browser's path and the command line's cannot
+	// differ in whose word the name is.
+	watcher.EXPECT().Describe(mock.Anything, mock.Anything).
+		Return(described(), nil).Maybe()
 	watcher.EXPECT().Authorise(mock.Anything, mock.Anything, mock.Anything).
 		Return(agent.Authorisation{
 			Item: item, Rendered: signed, ExpiresAt: expiry,
@@ -544,6 +567,11 @@ func TestTheBrowsersTriggerReachesTheWatchItStarts(t *testing.T) {
 	t.Parallel()
 
 	watcher := console.NewMockWatcher(t)
+	// Named on every route into Start — see Service.Start, which asks rather
+	// than being told so the browser's path and the command line's cannot
+	// differ in whose word the name is.
+	watcher.EXPECT().Describe(mock.Anything, mock.Anything).
+		Return(described(), nil).Maybe()
 	// Buffered and read on the test goroutine, on the standing hazard: Watch is
 	// called from a goroutine this test does not own, and testify fails from
 	// whichever goroutine touches it.
@@ -1449,6 +1477,11 @@ func TestTheBrowsersPromptReachesTheWatchItStarts(t *testing.T) {
 	t.Parallel()
 
 	watcher := console.NewMockWatcher(t)
+	// Named on every route into Start — see Service.Start, which asks rather
+	// than being told so the browser's path and the command line's cannot
+	// differ in whose word the name is.
+	watcher.EXPECT().Describe(mock.Anything, mock.Anything).
+		Return(described(), nil).Maybe()
 	// Buffered and read on the test goroutine, on the standing hazard: Watch is
 	// called from a goroutine this test does not own, and testify fails from
 	// whichever goroutine touches it.
@@ -1506,6 +1539,11 @@ func TestAnAuthorisationThatNamesItsOwnPromptKeepsIt(t *testing.T) {
 	t.Parallel()
 
 	watcher := console.NewMockWatcher(t)
+	// Named on every route into Start — see Service.Start, which asks rather
+	// than being told so the browser's path and the command line's cannot
+	// differ in whose word the name is.
+	watcher.EXPECT().Describe(mock.Anything, mock.Anything).
+		Return(described(), nil).Maybe()
 	seen := make(chan agent.Authorisation, 1)
 	watcher.EXPECT().Watch(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		RunAndReturn(func(
@@ -1535,4 +1573,168 @@ func TestAnAuthorisationThatNamesItsOwnPromptKeepsIt(t *testing.T) {
 	assert.Equal(t, "the sentence this authorisation was actually obtained for", got.Prompt,
 		"the authorisation's own account wins; the request's field fills a gap and never "+
 			"replaces one")
+}
+
+// TestAWatchIsNamedByWhatTheMerchantCallsIt is issue #242's backend half.
+//
+// The three-lane view had one string per transaction it could put at the head —
+// the checkout digest — and twelve base64url characters are not what a person
+// who has just arrived is asking about. What they are asking is *what is this*,
+// and the only party that can answer it is the one that publishes the
+// catalogue: `gtin:05012345678900` is the identifier a constraint carries, and
+// candidate's own comment says it "is nothing anybody can act on".
+//
+// Both fields travel, and the pairing is the assertion rather than the title on
+// its own. They answer different questions and neither replaces the other: the
+// identifier is what the constraints were narrowed to and is checkable against
+// the mandates, and the title is what a person calls it and is checkable against
+// nothing at all.
+func TestAWatchIsNamedByWhatTheMerchantCallsIt(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, nothing)
+	_, started, _ := c.post(t, t.Name(), map[string]any{"prompt": "buy me this bicycle"})
+
+	status, list := c.get(t, "/watches")
+	require.Equal(t, http.StatusOK, status)
+	watches, ok := list["watches"].([]any)
+	require.True(t, ok, "a named field rather than a bare array")
+	require.Len(t, watches, 1)
+	row := watches[0].(map[string]any)
+
+	assert.Equal(t, title, row["title"],
+		"the merchant's own words, which is the only thing on this row a person can read")
+	assert.Equal(t, item, row["item"],
+		"beside the identifier rather than instead of it — one is checkable against the "+
+			"mandates and the other is checkable against nothing, and a screen has to be "+
+			"able to say which is which")
+
+	// And on the watch's own resource, which is what the tracker polls.
+	status, one := c.get(t, "/watches/"+started["id"].(string))
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, title, one["title"],
+		"a name that appeared only in the list would leave every screen reading one watch with none")
+}
+
+// TestAWatchWhoseMerchantCouldNotBeAskedStillRuns is the half that says a name
+// is a caption.
+//
+// Service.Start drops the error from Describe, and it is the only error in that
+// function that is dropped. Everything else there is something the watch cannot
+// proceed without; this is the shop's own words. A signature the user has
+// already given, refused because a title could not be fetched, would be the tail
+// wagging the dog — and if the merchant is genuinely gone the watch says so on
+// the axis where that is a fact rather than a missing label.
+//
+// The row still carries the identifier, so the screen has something true to
+// draw. Nothing substitutes one for the other: an identifier wearing the name's
+// clothes is exactly the reading #242 was filed about.
+func TestAWatchWhoseMerchantCouldNotBeAskedStillRuns(t *testing.T) {
+	t.Parallel()
+
+	watcher := console.NewMockWatcher(t)
+	watcher.EXPECT().Authorise(mock.Anything, mock.Anything, mock.Anything).
+		Return(authorised(), nil).Maybe()
+	watcher.EXPECT().Describe(mock.Anything, mock.Anything).
+		Return(agent.Offer{}, errors.New("the merchant is not answering")).Maybe()
+	watcher.EXPECT().Watch(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(agent.Watched{}, nil).Maybe()
+
+	service := &console.Service{Watcher: watcher, Clock: clock.New()}
+	handler, err := service.Handler()
+	require.NoError(t, err)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	var started startedBody
+	require.Equal(t, http.StatusCreated,
+		post(t, server.URL+"/watches", map[string]any{"prompt": "buy me this bicycle"}, &started),
+		"a watch the user signed for is not refused because a caption could not be fetched")
+
+	var listed struct {
+		Watches []struct {
+			Item  string `json:"item"`
+			Title string `json:"title"`
+		} `json:"watches"`
+	}
+	require.Equal(t, http.StatusOK, get(t, server.URL+"/watches", &listed))
+	require.Len(t, listed.Watches, 1)
+	assert.Empty(t, listed.Watches[0].Title,
+		"no name, said as no name — a screen can then draw what it drew before rather than "+
+			"showing a title somebody would take for the merchant's")
+	assert.Equal(t, item, listed.Watches[0].Item,
+		"and the identifier is still there, because that one came from the authorisation")
+}
+
+// TestTheNameIsAskedForRatherThanTakenFromTheBrowser is the reason Describe
+// exists at all instead of a field on agent.Authorisation.
+//
+// That type is also the wire shape a browser posts — Watching.Authorisation —
+// so a title on it would be a name this console republished on the word of
+// whoever made the request, and the two routes into Service.Start would differ
+// in who said it. This drives the browser's route with an authorisation whose
+// item is the ladders, and the assertion is that the console asked the agent
+// about *that* item rather than about anything the request said, and drew the
+// answer.
+func TestTheNameIsAskedForRatherThanTakenFromTheBrowser(t *testing.T) {
+	t.Parallel()
+
+	const ladders = "gtin:05014477390221"
+
+	watcher := console.NewMockWatcher(t)
+	asked := make(chan string, 1)
+	watcher.EXPECT().Describe(mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, item string) (agent.Offer, error) {
+			asked <- item
+			return agent.Offer{ID: item, Title: "Telescopic ladder, 3.8 m"}, nil
+		}).Maybe()
+	watcher.EXPECT().Watch(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(agent.Watched{}, nil).Maybe()
+	// Never called on this path; expected so that a failure here reads as the
+	// name having gone wrong rather than as the route asking for a second
+	// signature.
+	watcher.EXPECT().Authorise(mock.Anything, mock.Anything, mock.Anything).
+		Return(authorised(), nil).Maybe()
+
+	service := &console.Service{Watcher: watcher, Clock: clock.New()}
+	handler, err := service.Handler()
+	require.NoError(t, err)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	body := anAuthorisationBody()
+	// A title on the request, which nothing may read. agent.Authorisation has no
+	// such field, so this is what a browser trying to name its own watch would
+	// send — and the answer has to come from the merchant regardless.
+	body["title"] = "Whatever the browser felt like calling it"
+
+	require.Equal(t, http.StatusCreated, post(t, server.URL+"/watches", map[string]any{
+		"prompt":        "kupi merdevine, najjeftinije",
+		"authorisation": body,
+	}, nil))
+
+	// A non-blocking read rather than `<-asked`. Describe runs inside the
+	// handler, so the value is in the buffer by the time the response has been
+	// decoded — and a version that never called it would otherwise hang until
+	// the package timeout instead of failing on the line that noticed.
+	var askedAbout string
+	select {
+	case askedAbout = <-asked:
+	default:
+		require.FailNow(t, "nothing asked the merchant what this watch is about")
+	}
+	assert.Equal(t, ladders, askedAbout,
+		"the identifier off the authorisation, which is the one the constraints were narrowed to")
+
+	var listed struct {
+		Watches []struct {
+			Title string `json:"title"`
+		} `json:"watches"`
+	}
+	require.Equal(t, http.StatusOK, get(t, server.URL+"/watches", &listed))
+	require.Len(t, listed.Watches, 1)
+	assert.Equal(t, "Telescopic ladder, 3.8 m", listed.Watches[0].Title,
+		"the merchant's own words rather than the request's, so that a browser cannot name "+
+			"somebody else's purchase")
+	watcher.AssertNumberOfCalls(t, "Authorise", 0)
 }

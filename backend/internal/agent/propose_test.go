@@ -370,3 +370,87 @@ func TestProposeRefusesAMerchantThatAnsweredADifferentOffer(t *testing.T) {
 	assert.ErrorIs(t, err, agent.ErrNothingToBuy,
 		"the canonical refusal for 'nothing here matches what was asked for', which this is a case of")
 }
+
+// TestDescribeAsksTheMerchantForTheWordsAPersonReads is the name half of issue
+// #242.
+//
+// A screen drawing a transaction it did not start holds an identifier and no
+// prompt, and `gtin:05012345678900` is the string a constraint carries rather
+// than anything a reader can act on — candidate's own comment says exactly that
+// about the consent screen's version of the same problem. This is the call that
+// turns one into the other.
+//
+// The assertion is that the words come back from the merchant. Nothing in this
+// package composes them, and nothing in this package could: the catalogue's
+// Title is the shop's own presentation of its stock, kept out of contracts/ on
+// the ground that the canonical model must not know what a bicycle is.
+func TestDescribeAsksTheMerchantForTheWordsAPersonReads(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	// Describing an offer is a read of somebody else's catalogue, and there is
+	// nothing about it for a user to approve. A surface reached here would mean
+	// naming a thing on a screen had become a step that could collect a
+	// signature.
+	w.endpoints.Surface = unreachableSurface(t)
+
+	got, err := w.client().Describe(t.Context(), "gtin:05012345678900")
+	require.NoError(t, err, "the bicycle is one of the four the demonstration ships")
+
+	assert.Equal(t, "Vitesse Urbain 7", got.Title,
+		"the merchant's own name for it, which is the whole of what this call is for")
+	assert.Equal(t, "gtin:05012345678900", got.ID,
+		"and the identifier it describes, so a caller can see the answer is about what it asked")
+}
+
+// TestDescribeRefusesAMerchantThatNamedADifferentOffer is
+// TestProposeRefusesAMerchantThatAnsweredADifferentOffer one call along, and it
+// is here for the same reason: a search on item.id has exactly one honest
+// answer.
+//
+// The consequence is sharper for a description than for a proposal, because a
+// description is the half nothing downstream can check. A constraint naming the
+// wrong item is refused by a verifier at the moment of purchase; a *name* drawn
+// from the wrong offer is a screen calmly telling a person they bought
+// something they did not, with every signature in the transaction still valid.
+func TestDescribeRefusesAMerchantThatNamedADifferentOffer(t *testing.T) {
+	t.Parallel()
+
+	client := &agent.Client{Endpoints: agent.Endpoints{
+		Surface: unreachableSurface(t),
+		Merchant: merchantReturning(t, `{"offers":[
+			{"id":"gtin:9999","title":"Not the offer that was asked about","retailer":"A","image_url":"/a.svg","price":{"amount":100,"currency":"USD"}}
+		]}`),
+	}}
+
+	_, err := client.Describe(t.Context(), "gtin:05012345678900")
+	require.Error(t, err,
+		"a name is the one thing on the screen no verifier will ever check, so the wrong one must not be returned")
+	assert.ErrorIs(t, err, agent.ErrMerchantAnsweredDifferently,
+		"the same refusal settle reaches for, because it is the same misbehaviour")
+}
+
+// TestDescribeRefusesAnEmptyIdentifierAsTheCallersMistake keeps a caller's own
+// bug from being reported as a fact about the shop.
+//
+// **Asserting only that this errors proves nothing**, which is what the first
+// version of this test did: with the guard deleted the call still fails, because
+// candidates falls back to identifying(nil) and an empty query is refused before
+// any merchant is reached. It passed for a reason that has nothing to do with
+// the guard.
+//
+// What the guard is actually for is *which* refusal comes back.
+// agent.ErrNothingToBuy is this agent's account of a catalogue that holds
+// nothing matching — console.Service.start maps it to 422 and #109's picker acts
+// on it — and answering it here would tell an operator their shop is empty when
+// what really happened is that nobody asked a question. QuoteItem guards the
+// same argument the same way.
+func TestDescribeRefusesAnEmptyIdentifierAsTheCallersMistake(t *testing.T) {
+	t.Parallel()
+
+	_, err := (&agent.Client{}).Describe(t.Context(), "")
+	require.Error(t, err, "there is no offer to describe and no call worth making")
+	assert.NotErrorIs(t, err, agent.ErrNothingToBuy,
+		"an empty identifier is the caller's mistake, not a claim about what the merchant sells — "+
+			"and that claim is the one a console turns into 422 and a picker acts on")
+}
