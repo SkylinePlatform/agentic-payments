@@ -275,7 +275,7 @@ func TestTheModelsPreferenceReachesTheInterpretation(t *testing.T) {
 			interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))
 			require.NoError(t, err)
 
-			interpretation, err := interpreter.Interpret(t.Context(), builtScenarioPrompt)
+			interpretation, err := interpreter.Interpret(t.Context(), builtScenarioPrompt, nil)
 			require.NoError(t, err, "this answer is one a verifier could read")
 			assert.Equal(t, tc.want, interpretation.Rank, tc.why)
 		})
@@ -304,7 +304,7 @@ func TestAPreferenceWithNothingInItIsRefused(t *testing.T) {
 	interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))
 	require.NoError(t, err)
 
-	got, err := interpreter.Interpret(t.Context(), builtScenarioPrompt)
+	got, err := interpreter.Interpret(t.Context(), builtScenarioPrompt, nil)
 	require.Error(t, err,
 		"an empty rank object read as silence is a ranking word in the sentence that nothing acts on")
 	assert.ErrorIs(t, err, interpret.ErrUnknownRank,

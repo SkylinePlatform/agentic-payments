@@ -79,6 +79,28 @@ type IntentInterpreter interface {
 // fact as the other two: it is not about the purchase being offered but about the
 // ones that were not, and there is nothing at the point of sale to refute — see
 // Rank. Unlike Trigger it has an honest zero, on Quantity's terms.
+//
+// # There is a fifth member and it is not a fifth of these
+//
+// DeclinedCategories arrived with issue #254 and belongs to a different kind, which
+// is why the count above stops at four. Three sorts of non-constraint fact live on
+// this type and running them together would lose what each is for:
+//
+//   - **Things the sentence said that steer a purchase.** Quantity, Trigger and Rank.
+//     Each changes what the agent does — how many, when, which one — so each is on
+//     the criterion the constraint registry is closed on, each is put in front of a
+//     person on the consent screen, and each is bounded by the constraints rather
+//     than part of them.
+//   - **An account of what the reading dropped.** DeclinedCategories. Nothing acts
+//     on it, no screen shows it, and its only reader is Propose's failure text, so
+//     that a refusal can name the shelf this shop does not stock instead of
+//     misattributing the cause.
+//   - **The limits themselves**, which is Constraints and the only member a verifier
+//     ever sees.
+//
+// The distinction is worth keeping sharp because the second kind is safe by having
+// no consequences, and the first is safe only by argument — see Rank's "Why a rank
+// need not be signed", which would prove nothing about a field nobody reads.
 type Interpretation struct {
 	// Constraints are the limits a verifier will enforce.
 	Constraints []generated.Constraint
@@ -115,11 +137,12 @@ type Interpretation struct {
 	// fact about a purchase, and a screen showing it would be showing the
 	// buyer's own working.
 	//
-	// **It is not a fifth sibling of the three above**, which is why it sits
-	// below Rank rather than beside it. Those are facts a sentence stated that no
-	// verifier can refute; this is an account of what the reading *dropped*, and
-	// the four-way count in this type's own doc comment deliberately does not
-	// include it.
+	// **It is not a fifth sibling of the four above**, which is why it sits below
+	// Rank rather than beside it — see this type's own doc comment, which sorts the
+	// members into three kinds and stops its count at four for exactly this
+	// reason. Those four are facts a sentence stated that steer a purchase; this is
+	// an account of what the reading dropped, and it is safe by having no
+	// consequences rather than by an argument about consent.
 	DeclinedCategories []string
 }
 

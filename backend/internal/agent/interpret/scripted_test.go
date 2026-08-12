@@ -243,7 +243,7 @@ func TestEachScenarioSaysWhichOfferItWouldRatherHave(t *testing.T) {
 					"offer to another; the agent chooses among candidates either way, so an "+
 					"unrecorded preference is one nobody notices was dropped")
 
-			interpretation, err := interpret.Demo().Interpret(t.Context(), script.Prompt)
+			interpretation, err := interpret.Demo().Interpret(t.Context(), script.Prompt, nil)
 			require.NoError(t, err, "a scenario this package publishes is not in its own script")
 			assert.Equal(t, expected, interpretation.Rank,
 				"a ranking word this sentence contains and this interpretation does not is bought "+
