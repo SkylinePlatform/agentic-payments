@@ -94,9 +94,15 @@ stops all of it**, including the frontend's dev server.
 | Frontend | <http://localhost:5173> |
 | Collector | <http://localhost:8085> |
 
-You need **Go 1.26+** and **Node 20+**. Older Go toolchains download the right
+You need **Go 1.26+** and **Node 22.13+**. Older Go toolchains download the right
 one on their own; Node is needed because the frontend is part of the stack.
 Nothing else — no Docker, no database, no accounts, no keys.
+
+`.nvmrc` names the Node that CI builds and type-checks with, so `nvm use` at the
+repository root gets you exactly that. Anything newer works too and is tested —
+the frontend suite runs on both that version and the current release, which is
+what stopped a Node-version-dependent break from being invisible ([#269](https://github.com/SkylinePlatform/agentic-payments/issues/269)).
+Node 20 is out: it reached end of life on 2026-04-30.
 
 ### What actually comes up today
 

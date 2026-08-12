@@ -152,6 +152,43 @@ export default defineConfig(({ mode }) => {
       // under Vitest's default `node` environment.
       environment: "jsdom",
 
+      // Node's own Web Storage, off, so that jsdom's is what the suite gets.
+      //
+      // Node 26 is the first release to put `localStorage` and `sessionStorage`
+      // on the global object without a flag, and Vitest will not overwrite a
+      // global the host already defines unless the name is on its allow-list of
+      // WebIDL interfaces — `getWindowKeys`, `if (k in global) return
+      // keysArray.includes(k)`. `Storage` is on that list. `localStorage` and
+      // `sessionStorage` are not; the string does not appear anywhere in
+      // node_modules/vitest/dist. So on Node 26 jsdom's two storages are built
+      // and then dropped, and the tests get Node's: `sessionStorage` in-memory
+      // and working, `localStorage` file-backed and `undefined` without
+      // `--localstorage-file`. That is how #269 read — fourteen theme tests
+      // failing in `afterEach` on `localStorage.clear()` rather than on anything
+      // they were asserting, with `tsc` silent throughout because the DOM lib
+      // types `localStorage` as a `Storage` that always exists.
+      //
+      // With Node's implementation off, `'localStorage' in globalThis` is false
+      // when Vitest looks, the filter falls through, and jsdom's own is
+      // installed — the same path Node 22 and 24 already take, where this flag is
+      // accepted and does nothing. Nothing here wants Node's Web Storage: the app
+      // runs in a browser and the tests run in jsdom.
+      //
+      // **Not `--localstorage-file`**, which would make Node's `localStorage`
+      // work and leave the two halves in different realms. That state is
+      // observable on Node 26 today: the global `Storage` is jsdom's, so
+      // `sessionStorage instanceof Storage` is already false. src/theme/
+      // noflash.test.ts spies on `Storage.prototype.getItem` to prove the
+      // no-flash script survives a storage that throws, and a spy on a prototype
+      // the object under test does not use passes without ever making storage
+      // throw. src/test/webstorage.test.ts is what holds that line, and deleting
+      // this option turns it red on Node 26 before the theme suite gets there.
+      //
+      // It is also why `engines` in package.json starts at 22.13: Node 20 has no
+      // `--experimental-webstorage` to negate and refuses to start at all — `bad
+      // option`, no tests run. Node 20 reached end of life on 2026-04-30.
+      execArgv: ["--no-experimental-webstorage"],
+
       // Testing Library registers its own cleanup only when Vitest runs with
       // `globals: true`. It does not here, so setup.ts registers it — and it
       // is also where the note about jsdom's missing EventSource lives, next

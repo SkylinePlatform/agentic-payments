@@ -24,9 +24,14 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
+      # .nvmrc rather than a version repeated in three jobs. It is the one answer
+      # to "which Node", it is what `nvm use` reads at the repository root, and
+      # bumping it moves every job at once. The second, newer Node this job also
+      # runs the frontend suite on is at the bottom, named there rather than here
+      # because it covers one step rather than the whole job.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -61,6 +66,34 @@ jobs:
         working-directory: frontend
         run: npm test
 
+      # The same suite again on the newest Node the `engines` range claims, and
+      # the only thing on the way to a merge that can see a break which depends
+      # on the Node version. Before #269 nothing could: every job pinned one
+      # version, so fourteen tests were red on Node 26 from the day it shipped
+      # with every check on every pull request green, and the first report came
+      # from somebody running the suite by hand.
+      #
+      # Two things were weighed rather than assumed. A `strategy.matrix` over
+      # this job would re-run `make generate-verify`, the Go build, `npm ci` and
+      # the Vite build to re-run a ten-second suite, and a job of its own would
+      # install Go and npm a fifth time; this is one `setup-node` and one `npm
+      # test`, which is worth the seconds it costs. And the install above is
+      # reused because it survives the switch — the only native code here is
+      # prebuilt N-API selected by platform, not compiled against a Node ABI,
+      # which was checked by running the suite both ways round rather than
+      # reasoned about. No `cache: npm`, because nothing installs after this.
+      #
+      # The build and the type-check deliberately stay on .nvmrc's version. `tsc`
+      # reads no Node global, so a second pass would cost minutes to re-prove
+      # what the first one proved.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+
+      - name: Frontend tests on the newest supported Node
+        working-directory: frontend
+        run: npm test
+
   test:
     name: Build and test
     runs-on: ubuntu-latest
@@ -74,7 +107,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
@@ -148,7 +181,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 

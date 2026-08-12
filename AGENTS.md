@@ -904,6 +904,22 @@ around. It runs in the *Contracts* job instead, which already installs Node for
 the frontend build, so a frontend change cannot merge unrun even though nothing
 local is obliged to run it.
 
+**It runs there twice, on two Node versions, and the second one is not
+redundancy.** `.nvmrc` names the version every job installs — one answer to
+"which Node", read by `actions/setup-node` and by `nvm use` alike — and the
+*Contracts* job then runs `npm test` again on the newest release the `engines`
+range in `frontend/package.json` claims. Before #269 every job pinned one
+version, which made a Node-version-dependent break structurally invisible: Node
+26 ships Web Storage as an unflagged global, Vitest will not shadow a global the
+host already defines unless the name is on its allow-list of WebIDL interfaces,
+and `localStorage` is not on it — so jsdom's was discarded, Node's answered
+`undefined` without `--localstorage-file`, and fourteen theme tests were red from
+the day that Node shipped with every check on every pull request green.
+`frontend/vite.config.ts` turns Node's implementation off and
+`frontend/src/test/webstorage.test.ts` is the guard, which can only fail on a
+Node where the collision happens — so the second leg is what makes the guard
+mean anything, and the two are one mechanism rather than two changes.
+
 **`make check` is no longer the whole of CI.** It is the local gate; the
 *Build and test*, *Lint* and *Contracts* jobs in `.github/workflows/ci.yml`
 cover the rest, and the *Contracts* job additionally runs

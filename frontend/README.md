@@ -62,11 +62,25 @@ types first. Running `npm run dev` in a fresh clone fails on a missing import,
 and that is correct rather than unfriendly: `src/protocol/generated` is build
 output, not source.
 
-Node 20.19, 22.13 or 24 and up. `engines` in package.json states that exact
-range rather than a round `>=20` because it is the real one: jsdom is the
-strictest thing in the tree, at `^20.19.0 || ^22.13.0 || >=24.0.0`. npm only
-warns on a mismatch, and it warns naming jsdom — a package nobody here chose
-directly — so the range is also written where somebody would think to look.
+Node 22.13, or 24 and up — `^22.13.0 || >=24.0.0`, and `engines` in package.json
+says exactly that rather than a round `>=22`. The odd majors are excluded because
+jsdom, the strictest dependency in the tree, excludes them; npm only warns on a
+mismatch and it warns naming jsdom, a package nobody here chose directly, so the
+range is also written where somebody would think to look.
+
+`.nvmrc` at the repository root names one of those versions rather than leaving a
+range and a hope, and the two say different things on purpose: `engines` is what
+works, `.nvmrc` is what CI builds and type-checks with. Both ends of the range
+are tested — the *Contracts* job runs this suite on `.nvmrc`'s version and again
+on the newest release — which is the arrangement #269 put in, after fourteen
+tests were red on Node 26 with every check green because every job pinned one
+version.
+
+Node 20 was in that range until #269 and is not any more. It reached end of life
+on 2026-04-30, nothing ever tested it, and it is the one version that cannot run
+the suite now: `vite.config.ts` passes `--no-experimental-webstorage` to the test
+worker, and a Node without `--experimental-webstorage` to negate refuses to start
+at all.
 
 ## Tests
 
