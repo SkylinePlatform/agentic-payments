@@ -119,6 +119,24 @@ func proposal() agent.Proposal {
 	}
 }
 
+// interpretation is the canned reading a mocked Interpret answers with — issue
+// #299's half of the fixtures above, and deliberately unlike proposal()'s for
+// exactly proposal()'s reason.
+//
+// Its constraint names a field that appears nowhere else in this file, so a
+// response that leaked the reading's limits onto the wire fails on sight rather
+// than by coincidence: POST /interpret answers with no constraints at all, and
+// TestAReadingCarriesNoConstraintsOntoTheWire is what says so.
+func interpretation() interpret.Interpretation {
+	field := "merchant.id"
+	return interpret.Interpretation{
+		Constraints: []generated.Constraint{{Op: "eq", Field: &field, Value: "balkan-hardware"}},
+		Quantity:    2,
+		Trigger:     interpret.TriggerConditional,
+		Rank:        interpret.Rank{By: interpret.RankByPrice, Direction: interpret.RankAscending},
+	}
+}
+
 // scripted is a console in front of an agent that does what the test says.
 type scripted struct {
 	service *console.Service
@@ -135,13 +153,66 @@ type scripted struct {
 // second way in.
 func newConsole(t *testing.T, watch func(agent.Progress) (agent.Watched, error)) *scripted {
 	t.Helper()
+	return newConsoleAt(t, watch, clock.New())
+}
+
+// newConsoleAt is newConsole against a clock a test drives.
+//
+// The store POST /interpret writes to ages its readings against Service.Clock,
+// so a test about a reading that expired needs one it can advance. Nothing else
+// in this file does — every other deadline here belongs to the idempotency
+// middleware, whose window is a day.
+func newConsoleAt(
+	t *testing.T, watch func(agent.Progress) (agent.Watched, error), clk authz.Clock,
+) *scripted {
+	t.Helper()
+	return build(t, watch, clk, 0, nil)
+}
+
+// newConsoleLimited is a console that will hold exactly limit watches, for the
+// tests about what a full one says.
+func newConsoleLimited(t *testing.T, limit int) *scripted {
+	t.Helper()
+	return build(t, nothing, clock.New(), limit, nil)
+}
+
+// newConsoleWith is a console whose agent answers as override says.
+//
+// The override runs *before* the permissive defaults below are registered, which
+// is the whole reason it is a parameter rather than something a caller does to
+// the returned mock: testify matches expectations in the order they were added,
+// so a later one for the same method is unreachable behind an earlier
+// mock.Anything.
+func newConsoleWith(t *testing.T, override func(*console.MockWatcher)) *scripted {
+	t.Helper()
+	return build(t, nothing, clock.New(), 0, override)
+}
+
+func build(
+	t *testing.T,
+	watch func(agent.Progress) (agent.Watched, error),
+	clk authz.Clock,
+	limit int,
+	override func(*console.MockWatcher),
+) *scripted {
+	t.Helper()
 
 	watcher := console.NewMockWatcher(t)
+	if override != nil {
+		override(watcher)
+	}
 	// Permissive rather than counted, on the standing hazard: testify fails from
 	// whichever goroutine called the mock, and Watch is called from one this
 	// test does not own. Where a count matters it is asserted afterwards, on the
 	// test goroutine.
 	watcher.EXPECT().Propose(mock.Anything, mock.Anything, mock.Anything).
+		Return(proposal(), nil).Maybe()
+	// The two halves POST /proposals is now composed of — issue #299. Permissive
+	// for the same reason as everything else here, with the counts asserted from
+	// the test goroutine where a count is the claim.
+	watcher.EXPECT().Interpret(mock.Anything, mock.Anything).
+		Return(interpretation(), nil).Maybe()
+	watcher.EXPECT().ProposeFrom(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(proposal(), nil).Maybe()
 	watcher.EXPECT().Authorise(mock.Anything, mock.Anything, mock.Anything).
 		Return(authorised(), nil).Maybe()
@@ -157,7 +228,7 @@ func newConsole(t *testing.T, watch func(agent.Progress) (agent.Watched, error))
 			return watch(p)
 		}).Maybe()
 
-	service := &console.Service{Watcher: watcher, Clock: clock.New()}
+	service := &console.Service{Watcher: watcher, Clock: clk, Limit: limit}
 	handler, err := service.Handler()
 	require.NoError(t, err, "the console has to stand up before anything can be asked of it")
 
@@ -277,6 +348,24 @@ func postWithoutKey(t *testing.T, url string, body, into any) int {
 func postKeyed(t *testing.T, key, url string, body, into any) int {
 	t.Helper()
 	return doPost(t, key, url, body, into)
+}
+
+// postRaw is postKeyed answering with the body as text rather than decoded.
+//
+// For the one claim that is about what is *not* in a response.
+// TestAReadingCarriesNoConstraintsOntoTheWire asserts that a key does not exist,
+// and decoding into a struct cannot say that — a field nobody declared is
+// silently dropped, so the assertion would hold whether or not the server sent
+// one.
+func postRaw(t *testing.T, key, url string, body any) (int, string) {
+	t.Helper()
+
+	resp := doRequest(t, http.MethodPost, url, key, body)
+	defer func() { _ = resp.Body.Close() }()
+
+	raw, err := io.ReadAll(transport.RefusingOver(resp.Body, 1<<20))
+	require.NoError(t, err, "reading the answer")
+	return resp.StatusCode, string(raw)
 }
 
 func doPost(t *testing.T, key, url string, body, into any) int {

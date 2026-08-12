@@ -136,6 +136,54 @@ type proposed struct {
 	WatchSlotsFree int `json:"watch_slots_free"`
 }
 
+// interpreted is what POST /interpret answers with: a name for the reading, and
+// the facts about it a screen can draw before anybody has searched anything.
+//
+// **It carries no constraints, and that is the shape of issue #299 rather than an
+// omission.** Two reasons, and the second is the one that decides it. The set a
+// person is asked to sign is the narrowed one — `item.id eq …` appended by
+// `agent.narrow` once an offer exists — so what could be sent here is a set
+// nothing downstream ever uses, which would leave the browser holding two
+// constraint lists and a rule about which is real. And a browser that was handed
+// one would be a browser that could hand one back: `POST /candidates` takes a
+// name for a reading precisely so that the limits reaching a consent screen were
+// proposed by the party that read the sentence. See readings.go.
+//
+// What is left is exactly the three facts a consent screen already shows *outside*
+// the signed box — see `frontend/src/routes/consent/Consent.tsx`, where quantity
+// and trigger sit under labels of their own because nothing signs them. That is
+// the line this response falls on: the console shows what is not signed, the
+// Trusted Surface shows what is.
+type interpreted struct {
+	// InterpretationID names this reading on POST /candidates. Opaque, bounded
+	// and unguessable — readings.go carries all three arguments.
+	InterpretationID string `json:"interpretation_id"`
+
+	// Prompt is the sentence this reading was made from, echoed so a screen
+	// holding several has something to label them with. It is the console's own
+	// copy: every later answer about this reading reads it out of the store, so
+	// nothing a caller sends can put a proposal's prompt out of step with the
+	// constraints it carries.
+	Prompt string `json:"prompt"`
+
+	// Quantity, Trigger and Rank are proposed's, one step earlier and with the
+	// same resolutions — quantity's zero becomes one at this edge, the trigger is
+	// never empty, and an absent rank is a sentence that stated no preference.
+	// See those fields for the whole argument; there is no second one here.
+	Quantity int               `json:"quantity"`
+	Trigger  interpret.Trigger `json:"trigger"`
+	Rank     *preference       `json:"rank,omitempty"`
+
+	// WatchSlotsFree is proposed's, read one call earlier.
+	//
+	// **That is the point of it being here.** On a proposal it is what stops a
+	// browser sending somebody to a consent screen with nowhere to spend the
+	// signature. Here it stops a browser spending a model call it already knows
+	// it can do nothing with — the same fact, asked before the expensive half
+	// rather than after it. It is still not a reservation.
+	WatchSlotsFree int `json:"watch_slots_free"`
+}
+
 // preference is the wire shape of interpret.Rank: what the agent ordered the
 // offers on, and which way.
 //

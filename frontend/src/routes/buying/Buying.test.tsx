@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Previewed, Proposal } from "../../consent/model";
+import type { Previewed, Proposal, Reading } from "../../consent/model";
 import { Buying } from "./Buying";
 
 /**
@@ -78,6 +78,21 @@ function aProposal(): Proposal {
   };
 }
 
+/**
+ * What `POST /interpret` answers with — issue #299 split discovery into two
+ * calls, and this screen's tests drive the whole of it because what they are
+ * about is the hand-off between the console and the surface.
+ */
+function aReading(): Reading {
+  return {
+    interpretation_id: "reading-1",
+    prompt: PROMPT,
+    quantity: 1,
+    trigger: "immediate",
+    watch_slots_free: 8,
+  };
+}
+
 function aPreview(): Previewed {
   return {
     rendered: ["at most 200.00 USD"],
@@ -116,7 +131,8 @@ describe("the Buying screen", () => {
   it("puts the signed box inside the Trusted Surface's region and outside the agent's", async () => {
     stubFetch({
       "/examples": { examples: [] },
-      "/proposals": { body: aProposal() },
+      "/interpret": { body: aReading() },
+      "/candidates": { body: aProposal() },
       "/authorise/preview": { body: aPreview() },
     });
     render(<Buying />, { wrapper: Router });
@@ -144,7 +160,8 @@ describe("the Buying screen", () => {
   it("takes the agent's own controls off the screen while the surface asks", async () => {
     stubFetch({
       "/examples": { examples: [] },
-      "/proposals": { body: aProposal() },
+      "/interpret": { body: aReading() },
+      "/candidates": { body: aProposal() },
       "/authorise/preview": { body: aPreview() },
     });
     render(<Buying />, { wrapper: Router });
@@ -181,7 +198,8 @@ describe("the Buying screen", () => {
   it("names the two parties as two regions a screen reader can tell apart", async () => {
     stubFetch({
       "/examples": { examples: [] },
-      "/proposals": { body: aProposal() },
+      "/interpret": { body: aReading() },
+      "/candidates": { body: aProposal() },
       "/authorise/preview": { body: aPreview() },
     });
     render(<Buying />, { wrapper: Router });
@@ -195,7 +213,8 @@ describe("the Buying screen", () => {
   it("comes back to the console on a refusal, with the acknowledgement and the prompt", async () => {
     const calls = stubFetch({
       "/examples": { examples: [] },
-      "/proposals": { body: aProposal() },
+      "/interpret": { body: aReading() },
+      "/candidates": { body: aProposal() },
       "/authorise/preview": { body: aPreview() },
       "/authorise/refused": { body: { constraints_digest: "d" } },
     });
@@ -219,7 +238,8 @@ describe("the Buying screen", () => {
   it("says the refusal stands when the surface could not record it", async () => {
     stubFetch({
       "/examples": { examples: [] },
-      "/proposals": { body: aProposal() },
+      "/interpret": { body: aReading() },
+      "/candidates": { body: aProposal() },
       "/authorise/preview": { body: aPreview() },
       "/authorise/refused": { status: 502, body: "the surface did not answer" },
     });

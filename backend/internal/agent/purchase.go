@@ -30,8 +30,11 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/adapters/ap2"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/evidence"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
@@ -86,11 +89,18 @@ type Receipt struct {
 }
 
 // Client runs purchases.
+//
+// **Not safe to copy once used.** It memoises the merchant's shelves behind a
+// mutex — see Client.shelves — so a copy taken after the first fetch would carry
+// a copy of that lock. Every holder in this module already keeps a *Client;
+// nothing here takes one by value.
 type Client struct {
 	Endpoints Endpoints
-	// HTTP is the client to use; nil means http.DefaultClient. Whatever it is,
-	// requests go out through transport.Correlating, so no call site here can
-	// drop the correlation ID by forgetting a header.
+	// HTTP is the client to use; nil means a client with counterpartyTimeout on
+	// it — see there, and note that it is *not* http.DefaultClient, which has no
+	// timeout at all. Whatever it is, requests go out through
+	// transport.Correlating, so no call site here can drop the correlation ID by
+	// forgetting a header.
 	HTTP *http.Client
 	// Events records the moments this role owns: presenting a mandate to a
 	// verifier. Optional — a nil Emitter records nothing, which is what a unit
@@ -102,6 +112,56 @@ type Client struct {
 	// decision as its own — and the event log is what the three-lane view
 	// teaches from.
 	Events *obs.Emitter
+
+	// shelvesMu guards the two fields below, which memoise the one optional
+	// fetch this client repeats — see Client.shelves.
+	shelvesMu     sync.Mutex
+	shelvesKnown  bool
+	shelvesCached interpret.Shelves
+}
+
+// counterpartyTimeout bounds one call to a counterparty when the caller supplied
+// no http.Client of its own.
+//
+// The value it replaces is **none at all**. `HTTP` nil meant http.DefaultClient,
+// whose Timeout is zero, so every call in this file — the merchant's search, the
+// merchant's shelves, the Trusted Surface's /authorise, the four verifiers a
+// purchase passes through — would wait for as long as a counterparty held the
+// connection open. Issue #299 measured what that looks like from a browser:
+// GET /shelves in front of a model call in front of GET /search, with nothing on
+// screen and no ceiling anywhere but the model's own 60 seconds.
+//
+// Fifteen seconds, chosen against the widest answer any of them gives rather
+// than measured as a latency. maxResponse's comment records that one: 430 KiB of
+// search results over loopback, which is milliseconds. Nothing in this project
+// legitimately takes seconds — the roles are in-process mocks over a local
+// socket — so this is far enough above every real answer to never fire on one,
+// and far enough below a person's patience that a counterparty which has stopped
+// answering is reported as such rather than waited on.
+//
+// **It is a floor and not a policy**, on interpret.geminiTimeout's own terms: a
+// caller whose context expires sooner still wins, because http.Client.Timeout and
+// the request's context are both live and the earlier one ends the call.
+const counterpartyTimeout = 15 * time.Second
+
+// timedOut is the client this package uses when a caller supplied none.
+//
+// A package-level value rather than one built per call, so that connection
+// pooling behaves as it did: transport.Correlating copies whatever it is handed
+// and replaces only the Transport, and a fresh http.Client per request would
+// otherwise hand it a fresh zero Transport each time.
+var timedOut = &http.Client{Timeout: counterpartyTimeout}
+
+// httpClient is what this client's calls actually go out on.
+//
+// The nil case is the one that matters: it used to fall through to
+// http.DefaultClient inside transport.Correlating, which is where the missing
+// timeout came from. Every caller in this repository leaves HTTP nil.
+func (c *Client) httpClient() *http.Client {
+	if c.HTTP != nil {
+		return c.HTTP
+	}
+	return timedOut
 }
 
 // ErrRefused means a counterparty declined, and the purchase stopped there.
@@ -424,7 +484,7 @@ func (c *Client) call(ctx context.Context, method, url string, body, into any) e
 	// interchangeable: "no hop drops the identifier" has to hold at call sites
 	// written later as well as at these four, and a client built with the
 	// round-tripper cannot forget where a call site can.
-	resp, err := transport.Correlating(c.HTTP).Do(req)
+	resp, err := transport.Correlating(c.httpClient()).Do(req)
 	if err != nil {
 		return fmt.Errorf("calling %s: %w", url, err)
 	}

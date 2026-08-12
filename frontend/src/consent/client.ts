@@ -7,20 +7,28 @@
  * That is #22's central decision: the sentences a user reads have to come from
  * the party that signs, over a connection the agent is never on, so `preview`,
  * `refuse` and `authorise` below go straight to the Trusted Surface rather than
- * through the agent that proposed the purchase. Only `propose`, `fetchExamples`
- * and `startWatch` talk to the agent — discovery, and handing over a signature
- * already collected.
+ * through the agent that proposed the purchase. Only `interpret`, `candidates`,
+ * `fetchExamples` and `startWatch` talk to the agent — discovery, and handing over
+ * a signature already collected.
+ *
+ * **Discovery is two calls rather than one since issue #299**, and `POST
+ * /proposals` is deliberately not among them any more. The agent still serves it
+ * and this module no longer calls it: `cmd/agent`'s `-buy` and the watch path have
+ * nobody to show a progress line to, and a browser does — so the browser takes the
+ * split and the command line keeps the single entry point. Anything here that
+ * wanted one call back would be re-introducing the silent window this file's
+ * `interpret` exists to end.
  *
  * No React and no module-level state, on the same seam `src/sse` draws for the
  * same reason: a flow built out of calls a component makes is testable against
  * a stubbed `fetch`, with no DOM anywhere in the picture.
  *
  * Every route here is proxied same-origin in development — see
- * `vite.config.ts`'s `/authorise`, `/proposals`, `/examples` and `/watches`
- * entries — so the paths below are exactly what the browser asks for.
+ * `vite.config.ts`'s `/authorise`, `/interpret`, `/candidates`, `/examples` and
+ * `/watches` entries — so the paths below are exactly what the browser asks for.
  */
 
-import type { Authorised, Previewed, Proposal } from "./model";
+import type { Authorised, Previewed, Proposal, Reading } from "./model";
 
 /**
  * A fresh idempotency key.
@@ -111,6 +119,23 @@ export class RequestFailed extends Error {
   constructor(
     message: string,
     readonly code?: string,
+    /**
+     * The HTTP status, for the one distinction a caller cannot make any other
+     * way — issue #299.
+     *
+     * `code` covers a Problem Details body, and the agent's own refusals carry
+     * none: `internal/agent/console` answers `http.Error`'s plain text on
+     * purpose, because `generated.ErrorCode` is a verifier's vocabulary for
+     * what is wrong with a mandate and an agent minting an entry in it to
+     * describe its own bookkeeping would be reporting a verdict. So a browser
+     * that has to tell *this reading has expired, read the sentence again* from
+     * *the merchant did not answer* has the status and nothing else.
+     *
+     * Optional for the same reason `code` is: a `fetch` that never got an
+     * answer has no status, and a caller must treat a missing one as
+     * unclassified rather than as any particular failure.
+     */
+    readonly status?: number,
   ) {
     super(message);
     this.name = "RequestFailed";
@@ -128,7 +153,7 @@ export class RequestFailed extends Error {
 async function unwrap<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const text = (await response.text()).trim();
-    throw new RequestFailed(messageOf(text), codeOf(text));
+    throw new RequestFailed(messageOf(text), codeOf(text), response.status);
   }
   return (await response.json()) as T;
 }
@@ -142,6 +167,18 @@ async function unwrap<T>(response: Response): Promise<T> {
 function partyOf(url: string): string {
   return url.startsWith("/authorise") ? "the Trusted Surface" : "the Shopping Agent";
 }
+
+/**
+ * The status the agent answers with for a reading it is no longer holding.
+ *
+ * `410 Gone` rather than `404`, and the choice is about what a caller does next.
+ * The console's store genuinely cannot tell an expired identifier from one it
+ * never minted, so either would be honest — but a browser has to tell *read the
+ * sentence again* from *something is misconfigured*, and a `404` is exactly what a
+ * dev server with no proxy entry for `/candidates` answers. A `410` can only have
+ * come from the handler.
+ */
+export const READING_GONE = 410;
 
 /**
  * `fetch`, with a network failure renamed to the party that did not answer.
@@ -192,12 +229,37 @@ export async function fetchExamples(): Promise<string[]> {
 }
 
 /**
- * Interpretation and search, without a signature — `POST /proposals`. `item`,
- * when set, is an offer the caller already picked, in the shape
- * `agent.Intent.Item` documents.
+ * The reading, without the search — `POST /interpret`. Issue #299's slow half:
+ * a shelves fetch and a model call, and nothing that talks to a merchant about
+ * stock.
+ *
+ * **This is what the browser waits on, and it is the whole reason there are two
+ * calls.** `POST /proposals` still exists and still does both — `cmd/agent`'s
+ * `-buy`, the watch path and `console.Agent.Propose` all use it — but a caller
+ * with a person in front of it needs the interpretation on screen before the
+ * search that follows it has finished.
  */
-export async function propose(prompt: string, item?: string): Promise<Proposal> {
-  return post<Proposal>("/proposals", { prompt, item });
+export async function interpret(prompt: string): Promise<Reading> {
+  return post<Reading>("/interpret", { prompt });
+}
+
+/**
+ * The search, against a reading already made — `POST /candidates`. `item`, when
+ * set, is an offer the caller already picked, in the shape `agent.Intent.Item`
+ * documents.
+ *
+ * **It sends a name for the reading and never the reading itself**, which is the
+ * property #299 said was worth more than the round trip it saves: constraints
+ * have never come from this browser, and a call that handed them back would be
+ * one where the limits a person is asked to sign are limits the agent was told.
+ *
+ * A `410` means the agent is no longer holding that reading — expired, evicted, or
+ * from a process that has restarted — and the repair is to interpret the sentence
+ * again rather than to retry this call. `Console` does exactly that, once; see
+ * `RequestFailed.status` for why the status is what carries it.
+ */
+export async function candidates(interpretationID: string, item?: string): Promise<Proposal> {
+  return post<Proposal>("/candidates", { interpretation_id: interpretationID, item });
 }
 
 /**

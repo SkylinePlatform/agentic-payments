@@ -71,6 +71,41 @@ func (a *Agent) Propose(ctx context.Context, prompt, item string) (agent.Proposa
 	})
 }
 
+// Interpret runs the reading and stops there — Propose's slow half.
+//
+// The only method on this type that reaches an interpreter, which is what the
+// paragraph above claims for the whole of it: Propose delegates to
+// agent.Client.Propose, which delegates to agent.Client.Interpret, so there is
+// exactly one call site for a model however a caller arrives. ProposeFrom below
+// reaches none at all.
+func (a *Agent) Interpret(ctx context.Context, prompt string) (interpret.Interpretation, error) {
+	if a.Client == nil {
+		return interpret.Interpretation{},
+			errors.New("console: this agent has no client to reach its counterparties with")
+	}
+	return a.Client.Interpret(ctx, agent.Intent{
+		Prompt: prompt, Interpreter: a.Interpreter, AgentKey: a.AgentKey,
+	})
+}
+
+// ProposeFrom settles on an offer from a reading already made.
+//
+// No interpreter is handed to the Intent below, and that absence is the point
+// rather than an economy: agent.Client.ProposeFrom does not read a sentence, so a
+// field for one here would suggest some path through this call could. Hard rule 2
+// is a property of the graph, and the graph is narrower on this method than on
+// any other.
+func (a *Agent) ProposeFrom(
+	ctx context.Context, prompt, item string, reading interpret.Interpretation,
+) (agent.Proposal, error) {
+	if a.Client == nil {
+		return agent.Proposal{}, errors.New("console: this agent has no client to reach its counterparties with")
+	}
+	return a.Client.ProposeFrom(ctx, agent.Intent{
+		Prompt: prompt, Item: item, AgentKey: a.AgentKey,
+	}, reading)
+}
+
 // Describe asks the merchant to say what one offer is.
 //
 // No interpreter and no key: naming a thing is a read of the shop's own

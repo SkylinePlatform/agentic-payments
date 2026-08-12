@@ -515,8 +515,39 @@ type Proposal struct {
 // Surface parses the whole set with the verifier's own parser before signing any
 // of it — so a defect in it fails the authorisation loudly, at the same place
 // and under the same code as a defect in the interpretation.
+// # It is now the two halves called in order, and that is issue #299
+//
+// Interpret and ProposeFrom are the same sequence with a seam in the one place a
+// caller can usefully wait: the model call is on the near side of it and the
+// merchant's search on the far side. Nothing about this function changed — same
+// calls, same order, same errors, same Proposal — and that is the point of
+// writing it as a composition rather than leaving a copy behind. A behaviour that
+// exists once cannot drift from itself, and the single-call entry point is what
+// cmd/agent's -buy, the watch path and console.Agent.Propose all still use.
 func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
-	var out Proposal
+	interpretation, err := c.Interpret(ctx, in)
+	if err != nil {
+		return Proposal{}, err
+	}
+	return c.ProposeFrom(ctx, in, interpretation)
+}
+
+// Interpret is Propose's first half: fetch the merchant's shelves, read the
+// sentence against them, and refuse a reading no verifier could act on.
+//
+// **This is the slow half, and separating it is the whole of issue #299.** A
+// model call has a 60-second ceiling of its own (interpret.geminiTimeout) and
+// nothing above it shortens that, so a caller with a person waiting needs to be
+// able to show what was understood before the search that follows it has
+// finished. Nothing here talks to the merchant except the shelves fetch, which is
+// memoised and optional.
+//
+// What comes back is a proposal's input and not a proposal: no offer, no
+// narrowing, nothing pinned. See ProposeFrom for the half that turns it into
+// something a person can be shown, and Propose for the two in order — which is
+// still the only thing the command line and the watch path call.
+func (c *Client) Interpret(ctx context.Context, in Intent) (interpret.Interpretation, error) {
+	var out interpret.Interpretation
 
 	if in.Interpreter == nil {
 		return out, errors.New("agent: no interpreter to read the prompt with")
@@ -534,6 +565,27 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 		return out, fmt.Errorf("the interpretation of %q is not something a verifier could read: %w",
 			in.Prompt, err)
 	}
+	return interpretation, nil
+}
+
+// ProposeFrom is Propose's second half: search, choose, narrow, and describe what
+// a person is about to be asked to authorise.
+//
+// interpretation is what Interpret answered, and this function does not re-read
+// the sentence — the interpreter is not called here at all, which is what makes
+// splitting the two safe under hard rule 2: a flow that reached a model twice
+// could put a second reading in front of a signature collected for the first.
+// in.Prompt is unused for that reason and in.Item is not: naming an offer changes
+// what the search asks for, and never whether it happens. See settle.
+//
+// **A caller holding an interpretation across two requests is holding it across
+// time**, which is a property this function cannot check and its callers must.
+// internal/agent/console is the one that does, and it bounds what it holds by
+// count and by age rather than trusting an identifier to still mean something.
+func (c *Client) ProposeFrom(
+	ctx context.Context, in Intent, interpretation interpret.Interpretation,
+) (Proposal, error) {
+	var out Proposal
 
 	item, offer, offers, err := c.settle(ctx, interpretation.Constraints, in.Item, interpretation.Rank)
 	if err != nil {
@@ -850,7 +902,46 @@ func (c *Client) candidates(
 // rather than filtered**, because a filtered vocabulary is worse than none — a
 // model shown half a shop's shelves narrows confidently by the wrong one, and
 // editing a counterparty's list would be this agent deciding what the shop meant.
+//
+// # The answer is fetched once and then remembered, which is issue #299's second fix
+//
+// This ran on every Propose, in front of the model call, because the answer is
+// interpolated into the instruction that call carries. So the slowest step in the
+// whole flow had a network round trip bolted to the front of it, repeated for a
+// list that changes when a merchant restarts and at no other time.
+//
+// **Only a success is remembered.** A merchant that is not up yet answers
+// nothing, and caching that would mean an agent started one second early never
+// asks again — a shop's whole vocabulary lost for the life of the process, on the
+// one path whose design is that an unanswered question is not a failure. Caching
+// the silence would turn a transient miss into a permanent one, which is the
+// opposite of what the silence is for. A failure therefore leaves the memo empty
+// and the next call tries again.
+//
+// **The lock is held across the fetch**, which is deliberate rather than
+// careless: two proposals starting together should produce one request and not
+// two, and the call underneath now carries counterpartyTimeout — so the longest a
+// waiting caller can inherit is bounded by the same constant that bounds its own
+// calls.
 func (c *Client) shelves(ctx context.Context) (interpret.Shelves, error) {
+	c.shelvesMu.Lock()
+	defer c.shelvesMu.Unlock()
+
+	if c.shelvesKnown {
+		return c.shelvesCached, nil
+	}
+	shelves, err := c.fetchShelves(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.shelvesKnown, c.shelvesCached = true, shelves
+	return shelves, nil
+}
+
+// fetchShelves is the request shelves memoises: one GET, and every rule that
+// comment states about what a merchant may answer with. It holds no lock and
+// remembers nothing.
+func (c *Client) fetchShelves(ctx context.Context) (interpret.Shelves, error) {
 	var answer struct {
 		Categories []string `json:"categories"`
 	}

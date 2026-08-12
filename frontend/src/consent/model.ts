@@ -164,6 +164,53 @@ export interface Proposal {
 }
 
 /**
+ * What `POST /interpret` answers with: a name for the reading the agent made, and
+ * the facts about it a screen can draw while the search is still running — issue
+ * #299.
+ *
+ * **It carries no constraints, and that is the shape of the change rather than an
+ * omission.** The limits reach this browser from `POST /candidates`, narrowed to
+ * the offer that was settled on, exactly as they always reached it from `POST
+ * /proposals`. What is new is that they never travel the other way: `candidates`
+ * sends {@link Reading.interpretation_id} and the agent looks the reading up, so a
+ * browser cannot supply the limits a consent screen then asks somebody to sign.
+ *
+ * What is left is the three facts the consent screen already draws **outside** the
+ * signed box — quantity, trigger, preference — which is the line this whole screen
+ * falls on: the console shows what nothing signs, and the Trusted Surface shows
+ * what a signature covers.
+ */
+export interface Reading {
+  /**
+   * The agent's name for this reading, sent back on `POST /candidates`. Opaque:
+   * nothing in this browser reads it, and it is bounded and expiring on the
+   * agent's side — see `internal/agent/console/readings.go`.
+   */
+  readonly interpretation_id: string;
+
+  /** The sentence this reading was made from, as the agent recorded it. */
+  readonly prompt: string;
+
+  /**
+   * `Proposal`'s three unsigned facts, one call earlier and with the same
+   * meanings — see {@link Proposal.quantity}, {@link Proposal.trigger} and
+   * {@link Proposal.rank}. There is no second argument for any of them here.
+   */
+  readonly quantity: number;
+  readonly trigger: string;
+  readonly rank?: Rank;
+
+  /**
+   * `Proposal.watch_slots_free`, read before the search rather than after it.
+   *
+   * A console that sees zero has learnt it in time to stop, which on this route
+   * means before a person has read an interpretation they would then be told to
+   * abandon.
+   */
+  readonly watch_slots_free: number;
+}
+
+/**
  * What `POST /authorise/preview` answers with: the sentences the surface
  * would sign, and the name of the set they describe — before anything is
  * signed.
@@ -272,26 +319,31 @@ export type Preference =
   | { readonly sentence: string; readonly raw: string };
 
 /**
- * The sentences, keyed by the agent's own words for a field and a direction, each
- * taking the number of candidates it chose among.
+ * The superlative each preference reads as, keyed by the agent's own words for a
+ * field and a direction.
  *
- * **The count is in the sentence because the candidate list is not on this screen**,
- * and the review of #262 is what caught the difference. `routes/buying/Buying.tsx`
- * swaps the console out for this zone when the stage becomes `consent`, so the
- * product table that shows every offer is *gone* by the time a person reads this —
- * an earlier draft of the argument for why a rank need not be signed said the
- * preference travels "beside every candidate the search found", and it does not.
- * "The cheapest of 4 offers that matched" is what can honestly be delivered here: it
- * makes the claim concrete and falsifiable-in-principle rather than gesturing at a
- * table on the previous screen.
+ * **A word rather than a whole sentence, and issue #299 is why.** Two screens now
+ * say something about a preference and they cannot say the same thing. The consent
+ * zone has the candidates counted and says *the cheapest of the 4 offers that
+ * matched*; the console says what the agent understood **before** it has searched
+ * anything, so there is no count to name and no offer to point at. Both read this
+ * one table, so a second orderable fact arrives as one entry and both sentences
+ * grow together — which is the shape `RANK_FIELDS` is in for the same reason.
+ *
+ * **The count is in {@link whyThisOffer}'s sentence because the candidate list is
+ * not on that screen**, and the review of #262 is what caught the difference.
+ * `routes/buying/Buying.tsx` swaps the console out for the consent zone when the
+ * stage becomes `consent`, so the product table that shows every offer is *gone* by
+ * the time a person reads it — an earlier draft of the argument for why a rank need
+ * not be signed said the preference travels "beside every candidate the search
+ * found", and it does not. "The cheapest of 4 offers that matched" is what can
+ * honestly be delivered there: it makes the claim concrete and
+ * falsifiable-in-principle rather than gesturing at a table on the previous screen.
  */
-const PREFERRED: Record<RankField, Record<RankDirection, (n: number) => string>> = {
+const PREFERRED: Record<RankField, Record<RankDirection, string>> = {
   price: {
-    // "Of the offers that matched" rather than "of all offers": the agent ranks the
-    // candidates one merchant answered with, and this screen must not imply it
-    // searched a market.
-    ascending: (n) => `The cheapest of the ${n} offers that matched what you asked for.`,
-    descending: (n) => `The most expensive of the ${n} offers that matched what you asked for.`,
+    ascending: "cheapest",
+    descending: "most expensive",
   },
 };
 
@@ -344,17 +396,59 @@ export function whyThisOffer(
     if (candidates <= 1) {
       return { sentence: "The only offer that matched what you asked for." };
     }
+    // "Of the offers that matched" rather than "of all offers": the agent ranks
+    // the candidates one merchant answered with, and this screen must not imply
+    // it searched a market.
     return {
-      sentence: PREFERRED[rank.by as RankField][rank.direction as RankDirection](candidates),
+      sentence:
+        `The ${PREFERRED[rank.by as RankField][rank.direction as RankDirection]} of the ` +
+        `${candidates} offers that matched what you asked for.`,
     };
   }
-  return {
-    sentence: "This console does not recognise what the agent said about which offer it preferred.",
-    // Both words, because either half can be the one this build has not met and a
-    // reader debugging it needs the pair. Never undefined — that spelling is what
-    // "this build knows the words" means above.
-    raw: `${rank.by} ${rank.direction}`.trim(),
-  };
+  return { sentence: UNRECOGNISED_PREFERENCE, raw: rawOf(rank) };
+}
+
+/**
+ * What the *console* says about a preference, before anything has been searched —
+ * issue #299.
+ *
+ * {@link whyThisOffer} one step earlier, and the step is what makes it a different
+ * sentence. That one explains a choice already made among candidates it can count;
+ * this one reports what the agent read out of the sentence, at a moment when no
+ * offer exists to have preferred. Saying *"the cheapest of the 0 offers that
+ * matched"* would be a claim about a comparison that has not happened.
+ *
+ * The three outcomes are that function's, unchanged: no preference draws nothing, a
+ * known one is a sentence, and one this build cannot read says so and carries the
+ * words. Nothing is signed on the screen that shows this, so there is no signature
+ * for the third arm to block.
+ */
+export function whatItPrefers(rank: Rank | undefined): Preference | undefined {
+  if (rank === undefined) {
+    return undefined;
+  }
+  if (
+    (RANK_FIELDS as readonly string[]).includes(rank.by) &&
+    (RANK_DIRECTIONS as readonly string[]).includes(rank.direction)
+  ) {
+    return {
+      sentence: `You asked for the ${PREFERRED[rank.by as RankField][rank.direction as RankDirection]}.`,
+    };
+  }
+  return { sentence: UNRECOGNISED_PREFERENCE, raw: rawOf(rank) };
+}
+
+/** What both functions above say about a preference neither can read. */
+const UNRECOGNISED_PREFERENCE =
+  "This console does not recognise what the agent said about which offer it preferred.";
+
+/**
+ * Both words, because either half can be the one this build has not met and a
+ * reader debugging it needs the pair. Never undefined — that spelling is what
+ * "this build knows the words" means above.
+ */
+function rawOf(rank: Rank): string {
+  return `${rank.by} ${rank.direction}`.trim();
 }
 
 /**

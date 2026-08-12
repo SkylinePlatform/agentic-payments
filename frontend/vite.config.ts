@@ -221,9 +221,22 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
         },
 
-        // The agent's proposal and menu routes, alongside /watches above and
+        // The agent's discovery and menu routes, alongside /watches above and
         // for the same reason.
+        //
+        // `/interpret` and `/candidates` are the two halves `/proposals` became
+        // for a browser — issue #299 — and all three are listed because all three
+        // are served: `cmd/agent`'s `-buy` and the watch path still call the
+        // single one, so it stays reachable here rather than being replaced.
+        //
+        // **A missing entry here is why the agent answers a stale reading with
+        // `410` rather than `404`.** Vite answers a request it has no proxy rule
+        // for from the app itself, and the browser has to be able to tell *this
+        // reading has expired* from *this path was never wired up*. See
+        // `READING_GONE` in `src/consent/client.ts`.
         "/proposals": { target: agent, changeOrigin: true },
+        "/interpret": { target: agent, changeOrigin: true },
+        "/candidates": { target: agent, changeOrigin: true },
         "/examples": { target: agent, changeOrigin: true },
       },
     },
