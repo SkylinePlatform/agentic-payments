@@ -329,7 +329,20 @@ type proposedBody struct {
 	Offers         []agent.Offer          `json:"offers"`
 	Quantity       int                    `json:"quantity"`
 	Trigger        interpret.Trigger      `json:"trigger"`
+	Rank           *rankBody              `json:"rank"`
 	WatchSlotsFree int                    `json:"watch_slots_free"`
+}
+
+// rankBody is the preference on the wire — see view.go's preference, and
+// interpret.Rank for what it is.
+//
+// A pointer on the field above, because absent is the ordinary answer and this test
+// has to be able to tell an absent key from an object carrying two empty strings.
+// The two say different things: no preference was read, against a preference whose
+// words got lost.
+type rankBody struct {
+	By        string `json:"by"`
+	Direction string `json:"direction"`
 }
 
 // decode reads a JSON body, or an empty map for one that is not JSON.
@@ -827,6 +840,71 @@ func TestTheProposalNamesWhenItWillBuyOnTheWire(t *testing.T) {
 			assert.Equal(t, trigger, body.Trigger,
 				"this response is the only place a consent screen can learn which of the two "+
 					"authorisations it is about to collect a signature for")
+		})
+	}
+}
+
+// TestTheProposalNamesWhyThisOfferOnTheWire is issue #262's version of the miss
+// above, and it is the third time this repository has left a field on
+// agent.Proposal without putting it on this response — #133's quantity, #198's
+// trigger, and now the preference. Each time, the screen that had to say what was
+// about to happen had nothing to read.
+//
+// **This one carries a load the other two do not.** Nothing signs a rank and no
+// verifier will ever check one, so this response is the *only* place it can be held
+// to anything: interpret.Rank's argument for why a rank need not be signed rests on
+// the person reading the consent screen being able to see the preference beside every
+// candidate the search found, and check that the chosen offer is the one it names.
+// Leaving the field off would weaken that argument rather than shorten the response.
+//
+// Two arms, because absence is the ordinary answer and it has to be a *missing key*
+// rather than an object with two empty strings in it. A screen handed `{"by":"",
+// "direction":""}` would have to decide whether that meant no preference or a lost
+// one, and both readings are wrong somewhere a reader cannot see.
+func TestTheProposalNamesWhyThisOfferOnTheWire(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		rank interpret.Rank
+		want *rankBody
+		why  string
+	}{
+		{
+			name: "the sentence named a preference",
+			rank: interpret.Rank{By: interpret.RankByPrice, Direction: interpret.RankAscending},
+			want: &rankBody{By: "price", Direction: "ascending"},
+			why: "the screen has to be able to say why this offer and not one of the others, " +
+				"which is what makes a preference nobody signed checkable rather than merely harmless",
+		},
+		{
+			name: "the sentence named none",
+			rank: interpret.Rank{},
+			want: nil,
+			why: "an absent key rather than an empty object: no preference was read, and the " +
+				"merchant's own catalogue order is what chose — a browser must not have to guess " +
+				"which of those two an empty object meant",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := proposal()
+			p.Rank = tc.rank
+
+			watcher := console.NewMockWatcher(t)
+			watcher.EXPECT().Propose(mock.Anything, mock.Anything, mock.Anything).Return(p, nil).Maybe()
+
+			service := &console.Service{Watcher: watcher, Clock: clock.New()}
+			handler, err := service.Handler()
+			require.NoError(t, err)
+			server := httptest.NewServer(handler)
+			t.Cleanup(server.Close)
+
+			var body proposedBody
+			require.Equal(t, http.StatusOK, post(t, server.URL+"/proposals",
+				map[string]any{"prompt": "find and buy telescopic ladders, cheapest"}, &body))
+			assert.Equal(t, tc.want, body.Rank, tc.why)
 		})
 	}
 }

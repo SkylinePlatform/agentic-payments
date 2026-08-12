@@ -28,13 +28,14 @@
 //
 // # It does say what kind of sentence it read, and that is not the same thing
 //
-// An Interpretation carries two facts beside the constraints, and both are here
-// for the same reason: they are in the sentence, no verifier can refute them at
-// the point of sale, and there is nowhere else they could honestly come from.
+// An Interpretation carries three facts beside the constraints, and all three are
+// here for the same reason: they are in the sentence, no verifier can refute them
+// at the point of sale, and there is nowhere else they could honestly come from.
 // Quantity is how many the person asked for — issue #133. Trigger is whether
-// they asked to buy now or when something changes — issue #198.
+// they asked to buy now or when something changes — issue #198. Rank is which of
+// several matching offers they would rather have — issue #262.
 //
-// Neither widens what may be bought. The constraints are what the user signs
+// None of them widens what may be bought. The constraints are what the user signs
 // and what every verifier enforces, so the worst a wrong trigger can do is end
 // a run sooner than the person hoped, having collected a refusal at a price the
 // merchant was openly asking. What it must never be is *inferred from a price*:
@@ -43,15 +44,33 @@
 // the verifier and to nobody else. Deciding it from the sentence, once, before
 // anything is signed, is what keeps that true — see Trigger.
 //
-// # Objectives are not constraints
+// A rank is bounded the same way and it is the reason a rank may be applied by the
+// agent at all: it reorders offers one merchant already said match the signed
+// constraints, so no rank can reach a purchase the constraints do not authorise. It
+// never compares a price to a limit — that is internal/agent.ranked's own line — and
+// it never reaches the search.
+//
+// What a wrong rank *can* cost is a run that collects a refusal it need not have,
+// because the search deliberately does not carry the user's price bound and a
+// descending preference will happily select a candidate above it. That is the
+// trigger's cost exactly, and internal/agent.ranked records why the obvious remedy —
+// skipping candidates over the cap — is the one thing the agent may not do.
+//
+// # Objectives are not constraints, and are not thrown away either
 //
 // "Cheapest", "best", "fastest", "nearest" are not refutable at the point of
 // purchase: no merchant can establish what the whole market was offering at an
-// instant, and the merchant is in any case the least neutral party to ask. So
-// the interpreter's job with such a sentence is to produce a bound that is
-// checkable and to leave the searching as agent behaviour that nobody verifies.
-// The bound is then a number the user never said, which is the sharpest reason
+// instant, and the merchant is in any case the least neutral party to ask. So the
+// interpreter's job with such a sentence is to produce a bound that is checkable,
+// and to say the preference itself in Rank, where it can order the candidates a
+// search came back with without any verifier being asked to have an opinion about
+// it. The bound is then a number the user never said, which is the sharpest reason
 // the surface shows the interpretation rather than the prompt.
+//
+// **The second half of that arrived with issue #262 and the first half was read as
+// the whole of it for a long time.** That an objective cannot be a constraint was
+// taken to mean it had nowhere to go, so the word was dropped and the agent bought
+// whichever offer the merchant listed first. See Rank.
 //
 // # Every implementation validates before returning
 //

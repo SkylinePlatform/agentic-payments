@@ -20,10 +20,21 @@ import { withQuantity } from "./quantity";
  * `proposal.constraints` before this component ever saw them, so a click on a
  * *different* row would sign a mandate naming one item while the screen showed
  * another — the console duplicating a decision that belongs to a fresh
- * `POST /proposals {item}` it does not make here. Today that branch is dead:
- * `proposal.offers` never holds more than the one offer `proposal.item` names.
- * It is drawn anyway, disabled, so a wider catalogue makes the table honest by
- * construction instead of by a review nobody remembers to ask for.
+ * `POST /proposals {item}` it does not make here. It is drawn anyway, disabled, so
+ * a wider catalogue makes the table honest by construction instead of by a review
+ * nobody remembers to ask for.
+ *
+ * **The disabled branch stopped being dead with issue #262, and the reason it gives
+ * had to change with it.** It used to be reachable only in theory — every scripted
+ * sentence narrowed to one candidate — so "Not what this search narrowed to." was
+ * both the only possible explanation and an accurate one. A sentence that states a
+ * preference now settles on the cheapest of *several* offers that all matched the
+ * same narrowing, so under `make demo-live` a person can meet three ladders with two
+ * of them greyed out, and the old sentence would tell them the search excluded rows
+ * the search in fact returned — the wrong explanation for exactly the decision the
+ * consent screen's *Why this offer* zone exists to expose. `Row` takes the reason as
+ * a prop for that reason: which of the two is true is the caller's fact, not the
+ * row's.
  */
 export function Table({
   proposal,
@@ -60,12 +71,33 @@ export function Table({
             key={offer.id}
             offer={offer}
             buyable={offer.id === proposal.item}
+            unbuyableBecause={unbuyableBecause(proposal)}
             onBuy={(quantity) => onBuy(withQuantity(proposal, quantity))}
           />
         ))}
       </tbody>
     </table>
   );
+}
+
+/**
+ * Why every row but one is disabled, in the words that are true of this proposal.
+ *
+ * Two reasons and they are not interchangeable. Without a preference, the rows
+ * present are the search's answer and the one that is buyable is the one the
+ * narrowing settled on — so the search is the honest explanation. With a preference,
+ * every row matched the same narrowing and lost on price, and saying the search
+ * excluded them would be false about a list the search returned.
+ *
+ * It reads `rank` for its presence only, and deliberately not for its words: what a
+ * preference *said* is the consent screen's to render — `whyThisOffer` — and a second
+ * sentence about it here would be a second place for the same fact to drift. All this
+ * needs to know is which of two explanations applies.
+ */
+function unbuyableBecause(proposal: Proposal): string {
+  return proposal.rank === undefined
+    ? "Not what this search narrowed to."
+    : "Matched, but not the offer your sentence preferred.";
 }
 
 /** Parses what the quantity box holds into a purchasable count, never fewer than one. */
@@ -77,10 +109,13 @@ function parsedQuantity(raw: string): number {
 function Row({
   offer,
   buyable,
+  unbuyableBecause,
   onBuy,
 }: {
   readonly offer: Offer;
   readonly buyable: boolean;
+  /** What to say when this row cannot be bought — see `unbuyableBecause`. */
+  readonly unbuyableBecause: string;
   readonly onBuy: (quantity: number) => void;
 }) {
   // The box's own text, not the parsed number: a controlled input that
@@ -145,7 +180,7 @@ function Row({
         */}
         {!buyable && (
           <p id={reasonId} className="mt-1 font-sans text-xs text-graphite">
-            Not what this search narrowed to.
+            {unbuyableBecause}
           </p>
         )}
       </td>

@@ -61,6 +61,31 @@ func merchantReturning(t *testing.T, body string) string {
 // generated.Constraint.Field expects out of a literal.
 func ptr[T any](v T) *T { return &v }
 
+// unrankedLaddersPrompt and unrankedLadders are the ladders sentence with its
+// ranking word taken out.
+//
+// A local scenario rather than an entry in interpret.Demo(), on twoLadders'
+// reasoning exactly: inventing a fourth demo sentence to make a test's second row
+// possible would put a prompt on the menu that nobody asked for. What it is for is
+// that TestProposeBuysThePreferredOfferAndTheFirstOtherwise's two rows must differ
+// in **one** thing — whether the interpretation carries a preference. Reaching for
+// the flight or the bicycle instead would differ in the constraints as well, so a
+// row that passed would not say which difference made it pass.
+//
+// The constraints are interpret.telescopicLadders character for character. Only
+// Rank is absent, and its absence is the zero value rather than anything written
+// out, which is the point being tested.
+const unrankedLaddersPrompt = "find and buy telescopic ladders"
+
+var unrankedLadders = mustLocalScript(interpret.Script{
+	Prompt: unrankedLaddersPrompt,
+	Constraints: `[
+		{"op":"eq","field":"item.category","value":"ladders"},
+		{"op":"lte","field":"amount","value":{"amount":15000,"currency":"USD"}}
+	]`,
+	Trigger: interpret.TriggerImmediate,
+})
+
 // TestProposeDoesNotCallTheSurface is the whole point of the split.
 //
 // A proposal is what a person is about to be shown. If producing one collected
@@ -238,12 +263,14 @@ func TestTheProposalCarriesTheOfferTheMerchantPublished(t *testing.T) {
 
 // TestDiscoverStillChoosesOnTheIdentifierAlone is the half of candidate's
 // comment that must stay true: the richer decode carries title, image and
-// price through in catalogue order, unranked.
+// price through in the merchant's own order, unranked.
 //
 // It chooses nothing — Discover returns every identifier a search found — so
-// it does not exercise selection at all.
-// TestProposeTakesTheFirstCandidateRegardlessOfPriceOrTitle is what does: this
-// test alone would stay green even if settle started sorting by price.
+// it does not exercise selection at all, and it must keep not exercising it:
+// Discover takes no interpretation and therefore no preference, so a sentence's
+// ranking word cannot reach it even now that one exists.
+// TestProposeBuysThePreferredOfferAndTheFirstOtherwise is what drives selection:
+// this test alone would stay green either side of issue #262.
 func TestDiscoverStillChoosesOnTheIdentifierAlone(t *testing.T) {
 	t.Parallel()
 
@@ -267,39 +294,182 @@ func TestDiscoverStillChoosesOnTheIdentifierAlone(t *testing.T) {
 		"catalogue order, unchanged: a cheaper second result must not start winning because the agent can now see the price")
 }
 
-// TestProposeTakesTheFirstCandidateRegardlessOfPriceOrTitle is what
+// TestProposeBuysThePreferredOfferAndTheFirstOtherwise is what
 // TestDiscoverStillChoosesOnTheIdentifierAlone does not pin, because Discover
-// chooses nothing. The selection this change introduces is settle taking
-// found[0], and this is the test that drives it with more than one candidate.
+// chooses nothing. settle does, and this is the test that drives it with more
+// than one candidate.
 //
-// Discover's own comment records this repository hitting exactly this failure
-// mode before: a test that asserted only the identifier stayed green while the
-// claim it was cited for — that there was only ever one candidate — became
-// false. Same fixture as the test above, so the same two offers are here to
-// prove settle does not start preferring the cheaper, better-titled second one.
-func TestProposeTakesTheFirstCandidateRegardlessOfPriceOrTitle(t *testing.T) {
+// # It replaced TestProposeTakesTheFirstCandidateRegardlessOfPriceOrTitle, and that
+// # test's message is the second row below
+//
+// The old test asserted that `gtin:0001` won this exact fixture with the message
+// *"settle takes found[0] without ranking; a cheaper second offer must not start
+// winning"*, and it was right when it was written: choosing among candidates was a
+// product decision the demo did not make, so the *only* defensible thing to do with
+// two candidates was to take the merchant's own first, and a test was owed to keep
+// anybody from quietly starting to sort. Issue #262 is what changed underneath it —
+// not that ranking became acceptable, but that the sentence being answered
+// contained the word *cheapest*, which the interpretation turned into a checkout
+// cap and then dropped. So the agent was answering "buy the cheapest" by buying
+// whichever offer sorted first in a catalogue it did not choose, and the old
+// assertion had become a promise to keep doing that.
+//
+// **Both halves of the rule are here, over one fixture, differing only in the
+// rank.** The first row is the new behaviour; the second is the old test's claim,
+// which is still exactly true for a sentence that ranks nothing — and keeping it
+// is what makes the first row a *rule* rather than a reversal. A sort that ran
+// unconditionally would pass the first row and fail the second.
+//
+// The two offers are the fixture the replaced test used, kept deliberately: the
+// cheaper one is second in the merchant's order and better titled, so neither row
+// can pass by accident of position.
+func TestProposeBuysThePreferredOfferAndTheFirstOtherwise(t *testing.T) {
 	t.Parallel()
 
-	merchantURL := merchantReturning(t, `{"offers":[
+	const twoOffers = `{"offers":[
 		{"id":"gtin:0001","title":"Expensive","retailer":"A","image_url":"/a.svg","price":{"amount":99900,"currency":"USD"}},
 		{"id":"gtin:0002","title":"Cheap","retailer":"B","image_url":"/b.svg","price":{"amount":100,"currency":"USD"}}
-	]}`)
+	]}`
+
+	for _, tc := range []struct {
+		name        string
+		prompt      string
+		interpreter interpret.IntentInterpreter
+		wantID      string
+		wantTitle   string
+		why         string
+	}{
+		{
+			name: "the sentence named a preference", prompt: ladderPrompt, interpreter: interpret.Demo(),
+			wantID: "gtin:0002", wantTitle: "Cheap",
+			why: "the sentence says cheapest and this is the cheaper offer — answering with the " +
+				"first row of a shelf the agent did not choose is issue #262",
+		},
+		{
+			name: "the sentence named none", prompt: unrankedLaddersPrompt, interpreter: unrankedLadders,
+			wantID: "gtin:0001", wantTitle: "Expensive",
+			why: "the merchant's own order, untouched: with no preference to apply there is nothing " +
+				"to prefer, and a screenshot of this has to be the same one every run",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := &agent.Client{Endpoints: agent.Endpoints{
+				Surface:  unreachableSurface(t),
+				Merchant: merchantReturning(t, twoOffers),
+			}}
+
+			got, err := client.Propose(t.Context(), agent.Intent{
+				Prompt:      tc.prompt,
+				Interpreter: tc.interpreter,
+			})
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.wantID, got.Item, tc.why)
+			assert.Equal(t, tc.wantTitle, got.Offer.Title,
+				"the offer carried through has to be the one actually selected, or the screen "+
+					"would describe a different purchase than the one being signed for")
+			require.Len(t, got.Offers, 2, "both candidates still travel, whichever one was chosen")
+			assert.Equal(t, got.Offer, got.Offers[0],
+				"the chosen offer is Offers[0] by construction — a person reading the product "+
+					"table has to be able to see why this one, and a choice taken from the middle "+
+					"of a list shown in another order is not something a reader can check")
+		})
+	}
+}
+
+// TestARankCannotLaunderAMerchantsWrongAnswer is settle's ordering of two steps,
+// asserted rather than left to reading order.
+//
+// A caller-named item makes the search one identifier, and settle refuses a
+// merchant that answers with a different one — TestProposeRefusesAMerchantThat-
+// AnsweredADifferentOffer is that refusal on its own. This is what happens when a
+// preference is in play at the same time, and the answer has to be that the
+// preference does not get to participate: the merchant here answers with a cheaper
+// offer nobody asked about *first* and the named one second, so a rank applied
+// before the check would sort the wrong offer into found[0]... no. It would sort
+// the *cheaper* one there, which is the wrong one, and the check would then fire on
+// it — but reverse the fixture's prices and the same reordering puts the named
+// offer at the head and the check passes over a response that answered a question
+// it was not asked. Both prices are therefore in the table below, because only one
+// of the two orderings can be got wrong silently.
+func TestARankCannotLaunderAMerchantsWrongAnswer(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		offer string
+		why   string
+	}{
+		{
+			name:  "the offer that was not asked about is the cheaper one",
+			offer: `{"id":"gtin:9999","title":"Cheaper, and not what was asked about","retailer":"A","price":{"amount":100,"currency":"USD"}}`,
+			why: "a preference that reordered this response would put the wrong offer at its head, " +
+				"and the identifier check is what catches that either way",
+		},
+		{
+			name:  "the offer that was not asked about is the dearer one",
+			offer: `{"id":"gtin:9999","title":"Dearer, and not what was asked about","retailer":"A","price":{"amount":99900,"currency":"USD"}}`,
+			why: "this is the ordering a rank could hide: sorting cheapest-first would move the " +
+				"offer that was actually asked about to the head and let a response that named a " +
+				"different one pass as if it had answered",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := &agent.Client{Endpoints: agent.Endpoints{
+				Surface: unreachableSurface(t),
+				Merchant: merchantReturning(t, `{"offers":[`+tc.offer+`,
+					{"id":"gtin:0001","title":"The offer that was asked about","retailer":"B","price":{"amount":50000,"currency":"USD"}}
+				]}`),
+			}}
+
+			_, err := client.Propose(t.Context(), agent.Intent{
+				// interpret.Demo()'s ladders sentence, which does carry a rank —
+				// so this drives the interaction rather than a rankless path
+				// that would pass whatever settle did.
+				Prompt:      ladderPrompt,
+				Interpreter: interpret.Demo(),
+				Item:        "gtin:0001",
+			})
+			require.Error(t, err, tc.why)
+			assert.ErrorIs(t, err, agent.ErrMerchantAnsweredDifferently, tc.why)
+		})
+	}
+}
+
+// TestProposeRefusesToRankOffersItCannotCompare is the currency half of issue
+// #262, at the level a caller sees it.
+//
+// rank_test.go holds the table; this is the one assertion that the refusal
+// travels — a Propose that swallowed it would answer with an offer chosen by
+// comparing minor units across two currencies, which is a run that says it found
+// the cheapest and did not.
+func TestProposeRefusesToRankOffersItCannotCompare(t *testing.T) {
+	t.Parallel()
 
 	client := &agent.Client{Endpoints: agent.Endpoints{
-		Surface:  unreachableSurface(t),
-		Merchant: merchantURL,
+		Surface: unreachableSurface(t),
+		Merchant: merchantReturning(t, `{"offers":[
+			{"id":"gtin:0001","title":"Priced in dollars","retailer":"A","price":{"amount":10000,"currency":"USD"}},
+			{"id":"gtin:0002","title":"Priced in yen","retailer":"B","price":{"amount":10000,"currency":"JPY"}}
+		]}`),
 	}}
 
-	got, err := client.Propose(t.Context(), agent.Intent{
-		Prompt:      "find and buy telescopic ladders, cheapest",
+	_, err := client.Propose(t.Context(), agent.Intent{
+		Prompt:      ladderPrompt,
 		Interpreter: interpret.Demo(),
 	})
-	require.NoError(t, err)
-
-	assert.Equal(t, "gtin:0001", got.Item,
-		"settle takes found[0] without ranking; a cheaper second offer must not start winning")
-	assert.Equal(t, "Expensive", got.Offer.Title,
-		"the offer carried through has to be the one actually selected, not the better-sounding one")
+	require.Error(t, err,
+		"100.00 USD and 100 JPY have equal minor units and unequal value, so a sort over the "+
+			"integers alone would report the yen as the cheapest of the two")
+	assert.ErrorIs(t, err, agent.ErrCannotRank,
+		"which refusal it is matters: this is not an empty shop and not a misbehaving one, it is "+
+			"a preference this model cannot honestly apply")
+	assert.ErrorIs(t, err, agent.ErrNothingToBuy,
+		"and it is a case of that too, so console.Service answers 422 without a new arm")
 }
 
 // TestTheProposalCarriesEveryOfferTheSearchFound is #109's seam: the console's
@@ -309,6 +479,21 @@ func TestProposeTakesTheFirstCandidateRegardlessOfPriceOrTitle(t *testing.T) {
 // field exists to avoid. Same two-offer fixture as
 // TestDiscoverStillChoosesOnTheIdentifierAlone, so a reader can see this is the
 // same search, carried further rather than run twice.
+//
+// # The order this asserted changed with issue #262, and the invariant did not
+//
+// It used to expect the merchant's own order, `gtin:0001` first, on the ground that
+// settle ranked nothing. This sentence carries a preference now, so the list is in
+// the order the preference asked for — cheapest first, which puts the merchant's
+// *second* offer at the head. What is unchanged, and is the assertion this test
+// actually exists for, is that Offer is Offers[0]: whichever rule ordered the list,
+// the offer settle chose is the one at the head of the list a person reads. See
+// agent.Proposal.Offers for why the whole list is sorted rather than the winner
+// plucked out of an unsorted one.
+//
+// The step and final assertions therefore moved rows with their offers. Their point
+// is that each row's own schedule position is decoded onto that row rather than
+// bleeding from a neighbour, and that is exactly as strong from either end.
 func TestTheProposalCarriesEveryOfferTheSearchFound(t *testing.T) {
 	t.Parallel()
 
@@ -323,22 +508,23 @@ func TestTheProposalCarriesEveryOfferTheSearchFound(t *testing.T) {
 	}}
 
 	got, err := client.Propose(t.Context(), agent.Intent{
-		Prompt:      "find and buy telescopic ladders, cheapest",
+		Prompt:      ladderPrompt,
 		Interpreter: interpret.Demo(),
 	})
 	require.NoError(t, err)
 
 	require.Len(t, got.Offers, 2, "every candidate the search found, not only the one settle chose")
-	assert.Equal(t, "gtin:0001", got.Offers[0].ID,
-		"catalogue order, unranked — the same order settle picks Offer from")
-	assert.Equal(t, "gtin:0002", got.Offers[1].ID)
+	assert.Equal(t, "gtin:0002", got.Offers[0].ID,
+		"the order the sentence asked for — cheapest first, which is the merchant's second offer")
+	assert.Equal(t, "gtin:0001", got.Offers[1].ID,
+		"and the dearer one still travels; ranking reorders the list and never shortens it")
 	assert.Equal(t, got.Offer, got.Offers[0],
 		"the offer settle chose to watch is Offers[0] by construction, not a second lookup that could disagree with it")
 
-	assert.Equal(t, 2, got.Offers[1].Step, "the price schedule position travels, not only the price")
-	assert.True(t, got.Offers[1].Final, "and whether the schedule has run out of moves")
-	assert.Zero(t, got.Offers[0].Step, "the first offer's own step, decoded rather than left at some other row's value")
-	assert.False(t, got.Offers[0].Final)
+	assert.Equal(t, 2, got.Offers[0].Step, "the price schedule position travels, not only the price")
+	assert.True(t, got.Offers[0].Final, "and whether the schedule has run out of moves")
+	assert.Zero(t, got.Offers[1].Step, "the other offer's own step, decoded rather than left at some other row's value")
+	assert.False(t, got.Offers[1].Final)
 }
 
 // TestProposeRefusesAMerchantThatAnsweredADifferentOffer pins settle's refusal

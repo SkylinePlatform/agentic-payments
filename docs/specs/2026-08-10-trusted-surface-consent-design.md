@@ -517,7 +517,10 @@ premise of Human Not Present, stated by two numbers rather than by a paragraph.
 
 **And it is where a wrong item becomes catchable.** `agent.discover` takes
 `found[0]` under a comment saying that choosing among candidates is a product
-decision this demo does not make. Every scripted sentence narrows to exactly one,
+decision this demo does not make — which issue #262 replaced with the preference
+the sentence stated, leaving the merchant's order in charge only where a sentence
+states none. The card's job here is unchanged either way: whichever rule chose,
+this is where the offer that was chosen is shown. Every scripted sentence narrows to exactly one,
 so for those five the choice never shows — and since #160 that is held on
 purpose rather than by there being nothing else in the shop: `tools/catalogue`'s
 `Reserved` keeps the generator off the ladders' shelf and off BEG→PMI, and
@@ -756,6 +759,17 @@ Gates: `make check` and `make frontend-check`.
 - **No choice among candidates.** `discover` takes `found[0]`, and this design
   does not change that. What it adds is the offer card, so a first match that was
   wrong can at least be *seen* and refused. Choosing is #109's table.
+
+  **Issue #262 changed it, and the boundary this line drew survived.** `settle`
+  now orders the candidates by the preference the sentence stated — *cheapest*
+  had been reaching the merchant as nothing at all — so `found[0]` is the
+  cheapest of them rather than the merchant's first. What did not change is the
+  reason this line is on a *non-goals* list: the agent still applies a
+  preference read out of the sentence rather than making a product decision of
+  its own, and a sentence stating none still resolves in the merchant's own
+  order. The consent screen gained a sixth zone for it, *Why this offer*, which
+  is what keeps an unsigned preference checkable — see
+  [Ranking among authorised offers](2026-08-12-ranking-among-authorised-offers.md).
 - **No repaint.** #159 owns the palette and the type hierarchy.
 - **No proof that a human was there.** Nothing in this design establishes it and
   nothing pretends to. What it establishes is that a signature can only cover a

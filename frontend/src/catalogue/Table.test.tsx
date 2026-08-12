@@ -129,6 +129,42 @@ describe("the product table", () => {
     ).toBe(false);
   });
 
+  it("gives the ranked reason for a row that matched and lost on price — issue #262", async () => {
+    // The row above states the reason that was the only possible one while the
+    // narrowing was the only thing that could exclude a row. A sentence stating a
+    // preference settles on the cheapest of *several* offers that all matched the
+    // same narrowing, so "not what this search narrowed to" would tell a person the
+    // search excluded rows the search in fact returned — the wrong explanation for
+    // exactly the decision the consent screen's *Why this offer* zone exists to
+    // expose.
+    //
+    // The rank is read for its presence only: what it *said* is the consent
+    // screen's to render, and a second sentence about it here would be a second
+    // place for one fact to drift.
+    const settled = anOffer();
+    const dearer = anOffer({ id: "gtin:0002", title: "A ladder that cost more" });
+    render(
+      <Table
+        proposal={aProposal({
+          offers: [settled, dearer],
+          rank: { by: "price", direction: "ascending" },
+        })}
+        onBuy={vi.fn()}
+      />,
+    );
+
+    const buyButtons = screen.getAllByRole("button", { name: /buy/i });
+    const reason = screen.getByText(/matched, but not the offer your sentence preferred/i);
+    expect(
+      buyButtons[1].getAttribute("aria-describedby"),
+      "the disabled row names its own reason, and this row's reason is the preference",
+    ).toBe(reason.id);
+    expect(
+      screen.queryByText(/not what this search narrowed to/i),
+      "the search did narrow to this row — it returned it — so that sentence is false here",
+    ).toBeNull();
+  });
+
   it("shows whether a price can still move, so a row not yet worth its cap still reads as one worth watching", () => {
     render(
       <Table

@@ -644,7 +644,10 @@ func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
 		// Unresolved, unlike the quantity above: there is no absence to stand
 		// in for, and a consent screen has to be able to say which of the two
 		// authorisations the person is signing. See proposed.Trigger.
-		Trigger:        proposal.Trigger,
+		Trigger: proposal.Trigger,
+		// Absent when the sentence ranked nothing, which is the honest answer
+		// rather than an absence to resolve — see proposed.Rank.
+		Rank:           rankOf(proposal.Rank),
 		WatchSlotsFree: s.free(),
 	})
 }

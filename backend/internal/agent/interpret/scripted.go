@@ -56,6 +56,19 @@ type Script struct {
 	// in the state issue #198 found it in, with nothing on the screen or in
 	// this file saying so.
 	Trigger Trigger
+
+	// Rank is which of several matching offers this prompt would rather have.
+	// The zero value is a prompt that ranks nothing, which is two of the three
+	// entries in Scenarios — see Interpretation.Rank.
+	//
+	// Unlike Trigger it has a default, and the reason is the asymmetry
+	// Rank documents: silence here is a sentence with no ranking word in it,
+	// which reads correctly and resolves in catalogue order. An entry that
+	// *does* have one has to say so, and NewScripted refuses half a rank, so
+	// the mistake this field can still make is leaving a ranking word
+	// unrecorded — which shows up as issue #262's own symptom rather than as a
+	// wrong purchase.
+	Rank Rank
 }
 
 // ScriptedInterpreter answers from a fixed table and never calls a model.
@@ -200,7 +213,12 @@ func (s *ScriptedInterpreter) Interpret(_ context.Context, prompt string, _ Shel
 // on the way out would pass every test in this package and buy at the wrong
 // moment in the demo.
 func (s Script) interpretation(constraints []generated.Constraint) Interpretation {
-	return Interpretation{Constraints: constraints, Quantity: s.Quantity, Trigger: s.Trigger}
+	return Interpretation{
+		Constraints: constraints,
+		Quantity:    s.Quantity,
+		Trigger:     s.Trigger,
+		Rank:        s.Rank,
+	}
 }
 
 // Prompts lists the sentences this interpreter answers, as they were written.

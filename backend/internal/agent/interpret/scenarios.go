@@ -57,6 +57,13 @@ func mustScript(scripts ...Script) *ScriptedInterpreter {
 // synthetic pair in scripted_test.go's TestTwoWordingsOfOneIntentReachOneInterpretation
 // rather than leaving with the menu entry.
 //
+// **One of the three ranks, and it is the one that says "cheapest".** Rank is the
+// fourth thing an Interpretation carries and the zero value means a sentence that
+// preferred nothing, so the flight and the bicycle leave it empty and resolve in
+// catalogue order exactly as they always did. The ladders do not, which is issue
+// #262: the word was in the sentence, became an amount bound, and reached the
+// merchant as nothing.
+//
 // **Nothing here proposes a Quantity greater than one any more.** The concert
 // entry this table carried was the one scripted demonstration of
 // Interpretation.Quantity's reason to exist — issue #133, two tickets against
@@ -84,6 +91,9 @@ var demoScenarios = []Script{
 		Prompt:      "find and buy telescopic ladders, cheapest",
 		Constraints: telescopicLadders,
 		Trigger:     TriggerImmediate,
+		// The only entry here that ranks anything, and issue #262 is the whole
+		// story of the word this used to drop. See telescopicLadders.
+		Rank: Rank{By: RankByPrice, Direction: RankAscending},
 	},
 }
 
@@ -184,13 +194,33 @@ const thisBicycle = `[
 // The mandate names no merchant, so any merchant's verifier accepts it. The
 // bound is what protects the user, not the choice of shop.
 //
+// # The bound is not the whole of the word, and issue #262 is the half that was missing
+//
+// Everything above stays true and it was read for two years as more than it says.
+// That "cheapest" cannot be a *constraint* is a fact about the constraint
+// registry; it was taken to mean the word had nowhere else to go, so the
+// interpretation dropped it and agent.settle bought found[0] — the first offer in
+// a catalogue order the agent did not choose. This entry now carries a Rank as
+// well, and that is where the word goes: a preference among the offers the
+// mandate already authorises, applied after the search and before anything is
+// signed. Read Interpretation.Rank for why it is not a constraint and why it is
+// not signed.
+//
+// **The bound and the rank do different jobs and neither substitutes for the
+// other.** The bound is what the user signed and what a verifier refuses a
+// purchase over; the rank only decides which of several already-acceptable offers
+// is bought. A rank that is wrong buys something authorised. A bound that is
+// wrong buys something that was not — which is why one of them is on the mandate
+// and the other is on the screen.
+//
 // "Find and buy" is an instruction, so this entry is TriggerImmediate. The
 // objective is the reason it matters here rather than a complication: read as a
 // watch, "cheapest" bought whatever the merchant happened to move to next,
 // which on a cycling schedule is as likely to be the dearer of two prices as
-// the cheaper. Buying at once does not make the agent an optimiser — nothing
-// here compares prices, and the bound is still what protects the user — but it
-// does stop the sentence being answered by a wait it never asked for.
+// the cheaper. Buying at once still does not make the agent an optimiser — it
+// orders the candidates one merchant answered with and compares no price to any
+// limit, which is the line internal/agent.ranked draws — and the bound is still
+// what protects the user.
 const telescopicLadders = `[
 	{"op":"eq","field":"item.category","value":"ladders"},
 	{"op":"lte","field":"amount","value":{"amount":15000,"currency":"USD"}}

@@ -45,6 +45,38 @@ export const TRIGGERS = ["immediate", "conditional"] as const;
 export type Trigger = (typeof TRIGGERS)[number];
 
 /**
+ * `interpret.RankField` and `interpret.RankDirection`, as the agent writes them.
+ *
+ * The machine's own words, for {@link TRIGGERS}' reason: what a person reads is a
+ * *sentence about* the preference — {@link whyThisOffer} — rather than a respelling
+ * of `ascending`.
+ *
+ * Two closed sets rather than one list of named preferences, because that is the
+ * shape the agent publishes: a field and a direction, so a second orderable fact
+ * arrives as one entry with both directions already working. Only `price` exists
+ * today, and it is the only orderable thing a shop publishes about an offer that a
+ * sentence ever means.
+ */
+export const RANK_FIELDS = ["price"] as const;
+export type RankField = (typeof RANK_FIELDS)[number];
+
+export const RANK_DIRECTIONS = ["ascending", "descending"] as const;
+export type RankDirection = (typeof RANK_DIRECTIONS)[number];
+
+/**
+ * The preference the agent applied among the offers it found — `console`'s
+ * `preference`, which is `interpret.Rank` on the wire.
+ *
+ * Both fields are `string` rather than the closed types above, on the rule
+ * `Proposal.trigger` states: TypeScript cannot narrow a value that arrived as JSON,
+ * so the sets are applied at the read and never asserted over the wire.
+ */
+export interface Rank {
+  readonly by: string;
+  readonly direction: string;
+}
+
+/**
  * What `POST /proposals` answers with: the interpretation, the offer it
  * narrowed to, the key it wants endorsed, the basket size the sentence asked
  * for, and when it asked to buy. Nothing here is signed.
@@ -107,6 +139,28 @@ export interface Proposal {
    * {@link whenItBuys} — and never asserted over the wire.
    */
   readonly trigger: string;
+
+  /**
+   * Which of `offers` the sentence would rather have, and why this one is `offer` —
+   * `agent.Proposal.Rank`, issue #262.
+   *
+   * **Optional, and unlike `trigger` that is not a concession to an older
+   * console.** A sentence naming no preference has none to send, which is most
+   * sentences: the agent then settles on whichever offer the merchant listed first,
+   * and the key is absent rather than an object carrying two empty strings. So
+   * `undefined` here is a fact about the sentence rather than about the build that
+   * sent it, and {@link whyThisOffer} draws nothing for it.
+   *
+   * **Outside the signed box, for `quantity` and `trigger`'s reason** — nothing
+   * signs it, and no verifier can be asked about a preference. What makes that safe
+   * rather than merely conventional is that the offer this preference *chose* is
+   * itself inside the box: the agent narrows the interpretation to `the item is
+   * gtin:…` before the surface renders anything, so the identifier a rank settled on
+   * is one of the sentences in zone 2 and is covered by the signature. This field
+   * explains a choice the signed set already names; it cannot make a person sign for
+   * an offer they did not read.
+   */
+  readonly rank?: Rank;
 }
 
 /**
@@ -206,6 +260,104 @@ export function whenItBuys(trigger: string | undefined): Buying {
 }
 
 /**
+ * What the screen says about why this offer and not one of the others.
+ *
+ * `undefined` is the sentence having named no preference — most sentences — and the
+ * caller draws nothing at all for it. That is deliberately not the same as
+ * {@link whenItBuys}'s unknown arm: there is nothing to say, rather than something
+ * this build cannot read.
+ */
+export type Preference =
+  | { readonly sentence: string; readonly raw?: undefined }
+  | { readonly sentence: string; readonly raw: string };
+
+/**
+ * The sentences, keyed by the agent's own words for a field and a direction, each
+ * taking the number of candidates it chose among.
+ *
+ * **The count is in the sentence because the candidate list is not on this screen**,
+ * and the review of #262 is what caught the difference. `routes/buying/Buying.tsx`
+ * swaps the console out for this zone when the stage becomes `consent`, so the
+ * product table that shows every offer is *gone* by the time a person reads this —
+ * an earlier draft of the argument for why a rank need not be signed said the
+ * preference travels "beside every candidate the search found", and it does not.
+ * "The cheapest of 4 offers that matched" is what can honestly be delivered here: it
+ * makes the claim concrete and falsifiable-in-principle rather than gesturing at a
+ * table on the previous screen.
+ */
+const PREFERRED: Record<RankField, Record<RankDirection, (n: number) => string>> = {
+  price: {
+    // "Of the offers that matched" rather than "of all offers": the agent ranks the
+    // candidates one merchant answered with, and this screen must not imply it
+    // searched a market.
+    ascending: (n) => `The cheapest of the ${n} offers that matched what you asked for.`,
+    descending: (n) => `The most expensive of the ${n} offers that matched what you asked for.`,
+  },
+};
+
+/**
+ * Reads a preference into a sentence, or into nothing.
+ *
+ * Three outcomes rather than {@link whenItBuys}'s two, and the third is the one the
+ * signature rule below turns on:
+ *
+ * - **No preference.** `undefined` in, `undefined` out. The sentence ranked nothing
+ *   and the merchant's own order chose; there is nothing to draw and nothing to warn
+ *   about.
+ * - **A preference this build knows.** A sentence naming how many candidates it chose
+ *   among, with `raw` absent. `candidates` is `proposal.offers.length` — see
+ *   {@link PREFERRED} for why the number is in the sentence rather than left to a
+ *   table that is not on this screen.
+ * - **A preference it does not.** A sentence saying so, and `raw` carrying the words
+ *   for a reader to see — the agent grew a second orderable fact and this bundle
+ *   predates it.
+ *
+ * **The third arm does not stop the signature, and that is the difference from an
+ * unreadable trigger.** An unreadable trigger means the screen cannot say what will
+ * happen to a person's money, and nothing else on the screen says it either, so
+ * {@link canSign} refuses. An unreadable *preference* means the screen cannot say
+ * how one offer was picked out of several — while the offer itself is named in the
+ * signed box, rendered by the Trusted Surface, as `the item is gtin:…`. So the
+ * person can still read exactly what they are authorising; what they lose is the
+ * agent's account of how it got there. Blocking on it would refuse a signature over
+ * a missing explanation for a purchase the screen fully describes, and every
+ * preference is applied among offers the constraints already authorise.
+ */
+export function whyThisOffer(
+  rank: Rank | undefined,
+  candidates: number,
+): Preference | undefined {
+  if (rank === undefined) {
+    return undefined;
+  }
+  if (
+    (RANK_FIELDS as readonly string[]).includes(rank.by) &&
+    (RANK_DIRECTIONS as readonly string[]).includes(rank.direction)
+  ) {
+    // One candidate is the case `make demo` actually shows, and the preference
+    // decided nothing in it: the ladders sentence says *cheapest* and the committed
+    // catalogue holds exactly one ladder. "The cheapest of the 1 offers that
+    // matched" is both bad English and a claim about a comparison that did not
+    // happen, so this says what is true instead. Zero is unreachable — the agent
+    // refuses ErrNothingToBuy rather than proposing — and takes the same arm rather
+    // than a third.
+    if (candidates <= 1) {
+      return { sentence: "The only offer that matched what you asked for." };
+    }
+    return {
+      sentence: PREFERRED[rank.by as RankField][rank.direction as RankDirection](candidates),
+    };
+  }
+  return {
+    sentence: "This console does not recognise what the agent said about which offer it preferred.",
+    // Both words, because either half can be the one this build has not met and a
+    // reader debugging it needs the pair. Never undefined — that spelling is what
+    // "this build knows the words" means above.
+    raw: `${rank.by} ${rank.direction}`.trim(),
+  };
+}
+
+/**
  * Whether the sign button may be enabled.
  *
  * #22's third box: "Approve is disabled until every constraint has rendered."
@@ -226,6 +378,15 @@ export function whenItBuys(trigger: string | undefined): Buying {
  * this set does not hold; a console built before #198 sends no `trigger` key at
  * all. Both stop the signature, and the second is the one this repository can
  * actually produce today. See {@link whenItBuys}.
+ *
+ * **There is deliberately no clause for the preference**, and the asymmetry is the
+ * decision rather than an omission. {@link whyThisOffer} says why at length: an
+ * unreadable trigger leaves nothing on the screen saying what will happen to a
+ * person's money, while an unreadable preference leaves the *chosen offer* still
+ * named in the signed box — the agent narrows the interpretation to `the item is
+ * gtin:…` before the surface renders it, so the identifier a rank settled on is one
+ * of the sentences this function is counting. A third clause here would refuse a
+ * signature over a missing explanation for a purchase the screen fully describes.
  */
 export function canSign(proposal: Proposal, previewed: Previewed): boolean {
   return (

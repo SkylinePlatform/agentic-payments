@@ -40,10 +40,11 @@ type IntentInterpreter interface {
 }
 
 // Interpretation is what one call to Interpret answers with: the limits a
-// verifier will enforce, the basket size the sentence asked for, and whether it
-// asked for a purchase now or for one when something changes.
+// verifier will enforce, the basket size the sentence asked for, whether it asked
+// for a purchase now or for one when something changes, and which of several
+// offers it would rather have.
 //
-// The three are kept apart on purpose, and issue #133 is the failure that
+// The four are kept apart on purpose, and issue #133 is the failure that
 // happens when the first two are not. "Two tickets... up to $160 all in" places
 // a bound — quantity lte 2 — that a verifier evaluates, and that bound is
 // satisfied by a purchase of one ticket as readily as by two: it says at most,
@@ -72,6 +73,34 @@ type IntentInterpreter interface {
 // refute it at the point of sale, and a merchant asked to judge it would be
 // judging the buyer's own account of what they meant. Unlike Quantity there is
 // no honest zero — see Trigger.
+//
+// Rank is the fourth, and issue #262 is what it cost to have no field for it. A
+// preference between two offers that both satisfy the mandate is the same kind of
+// fact as the other two: it is not about the purchase being offered but about the
+// ones that were not, and there is nothing at the point of sale to refute — see
+// Rank. Unlike Trigger it has an honest zero, on Quantity's terms.
+//
+// # There is a fifth member and it is not a fifth of these
+//
+// DeclinedCategories arrived with issue #254 and belongs to a different kind, which
+// is why the count above stops at four. Three sorts of non-constraint fact live on
+// this type and running them together would lose what each is for:
+//
+//   - **Things the sentence said that steer a purchase.** Quantity, Trigger and Rank.
+//     Each changes what the agent does — how many, when, which one — so each is on
+//     the criterion the constraint registry is closed on, each is put in front of a
+//     person on the consent screen, and each is bounded by the constraints rather
+//     than part of them.
+//   - **An account of what the reading dropped.** DeclinedCategories. Nothing acts
+//     on it, no screen shows it, and its only reader is Propose's failure text, so
+//     that a refusal can name the shelf this shop does not stock instead of
+//     misattributing the cause.
+//   - **The limits themselves**, which is Constraints and the only member a verifier
+//     ever sees.
+//
+// The distinction is worth keeping sharp because the second kind is safe by having
+// no consequences, and the first is safe only by argument — see Rank's "Why a rank
+// need not be signed", which would prove nothing about a field nobody reads.
 type Interpretation struct {
 	// Constraints are the limits a verifier will enforce.
 	Constraints []generated.Constraint
@@ -84,6 +113,11 @@ type Interpretation struct {
 	// interpretation states one; Validate refuses an interpretation that
 	// does not.
 	Trigger Trigger
+
+	// Rank is which of several offers the sentence would rather have, and the
+	// zero value is the ordinary case: nothing in it ranked anything. Validate
+	// accepts that and refuses half of one.
+	Rank Rank
 
 	// DeclinedCategories are the categories the reading narrowed by that this
 	// merchant has no shelf for, and which therefore did not become constraints.
@@ -102,6 +136,13 @@ type Interpretation struct {
 	// Proposal or Authorisation — it is an account of a reading rather than a
 	// fact about a purchase, and a screen showing it would be showing the
 	// buyer's own working.
+	//
+	// **It is not a fifth sibling of the four above**, which is why it sits below
+	// Rank rather than beside it — see this type's own doc comment, which sorts the
+	// members into three kinds and stops its count at four for exactly this
+	// reason. Those four are facts a sentence stated that steer a purchase; this is
+	// an account of what the reading dropped, and it is safe by having no
+	// consequences rather than by an argument about consent.
 	DeclinedCategories []string
 }
 
@@ -168,6 +209,207 @@ func (t Trigger) Known() bool {
 	return t == TriggerImmediate || t == TriggerConditional
 }
 
+// Rank is what a sentence said about *which* of several offers to buy, which is a
+// fact about the sentence and never a limit on a purchase.
+//
+// "Find and buy telescopic ladders, **cheapest**" has three things in it. The
+// category is a limit, the price it implies is a limit, and *cheapest* is neither:
+// it is a preference between offers that both satisfy those limits. Issue #262 is
+// what throwing it away cost. The word became an amount bound — a term, evaluated
+// at checkout and absent from the search — so it reached the merchant as nothing
+// at all, and agent.settle bought found[0]. At four offers that was invisible
+// because there was only ever one candidate; at 257, of which 194 come from a shop
+// nobody in this repository curated, a category-only query lands on a fetched
+// offer in 23 of 30 categories. The selection was doing real work while claiming
+// not to.
+//
+// # It is a sibling of Quantity and Trigger on exactly their criterion
+//
+// A preference is not a fact about the purchase being offered. Ask a merchant
+// whether the offer in front of it is the one the buyer would have preferred and
+// the question is not about that offer at all — it is about the others, which the
+// merchant answering was not asked about and the verifier evaluating never sees.
+// So there is nothing to refute at the point of sale, which is the criterion the
+// constraint registry is closed on, and a rank does not belong in Constraints.
+// That is #133's argument for the basket size and #198's for the trigger, arriving
+// a third time.
+//
+// The model's instruction has always said the other half of this and it is still
+// true: *cheapest*, *best* and *fastest* cannot become constraints, because no
+// merchant can establish what the whole market was offering at an instant. What
+// #262 corrects is the conclusion drawn from that — the word was discarded rather
+// than carried somewhere a verifier is not.
+//
+// # There is an honest zero, and that is Quantity's precedent rather than Trigger's
+//
+// A sentence naming no preference leaves the zero Rank, and agent.settle then
+// resolves exactly as it did before this existed: the merchant's own catalogue
+// order, first result wins. So Validate accepts an empty rank, where it refuses an
+// empty Trigger.
+//
+// The difference is what an absence leaves the agent to do. An unstated trigger
+// leaves it inventing one, and both inventions are wrong somewhere a user cannot
+// see — that is why Trigger has no honest zero. An unstated rank leaves it doing
+// what it already did, deterministically, over an order the merchant chose and
+// #255 made defensible. A screenshot of `make demo` is therefore byte-for-byte
+// what it was, which is a property the golden numbers in this repository's
+// documentation depend on.
+//
+// **Half a rank is not a third answer**, though, and that is where the honest zero
+// stops. A field with no direction, or a direction with no field, or either drawn
+// from outside the sets below, is an interpreter that read a preference and could
+// not say what it was — and reading that as silence would put #262 straight back,
+// with the word still in the sentence and nothing acting on it. Validate refuses
+// all three.
+//
+// # Why a rank need not be signed
+//
+// This is the part to be careful about, because a preference the user did not sign
+// steering which offer gets bought is close to the thing AP2's consent path exists
+// to prevent. Four claims, and the fourth is where the answer actually lives.
+//
+// **It cannot widen what may be bought.** The open mandate carries the
+// constraints and nothing else; every purchase is a closed mandate bound to one
+// checkout, and every verifier evaluates that checkout against the signed
+// constraints without ever being shown a rank. So the purchases a rank can reach
+// are not a superset of the ones the signature authorised — they are the same set,
+// in a different order. No rank, however wrong or however tampered with, turns a
+// refusal into an acceptance.
+//
+// **It cannot reach the search either.** agent.candidates builds its query from
+// the signed constraints, by asking the verifier's own registry which of them
+// narrow a catalogue. A rank is applied to what comes back. It cannot make a
+// merchant offer something it does not sell, and it cannot introduce a candidate
+// the constraints did not describe.
+//
+// **What it can do is pick a different authorised offer, or none at all**, and both
+// are real costs rather than nothing. The bound is the same shape as Trigger's. The
+// run buys something the user approved but might not have chosen — or, for a
+// descending preference over a shelf straddling the cap, selects the dearest
+// candidate and collects a visible refusal where a rankless run would have bought.
+// agent.ranked records that second case and why the remedy for it is forbidden:
+// skipping candidates over the cap is the agent evaluating the user's limit.
+//
+// Both are costs a *reader* can catch, which is why the answer travels to the consent
+// screen beside the limits — see agent.Proposal.Rank and console's proposed.Rank,
+// which is where Trigger already goes. The screen states the preference and how many
+// candidates it chose among — "the cheapest of the 4 offers that matched what you
+// asked for" — so it is something the person about to sign is told rather than
+// something only the agent knows. **The candidates themselves are not on that
+// screen**, and the review of this branch is what caught an earlier draft saying they
+// were: the console's product table is swapped out for the consent zone, so the count
+// is what can be delivered beside a signature and the list is not.
+//
+// **And signing it would be worse than not.** A mandate is a set of limits a
+// verifier enforces. Putting `prefer the cheapest` in one would add a sentence to
+// the approval screen that no verifier will ever check — for the same reason it is
+// not a constraint — and a screen where some of the limits are enforced and some
+// are decoration is the single thing that makes an approval screen untrustworthy.
+// The user would have less, not more.
+//
+// docs/specs/2026-08-12-ranking-among-authorised-offers.md is the long form, and
+// the boundary it draws that this comment does not: an item the caller named by
+// hand outranks any rank, because a person who picked a row has already chosen.
+type Rank struct {
+	// By is the fact a preference orders on. Deliberately not called a field —
+	// see RankField.
+	By RankField
+
+	// Direction is which end of that ordering the sentence wanted.
+	Direction RankDirection
+}
+
+// RankField is a fact the merchant published about an offer that a preference can
+// order on.
+//
+// **It is not a constraint field and the two vocabularies must not be run
+// together.** A constraint field names something a verifier evaluates against a
+// subject built from one checkout; a rank field names something the merchant put
+// in its own search response, which is the whole of what the agent knows about the
+// offers it did not pick. The registry's `amount` is the money a purchase is
+// authorised up to and belongs to the user; this `price` is the money the shop is
+// asking today and belongs to the shop. Two different numbers in two different
+// parties' mouths, and a rank can only ever read the second.
+//
+// The set is closed for the reason the registry's is, and the failure direction is
+// the same one AGENTS.md's "Open for extension is not open at runtime" paragraph
+// argues for: a preference naming something the agent cannot order on is refused,
+// never skipped. Skipping it would convert a preference the user stated into one
+// nobody applied, which is #262 with better manners.
+type RankField string
+
+const (
+	// RankByPrice orders on the price the merchant is asking today —
+	// agent.candidate's own Price, which is merchant.PricedOffer's number for
+	// the current step of its schedule.
+	//
+	// It is the only member, and the reason is that it is the only orderable
+	// fact a search response carries that anybody means. An identifier, a
+	// title, a retailer and an image URL all sort, and no sentence a person
+	// types is asking for any of those orders; step and final describe the
+	// price schedule rather than the offer.
+	RankByPrice RankField = "price"
+)
+
+// Known reports whether this is a field this package can order on.
+//
+// The empty field is not one, on Trigger.Known's terms exactly: half a rank is an
+// interpreter that did not finish answering, not a third kind of preference. It is
+// Rank.Stated that carries the honest zero, not this.
+func (f RankField) Known() bool { return f == RankByPrice }
+
+// RankDirection is which end of a field's ordering a sentence wanted.
+//
+// Two constants and a field × direction pair rather than a list of named
+// preferences — `cheapest`, `dearest`, `newest` — for the reason AGENTS.md's "Open
+// for extension" row gives for the constraint model being a field-by-operator
+// matrix: a second RankField then arrives as one entry with both directions
+// already working, instead of as two more names to spell, parse, validate and
+// render.
+type RankDirection string
+
+const (
+	// RankAscending is least first: cheapest, by price.
+	RankAscending RankDirection = "ascending"
+
+	// RankDescending is greatest first.
+	//
+	// No sentence in Scenarios asks for it, and it is here rather than deferred
+	// because the matrix is the point: a model reads whatever a person typed,
+	// and "buy the best one" is a real sentence that means the dearest as often
+	// as it means anything else. Leaving the direction out would make that
+	// sentence unanswerable rather than answered, and the demo table not
+	// containing one is a fact about the table.
+	RankDescending RankDirection = "descending"
+)
+
+// Known reports whether this is a direction this package defines. The empty
+// direction is not one — see RankField.Known.
+func (d RankDirection) Known() bool {
+	return d == RankAscending || d == RankDescending
+}
+
+// Stated reports whether the sentence named a preference at all.
+//
+// The zero Rank is a sentence that named none, which is the ordinary case and not
+// a failure. Callers ask this rather than comparing against Rank{} themselves, so
+// that a third field arriving on the struct cannot leave a call site testing two
+// thirds of the question.
+func (r Rank) Stated() bool { return r != Rank{} }
+
+// Complete reports whether a stated rank named both halves, each from the closed
+// set this package defines.
+//
+// An unstated rank is complete: there was nothing to state. That is the asymmetry
+// with Trigger.Known and it is the whole of Rank's honest zero, so it is worth
+// reading the two together rather than assuming this behaves like that.
+func (r Rank) Complete() bool {
+	if !r.Stated() {
+		return true
+	}
+	return r.By.Known() && r.Direction.Known()
+}
+
 // ErrUnknownTrigger means the interpretation did not say when the sentence
 // asked for the purchase, or said something this package does not define.
 //
@@ -177,6 +419,20 @@ func (t Trigger) Known() bool {
 // conditional silently reproduces the defect #198 is about — a sentence that
 // said buy, waiting. Both would look like the agent working.
 var ErrUnknownTrigger = errors.New("interpret: the interpretation does not say when the sentence asked for the purchase")
+
+// ErrUnknownRank means the interpretation stated a preference between offers that
+// this package cannot apply: half of one, or a field or direction nobody defines.
+//
+// **Silence is not this error**, and the difference is the point. An
+// interpretation with no rank at all is a sentence that ranked nothing, which is
+// most sentences, and agent.settle resolves it in catalogue order — see Rank's
+// honest zero. This is the interpreter having read a preference and not managed to
+// say what it was, and the failure direction follows Rank's own: acting on half of
+// one means guessing a direction, and a guess between cheapest and dearest is
+// bought before anybody sees it. Ignoring it means the word *cheapest* is in the
+// sentence, on the screen, and acted on by nothing — which is the defect issue
+// #262 exists to close.
+var ErrUnknownRank = errors.New("interpret: the interpretation states a preference this package cannot apply")
 
 // ErrNoConstraints means the interpretation placed no limits at all.
 //
@@ -213,8 +469,8 @@ var ErrNoConstraints = errors.New("interpret: the interpretation placed no limit
 // on parsed expressions, and an operator added without a phrase panics at
 // initialisation rather than producing an approval screen with a gap in it.
 //
-// # It takes the whole Interpretation, and the two halves are checked by
-// # different authorities
+// # It takes the whole Interpretation, and the parts are checked by different
+// # authorities
 //
 // The constraints go to the verifier's own parser, because the verifier is who
 // has to read them. The trigger cannot: no verifier has an opinion about when a
@@ -226,13 +482,23 @@ var ErrNoConstraints = errors.New("interpret: the interpretation placed no limit
 // non-deterministic, so a dimension it invented has to fail where somebody is
 // still looking.
 //
+// The rank is checked here for the trigger's reason and refused on narrower
+// grounds. No verifier is ever shown one — it is applied before anything is
+// signed, to choose among offers a mandate would authorise — so this package is
+// again the last place anybody looks. What differs is that silence is legitimate:
+// an unstated rank is a sentence that ranked nothing, and Rank.Complete answers
+// true for it. Only a preference that was stated and cannot be applied fails, and
+// ErrUnknownRank says why each of the three ways to state one badly is worse than
+// saying nothing.
+//
 // Quantity is checked by nobody and that is not an omission. Zero is a
 // meaningful answer there — the sentence named no count — and every caller
 // downstream holds a number of its own to fall back to, which is precisely what
 // the trigger has none of.
 //
 // It took Constraints alone until issue #198 added the second dimension. Every
-// caller passed interp.Constraints; they now pass interp.
+// caller passed interp.Constraints; they now pass interp, and issue #262's rank
+// arrived on that signature without moving a call site.
 func Validate(interp Interpretation) error {
 	constraints := interp.Constraints
 	if len(constraints) == 0 {
@@ -256,6 +522,14 @@ func Validate(interp Interpretation) error {
 	if !interp.Trigger.Known() {
 		return fmt.Errorf("%w: %q is neither %q nor %q",
 			ErrUnknownTrigger, interp.Trigger, TriggerImmediate, TriggerConditional)
+	}
+
+	// The rank last, and it is the one dimension here with an honest empty value.
+	// Nothing is refused for silence; what is refused is a preference that was
+	// stated and cannot be applied. See ErrUnknownRank for why that asymmetry runs
+	// the way it does.
+	if r := interp.Rank; !r.Complete() {
+		return fmt.Errorf("%w: it asks for %q in %q order", ErrUnknownRank, r.By, r.Direction)
 	}
 	return nil
 }
