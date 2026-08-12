@@ -234,21 +234,6 @@ func (w *Watch) Delegate(ctx context.Context, q Quote) (*Delegated, error) {
 	if err != nil {
 		return nil, fmt.Errorf("signing the closed Checkout Mandate for the merchant: %w", err)
 	}
-	// q.Price, not a value read off the chain: generated.CheckoutMandate carries
-	// no structured amount at all — the same reason the Trusted Surface's own
-	// "Checkout Mandate signed" event reads req.Payment.PaymentAmount rather
-	// than parsing the checkout it wraps. This agent already holds the same
-	// purchase's price from the quote Watch.Run began this attempt against, so
-	// that is the amount it held.
-	w.Client.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.CheckoutDigestOf(checkoutChain.String()))), obs.KindMandateConstructed,
-		"closed Checkout Mandate signed by the agent, under the open mandate the user signed",
-		obs.WithAmount(q.Price),
-		// Closed, and "signed by the agent" is not a second issuance: this is a
-		// Key Binding JWT over the open Checkout Mandate, made with the key that
-		// mandate already endorsed in cnf. The label is what lets a reader see
-		// the user's open card and this one as two ends of one delegation
-		// rather than as the same artefact signed twice.
-		obs.WithMandate(obs.MandateCheckout, obs.MandateClosed))
 
 	// One per verifier. The audience and the nonce are the only things that
 	// differ between the three, and they are the whole reason there are three.
@@ -267,17 +252,6 @@ func (w *Watch) Delegate(ctx context.Context, q Quote) (*Delegated, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Any one of the three carries the same digest — the same q.Checkout, the
-	// same payment claims, the audience and the nonce are the only things that
-	// differ between them — so the first one minted is as representative of
-	// this attempt's Payment Mandate as the other two.
-	// q.Price is the value payment.PaymentAmount above was built from, unchanged
-	// — PaymentAmount is never recomputed the way checkout_hash is, so there is
-	// no drift risk in using it directly rather than reading it back.
-	w.Client.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.PaymentDigestOf(credentialChain))), obs.KindMandateConstructed,
-		"closed Payment Mandate signed by the agent, once for each of the three verifiers that reads it",
-		obs.WithAmount(q.Price),
-		obs.WithMandate(obs.MandatePayment, obs.MandateClosed))
 
 	d := &Delegated{
 		Offer:             q.Checkout,
@@ -296,7 +270,109 @@ func (w *Watch) Delegate(ctx context.Context, q Quote) (*Delegated, error) {
 	d.ID = roles.Fingerprint(strings.Join([]string{
 		d.CheckoutChain, d.CredentialChain, d.MerchantChain, d.ProcessorChain,
 	}, " "))
-	return d, nil
+	return w.announce(ctx, d), nil
+}
+
+// announce says what this attempt was signed from, and hands it to the caller in
+// one step.
+//
+// # This is issue #228's fix, and it is structural rather than positional
+//
+// Delegate used to announce the closed Checkout Mandate the moment it existed
+// and then sign three more documents. Any of the three can fail, and the attempt
+// is then dropped whole — Delegate returns nil, and nobody is ever handed the
+// mandate the log has already called constructed. ADR 0003 makes that cheap to
+// fix and expensive to leave: the event log is observability and never evidence,
+// so nobody can appeal to a false line in it, and everybody reads it.
+//
+// *"Move the emits to the end"* would have worked and is not what this is. Both
+// emits sit inside a method that announces **and** returns the attempt, so
+// within it KindMandateConstructed cannot be reached without a *Delegated going
+// back to the caller — the shape #227's deliver established two roles along, and
+// reused here rather than re-derived. What it does not do is make a direct emit
+// elsewhere in this file impossible; Go has no way to say that, and what catches
+// that is TestNothingIsAnnouncedForAnAttemptThatWasNeverMinted, whose minted arm
+// fails on a duplicate and whose three failing arms fail on a moved one.
+//
+// It is called deliver over there and announce here because Deliver is taken in
+// this package, and taken for the opposite end of the flow: presenting an attempt
+// to the verifiers that read it. Two neighbouring methods spelling one word two
+// ways would be worse than the divergence.
+//
+// # Two announcements, not four
+//
+// The four documents are two mandates. The three payment chains are three
+// delegations of one open Payment Mandate that differ in aud and nonce and in
+// nothing else — same claims, same amount, same transaction_id — so a
+// mandate_constructed each would put three Payment Mandates on a screen where
+// AP2 has one. obs.Mandate carries which mandate and whether it is bound, and
+// nothing that could tell the three apart, so they would render as three cards
+// separable by nothing but a sequence number: the defect #201 fixed, reintroduced
+// by a fix for a different one.
+//
+// Delegate is also not where anything is delivered — its own doc opens with "It
+// presents nothing." The per-verifier story is told by Fund and Settle, which
+// emit one KindMandatePresented per hop at the moment that hop is made.
+//
+// # What this costs the screen, which is not what it looks like
+//
+// Nothing waits on a verifier here. The three round trips Delegate makes are the
+// nonce requests, and they are already finished before the first signature; the
+// three delegatePayment calls that follow are ap2.DelegatePayment — blind,
+// Minimise, one signJWT — and the Signer behind them is
+// crypto.storeSigner, which takes a read lock and returns bytes. So holding both
+// announcements until the attempt exists moves them later by three local ECDSA
+// signatures, not by three verifier round trips, and the agent lane narrates the
+// same steps in the same order.
+//
+// **That is a precondition, and it is written here rather than assumed**, the
+// way issueOpenPair writes down its own. That one answers a different question —
+// nothing in a detached region may block, or a goroutine is stranded — and both
+// turn on the same fact about this Signer: it computes and returns.
+// internal/platform/crypto's Store names the change that ends it, keys in a KMS
+// or an HSM, which its own doc calls "a wiring change in cmd/". After that the
+// gap between the first signature and the announcement really would be three
+// round trips, and this paragraph would have to be argued again rather than left
+// reading as though it still held.
+//
+// It is also why nothing here is wrapped in context.WithoutCancel. #221 needed
+// that because a cancellation between two signatures reached a 503, the
+// idempotency middleware released the key, and the retry made a third signature
+// the user's key had endorsed — a credential nobody holds and nothing can revoke.
+// There is no middleware on this path and no second issuance: a delegation that
+// was not made leaves nothing behind, so finishing signatures the caller has
+// abandoned would buy nothing and would cost a cancelled watch the ability to
+// stop.
+func (w *Watch) announce(ctx context.Context, d *Delegated) *Delegated {
+	// d.Price, not a value read off a chain: generated.CheckoutMandate carries
+	// no structured amount at all — the same reason the Trusted Surface's own
+	// "Checkout Mandate signed" event reads req.Payment.PaymentAmount rather
+	// than parsing the checkout it wraps. This agent already holds the same
+	// purchase's price from the quote Watch.Run began this attempt against, so
+	// that is the amount it held.
+	w.Client.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.CheckoutDigestOf(d.CheckoutChain))), obs.KindMandateConstructed,
+		"closed Checkout Mandate signed by the agent, under the open mandate the user signed",
+		obs.WithAmount(d.Price),
+		// Closed, and "signed by the agent" is not a second issuance: this is a
+		// Key Binding JWT over the open Checkout Mandate, made with the key that
+		// mandate already endorsed in cnf. The label is what lets a reader see
+		// the user's open card and this one as two ends of one delegation
+		// rather than as the same artefact signed twice.
+		obs.WithMandate(obs.MandateCheckout, obs.MandateClosed))
+
+	// Any one of the three carries the same digest — the same offer, the same
+	// payment claims, the audience and the nonce are the only things that differ
+	// between them — so the first one minted is as representative of this
+	// attempt's Payment Mandate as the other two.
+	// d.Price is the value payment.PaymentAmount was built from, unchanged —
+	// PaymentAmount is never recomputed the way checkout_hash is, so there is no
+	// drift risk in using it directly rather than reading it back.
+	w.Client.Events.Emit(obs.WithDigest(ctx, reportDigest(ap2.PaymentDigestOf(d.CredentialChain))), obs.KindMandateConstructed,
+		"closed Payment Mandate signed by the agent, once for each of the three verifiers that reads it",
+		obs.WithAmount(d.Price),
+		obs.WithMandate(obs.MandatePayment, obs.MandateClosed))
+
+	return d
 }
 
 // delegatePayment signs one closed Payment Mandate, addressed to one verifier.
