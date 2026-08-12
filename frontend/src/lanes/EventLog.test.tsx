@@ -595,9 +595,18 @@ describe("what the log is", () => {
 });
 
 describe("the terms a step was taken under", () => {
+  // `signed_at` is stated an hour before the expiry and this log line
+  // deliberately does not draw it — the row is one line per step and the
+  // question it answers is what terms the step was taken under, for which the
+  // live-or-spent instant is the useful one. The User lane's card is where the
+  // signing moment belongs, and `Lanes.test.tsx` is where it is pinned. What
+  // this fixture does buy is that the two instants are different values, so a
+  // row that started drawing the wrong one would be visible below rather than
+  // plausible.
   const APPROVED = {
     typed: "kupi merdevine, najjeftinije",
     signed: ["the amount is at most 200.00 USD", "the item is gtin:05014477390221"],
+    signed_at: "2026-08-10T19:04:31Z",
     expires_at: "2026-08-10T20:04:31Z",
   } as const;
 

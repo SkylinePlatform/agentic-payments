@@ -203,8 +203,8 @@ type Mandate struct {
 }
 
 // Authorisation is the open mandate pair a step was taken under: what the user
-// typed, what the Trusted Surface said each limit means, and when the pair stops
-// authorising anything.
+// typed, what the Trusted Surface said each limit means, when they signed it and
+// when the pair stops authorising anything.
 //
 // # Why an event carries it at all
 //
@@ -217,7 +217,7 @@ type Mandate struct {
 // This is the fact that lets that lane show the authorisation itself rather than
 // a step in this transaction.
 //
-// # The three members, and the one that is not here
+// # The four members, and which of them a signature covers
 //
 // Typed and Signed are deliberately different kinds of thing and the screen has
 // to keep them apart. Typed is the caller's account of what the user wrote —
@@ -230,40 +230,61 @@ type Mandate struct {
 // `typed` and `signed` for the same reason, and this is that pair one wire
 // across.
 //
-// **There is no signed-at member, and the reason is that nothing carries the
-// instant *forward* — not that no such instant exists.** It does, and the
-// distinction matters enough to write down, because the obvious reading of the
-// shorter sentence sends the next reader looking for something that is not
-// missing. The Trusted Surface reads one clock at the moment it signs and stamps
-// it into both open mandates as `iat` — roles/surface's authorise handler, and
-// contracts/authz/checkout_mandate_open.json declares it as `issued_at`. It is a
-// plain claim rather than a disclosable one, so a holder can read it out of a
-// mandate it is already carrying, which is what internal/adapters/ap2/digest.go
-// does for the digest on the field above and argues at length is sound precisely
-// because the value only ever lands in an obs.Event.
+// **SignedAt is #245's member, and where it comes from is the whole of why it
+// took a second issue.** An earlier version of this comment said there was no
+// signed-at member because nothing carried the instant forward — true of the
+// path, and it sent the reader looking for a wire change through four hops.
+// There is none. The Trusted Surface reads one clock at the moment it signs and
+// stamps it into both open mandates as `iat` — roles/surface's authorise handler,
+// and contracts/authz/checkout_mandate_open.json declares it as `issued_at` — and
+// it is a plain claim rather than a disclosable one, so the agent reads it
+// straight out of a mandate it is already carrying. ap2.IssuedAtOfMandate is the
+// reader, on the terms internal/adapters/ap2/digest.go already argues for the
+// digest on the field above, and agent.Authorisation.SignedAt is the holder side.
+// So POST /authorise still answers an expiry and no issuance moment,
+// agent.Authorisation still has no such field, and neither needs one: this member
+// is filled from the signed document rather than from a hop that could drop it.
 //
-// What is absent is every hop after that. POST /authorise answers with an expiry
-// and no issuance instant; agent.Authorisation has no field for one, so
-// Client.sign could not carry one even if the surface sent it; the browser
-// assembles POST /watches out of that same answer; and the console's own runView
-// is likewise typed / signed / expires_at. Carrying it would mean a member on
-// each of those and a fourth here — a change worth making and worth its own
-// issue, and one this type should not pre-empt with a field nothing can fill.
-//
-// The one thing that would be wrong is the agent stamping *its own* clock: on
-// the browser path it demonstrably was not present when the user signed, and a
-// buyer claiming to have witnessed a moment it was not at is exactly what this
-// screen exists to make impossible. Reading the user's own signed `iat` is not
-// that, and is what any future member should be filled from. Until one exists,
-// ExpiresAt is the instant the wire has — the `exp` both open mandates carry —
-// and it answers what a reader of the card actually asks, which is whether the
-// authorisation the purchase was made under is still live.
+// The thing that would be wrong is the agent stamping *its own* clock: on the
+// browser path it demonstrably was not present when the user signed, and a buyer
+// claiming to have witnessed a moment it was not at is exactly what this screen
+// exists to make impossible. That is why this is a pointer and why nothing
+// defaults it — see the field.
 type Authorisation struct {
 	// Typed is the caller's account of the sentence the user wrote. Unsigned.
 	Typed string `json:"typed"`
 	// Signed is what the Trusted Surface said each limit means, one sentence
 	// per constraint, in the order they were signed.
 	Signed []string `json:"signed"`
+
+	// SignedAt is when the user signed the pair, as the Trusted Surface's own
+	// clock read at the moment it signed — the `iat` claim inside both open
+	// mandates, not any clock belonging to the party that emitted this event.
+	//
+	// **A pointer, so that "nobody said" cannot be drawn as a time.** A zero
+	// time.Time marshals as "0001-01-01T00:00:00Z", which is a perfectly valid
+	// date a screen will happily format, and a card reading one would show a
+	// moment nobody signed at — the precise failure this member exists to avoid,
+	// arriving through the encoding rather than through a clock. `null` cannot be
+	// mistaken for an instant. That is Event.Amount's argument for the same
+	// choice, one field along and about a different confusion.
+	//
+	// Nil is a legitimate state and is not defaulted: an authorisation whose open
+	// Checkout Mandate carries no `iat`, or which no reader could parse, arrives
+	// here as an absence. agent.reportSignedAt is where that happens and prints
+	// the reason beside the event; Validate deliberately does not *require* this
+	// field, because refusing the event would take every step of every attempt off
+	// the three-lane view to hide one missing label — Watch.under's own reasoning
+	// for the two members it does gate on.
+	//
+	// **The pointer alone does not close the "0001-01-01" hole, and Validate is
+	// what does.** A nil pointer cannot be drawn as a date; a pointer to the zero
+	// time can, and `iat: -62135596800` is a syntactically perfect NumericDate
+	// that decodes to exactly it. So Validate refuses a *stated* zero instant, on
+	// the same terms it refuses a missing expiry — see the case, and
+	// TestAnAuthorisationCannotStateTheZeroInstantAsWhenItWasSigned.
+	SignedAt *time.Time `json:"signed_at"`
+
 	// ExpiresAt is when the open mandate pair stops authorising anything.
 	ExpiresAt time.Time `json:"expires_at"`
 }
@@ -404,8 +425,8 @@ type Event struct {
 	Mandate *Mandate `json:"mandate,omitempty"`
 
 	// Authorisation is the open mandate pair this step was taken under — see
-	// Authorisation above for what the three members are and why there is no
-	// fourth.
+	// Authorisation above for what its four members are and which of them a
+	// signature covers.
 	//
 	// Issue #213's field, on the precedent #201 and #174 set: a fact the screen
 	// needs in order to make a true claim, carried as a typed nested object
@@ -598,6 +619,20 @@ func (e Event) Validate() error {
 			ErrInvalidEvent)
 	case e.Authorisation != nil && e.Authorisation.ExpiresAt.IsZero():
 		return fmt.Errorf("%w: an authorisation with no expiry cannot be placed in time, and the Trusted Surface always computes one",
+			ErrInvalidEvent)
+	case e.Authorisation != nil && e.Authorisation.SignedAt != nil && e.Authorisation.SignedAt.IsZero():
+		// Not the same rule as the two above, and the difference is which of them
+		// nil satisfies. An absent signing instant is legitimate and goes through —
+		// see the field. A *stated* one that is the zero time is not an absence, it
+		// is the one value the pointer exists to keep off a card: it marshals as
+		// "0001-01-01T00:00:00Z" and renders as a moment somebody signed at. Two
+		// spellings of "no instant" would mean a consumer had to know that one of
+		// them is not a time, which is the whole reason the other spelling is null.
+		//
+		// agent.reportSignedAt collapses it before it ever gets here, on
+		// Watch.under's split: the emitter states the fact only when it has one,
+		// and this catches a call site that got that invariant wrong.
+		return fmt.Errorf("%w: an authorisation stating the zero instant as when it was signed is naming a moment nobody signed at; absent is null",
 			ErrInvalidEvent)
 	}
 	return nil

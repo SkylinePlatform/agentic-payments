@@ -469,12 +469,14 @@ describe("the authorisation an attempt was made under", () => {
   const APPROVED = {
     typed: "kupi merdevine, najjeftinije",
     signed: ["the amount is at most 200.00 USD"],
+    signed_at: "2026-08-10T19:04:31Z",
     expires_at: "2026-08-10T20:04:31Z",
   } as const;
 
   const LATER = {
     typed: "something else entirely",
     signed: ["the amount is at most 5.00 USD"],
+    signed_at: "2026-08-10T19:30:00Z",
     expires_at: "2026-08-10T21:00:00Z",
   } as const;
 

@@ -234,6 +234,11 @@ type Authorisation struct {
 	Rendered []string `json:"rendered"`
 
 	// ExpiresAt is when the pair stops authorising anything.
+	//
+	// It is a field and not a read of the mandates because the watch loop *acts*
+	// on it. The other instant the pair carries — when the user signed — is a
+	// caption rather than something acted on, and is the SignedAt method in
+	// signed.go instead, which is where that line is drawn.
 	ExpiresAt time.Time `json:"expires_at"`
 
 	// Instrument is the payment instrument the surface pinned into the open

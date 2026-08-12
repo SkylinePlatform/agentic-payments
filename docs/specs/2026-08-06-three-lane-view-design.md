@@ -11,8 +11,10 @@ Human Present is the half that will not be built — see *What this is not*.
 **Issues:** #20, narrow slice of #45. Waited on #12, #16 and #15. Tokens
 revised by #159. *Indicators* added by #185 and consumed by #183, #184 and
 #186. *Where the data comes from* gained the User lane's authorisation card
-with #213. *The head orients* added by #242. *A card is a document* added by
-#241, which changed the unit a card draws and closed #217 and #218 with it.
+with #213, and #245 is where that card started saying when the user signed
+rather than only how long they signed for. *The head orients* added by #242.
+*A card is a document* added by #241, which changed the unit a card draws and
+closed #217 and #218 with it.
 
 ## The standard this screen is held to
 
@@ -1210,19 +1212,52 @@ things about it are design rather than implementation, and belong here:
   nothing is signed here — so `Lanes.test.tsx` holds it directly, over the
   transitive import graph.
 
-**The card says *authorises until* rather than *signed at*, and that is a gap
-rather than a preference.** #213's approved sketch asked for *signed 19:04*. The
-instant exists — the Trusted Surface stamps one clock into both open mandates as
-`iat` when it signs them, which `contracts/authz/checkout_mandate_open.json`
-declares as `issued_at` — but no hop between that signature and this card has a
-field to carry it: `POST /authorise` answers an expiry and no issuance moment,
+**The card says *signed 19:04* as well as *authorises until*, and how the first
+of those arrives is the decision worth recording.** #213's approved sketch asked
+for the moment the user signed; the branch that built the card shipped the expiry
+alone, on the reasoning that no signed-at instant existed anywhere. That reasoning
+was wrong and its own architect review found it, which is why #245 exists. The
+instant was there the whole time: the Trusted Surface reads one clock when it
+signs and stamps it into both open mandates as `iat`, which
+`contracts/authz/checkout_mandate_open.json` declares as `issued_at`.
+
+What was true is the narrower claim underneath it — no hop *between* that
+signature and this card carries the value. `POST /authorise` answers an expiry and
+no issuance moment, `Client.sign` has no field to decode one into,
 `agent.Authorisation` has none, and `GET /watches/{id}` is likewise `typed` /
-`signed` / `expires_at`. So the card would have to invent it, and inventing it
-means the *agent's* clock, which on the browser path was not present when the
-user signed. The expiry is the instant the wire has and it answers what the
-reader asks — whether these limits are still live. Carrying the issuance instant
-forward is a change to four hops and a member in two languages, and wants its own
-issue rather than a field nothing can fill.
+`signed` / `expires_at`. Two answers follow from that and they are not equivalent.
+Forwarding it is the obvious one: the surface asserts its own clock in the
+response, and the value rides the path `expires_at` already does. **Reading it out
+of the mandate is the one this repository took**, and the reason is that it adds
+no field to any of those four hops: `iat` is a plain claim rather than a
+disclosable one, so the party holding an open mandate can read it straight out of
+the signed document. `ap2.IssuedAtOfMandate` is the reader and
+`agent.Authorisation.SignedAt` is the holder side — derived on every event rather
+than stored, so there is nothing for a hop to drop, and nothing a caller
+assembling an authorisation by hand can put there instead. The unverified-read
+argument is `internal/adapters/ap2/digest.go`'s, made for the digest on the claim
+beside this one and cited rather than restated: the value lands in one
+`obs.Event` field and one card, ADR 0003 calls that log observability and never
+evidence, and every verifier that matters checks the signatures for itself.
+
+One member does cross a wire, because the agent and the browser are separate
+processes: `obs.Authorisation.SignedAt`, a pointer so that `null` means *nobody
+said* and cannot be formatted as a date — a zero `time.Time` marshals as
+`0001-01-01T00:00:00Z`, which any screen will happily render as an instant
+somebody signed at.
+
+**What the card must never do is fall back to a clock**, and that half of the
+original reasoning stands. The only clocks near this screen belong to the agent
+and to the browser, and on the browser path neither was present at the Trusted
+Surface when the user signed — so a card drawn from one would be a buyer stating a
+moment it did not witness, and it would look exactly like a card drawn from the
+signature. An authorisation with no readable instant therefore draws the expiry
+alone and says nothing about signing.
+
+**The expiry stays on the card and is not a substitute that got left behind.** It
+is the `exp` both open mandates carry, it answers a different question — whether
+the limits on screen are still live — and it is the fact the `expired` row of the
+status vocabulary above is about.
 
 Under Human Present nothing on this screen changes. There the user signs the
 *closed* mandates at the surface, inside this correlation, so the lane already

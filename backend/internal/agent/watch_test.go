@@ -1954,9 +1954,29 @@ func TestEveryStepAWatchEmitsNamesTheAuthorisationItWasTakenUnder(t *testing.T) 
 			"the sentences the Trusted Surface rendered, unchanged — the agent carries what it "+
 				"was answered with and never renders a constraint itself")
 		assert.Equal(t, a.auth.ExpiresAt, e.Authorisation.ExpiresAt,
-			"and the one instant an authorisation carries, which is what tells a reader "+
-				"whether the limits on screen are still live")
+			"the instant that tells a reader whether the limits on screen are still live")
+
+		// Issue #245. The two assertions below are one property from both sides,
+		// and the second is the one that would otherwise be easy to satisfy
+		// wrongly: `base` is the instant the Trusted Surface's clock read when it
+		// signed this pair, and every event here was emitted after `step` had
+		// advanced that same clock — so an implementation reading Watch.Clock
+		// instead of the mandate produces a plausible time that is not this one.
+		if assert.NotNil(t, e.Authorisation.SignedAt,
+			"event %d (%s) says nothing about when the user signed, and the whole of #213's "+
+				"approved sketch for this card was the moment they did", i, e.Kind) {
+			assert.Equal(t, base, *e.Authorisation.SignedAt,
+				"the iat the surface stamped into both open mandates, read back out of one of "+
+					"them — the moment the user signed, and not a moment the agent was present for")
+		}
 	}
+
+	// Read here rather than inside the loop: assertions belong on the test
+	// goroutine, and the watch has returned.
+	assert.NotEqual(t, base, w.clock.Now(),
+		"the assertion above is only worth making while the agent's own clock has moved on "+
+			"from the signature; if these are equal, this test can no longer tell the mandate's "+
+			"instant from Watch.Clock and the next reader should advance the world further")
 
 	// Nothing anybody else emitted may claim it. A verifier is shown a minimised
 	// presentation — the constraints it is entitled to evaluate — and never the
@@ -2012,5 +2032,99 @@ func TestAWatchWithNothingRenderedStatesNoAuthorisationAndStillEmits(t *testing.
 	for i, e := range events {
 		assert.Nil(t, e.Authorisation,
 			"event %d (%s) states an authorisation it has no sentences for", i, e.Kind)
+	}
+}
+
+// undatedOpenCheckout re-issues an open Checkout Mandate under the user's key
+// with no `iat` at all, endorsing the same agent key and carrying the same
+// constraints and expiry as the pair the Trusted Surface signed.
+//
+// It exists because the surface cannot produce this and should not be able to:
+// its authorise handler reads one clock and stamps the value into both mandates,
+// so there is no request that gets a pair without one. The shape is still
+// legitimate — AP2 marks `iat` optional and
+// contracts/authz/checkout_mandate_open.json lists only `agent_key` and
+// `constraints` as required — and it is what an authorisation assembled by
+// something other than this surface can arrive as. Signed by the user's own key
+// rather than mangled, so every verifier downstream accepts it and what is under
+// test is the missing claim rather than a broken signature.
+func undatedOpenCheckout(t *testing.T, a *authorisedAgent) string {
+	t.Helper()
+
+	agentKey, err := roles.PublicKey(t.Context(), a.key.keys)
+	require.NoError(t, err, "reading the key this mandate has to go on endorsing")
+
+	blinder, err := sdjwt.NewBlinder()
+	require.NoError(t, err, "building the blinder the constraints are withheld with")
+
+	expires := a.auth.ExpiresAt
+	sd, err := ap2.IssueOpenCheckout(t.Context(), a.world.user.signer, generated.OpenCheckoutMandate{
+		AgentKey:    agentKey,
+		Constraints: a.auth.Constraints,
+		// IssuedAt deliberately absent. Everything else is the pair as signed.
+		ExpiresAt: &expires,
+	}, blinder)
+	require.NoError(t, err, "re-issuing the open Checkout Mandate without an issuance instant")
+	return sd.String()
+}
+
+// TestAnAuthorisationWithNoReadableInstantStillDrawsAndNamesNoClock is #245's
+// other side, and it is the case where getting it wrong would be invisible.
+//
+// The authorisation here is complete in every way a screen cares about — a
+// prompt, the surface's sentences, an expiry — and the one thing it cannot answer
+// is when it was signed. Two things have to hold at once. Every step still has to
+// carry its authorisation, because losing them takes the User lane back to
+// *Nothing yet.* over one absent label, which is #213 reappearing through the fix
+// for it. And the absence has to travel as an absence: the agent holds a running
+// clock the whole time — Watch.Clock, which every closed mandate it signs is
+// stamped from — and filling this gap from it is one line away at the call site.
+// A card drawn from that clock would be a buyer stating a moment it was not
+// present for, and it would look exactly like a card drawn from the signature.
+func TestAnAuthorisationWithNoReadableInstantStillDrawsAndNamesNoClock(t *testing.T) {
+	t.Parallel()
+
+	recorded := newRecorder()
+	emitting := allEmitting(t, recorded)
+	w := newWorldEmitting(t, emitting)
+	a := authorise(t, w)
+	a.auth.OpenCheckoutMandate = undatedOpenCheckout(t, a)
+
+	wait, _ := a.running(t, a.watch(t))
+
+	a.quoted() // the baseline, $240
+	a.step()   // $210 — refused
+	a.quoted()
+	a.attempted()
+	a.step() // $189 — bought
+	a.quoted()
+	a.attempted()
+
+	watched, err := wait()
+	require.NoError(t, err,
+		"a mandate with no iat is one every verifier accepts, so this watch has to reach the "+
+			"same purchase as any other — otherwise the assertions below are about a run that "+
+			"never got to an emit site")
+	require.NotNil(t, watched.Bought, "and it has to be the run that bought")
+
+	require.NoError(t, emitting.agent.Close(context.Background()), "draining the agent's events")
+
+	events := recorded.eventsOf("agent")
+	require.NotEmpty(t, events, "an authorisation nobody can date is still an authorisation")
+	assert.Zero(t, emitting.agent.Stats().Rejected,
+		"obs.Validate must not require a signing instant; refusing the event would take every "+
+			"step of every attempt off the screen to hide one missing label")
+
+	for i, e := range events {
+		if !assert.NotNil(t, e.Authorisation,
+			"event %d (%s) dropped its authorisation over the one member it could not fill", i, e.Kind) {
+			continue
+		}
+		assert.Equal(t, a.auth.Rendered, e.Authorisation.Signed,
+			"the card still says what the user approved, which is the whole of what it can say")
+		assert.Nil(t, e.Authorisation.SignedAt,
+			"event %d (%s) states a signing instant its mandate does not carry, so it came from "+
+				"a clock — and the only ones running are this agent's, which was not at the "+
+				"Trusted Surface when the user signed", i, e.Kind)
 	}
 }
