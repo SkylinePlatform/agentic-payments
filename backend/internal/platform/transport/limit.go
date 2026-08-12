@@ -50,17 +50,15 @@ var ErrTooLarge = errors.New("transport: the body is longer than the reader acce
 // A body of exactly limit bytes is therefore read whole and never refused, which
 // is the boundary worth stating: the limit is what may be read, not what may not.
 //
-// The refusal fires when something *asks* for a byte past the limit, and at a
-// json.Decoder that is not quite the same as "the body was longer". A decoder
-// stops as soon as its top-level value closes, so a document that ends exactly on
-// the limit followed by trailing bytes is accepted, error unraised — which is the
-// case roles.OK produces on every answer, since json.NewEncoder appends a
-// newline. That tolerance is one byte of whitespace and it is correct: nothing the
-// caller needed was dropped. What it means for a test is that the fixture has to
-// carry the newline the real handler writes, or the row exercises a framing
-// production never sends — see TestASearchAnswerOverTheCapIsRefusedRatherThanShortened,
-// which has a row each way for exactly that reason. At an io.ReadAll site there is
-// no such tolerance: one byte past the limit is refused, full stop.
+// The refusal fires when something *asks* for a byte past the limit, which at a
+// json.Decoder is not quite the same as "the body was longer". A decoder stops as
+// soon as its top-level value closes, so a document ending exactly on the limit
+// followed by trailing bytes decodes and the error is never raised. That
+// tolerance is correct — nothing the caller needed was dropped — but it has a
+// consequence for whoever tests one of these sites: the fixture has to carry the
+// framing the real writer emits, trailing newline included, or the row pins a
+// boundary one byte away from the live one. At an io.ReadAll site there is no
+// tolerance at all: one byte past the limit is refused, full stop.
 //
 // # Why this is not a RoundTripper
 //
