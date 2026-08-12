@@ -60,9 +60,15 @@ Wikidata
   which committed files are not this project's own work.
 
   Only Wikidata's structured data is CC0. Media on Wikimedia Commons is not, and
-  none is used: every image this repository ships is drawn by it, by hand under
-  frontend/public/images/catalogue or by tools/catalogue/mark.go under the
+  none is used: every image file this repository ships is drawn by it, by hand
+  under frontend/public/images/catalogue or by tools/catalogue/mark.go under the
   derived/ directory beside them.
+
+  "Ships" is doing work in that sentence and did not have to before issue #300.
+  Under `make demo-live` the page also displays photographs that are not in this
+  repository and are not this project's: the browser loads them from DummyJSON's
+  CDN. Nothing about the 63 committed offers changed — see the DummyJSON entry
+  below for what is taken and on what terms.
 
 DummyJSON
   Copyright (c) Muhammad Ovi (Owais)
@@ -80,10 +86,75 @@ DummyJSON
 
   What DummyJSON serves is placeholder data published as placeholder data.
   Nothing in the recording is anybody's real product listing and nothing was
-  scraped. **No image is taken**, from the recording or from the live shop: a
-  fetched offer's picture is a mark this project draws from the offer's
-  identifier, on the same terms as the derived marks listed under Wikidata
-  above.
+  scraped.
+
+  IMPORTANT: **images are taken from this shop**, and this entry is where that
+  is recorded. Until issue #300 none was, and this paragraph said so — a fetched
+  offer's picture used to be a mark this project drew from the offer's
+  identifier. What happens now is that the merchant asks for the `thumbnail`
+  column, puts the URL the shop returns into the offer it builds, and serves
+  that offer to the browser. So under `make demo-live` a viewer's browser
+  fetches one photograph per fetched offer from https://cdn.dummyjson.com —
+  194 of them in the response recorded on 2026-08-12 — and shows them in the
+  same table as the 63 offers whose pictures this project drew. No image file is
+  copied into this repository and none is served from it; what is committed is
+  the recorded response above, which since that date carries those URLs as text.
+  Where the shop supplies no usable thumbnail, the drawn mark is still what an
+  offer shows.
+
+  Three things follow that the licence line above does not settle, and a reader
+  who thinks this was the wrong call should be able to say so from them:
+
+  1. **The MIT licence covers DummyJSON's software** — the server published in
+     that repository. It says nothing about the provenance of the product
+     photographs that server hands out, and this project has not established
+     where those pictures came from or who holds copyright in them. They are
+     displayed from the shop's own host, unmodified, in a demonstration that
+     sells nothing and moves no money. That is a narrower position than "the
+     pictures are MIT licensed", which nothing here is in a position to claim.
+
+  2. **The page now loads from a host this project does not control.** That is
+     a dependency this repository refused twice before — issue #215 ended four
+     broken images by requiring every picture to be a file it ships, and issue
+     #243 kept the rule for fetched offers by drawing marks instead. The cost
+     is the one those issues named: when cdn.dummyjson.com is slow, unreachable
+     or has moved a path, the fetched half of the product table shows broken
+     images, and both img tags carry `alt=""`, so it shows them silently.
+     Nothing else acquired a network dependency — the build, the tests and CI
+     reach no network, and this one is the browser's, under `make demo-live`
+     alone. A Content-Security-Policy for the frontend would need
+
+         img-src 'self' data: https://cdn.dummyjson.com
+
+     There is no CSP in this repository today; that line is what one would have
+     to say. backend/internal/roles/merchant/mark.go carries the argument for
+     making this trade, and what was given up to make it.
+
+     **The host in that line is an observation, not a rule the code keeps.**
+     What the merchant checks is `https://`, a host after it, and no whitespace
+     or quote — never which host. cdn.dummyjson.com is where all 194 thumbnails
+     in the recorded response point, and it is therefore where a run today sends
+     a browser; a shop that answered with a different host would be believed,
+     and the line above would be the wrong policy rather than an unenforced one.
+     That is deliberate — a merchant reads its stock through an interface and
+     does not know which shop answered, so naming one host would put the shop's
+     identity in the wrong package — and it is written here rather than only in
+     mark.go, because "which third-party hosts does this page talk to" is a
+     question a reader comes to this file for, and the honest answer is
+     "whichever ones `-catalogue-live` fetched from, one shop's word for it".
+
+     What bounds it in practice is one directory along: `cmd/merchant`'s
+     `-catalogue-live` refuses every value but `dummyjson`, so the shop whose
+     word is taken is not itself configurable at run time.
+
+  3. **A free service now carries this repository's demonstration traffic.**
+     Not a licence question and not a copyright one, which is why it is its own
+     point: every page view under `make demo-live` fetches up to 194 images from
+     a shop that charges nothing and promises nothing. The columns asked for in
+     the request are kept to the nine actually used, for the same reason — see
+     shop/data/PROVENANCE.md — but that courtesy was cheap and this one is not.
+     Anybody running this at any scale, or building on it, should be hosting
+     those images themselves.
 
 IBM Plex Mono and IBM Plex Sans
   Copyright (c) 2017 IBM Corp. with Reserved Font Name "Plex"

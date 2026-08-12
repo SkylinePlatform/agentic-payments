@@ -48,6 +48,17 @@ func TestTheRecordingTurnsIntoSomethingThisProjectCanSell(t *testing.T) {
 		"who is behind the counter is the shop; the brand is a fact about the product and is an attribute")
 	assert.Equal(t, "dummyjson.com", sunglasses.Attributes["source"],
 		"this is the one way a sentence can ask for the fetched half of the shelf — the text operators are eq, neq, in and nin, so the identifier's prefix is not something a constraint can reach")
+	assert.Equal(t, "https://cdn.dummyjson.com/product-images/sunglasses/black-sun-glasses/thumbnail.webp", sunglasses.Thumbnail,
+		"issue #300 asks this shop for its photographs and shows them; a decoder that dropped the column would leave the merchant drawing marks over pictures it had already been sent")
+
+	photographs := 0
+	for _, p := range products {
+		if p.Thumbnail != "" {
+			photographs++
+		}
+	}
+	assert.Equal(t, len(products), photographs,
+		"the recording carries a thumbnail on every row it sells, and the fallback to a drawn mark is for the shop that does not — a recording with holes in it would make that fallback the ordinary case without anything saying so")
 
 	for _, p := range products {
 		require.NoError(t, p.validate(),
@@ -69,12 +80,14 @@ func TestARowTheShopCannotDescribeIsDroppedAndTheCatalogueIsNot(t *testing.T) {
 
 	products, err := decodeDummyJSON([]byte(`{"total":3,"products":[
 		{"id":1,"title":"","description":"d","category":"c","price":1.0,"sku":"S1"},
-		{"id":2,"title":"t","description":"d","category":"c","price":2.5,"sku":"S2"},
+		{"id":2,"title":"t","description":"d","category":"c","price":2.5,"sku":"S2","thumbnail":"  "},
 		{"id":3,"title":"t","description":"d","category":"c","price":0,"sku":"S3"}]}`))
 
 	require.NoError(t, err, "two odd rows out of three is a data-quality problem, not a shop that failed to answer")
 	require.Len(t, products, 1, "the untitled row and the free one both have to go: one has nothing to put on the screen, and the other is inside every limit a user could set")
 	assert.Equal(t, 250, products[0].Price.Amount, "$2.50 is 250 minor units")
+	assert.Empty(t, products[0].Thumbnail,
+		"a thumbnail of spaces is no thumbnail, and the trim is what makes it arrive as the empty string rather than as a value the merchant needs a second opinion about — it is also what lets a padded URL still be shown")
 }
 
 // TestAShopWithNothingSellableIsAFailure is the other side of the row above,
@@ -218,7 +231,9 @@ func TestTheFetcherRefusesEverythingButAnAnswer(t *testing.T) {
 			assert.Contains(t, asked, "limit=0",
 				"the whole catalogue is asked for in one request, and the total the response carries is what proves it arrived whole")
 			assert.Contains(t, asked, "select=",
-				"asking for the eight columns this project can address is the one courtesy a free shop is owed")
+				"asking for the nine columns this project uses is the one courtesy a free shop is owed")
+			assert.Contains(t, asked, "thumbnail",
+				"issue #300 shows the shop's photograph, and a request that does not ask for it gets a merchant drawing marks for a shop that had pictures all along")
 		})
 	}
 }

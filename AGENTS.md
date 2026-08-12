@@ -889,15 +889,22 @@ not, and a wider shop nobody can address in their own words is a longer table.
 The shop is MIT-licensed placeholder data; `backend/internal/roles/merchant/shop`
 is the fetcher, and `NOTICE` records the terms.
 
-Three things about it are worth knowing before running it. **A fetched offer
+Four things about it are worth knowing before running it. **A fetched offer
 holds one price**, so a sentence with a condition in it can never resolve
 against one — only an instruction can, and the merchant says so in its own
 start-up output rather than leaving a viewer to wait. **A shop that will not
 answer stops the merchant**, on `-interpreter auto`'s own reasoning read one
 step along: an unset key is an answer and falls back, and a live catalogue asked
-for and not delivered is not. And **`make demo` is untouched by all of it** — it
-reaches no network, and the flag is refused in `deploy/demo.json` for exactly
-that reason.
+for and not delivered is not. **The browser fetches the shop's photographs**,
+which is the one place this repository depends on a host it does not control:
+since issue #300 a fetched offer's `image_url` is the shop's own `thumbnail`,
+so `cdn.dummyjson.com` being down shows broken images in the fetched half of the
+product table. That MIT licence covers DummyJSON's *software* and says nothing
+about the pictures it serves — `NOTICE` is where that distinction is written out,
+and `internal/roles/merchant/mark.go` is where the trade is argued. And **`make
+demo` is untouched by all of it** — it reaches no network, the flag is refused in
+`deploy/demo.json` for exactly that reason, and every committed offer still names
+a picture this repository ships.
 
 **The frontend suite is where that trade-off shows.** `frontend-test` is Vitest
 in jsdom, and it is deliberately not a prerequisite of `check` — a gate that

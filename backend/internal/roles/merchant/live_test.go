@@ -469,35 +469,89 @@ func TestAFetchedOfferMayNotBeSomethingTheFileAlreadySells(t *testing.T) {
 	}
 }
 
-// TestAFetchedOfferCarriesItsOwnPicture is the image rule, from the side that
-// matters: not that Validate refuses the wrong shape, but that what Extend
-// actually produces is a picture depending on nobody.
+// TestAFetchedOfferShowsTheShopsPhotograph is issue #300's headline, from the
+// side that matters: not that Validate would accept an https URL, but that what
+// Extend actually produces for a shop that has photographs is those
+// photographs.
 //
-// #215 added TestEveryShippedImageURLNamesAFileThatExists because a root-relative
-// path is a promise a file exists somewhere else, and four of them did not. A
-// fetched offer makes no such promise, so there is no equivalent way for it to
-// break — which is the argument mark.go makes and this is the measurement of it.
-func TestAFetchedOfferCarriesItsOwnPicture(t *testing.T) {
+// Both halves are asserted, because each on its own is satisfied by a broken
+// implementation. Every picture being *permitted* is satisfied by a merchant
+// that still draws a mark for all 194 — which is the state #300 exists to end.
+// Every picture being a photograph is satisfied by one that has forgotten the
+// fallback, and `src=""` is what that ships the day the shop omits one.
+//
+// The committed half is skipped rather than checked here, and that is a finding
+// rather than an omission. This test was written with an assertion that every
+// non-fetched offer still names a root-relative path, and no mutation could
+// make it fail: LoadCatalogue validates, so a committed offer pointing at a host
+// stops the file loading and the walk never runs. Two independent checks in
+// validateImage have to be disabled *and* the catalogue edited before the line
+// can go red, at which point it is asserting what
+// TestEveryShippedImageURLNamesAFileThatExists and
+// TestTheCatalogueFileRefusesNonsense/"an image at an absolute URL" already do.
+// TestOnlyAFetchedOfferMayPointAtAHost is where "committed offers are untouched"
+// is held with something that can fail.
+func TestAFetchedOfferShowsTheShopsPhotograph(t *testing.T) {
 	t.Parallel()
 
 	f, added := extended(t)
 	require.Positive(t, added)
 
-	fetched := 0
+	fetched, photographs, marks := 0, 0, 0
 	for _, o := range f.Offers {
 		if o.Source != merchant.SourceLive {
-			assert.True(t, strings.HasPrefix(o.ImageURL, "/"),
-				"an offer the file lists still names a file this repository ships; the rule gained a second shape, it did not lose the first")
 			continue
 		}
 		fetched++
-		assert.True(t, strings.HasPrefix(o.ImageURL, "data:image/svg+xml;base64,"),
-			"a fetched offer pointing anywhere else is a row that can render a broken image, which is the state #215 ended")
-		assert.NotContains(t, o.ImageURL, "http",
-			"a picture on the shop's own host would make this screen depend on a server nobody here operates")
+		switch {
+		case strings.HasPrefix(o.ImageURL, "https://"):
+			photographs++
+		case strings.HasPrefix(o.ImageURL, "data:image/svg+xml;base64,"):
+			marks++
+		default:
+			assert.Fail(t, "a fetched offer's picture is neither the shop's photograph nor a drawn mark",
+				"%q is a third thing, and the two Validate accepts are the two a browser is known to be able to draw", o.ImageURL)
+		}
 	}
+
 	assert.Equal(t, added, fetched,
 		"an offer was added without being marked as fetched, so Validate would hold it to the committed file's rules")
+	assert.Positive(t, photographs,
+		"the recorded shop supplies a thumbnail for every row it sells, so a shelf with no photograph on it is #300 reverted — the merchant is drawing marks over pictures it was given")
+	assert.Equal(t, 0, marks,
+		"this recording has a thumbnail on all 194 rows, so a mark here means one was discarded; the fallback is for a shop that gave nothing, not for one that gave something unfamiliar")
+}
+
+// TestOnlyAFetchedOfferMayPointAtAHost is "https for SourceLive only" measured
+// as one string in two positions, which is the only way to state it that a
+// mutation cannot dodge.
+//
+// Two separate rows — a live offer with a CDN URL that passes, a committed offer
+// with a different CDN URL that fails — would go on passing if the committed
+// branch grew an exception for the shop's own host, because no row would be
+// using it. So the picture below is taken from an offer Extend actually
+// produced and is then asked of Validate twice, differing in `source` and in
+// nothing else at all.
+func TestOnlyAFetchedOfferMayPointAtAHost(t *testing.T) {
+	t.Parallel()
+
+	fetched := fetchedPrototype(t)
+	photograph := fetched().ImageURL
+	require.True(t, strings.HasPrefix(photograph, "https://"),
+		"this test is about the string a fetched offer carries when it is the shop's photograph, and %q is not one", photograph)
+
+	live := shippedCatalogue(t)
+	live.Offers = append(live.Offers, fetched())
+	assert.NoError(t, live.Validate(),
+		"a fetched offer showing the shop's own photograph is what issue #300 decided, so a catalogue refusing one is a merchant that cannot start under -catalogue-live")
+
+	committed := shippedCatalogue(t)
+	entry(committed).ImageURL = photograph
+	err := committed.Validate()
+	require.ErrorIs(t, err, merchant.ErrInvalidCatalogue,
+		"the same picture on an offer this repository ships has to be refused; #300 widened the rule for stock nobody here wrote down, and an image the file names is one somebody here chose")
+	assert.Contains(t, err.Error(), "does not control",
+		"the refusal has to say why a committed offer may not do what the fetched one beside it just did, or the two rules read as an inconsistency")
 }
 
 // TestTheMerchantSaysWhichSentencesALiveOfferCanAnswer is decision three, made

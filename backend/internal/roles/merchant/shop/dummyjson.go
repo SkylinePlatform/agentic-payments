@@ -51,12 +51,21 @@ const dummyJSONCurrency = "USD"
 
 // dummyJSONFields is what the response is asked to carry.
 //
-// A products response with everything on it is about six times this size and
+// A products response with everything on it is about five times this size and
 // most of it is reviews and dimensions — facts about a fake product that no
 // constraint here can address. Asking for the columns actually used is the one
 // courtesy a free shop is owed, and it is also what makes the recorded snapshot
-// beside this file 62 KB rather than 400.
-const dummyJSONFields = "id,title,description,category,price,brand,sku,tags"
+// beside this file 80 KB rather than 400.
+//
+// `thumbnail` is the ninth and the one that is not a fact a constraint can
+// address: it is a URL on the shop's own CDN, and issue #300 is the decision to
+// take it. Every column before it ends up somewhere a verifier or a person can
+// read; this one ends up in an img tag in a browser, which is a dependency on a
+// host this project does not operate. merchant/mark.go argues it, and NOTICE
+// records what is taken and on what terms — the short version being that
+// DummyJSON's MIT licence covers its software and says nothing about the
+// pictures it serves.
+const dummyJSONFields = "id,title,description,category,price,brand,sku,tags,thumbnail"
 
 // DummyJSON fetches a catalogue from a DummyJSON-shaped shop.
 //
@@ -88,12 +97,18 @@ const DummyJSONTimeout = 15 * time.Second
 
 // dummyJSONMaxBody is the most this will read from the shop.
 //
-// The recorded snapshot of the whole catalogue is 62 KB — 62,169 bytes, and the
+// The recorded snapshot of the whole catalogue is 80 KB — 81,780 bytes, and the
 // live shop answered the same request with exactly that many on 12 August 2026,
-// so the recording is not a historical figure — making this roughly thirty times
-// the expected size: enough that a shop which grew tenfold still works, and small
-// enough that a misconfigured -catalogue-live pointed at something enormous fails
-// rather than filling memory.
+// so the recording is not a historical figure — making this roughly twenty-five
+// times the expected size: enough that a shop which grew tenfold still works, and
+// small enough that a misconfigured -catalogue-live pointed at something enormous
+// fails rather than filling memory.
+//
+// It was 62,169 bytes and thirty times over until issue #300 added `thumbnail`
+// to the request. Nineteen and a half KB for one column across 194 rows is what a
+// CDN path per product costs, and the number is written down rather than the
+// verdict for the reason maxResponse gives one package along: the next column
+// somebody adds needs something to compare against.
 //
 // **The "fails" in that sentence was not true until issue #251.** io.ReadAll over
 // an io.LimitReader returns the first 2 MiB of something enormous with no error
@@ -182,6 +197,7 @@ type dummyJSONProduct struct {
 	Brand       string   `json:"brand"`
 	SKU         string   `json:"sku"`
 	Tags        []string `json:"tags"`
+	Thumbnail   string   `json:"thumbnail"`
 }
 
 // decodeDummyJSON turns a products response into products this project can
@@ -282,6 +298,13 @@ func (row dummyJSONProduct) product() (Product, bool) {
 		Retailer:   DummyJSONHost,
 		Attributes: attributes,
 		Price:      generated.Amount{Amount: minor, Currency: dummyJSONCurrency},
+		// Passed on as the shop stated it, trimmed and not otherwise inspected.
+		// Whether a browser is pointed at it is the merchant's decision and is
+		// made in merchant/mark.go, which is also where a value this project
+		// will not put in an img tag falls back to a drawn mark — so a shop
+		// answering with a relative path, an http:// URL or nothing at all
+		// costs a picture rather than the row, and never the catalogue.
+		Thumbnail: strings.TrimSpace(row.Thumbnail),
 	}, true
 }
 
