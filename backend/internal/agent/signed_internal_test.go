@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -76,4 +78,59 @@ func TestAnInstantSomebodyCouldHaveSignedAtIsCarriedThrough(t *testing.T) {
 	require.NotNil(t, got, "an instant the mandate does state is the whole point of reading one")
 	assert.Equal(t, at, *got,
 		"and it travels unchanged — this function decides whether there is an instant, never which")
+}
+
+// aMandateDated is the smallest document ap2.IssuedAtOfMandate will read an
+// instant out of: an Issuer-signed JWT stating `iat`, and the trailing separator
+// that says no key binding follows.
+//
+// **The signature is not one, and that is the subject rather than a shortcut.**
+// Nothing on this path checks it — signed.go's "What this buys, and what it does
+// not" is that argument at length — so a real key here would be plumbing in aid
+// of a property this package deliberately does not have, and a reader who found
+// one would reasonably conclude the opposite. The tests in
+// internal/adapters/ap2/issued_test.go are where the reader is driven with
+// genuinely issued mandates; what this file needs is a document with a stated
+// instant in it.
+func aMandateDated(t *testing.T, at time.Time) string {
+	t.Helper()
+
+	segment := func(claims map[string]any) string {
+		raw, err := json.Marshal(claims)
+		require.NoError(t, err, "encoding one segment of the document under test")
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+	return segment(map[string]any{"alg": "ES256", "typ": "example+sd-jwt"}) + "." +
+		segment(map[string]any{"vct": "mandate.checkout.open.1", "iat": at.Unix()}) + "." +
+		base64.RawURLEncoding.EncodeToString([]byte("not a signature")) + "~"
+}
+
+// TestAWatchReadsTheSigningInstantOnceAndNotAgain is the guard on Watch's memo,
+// and it exists because deleting the memo altogether left every other test in
+// this package green.
+//
+// The memo is not a correctness fix and this test does not pretend otherwise:
+// what it saves is a base64 decode per event and, the reason it was added,
+// reportSignedAt's diagnostic per event — an authorisation nobody can date
+// printing the same line four times an attempt for as long as a poll watch
+// lives. A behaviour a comment argues for at that length and nothing pins is one
+// the next refactor removes without noticing.
+//
+// **Swapping the mandate between the two calls is what makes the assertion about
+// the memo rather than about the answer.** A watch that re-read would find a
+// document it can date and hand back an instant; one that memoised finds nothing
+// to do. Asserting the two calls agree on a *readable* mandate would pass on both
+// implementations, because the answer would be the same one twice.
+func TestAWatchReadsTheSigningInstantOnceAndNotAgain(t *testing.T) {
+	t.Parallel()
+
+	w := &Watch{Authorisation: Authorisation{OpenCheckoutMandate: "not a mandate at all"}}
+	require.Nil(t, w.signedInstant(),
+		"a document no reader can parse dates nothing, and reportSignedAt turns that into an absence")
+
+	w.Authorisation.OpenCheckoutMandate = aMandateDated(t, time.Unix(1_777_326_189, 0).UTC())
+	assert.Nil(t, w.signedInstant(),
+		"the read happens once for the whole watch, whether or not it produced a value — a "+
+			"second read here would be a second diagnostic on every event of every attempt, "+
+			"which is the noise the memo was added to stop")
 }

@@ -41,13 +41,19 @@ import (
 //
 // **Where that comment's argument stops, and it is worth being exact about.**
 // CheckoutDigestOfMandate offers a second comfort — that a verifier goes on to
-// check the very same claim over the very same mandate — and that half does not
-// transfer. Nothing downstream re-derives `iat`: verifiers read `exp` and refuse
-// an expired mandate, and no rule in this package compares an issuance instant
-// against anything. So the observability argument is the whole of what makes
-// this sound, rather than the first of two. It is enough for a label on a
-// screenshot and it would not be enough for anything a verdict turned on, which
-// is why nothing here is reachable from a verification path.
+// check the very same claim over the very same mandate — and that half transfers
+// in one direction only, which is too little to lean on. A verifier does read
+// this claim: authz.Endorsement.CanAuthorise, which authz.AuthoriseCheckout and
+// authz.AuthorisePayment both run under the chain verifiers above, refuses a
+// mandate whose `iat` has not arrived yet as ErrNotYetValid — the
+// mandate_not_yet_valid code. But that bound is one-sided, because an instant
+// already past is inside the window by construction: a *backdated* `iat` is
+// refused by nobody, and no verifier anywhere compares this claim against the
+// reading this function took. Recomputing a digest catches a wrong value in
+// either direction; this catches one. So the observability argument is the whole
+// of what makes this sound, rather than the first of two. It is enough for a
+// label on a screenshot and it would not be enough for anything a verdict turned
+// on, which is why nothing here is reachable from a verification path.
 //
 // # Why `iat` is readable with no disclosure resolved
 //
