@@ -44,16 +44,6 @@ func bicycle(id string, price int) constraint.Subject {
 	}
 }
 
-func tickets(count, total int) constraint.Subject {
-	return constraint.Subject{
-		Amount:   generated.Amount{Amount: total, Currency: "USD"},
-		At:       insideWindow,
-		Quantity: count,
-		Item:     constraint.Item{Category: "concert-tickets", ID: "event:vlado-georgijev-2026-11-14"},
-		Merchant: constraint.Party{ID: "tickets-rs", Category: "ticketing"},
-	}
-}
-
 func ladders(merchant string, price int) constraint.Subject {
 	return constraint.Subject{
 		Amount:   generated.Amount{Amount: price, Currency: "USD"},
@@ -132,12 +122,6 @@ func TestEachScenarioAuthorisesWhatItsSentenceSaid(t *testing.T) {
 		{"a cheaper bicycle the user did not name", "buy me this bicycle when it drops below $400",
 			bicycle("gtin:09999999999999", 10000), false},
 
-		{"two tickets inside the total", concertPrompt, tickets(2, 15000), true},
-		// "Two tickets, up to $160" is two bounds because either alone approves
-		// something the sentence did not: four at $40 stays inside the total.
-		{"four tickets inside the same total", concertPrompt, tickets(4, 15000), false},
-		{"two tickets over the total", concertPrompt, tickets(2, 17000), false},
-
 		// The mandate names no merchant, so any merchant's verifier accepts it —
 		// and the bound is what protects the user, not the choice of shop.
 		{"ladders from a shop nobody named", ladderPrompt, ladders("some-marketplace", 12000), true},
@@ -157,40 +141,25 @@ func TestEachScenarioAuthorisesWhatItsSentenceSaid(t *testing.T) {
 	}
 }
 
-const (
-	concertPrompt = "two tickets to the Vlado Georgijev concert in November, up to $160 all in"
-	ladderPrompt  = "find and buy telescopic ladders, cheapest"
-)
+const ladderPrompt = "find and buy telescopic ladders, cheapest"
 
-// TestTheConcertPromptsBasketSizeIsTwo is issue #133's own scenario, at the
-// interpreter — before any of it has reached an agent, a surface or a watch.
+// TestASentenceNamingNoCountProposesNoBasketSize is every scenario this
+// package publishes, walked rather than named one by one — the flight, the
+// bicycle and the ladders are all single-unit purchases, and the zero is what
+// says the sentence chose nothing rather than that it chose one.
+// Interpretation.Quantity records why the difference has to survive this far.
 //
-// "Two tickets... up to $160 all in" places a bound, `quantity lte 2`, that a
-// purchase of one ticket satisfies as readily as two. What tells the two apart
-// is Quantity, carried beside the constraints rather than folded into one of
-// them — and this is the one scripted sentence where it is not the ordinary
-// default.
-func TestTheConcertPromptsBasketSizeIsTwo(t *testing.T) {
-	t.Parallel()
-
-	interpretation, err := interpret.Demo().Interpret(t.Context(), concertPrompt)
-	require.NoError(t, err, "the concert scenario is not in the script")
-	assert.Equal(t, 2, interpretation.Quantity,
-		"the sentence asked for two tickets, and quantity lte 2 alone cannot tell that from one")
-}
-
-// TestASentenceNamingNoCountProposesNoBasketSize is the other four scenarios,
-// walked rather than named one by one — the flight, the bicycle and the
-// ladders are all single-unit purchases, and the zero is what says the
-// sentence chose nothing rather than that it chose one. Interpretation.Quantity
-// records why the difference has to survive this far.
+// **Nothing here is skipped any more.** Issue #244 removed the one entry that
+// used to carry a nonzero Quantity — "two tickets... up to $160 all in",
+// issue #133's own scripted demonstration — so every prompt in the current
+// table proposes no basket size, and this test says so of all of them rather
+// than of "the other four". What is not covered here is the field itself
+// carrying a count through an implementation: TestTheModelsQuantityReachesTheInterpretation
+// in model_test.go still proves that, independently, at the ModelInterpreter.
 func TestASentenceNamingNoCountProposesNoBasketSize(t *testing.T) {
 	t.Parallel()
 
 	for _, script := range interpret.Scenarios() {
-		if script.Prompt == concertPrompt {
-			continue
-		}
 		t.Run(script.Prompt, func(t *testing.T) {
 			t.Parallel()
 
@@ -205,28 +174,22 @@ func TestASentenceNamingNoCountProposesNoBasketSize(t *testing.T) {
 // TestEachScenarioSaysWhenItsSentenceWantedToBuy is issue #198 at the
 // interpreter — before any of it has reached an agent, a surface or a watch.
 //
-// Five prompts and two shapes of sentence. Three presuppose a price now and ask
-// for it not to be acted on at that price; two carry a cap and an instruction,
-// and a person reading either expects a purchase. The agent had one mode for
-// all five, which is why the concert demonstration read as *saw $150.00 for
-// two, declined it, paid $158.00*.
+// Three prompts and two shapes of sentence. Two presuppose a price now and ask
+// for it not to be acted on at that price; one carries an objective and an
+// instruction, and a person reading it expects a purchase. The agent had one
+// mode for all of them, which is why the concert demonstration issue #244
+// removed from this table read as *saw $150.00 for two, declined it, paid
+// $158.00*.
 //
-// It walks Scenarios rather than naming the five, so a sixth prompt has to
-// arrive with a row here — and asserts every prompt's trigger explicitly rather
-// than only the two that changed, because the interesting entry is the alias:
-// "buy a flight to Palma **under** $200" names no moment at all and is
-// conditional because the table declares it the same intent as the sentence
-// above it. A rule reading the words could not have known that, which is the
-// argument for the fact living in the table at all.
+// It walks Scenarios rather than naming the three, so a fourth prompt has to
+// arrive with a row here.
 func TestEachScenarioSaysWhenItsSentenceWantedToBuy(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]interpret.Trigger{
-		builtScenarioPrompt:                             interpret.TriggerConditional,
-		"buy a flight to Palma under $200, this summer": interpret.TriggerConditional,
-		"buy me this bicycle when it drops below $400":  interpret.TriggerConditional,
-		concertPrompt: interpret.TriggerImmediate,
-		ladderPrompt:  interpret.TriggerImmediate,
+		builtScenarioPrompt:                            interpret.TriggerConditional,
+		"buy me this bicycle when it drops below $400": interpret.TriggerConditional,
+		ladderPrompt:                                   interpret.TriggerImmediate,
 	}
 
 	for _, script := range interpret.Scenarios() {
@@ -343,24 +306,6 @@ func TestMatchingIgnoresCaseAndSpacingAndNothing(t *testing.T) {
 	}
 }
 
-// TestTheTwoWordingsOfTheBuiltScenarioAgree covers the declared alias.
-//
-// use-cases.md writes the sentence one way in beat 1 and another in its sequence
-// diagram, and both are in the script as separate entries. Two entries rather
-// than one fuzzy rule is the whole design: a reader of the table can see that
-// there are two, and can see that they agree.
-func TestTheTwoWordingsOfTheBuiltScenarioAgree(t *testing.T) {
-	t.Parallel()
-
-	beat, err := interpret.Demo().Interpret(t.Context(), builtScenarioPrompt)
-	require.NoError(t, err, "beat 1's wording")
-	diagram, err := interpret.Demo().Interpret(t.Context(), "buy a flight to Palma under $200, this summer")
-	require.NoError(t, err, "the sequence diagram's wording")
-
-	assert.Equal(t, beat, diagram,
-		"two wordings of one intent produced two different authorities")
-}
-
 // TestInterpretingTwiceReturnsIndependentTrees is why the script is decoded on
 // every call rather than once.
 //
@@ -462,7 +407,14 @@ func TestNewScriptedRefusesAScriptThatCouldNotDoItsJob(t *testing.T) {
 // Which entry answered would depend on which was written last, a reader would
 // have no way of telling that the other is dead, and this is the one component
 // whose entire purpose is to be deterministic. Aliases are still available —
-// they are two entries with two prompts, as the built scenario's are.
+// they are two entries with two prompts.
+//
+// **This is now the only witness of that mechanism.** The demo table carried
+// its own declared alias — "under $200" beside "when it drops below $200" —
+// until issue #244 dropped it as a demonstration of the same intent that read
+// as padding on a menu of three. What that removed is the illustration, not
+// the capability: two scripts that normalise to one prompt are still refused,
+// and this synthetic pair is what proves it.
 func TestNewScriptedRefusesTwoPromptsThatMatchTheSameWay(t *testing.T) {
 	t.Parallel()
 

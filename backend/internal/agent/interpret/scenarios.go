@@ -34,52 +34,44 @@ func mustScript(scripts ...Script) *ScriptedInterpreter {
 	return s
 }
 
-// The five prompts, and the two shapes of sentence among them.
+// The three prompts, and the two shapes of sentence among them.
 //
-// **Three say when.** "When it drops below $200", "under $200" and "when it
-// drops below $400" all presuppose a price now and ask for it not to be acted
-// on at that price, which is TriggerConditional and is what agent.Watch was
-// built for. The alias is the interesting one of those three: "under $200"
-// names no moment at all, and it is conditional because it is declared as the
-// *same intent* as the sentence above it rather than because of the words in
-// it. A table is where that can be said; a matcher scanning for "when" could
-// not have known.
+// **Two say when.** "When it drops below $200" and "when it drops below $400"
+// both presuppose a price now and ask for it not to be acted on at that price,
+// which is TriggerConditional and is what agent.Watch was built for.
 //
-// **Two do not.** "Two tickets... up to $160 all in" and "find and buy
-// telescopic ladders, cheapest" carry a cap and an instruction, and a person
-// reading either expects a purchase. They were watches until issue #198, which
-// is why the concert demonstration read as *saw $150.00 for two, declined it,
+// **One does not.** "Find and buy telescopic ladders, cheapest" carries an
+// objective and an instruction, and a person reading it expects a purchase. It
+// was a watch until issue #198, which is why the concert demonstration this
+// table used to carry alongside it read as *saw $150.00 for two, declined it,
 // paid $158.00* — inside the cap the whole way, and not what the sentence
-// asked for.
+// asked for. The concert prompt itself, and its declared alias for the flight
+// below, came out with issue #244: a menu of five read as padding rather than
+// as a demonstration, and this is what is left once each remaining sentence
+// shows something the others do not.
+//
+// **Nothing here proposes a Quantity greater than one any more.** The concert
+// entry this table carried was the one scripted demonstration of
+// Interpretation.Quantity's reason to exist — issue #133, two tickets against
+// one all-in cap — and removing it removes that witness from the demo table.
+// The field's wiring is not unproven: TestTheModelsQuantityReachesTheInterpretation
+// in model_test.go covers it independently, at the ModelInterpreter, decoding
+// the same "quantity" key from a model's own envelope rather than from a Script
+// literal. What is gone is a *scripted* prompt that carries a basket size
+// through this interpreter, and nothing in this table replaces it — restoring
+// one was judged worse than losing the demonstration, since none of the three
+// sentences below name a count without inventing one issue #244 did not ask
+// for.
 var demoScenarios = []Script{
 	{
 		Prompt:      "buy a flight to Palma when it drops below $200, this summer",
 		Constraints: flightToPalma,
 		Trigger:     TriggerConditional,
 	},
-
-	// The same sentence as the sequence diagram in the same document writes it.
-	//
-	// An alias, declared rather than guessed. Matching is exact once case and
-	// spacing are normalised, so two wordings of one intent are two entries — and
-	// a reader of this table can see that they are two, which is the property a
-	// fuzzy matcher would take away.
-	{
-		Prompt:      "buy a flight to Palma under $200, this summer",
-		Constraints: flightToPalma,
-		Trigger:     TriggerConditional,
-	},
-
 	{
 		Prompt:      "buy me this bicycle when it drops below $400",
 		Constraints: thisBicycle,
 		Trigger:     TriggerConditional,
-	},
-	{
-		Prompt:      "two tickets to the Vlado Georgijev concert in November, up to $160 all in",
-		Constraints: concertTickets,
-		Quantity:    2,
-		Trigger:     TriggerImmediate,
 	},
 	{
 		Prompt:      "find and buy telescopic ladders, cheapest",
@@ -163,34 +155,6 @@ const flightToPalma = `[
 const thisBicycle = `[
 	{"op":"eq","field":"item.id","value":"gtin:05012345678900"},
 	{"op":"lte","field":"amount","value":{"amount":40000,"currency":"USD"}}
-]`
-
-// concertTickets needs two bounds, because either one alone approves something
-// the user did not say.
-//
-// A cap on the total cannot tell one ticket at $160 from four at $40, and a cap
-// on the count says nothing about the price. "Two tickets, up to $160 all in" is
-// both, and the quantity is part of what was approved rather than a detail of
-// how it gets filled.
-//
-// **What the quantity is not is an instruction.** `quantity lte 2` says at most
-// two; it does not say how many to put in the basket, and reading a bound as
-// the number to buy would be the agent deciding what the user meant from a
-// limit they set — the same move as evaluating a constraint. So the basket size
-// travels beside the constraints rather than inside one of them: this entry's
-// Quantity is 2, interpret.Interpretation carries it, the Trusted Surface
-// renders it before anybody signs, and the watch spends exactly that many.
-// Issue #133.
-//
-// **Nor does the sentence make its purchase conditional on anything.** "Up to
-// $160 all in" is a cap, and a cap is not a condition to wait on — it is what
-// protects the person if the two tickets turn out to cost more than they
-// thought. So this entry is TriggerImmediate, and issue #198 is the second time
-// this one sentence has shown that a fact it carries is not a constraint.
-const concertTickets = `[
-	{"op":"eq","field":"item.id","value":"event:vlado-georgijev-2026-11-14"},
-	{"op":"lte","field":"quantity","value":2},
-	{"op":"lte","field":"amount","value":{"amount":16000,"currency":"USD"}}
 ]`
 
 // telescopicLadders is the scenario where the model's edge shows, and the one
