@@ -52,9 +52,9 @@ func TestAGroupQueryIsAnsweredByARealMerchant(t *testing.T) {
 				leaf(category, "eq", "ladders"),
 			}},
 			want:    []string{merchant.DemoFlightID, merchant.DemoLadderID},
-			without: []string{merchant.DemoBicycleID, merchant.DemoConcertID},
+			without: []string{merchant.DemoBicycleID},
 			why: "a disjunction has to widen the answer to both branches and to neither of the " +
-				"other two, which is the only evidence that the merchant read the group rather " +
+				"other one, which is the only evidence that the merchant read the group rather " +
 				"than one of its children",
 		},
 		{
@@ -67,7 +67,7 @@ func TestAGroupQueryIsAnsweredByARealMerchant(t *testing.T) {
 				leaf(category, "eq", "ladders"),
 			}},
 			want:    []string{merchant.DemoFlightID, merchant.DemoLadderID},
-			without: []string{merchant.DemoBicycleID, merchant.DemoConcertID},
+			without: []string{merchant.DemoBicycleID},
 			why: "the branch travels as the weakening the vocabulary allows, so the flight is " +
 				"found at a price a dollar cap would have excluded — which is the watch loop's " +
 				"whole case, arriving here as the same answer the row above gives",
@@ -77,7 +77,7 @@ func TestAGroupQueryIsAnsweredByARealMerchant(t *testing.T) {
 			given: generated.Constraint{Op: "not", Of: []generated.Constraint{
 				leaf(category, "eq", "flights"),
 			}},
-			want:    []string{merchant.DemoBicycleID, merchant.DemoConcertID, merchant.DemoLadderID},
+			want:    []string{merchant.DemoBicycleID, merchant.DemoLadderID},
 			without: []string{merchant.DemoFlightID},
 			why: "dropping this one did not merely widen the search — it left the flight as " +
 				"candidate zero, which is the offer the sentence ruled out and the one the agent " +

@@ -20,8 +20,8 @@ import (
 // running demonstration read alike.
 const demoMerchantID = "air-serbia"
 
-// The four scripted prompts' constraint sets, character for character the ones
-// in internal/agent/interpret/scenarios.go.
+// The three scripted prompts' constraint sets, character for character the
+// ones in internal/agent/interpret/scenarios.go.
 //
 // Copied rather than imported, and the copy is not laziness: that package
 // arrives with #16, and even once it has, the catalogue is what the prompts go
@@ -33,8 +33,17 @@ const demoMerchantID = "air-serbia"
 // failing test on either side: both keep passing, and the demonstration simply
 // stops showing one story — the interpreter proposes limits, the catalogue
 // answers a different set, and the search box returns nothing for a prompt the
-// documentation says works. Grep for BEG, for the GTIN and for the event
-// identifier before changing either.
+// documentation says works. Grep for BEG and for the GTIN before changing
+// either.
+//
+// **A fourth used to stand here**: concertTickets, matching a purchase of up to
+// two tickets under event:vlado-georgijev-2026-11-14, up to $160 all in. Issue
+// #244 removed the offer and its scripted prompt, so there is nothing left for
+// it to agree with; TestAnOfferedQuantityIsWhatTheConstraintIsEvaluatedAgainst
+// and TestTheAmountEvaluatedIsWhatTheWholeBasketCosts in chain_test.go, which
+// tested the merchant's own quantity-times-price arithmetic rather than this
+// prompt's agreement with the interpreter, moved to the ladders offer instead
+// of being deleted with it.
 const (
 	flightToPalma = `[
 		{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}},
@@ -48,26 +57,19 @@ const (
 		{"op":"lte","field":"amount","value":{"amount":40000,"currency":"USD"}}
 	]`
 
-	concertTickets = `[
-		{"op":"eq","field":"item.id","value":"event:vlado-georgijev-2026-11-14"},
-		{"op":"lte","field":"quantity","value":2},
-		{"op":"lte","field":"amount","value":{"amount":16000,"currency":"USD"}}
-	]`
-
 	telescopicLadders = `[
 		{"op":"eq","field":"item.category","value":"ladders"},
 		{"op":"lte","field":"amount","value":{"amount":15000,"currency":"USD"}}
 	]`
 )
 
-// scripted names the four sets so a subtest and a failure message can.
+// scripted names the three sets so a subtest and a failure message can.
 var scripted = []struct {
 	name        string
 	constraints string
 }{
 	{"a flight to Palma under $200, this summer", flightToPalma},
 	{"this bicycle when it drops below $400", thisBicycle},
-	{"two tickets to the concert, up to $160 all in", concertTickets},
 	{"telescopic ladders, cheapest", telescopicLadders},
 }
 
@@ -177,8 +179,8 @@ func TestAProductAppearsExactlyWhenAMandateWouldAuthoriseBuyingIt(t *testing.T) 
 }
 
 // TestTheCatalogueAnswersTheScriptedPrompts is the demonstration itself: the
-// four prompts the documentation is written around each find their own item and
-// nothing else.
+// three prompts the documentation is written around each find their own item
+// and nothing else.
 //
 // The property test above would pass over a catalogue that matched nothing at
 // all — an empty result set agrees with an evaluator that refuses everything.
@@ -191,7 +193,7 @@ func TestTheCatalogueAnswersTheScriptedPrompts(t *testing.T) {
 		constraints string
 
 		// atStart is what the prompt finds at the opening prices, and it is
-		// empty for two of the four on purpose. "When it drops below $400" has
+		// empty for two of the three on purpose. "When it drops below $400" has
 		// nothing to demonstrate if the answer is yes immediately: the beat the
 		// autonomous flow exists for is the price crossing into range, and in a
 		// search box that beat is the product appearing.
@@ -209,12 +211,6 @@ func TestTheCatalogueAnswersTheScriptedPrompts(t *testing.T) {
 			constraints: thisBicycle,
 			atStart:     nil,
 			atEnd:       []string{merchant.DemoBicycleID},
-		},
-		{
-			name:        "two tickets to the concert, up to $160 all in",
-			constraints: concertTickets,
-			atStart:     []string{merchant.DemoConcertID},
-			atEnd:       []string{merchant.DemoConcertID},
 		},
 		{
 			name:        "telescopic ladders, cheapest",
@@ -275,21 +271,6 @@ func TestTheCataloguePricesSitWhereTheScriptedPromptsNeedThem(t *testing.T) {
 			"nothing to watch it drop below")
 	assert.Less(t, merchant.DemoBicycleAccepted, merchant.DemoBicycleCap,
 		"the bicycle's final price never crosses into range, so that prompt never finds it")
-
-	assert.LessOrEqual(t, merchant.DemoConcertPrice, merchant.DemoConcertCap,
-		"one ticket already costs more than the whole approved total")
-	assert.LessOrEqual(t, 2*merchant.DemoConcertPrice, merchant.DemoConcertCap,
-		"the prompt approves two tickets 'all in', so two at this price have to fit "+
-			"inside the cap or the search finds something the checkout would refuse")
-	// The repriced figure is issue #192's: the concert was always affordable, so
-	// its second price only exists to give a watch a step to act on, and it has
-	// to stay inside the cap too or the purchase it is meant to demonstrate would
-	// be the one thing this offer refuses.
-	assert.LessOrEqual(t, merchant.DemoConcertPriceRepriced, merchant.DemoConcertCap,
-		"the repriced ticket alone costs more than the whole approved total")
-	assert.LessOrEqual(t, 2*merchant.DemoConcertPriceRepriced, merchant.DemoConcertCap,
-		"two at the repriced price have to still fit inside the cap, or the watch's one "+
-			"attempt is refused instead of bought")
 
 	assert.Less(t, merchant.DemoLadderPrice, merchant.DemoLadderCap,
 		"the ladders cost more than the bound the interpreter turned 'cheapest' into")

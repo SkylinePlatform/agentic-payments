@@ -43,7 +43,8 @@ type IntentInterpreter interface {
 //
 // Quantity is that second fact, carried beside the constraints rather than
 // folded into one of them. Zero is the sentence naming no count at all, which
-// is every scripted prompt but the concert — read as one wherever a concrete
+// since issue #244 removed the concert prompt is every scripted prompt there
+// is — read as one wherever a concrete
 // number is finally needed, on the convention Watch.Quantity and
 // console.Watching.Quantity already state, but **not resolved here and not by
 // anything between here and them**. An interpreter that answered 1 for silence
@@ -77,10 +78,10 @@ type Interpretation struct {
 //
 // Two shapes of sentence reach an interpreter and they ask for different
 // things. "Buy a flight to Palma **when it drops below** $200" presupposes a
-// price now and asks for it not to be acted on at that price. "**Two tickets**
-// to the concert, **up to** $160 all in" carries no condition at all: a person
-// reading it expects a purchase, and the cap is what protects them if the
-// purchase turns out to cost more than they thought.
+// price now and asks for it not to be acted on at that price. "**Find and buy**
+// telescopic ladders, cheapest" carries no condition at all: a person reading
+// it expects a purchase, and the bound the objective became is what protects
+// them if the purchase turns out to cost more than they thought.
 //
 // # Why the interpreter answers this and the agent does not
 //

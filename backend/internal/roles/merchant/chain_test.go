@@ -736,17 +736,20 @@ func TestTheSubjectAMerchantBuildsIsTheSubjectItsSearchMatched(t *testing.T) {
 		now := clk.Now()
 
 		// The search side reaches the facts through Price, which is what Search
-		// itself walks the catalogue with.
-		listed, err := cat.Price(merchant.DemoConcertID)
+		// itself walks the catalogue with. Any offer would do — this is a claim
+		// about two code paths, not about which product they describe — and
+		// the ladders is what took over from the concert once issue #244
+		// removed it.
+		listed, err := cat.Price(merchant.DemoLadderID)
 		require.NoError(t, err, "Price")
 		searched := cat.Subject(listed.Offer, listed.Price, 1, now)
 
 		// The checkout side reaches them through Quote — what GET /checkout
 		// signs — and Find, which is how settle recovers what an already-signed
 		// offer is for.
-		quoted, err := cat.Quote(merchant.DemoConcertID, 1)
+		quoted, err := cat.Quote(merchant.DemoLadderID, 1)
 		require.NoError(t, err, "Quote")
-		found, err := cat.Find(merchant.DemoConcertID)
+		found, err := cat.Find(merchant.DemoLadderID)
 		require.NoError(t, err, "Find")
 		bought := cat.Subject(found, quoted.LinePrice, quoted.Quantity, now)
 
@@ -925,11 +928,19 @@ func TestAChainAgainstAnOfferThatNamesNoItemIsRefused(t *testing.T) {
 // TestAnOfferedQuantityIsWhatTheConstraintIsEvaluatedAgainst is why the checkout
 // signs a quantity rather than assuming one.
 //
-// "Two tickets, up to $160 all in" places two bounds, and either alone approves
-// something the user did not say. The cap here is deliberately far above any
-// price the catalogue holds, so the only thing that can refuse the three-ticket
-// purchase is the quantity — a set carrying the scripted $160 cap would be
-// refused on the money and would pass this test with the quantity never read.
+// A cap on the count and a cap on the total are two bounds, and either alone
+// approves something the user did not say — issue #133's own reasoning, which
+// this test states over the merchant's checkout chain rather than over the
+// interpreter. The amount cap here is deliberately far above any price the
+// catalogue holds, so the only thing that can refuse the three-ladder purchase
+// is the quantity — a set carrying a tight amount cap would be refused on the
+// money and would pass this test with the quantity never read.
+//
+// **This used to run against the concert ticket**, whose scripted prompt —
+// "two tickets... up to $160 all in" — was this property's original source.
+// Issue #244 removed that offer along with the prompt; what this test proves is
+// the merchant's own quantity arithmetic, not agreement with any one sentence,
+// so it moved to the ladders rather than being deleted with the concert.
 func TestAnOfferedQuantityIsWhatTheConstraintIsEvaluatedAgainst(t *testing.T) {
 	t.Parallel()
 
@@ -957,7 +968,7 @@ func TestAnOfferedQuantityIsWhatTheConstraintIsEvaluatedAgainst(t *testing.T) {
 		{
 			name:     "three, which is not",
 			quantity: 3,
-			because: "a cap on the total cannot tell one ticket at $160 from four at $40, so " +
+			because: "a cap on the total cannot tell one ladder at $417 from three at $139, so " +
 				"the count is part of what was approved and has to be evaluated",
 		},
 	} {
@@ -969,8 +980,8 @@ func TestAnOfferedQuantityIsWhatTheConstraintIsEvaluatedAgainst(t *testing.T) {
 				settlingChain(s.processor)
 			}
 
-			offer, price := s.quoteItem(t, merchant.DemoConcertID, tc.quantity)
-			assert.Equal(t, merchant.DemoConcertPrice*tc.quantity, price.Amount,
+			offer, price := s.quoteItem(t, merchant.DemoLadderID, tc.quantity)
+			assert.Equal(t, merchant.DemoLadderPrice*tc.quantity, price.Amount,
 				"the signed offer prices the whole line, which is what the Payment Mandate "+
 					"has to pay and what an amount constraint bounds")
 
@@ -990,18 +1001,23 @@ func TestAnOfferedQuantityIsWhatTheConstraintIsEvaluatedAgainst(t *testing.T) {
 // quantity, and the half a test at one unit cannot see.
 //
 // The count and the money are two bounds and a purchase can sit inside one and
-// outside the other. Three tickets at $75 is within a limit of five and outside
-// a cap of $160 — and a merchant that evaluated the *unit* price against that
-// cap would authorise it, having compared the user's limit on the purchase
-// against the price of a third of it.
+// outside the other. Three ladders at $139 is within a limit of five and
+// outside a cap of $300 — and a merchant that evaluated the *unit* price
+// against that cap would authorise it, having compared the user's limit on the
+// purchase against the price of a third of it.
+//
+// **This used to run against the concert ticket**, for the reason the sibling
+// test above gives; it moved to the ladders with issue #244 rather than being
+// deleted alongside the offer it used to test against.
 func TestTheAmountEvaluatedIsWhatTheWholeBasketCosts(t *testing.T) {
 	t.Parallel()
 
 	// Five is deliberately more than any quantity below, so the count cannot be
-	// what refuses anything here. The cap is the scripted $160.
-	const upToFiveUnderOneSixty = `[
+	// what refuses anything here. The cap sits between two ladders ($278) and
+	// three ($417).
+	const upToFiveUnderThreeHundred = `[
 		{"op":"lte","field":"quantity","value":5},
-		{"op":"lte","field":"amount","value":{"amount":16000,"currency":"USD"}}
+		{"op":"lte","field":"amount","value":{"amount":30000,"currency":"USD"}}
 	]`
 
 	for _, tc := range []struct {
@@ -1011,16 +1027,16 @@ func TestTheAmountEvaluatedIsWhatTheWholeBasketCosts(t *testing.T) {
 		because    string
 	}{
 		{
-			name:       "two tickets, which come to $150",
+			name:       "two ladders, which come to $278",
 			quantity:   2,
 			authorised: true,
 			because:    "inside both bounds, which is what makes the row below about the money alone",
 		},
 		{
-			name:     "three tickets, which come to $225",
+			name:     "three ladders, which come to $417",
 			quantity: 3,
-			because: "each ticket is $75 and every one of them is under the cap; what is over it " +
-				"is the purchase, which is the only thing the user placed a limit on",
+			because: "each ladder is $139 and every one of them is under the cap; what is over " +
+				"it is the purchase, which is the only thing the user placed a limit on",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1031,14 +1047,14 @@ func TestTheAmountEvaluatedIsWhatTheWholeBasketCosts(t *testing.T) {
 				settlingChain(s.processor)
 			}
 
-			offer, price := s.quoteItem(t, merchant.DemoConcertID, tc.quantity)
-			require.Equal(t, merchant.DemoConcertPrice*tc.quantity, price.Amount,
+			offer, price := s.quoteItem(t, merchant.DemoLadderID, tc.quantity)
+			require.Equal(t, merchant.DemoLadderPrice*tc.quantity, price.Amount,
 				"the signed offer prices the whole line, or there is no basket here to test")
-			require.LessOrEqual(t, merchant.DemoConcertPrice, merchant.DemoConcertCap,
-				"one ticket has to be inside the cap, or this proves nothing about which "+
+			require.LessOrEqual(t, merchant.DemoLadderPrice, merchant.DemoLadderCap,
+				"one ladder has to be inside its own cap, or this proves nothing about which "+
 					"number was compared")
 
-			body := s.chains(t, constraintsFrom(t, upToFiveUnderOneSixty), offer, price,
+			body := s.chains(t, constraintsFrom(t, upToFiveUnderThreeHundred), offer, price,
 				sameNonce(s.nonce(t)))
 			status, out := s.present(t, strconv.Itoa(tc.quantity), body)
 
@@ -1057,7 +1073,7 @@ func TestTheAmountEvaluatedIsWhatTheWholeBasketCosts(t *testing.T) {
 			// price too, so it would refuse this basket even if the checkout
 			// side had been shown a unit price by mistake. A test asserting only
 			// the status therefore passes whether the merchant compared the cap
-			// against $225 or against $75, which is the whole question.
+			// against $417 or against $139, which is the whole question.
 			//
 			// This is a rebase's doing rather than an original oversight: the
 			// status assertion did isolate the checkout side until #120 gave
@@ -1071,7 +1087,7 @@ func TestTheAmountEvaluatedIsWhatTheWholeBasketCosts(t *testing.T) {
 			assert.Equal(t, generated.ReceiptMandateTypeCheckout, receipt.MandateType,
 				"the user's cap has to be exceeded on the Checkout Mandate, evaluated against "+
 					"what the merchant says this purchase costs; a payment-typed receipt here "+
-					"means the checkout side was shown the price of one ticket")
+					"means the checkout side was shown the price of one ladder")
 		})
 	}
 }

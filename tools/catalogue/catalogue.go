@@ -10,30 +10,39 @@ import (
 	"strings"
 )
 
-// Heroes are the offers a scripted sentence goes looking for, and the four this
-// program copies through untouched.
+// Heroes are the offers a scripted sentence goes looking for, and the three
+// this program copies through untouched.
 //
 // They are the engine of the demonstration rather than stock. The flight opens
 // at $240.00 against a cap of $200.00 and steps to $189.00, which *is* the Human
 // Not Present beat — a purchase refused at $210.00 and completed at $189.00 —
-// and the bicycle is the same shape one vertical over. The concert and the
-// ladders sit inside their cap the whole way and are bought at once, because
-// issue #198 read their sentences as instructions rather than as conditions.
+// and the bicycle is the same shape one vertical over. The ladders sit inside
+// their cap the whole way and are bought at once, because issue #198 read that
+// sentence as an instruction rather than as a condition.
 //
-// Two of the four are named character for character by the constraint sets in
+// One of the three is named character for character by the constraint sets in
 // backend/internal/agent/interpret/scenarios.go, which approve one specific
-// object rather than a class of object.
+// object rather than a class of object — the bicycle's GTIN. The flight and the
+// ladders are matched on attributes and category instead.
+//
+// **A fourth used to stand here**: the concert ticket, `event:vlado-georgijev-
+// 2026-11-14`. Issue #244 dropped it, together with its scripted prompt, on the
+// ground that a menu showing the same kind of purchase twice — this one and the
+// bicycle, both a specific object under a specific cap — reads as padding on a
+// menu of five. What went with it: the one scripted demonstration of a basket
+// size greater than one (Interpretation.Quantity, issue #133) and one of the two
+// TriggerImmediate prompts, leaving the ladders as that shape's only witness.
+// See backend/internal/agent/interpret/scenarios.go for where those two
+// properties are proven now.
 //
 // **They are named here and not restated.** This program copies each one out of
 // the file it is rewriting, as the raw JSON it found — so a re-run cannot move a
-// price, a title or even a key order, and there is no second copy of the four
-// numbers every diagram of a real transaction reuses. If one of these
-// identifiers ever left the file, the rewrite refuses rather than dropping the
-// beat quietly.
+// price, a title or even a key order, and there is no second copy of the numbers
+// every diagram of a real transaction reuses. If one of these identifiers ever
+// left the file, the rewrite refuses rather than dropping the beat quietly.
 var Heroes = []string{
 	"route:BEG-PMI",
 	"gtin:05012345678900",
-	"event:vlado-georgijev-2026-11-14",
 	"gtin:05014477390221",
 }
 
@@ -46,7 +55,7 @@ var Heroes = []string{
 //
 // Comment and Offers are both json.RawMessage because both are text this
 // program is a custodian of rather than an author of. The comment is prose a
-// person owns; the offers include the four heroes, which have to come back out
+// person owns; the offers include the three heroes, which have to come back out
 // exactly as they went in.
 type file struct {
 	Comment  json.RawMessage `json:"$comment,omitempty"`
@@ -104,7 +113,7 @@ func readCatalogue(path string) (*file, error) {
 // The heroes come first and in the order [Heroes] names them, which is the order
 // the file already had. Ordering inside the file is presentational — the
 // merchant sorts by identifier when it builds a catalogue — but a diff is not,
-// and keeping the four that matter at the top is what stops a re-run's diff
+// and keeping the three that matter at the top is what stops a re-run's diff
 // burying them under sixty rows of stock.
 func (f *file) rewrite(derived []entry) (*file, error) {
 	byID := make(map[string]json.RawMessage, len(f.Offers))
@@ -129,7 +138,7 @@ func (f *file) rewrite(derived []entry) (*file, error) {
 			// it, and writing the file anyway would replace a loud failure here
 			// with a quiet one in front of whoever was about to take a
 			// screenshot.
-			return nil, fmt.Errorf("the file no longer lists %s, which is one of the four offers "+
+			return nil, fmt.Errorf("the file no longer lists %s, which is one of the three offers "+
 				"a scripted sentence goes looking for; rewriting it would drop that beat", id)
 		}
 		out.Offers = append(out.Offers, hero)

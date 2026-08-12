@@ -177,12 +177,13 @@ func run() error {
 		"what the user typed, for the interpreter to read")
 	// A fallback rather than the source, and it still has a path that reaches
 	// it. The interpretation proposes a basket size only when the sentence
-	// named one — 2 for the concert prompt, and nothing at all for the other
-	// four — so this is what those four are bought by, and `-quantity 3` on
-	// the bicycle prompt still buys three. What it can no longer do is
-	// override a count the user actually said out loud, which is the whole of
-	// issue #133. See agent.Proposal.Quantity for why the interpreter's
-	// silence stays a silence all the way here.
+	// named one, and since issue #244 removed the concert prompt none of the
+	// three scripted sentences does — so this is what all three are bought by,
+	// and `-quantity 3` on the bicycle prompt still buys three. What it can no
+	// longer do is override a count the user actually said out loud, which is
+	// the whole of issue #133, and the path that reaches it is a sentence some
+	// other interpreter reads. See agent.Proposal.Quantity for why the
+	// interpreter's silence stays a silence all the way here.
 	quantity := flag.Int("quantity", 1, "how many of the item to buy, when the sentence named no count of its own")
 	poll := flag.Duration("poll", agent.DefaultPoll, "how often the watch re-quotes the merchant")
 

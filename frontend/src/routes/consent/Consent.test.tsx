@@ -176,8 +176,8 @@ describe("the consent screen", () => {
   });
 
   it("names the basket size, and never inside the signed box — issue #133", async () => {
-    // The concert prompt's own number: "two tickets... up to $160 all in"
-    // interprets to a `quantity lte 2` constraint that one ticket satisfies
+    // A sentence that names a count: "two of these... up to $300 all in"
+    // interprets to a `quantity lte 2` constraint that one of them satisfies
     // as readily as two, and proposal.quantity is the fact that actually says
     // how many. A person has to read it before signing — which is why it is
     // on the screen at all — and it is not a thing anybody signs: the surface

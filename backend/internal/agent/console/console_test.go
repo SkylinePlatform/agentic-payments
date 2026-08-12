@@ -567,7 +567,7 @@ func TestTheBrowsersTriggerReachesTheWatchItStarts(t *testing.T) {
 
 	var started startedBody
 	require.Equal(t, http.StatusCreated, post(t, server.URL+"/watches", map[string]any{
-		"prompt":        "two tickets to the Vlado Georgijev concert in November, up to $160 all in",
+		"prompt":        "two of these telescopic ladders, up to $300 all in",
 		"quantity":      2,
 		"authorisation": body,
 	}, &started))
@@ -753,7 +753,7 @@ func TestTheProposalNamesTheBasketSizeOnTheWire(t *testing.T) {
 
 			var body proposedBody
 			require.Equal(t, http.StatusOK, post(t, server.URL+"/proposals",
-				map[string]any{"prompt": "two tickets to the concert"}, &body))
+				map[string]any{"prompt": "two of these telescopic ladders"}, &body))
 			assert.Equal(t, tc.want, body.Quantity, tc.why)
 		})
 	}
@@ -795,7 +795,7 @@ func TestTheProposalNamesWhenItWillBuyOnTheWire(t *testing.T) {
 
 			var body proposedBody
 			require.Equal(t, http.StatusOK, post(t, server.URL+"/proposals",
-				map[string]any{"prompt": "two tickets to the concert"}, &body))
+				map[string]any{"prompt": "two of these telescopic ladders"}, &body))
 			assert.Equal(t, trigger, body.Trigger,
 				"this response is the only place a consent screen can learn which of the two "+
 					"authorisations it is about to collect a signature for")
@@ -1054,7 +1054,7 @@ func TestAnInstructionRefusedIsDrawnRefusedNotExhaustedOrFailed(t *testing.T) {
 		return agent.Watched{}, agent.ErrPurchaseRefused
 	})
 
-	run, err := c.service.Start(t.Context(), console.Watching{Prompt: "two tickets to the concert"})
+	run, err := c.service.Start(t.Context(), console.Watching{Prompt: "two of these telescopic ladders"})
 	require.NoError(t, err)
 	<-run.Done()
 

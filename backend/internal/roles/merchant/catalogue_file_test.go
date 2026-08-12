@@ -43,7 +43,7 @@ func shippedCatalogue(t *testing.T) *merchant.CatalogueFile {
 //
 // seed.go's constants are what docs/business/use-cases.md is asserted against,
 // and TestTheScenarioHolds pins them to the prose. The file is what the merchant
-// actually serves. Two copies of four numbers is normally the thing this
+// actually serves. Two copies of the same numbers is normally the thing this
 // repository refuses; what makes it safe is this test, which is the only reason
 // a price edited in deploy/catalogue.json cannot quietly move the demonstration
 // off the documentation it is written about.
@@ -83,11 +83,6 @@ func TestTheCatalogueFileIsTheDocumentedScenario(t *testing.T) {
 			bound:  merchant.DemoBicycleCap,
 			found:  merchant.FoundAtTheLastPrice,
 		},
-		merchant.DemoConcertID: {
-			prices: []int{merchant.DemoConcertPrice, merchant.DemoConcertPriceRepriced},
-			bound:  merchant.DemoConcertCap,
-			found:  merchant.FoundAlways,
-		},
 		merchant.DemoLadderID: {
 			prices: []int{merchant.DemoLadderPrice, merchant.DemoLadderPriceRepriced},
 			bound:  merchant.DemoLadderCap,
@@ -99,8 +94,8 @@ func TestTheCatalogueFileIsTheDocumentedScenario(t *testing.T) {
 	for id, want := range documented {
 		offer, stocked := listed[id]
 		require.True(t, stocked,
-			"%s is one of the four identifiers seed.go names and the file no longer lists it; "+
-				"two of the four are matched character for character by the scripted prompts",
+			"%s is one of the three identifiers seed.go names and the file no longer lists it; "+
+				"one of the three is matched character for character by the scripted prompts",
 			id)
 
 		assert.Equal(t, want.prices, offer.Prices,
@@ -194,7 +189,7 @@ func TestTheShopIsWideEnoughForASentenceToNarrowIt(t *testing.T) {
 // TestTheScenarioBlockAgreesWithTheScriptedPrompt closes the remaining gap
 // between the file and the interpreter.
 //
-// The four constraint sets at the top of search_test.go are the interpreter's
+// The three constraint sets at the top of search_test.go are the interpreter's
 // output copied character for character, and they stay copied — importing that
 // package would prove the two agree with each other while proving nothing about
 // what a mandate carrying those constraints authorises. What stops being
@@ -214,7 +209,6 @@ func TestTheScenarioBlockAgreesWithTheScriptedPrompt(t *testing.T) {
 	}{
 		{"a flight to Palma under $200, this summer", flightToPalma, merchant.DemoFlightID},
 		{"this bicycle when it drops below $400", thisBicycle, merchant.DemoBicycleID},
-		{"two tickets to the concert, up to $160 all in", concertTickets, merchant.DemoConcertID},
 		{"telescopic ladders, cheapest", telescopicLadders, merchant.DemoLadderID},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

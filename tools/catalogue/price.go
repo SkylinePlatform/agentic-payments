@@ -49,7 +49,8 @@ func price(id string, b band) ([]int, scenario) {
 	// nothing: a Human Not Present watch attempts only on a step change — see
 	// agent.Watch — so an offer whose second price equalled its first would be
 	// an offer no watch could ever act on. Issue #192 is what that cost the
-	// concert and the ladders before they each acquired a second figure.
+	// ladders — and the concert offer beside them, until issue #244 removed it —
+	// before they acquired a second figure.
 	reduction := (first * (5 + draw(id, "cut", 16)) / 100 / 1000) * 1000
 	if reduction < 1000 {
 		reduction = 1000

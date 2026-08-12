@@ -170,9 +170,10 @@ type Watching struct {
 	// authorisation — see Start. A basket size the interpretation proposed is
 	// the count the user actually said out loud, and on the browser's path it
 	// is also the number the consent screen displayed; this field is a
-	// caller's own by comparison, and loses to both. What it still covers, and
-	// covers on every scripted sentence but the concert, is the ordinary case
-	// where nobody said a count and somebody has to pick one.
+	// caller's own by comparison, and loses to both. What it still covers — on
+	// every scripted sentence there is, since issue #244 removed the one that
+	// named a count — is the ordinary case where nobody said a count and
+	// somebody has to pick one.
 	Quantity int
 
 	// Authorisation, when set, is what the user already signed, and Start uses

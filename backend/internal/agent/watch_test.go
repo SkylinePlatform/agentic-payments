@@ -43,13 +43,52 @@ import (
 // refused rather than guessed at.
 const palmaPrompt = "buy a flight to Palma when it drops below $200, this summer"
 
-// concertPrompt is the scenario issue #133 is about: two tickets, a total cap,
-// and a basket size the constraint model deliberately does not carry.
-const concertPrompt = "two tickets to the Vlado Georgijev concert in November, up to $160 all in"
-
 // ladderPrompt is the scenario where "cheapest" becomes a bound rather than an
 // instruction — see interpret.telescopicLadders.
 const ladderPrompt = "find and buy telescopic ladders, cheapest"
+
+// twoLaddersPrompt and twoLadders are issue #133's scenario, moved.
+//
+// It used to be the concert: two tickets, a total cap, and a basket size the
+// constraint model deliberately does not carry — `quantity lte 2` is
+// satisfied by a purchase of one exactly as readily as by two, so the count
+// itself has to travel beside the constraints. Issue #244 removed that
+// prompt and its offer along with the padding it read as on a five-sentence
+// menu, and took this property's only witness with it.
+//
+// It is not scripted into interpret.Demo() to get it back — inventing a
+// sixth demo sentence nobody asked for would be a different change from the
+// one #244 made. This is a local scenario instead, built the same way
+// interpret's own tests build one-off scripts, over an offer that still
+// exists: the ladders, at a cap wide enough that two ($278.00) authorise and
+// three ($417.00) would not.
+const twoLaddersPrompt = "two of these telescopic ladders, up to $300 all in"
+
+var twoLadders = mustLocalScript(interpret.Script{
+	Prompt: twoLaddersPrompt,
+	Constraints: fmt.Sprintf(`[
+		{"op":"eq","field":"item.id","value":%q},
+		{"op":"lte","field":"quantity","value":2},
+		{"op":"lte","field":"amount","value":{"amount":30000,"currency":"USD"}}
+	]`, merchant.DemoLadderID),
+	Quantity: 2,
+	Trigger:  interpret.TriggerImmediate,
+})
+
+// mustLocalScript builds a one-entry interpreter for a scenario
+// interpret.Demo() does not script.
+//
+// It panics rather than returning an error for the same reason
+// interpret.mustScript does: the input is this file, not a caller's, and a
+// defect in it should stop the test binary that loads it rather than putting
+// an unreachable branch at every call site.
+func mustLocalScript(s interpret.Script) *interpret.ScriptedInterpreter {
+	i, err := interpret.NewScripted(s)
+	if err != nil {
+		panic("agent_test: a local scenario is not usable: " + err.Error())
+	}
+	return i
+}
 
 // authorised is a world plus an agent that has been through the discovery half:
 // its own key endorsed by the user, both open mandates in hand, and one item to
@@ -119,9 +158,16 @@ func authorise(t *testing.T, w *world) *authorisedAgent {
 }
 
 // authoriseFor is authorise against a caller-named prompt, for a test that
-// needs a scenario other than the built one — the concert prompt's basket
-// size, say.
+// needs a scenario other than the built one but is still asking
+// interpret.Demo() for it.
 func authoriseFor(t *testing.T, w *world, prompt string) *authorisedAgent {
+	t.Helper()
+	return authoriseWith(t, w, prompt, interpret.Demo())
+}
+
+// authoriseWith is authoriseFor against a caller-supplied interpreter, for a
+// scenario interpret.Demo() does not script at all — twoLadders, say.
+func authoriseWith(t *testing.T, w *world, prompt string, interp interpret.IntentInterpreter) *authorisedAgent {
 	t.Helper()
 
 	key := newParty(t, "agent", w.clock)
@@ -150,7 +196,7 @@ func authoriseFor(t *testing.T, w *world, prompt string) *authorisedAgent {
 
 	auth, err := a.client.Authorise(t.Context(), agent.Intent{
 		Prompt:      prompt,
-		Interpreter: interpret.Demo(),
+		Interpreter: interp,
 		AgentKey:    agentKey,
 	})
 	require.NoError(t, err, "the discovery half has to complete before there is anything to watch")
@@ -401,19 +447,25 @@ func TestTheCredentialProvidersReceiptDoesNotSpendTheMandate(t *testing.T) {
 	})
 }
 
-// TestTheConcertPromptBuysTheBasketSizeItAsked is issue #133, demonstrated
+// TestAWatchBuysTheBasketSizeAnAuthorisationNamed is issue #133, demonstrated
 // rather than described.
 //
-// "Two tickets... up to $160 all in" interprets to three constraints — one of
-// them `quantity lte 2` — and every one of them is satisfied by a purchase of
-// a single ticket at $75.00. Nothing about authorisation is wrong: the bound
-// is a limit, not an instruction, and reading it as "buy two" would be the
-// agent deciding what the user meant from a cap it set — the same move as the
-// agent evaluating a constraint. What the sentence actually asked for is a
-// fact interpret.Interpretation carries beside the constraints, and this is
-// where it has to still be standing once the watch spends it: in
+// twoLaddersPrompt — "two of these telescopic ladders, up to $300 all in" —
+// interprets to three constraints, one of them `quantity lte 2`, and every
+// one of them is satisfied by a purchase of a single ladder at $139.00.
+// Nothing about authorisation is wrong: the bound is a limit, not an
+// instruction, and reading it as "buy two" would be the agent deciding what
+// the user meant from a cap it set — the same move as the agent evaluating a
+// constraint. What the sentence actually asked for is a fact
+// interpret.Interpretation carries beside the constraints, and this is where
+// it has to still be standing once the watch spends it: in
 // agent.Authorisation.Quantity, and in what the watch built from it actually
 // prices and pays for.
+//
+// This used to run against the concert prompt, which is where issue #133 was
+// first demonstrated; issue #244 removed that prompt and its offer, and
+// twoLadders is the local scenario that replaced it — see its own doc
+// comment for why this could not stay scripted into interpret.Demo().
 //
 // The basket size is orthogonal to whether Watch.Run ever gets as far as an
 // attempt at all — issue #192's defect, fixed since — so this test drives
@@ -421,18 +473,17 @@ func TestTheCredentialProvidersReceiptDoesNotSpendTheMandate(t *testing.T) {
 // TestTheCredentialProvidersReceiptDoesNotSpendTheMandate's own pattern,
 // rather than running the loop to completion. It reads the opening price,
 // which is deploy/catalogue.json's first figure for this offer and stays
-// $75.00 regardless of how many prices follow it.
-// TestAWatchOnAnAlwaysAffordableOfferStillWaitsForAStepThenBuys is what runs
-// the concert prompt's watch to completion and is where #192 itself is
-// covered.
-func TestTheConcertPromptBuysTheBasketSizeItAsked(t *testing.T) {
+// $139.00 regardless of how many prices follow it.
+// TestASentenceWithNoConditionBuysAtOnceRatherThanWaiting is what runs a
+// ladders watch to completion and is where issue #192 itself is covered.
+func TestAWatchBuysTheBasketSizeAnAuthorisationNamed(t *testing.T) {
 	t.Parallel()
 
 	w := newWorld(t)
-	a := authoriseFor(t, w, concertPrompt)
+	a := authoriseWith(t, w, twoLaddersPrompt, twoLadders)
 
 	require.Equal(t, 2, a.auth.Quantity,
-		"the sentence asked for two tickets; a watch that cannot see that number has nowhere honest to get it from")
+		"the sentence asked for two ladders; a watch that cannot see that number has nowhere honest to get it from")
 
 	watch := a.watch(t)
 	require.Equal(t, 2, watch.Quantity,
@@ -440,19 +491,19 @@ func TestTheConcertPromptBuysTheBasketSizeItAsked(t *testing.T) {
 
 	quoted, err := a.client.QuoteItem(t.Context(), a.auth.Item, watch.Quantity)
 	require.NoError(t, err, "the merchant has to price the basket the watch is actually about to buy")
-	assert.Equal(t, 2*merchant.DemoConcertPrice, quoted.Price.Amount,
-		"two tickets at $75.00 each is $150.00 — one ticket's worth is the bug this test exists to catch")
+	assert.Equal(t, 2*merchant.DemoLadderPrice, quoted.Price.Amount,
+		"two ladders at $139.00 each is $278.00 — one ladder's worth is the bug this test exists to catch")
 
 	d, err := watch.Delegate(t.Context(), quoted)
 	require.NoError(t, err, "minting the four closed mandates for the basket the watch is buying")
 
 	var tracker agent.Tracker
 	require.NoError(t, watch.Attempt(t.Context(), &tracker, d, quoted, 1),
-		"two tickets for $150.00 is well inside the $160.00 cap the user signed")
+		"two ladders for $278.00 is well inside the $300.00 cap the user signed")
 
 	assert.True(t, d.Settled, "the money has to have moved for the basket that was actually presented")
-	assert.Equal(t, 2*merchant.DemoConcertPrice, d.Price.Amount,
-		"what was paid for has to be the two tickets the user asked for, not one")
+	assert.Equal(t, 2*merchant.DemoLadderPrice, d.Price.Amount,
+		"what was paid for has to be the two ladders the user asked for, not one")
 }
 
 // shippedSteps is how many prices deploy/catalogue.json gives each offer, by
@@ -482,12 +533,14 @@ func shippedSteps(t *testing.T) map[string]int {
 // TestASentenceWithNoConditionBuysAtOnceRatherThanWaiting is issue #198, run
 // end to end.
 //
-// "Two tickets to the concert, up to $160 all in" and "find and buy telescopic
-// ladders, cheapest" carry no condition. A person reading either expects a
-// purchase; both were nevertheless turned into a watch, and #196 made them buy
-// only because the merchant re-commits to a second price — a step change that
-// carries no new information about whether the purchase was allowed, and which
-// left the concert reading as *saw $150.00, declined it, paid $158.00*.
+// "Two of these telescopic ladders, up to $300 all in" and "find and buy
+// telescopic ladders, cheapest" carry no condition. A person reading either
+// expects a purchase; both were nevertheless turned into a watch, and #196
+// made them buy only because the merchant re-commits to a second price — a
+// step change that carries no new information about whether the purchase was
+// allowed, and which left the concert prompt this table used to carry
+// reading as *saw $150.00, declined it, paid $158.00* before issue #244
+// removed it and the offer it named.
 //
 // What separates the two families is in the sentence rather than in the price,
 // so it is the interpreter that answers it and Authorisation.Trigger that
@@ -510,25 +563,36 @@ func shippedSteps(t *testing.T) map[string]int {
 // move to, and the purchase happens at the opening price regardless — an
 // assertion worth nothing if the catalogue quietly stopped giving them a
 // second price for it to have declined to wait for.
+//
+// # Both rows now buy the same offer, and that is not a loss
+//
+// twoLadders is a local scenario rather than a second scripted prompt — see
+// its own doc comment — so the row that used to be the concert is now the
+// ladders bought two at a time, and the row that already was the ladders is
+// the ladders bought one at a time by default. What each row proves is
+// distinct regardless of which product is behind it: one is the basket size
+// an authorisation named surviving into a purchase, the other is a run that
+// named no count at all still buying exactly one.
 func TestASentenceWithNoConditionBuysAtOnceRatherThanWaiting(t *testing.T) {
 	t.Parallel()
 
 	steps := shippedSteps(t)
 
 	for _, tc := range []struct {
-		name     string
-		prompt   string
-		item     string
-		quantity int
-		price    int
+		name        string
+		prompt      string
+		interpreter interpret.IntentInterpreter
+		item        string
+		quantity    int
+		price       int
 	}{
 		{
-			name: "concert", prompt: concertPrompt, item: merchant.DemoConcertID, quantity: 2,
-			price: 2 * merchant.DemoConcertPrice,
+			name: "two ladders", prompt: twoLaddersPrompt, interpreter: twoLadders,
+			item: merchant.DemoLadderID, quantity: 2, price: 2 * merchant.DemoLadderPrice,
 		},
 		{
-			name: "ladders", prompt: ladderPrompt, item: merchant.DemoLadderID, quantity: 1,
-			price: merchant.DemoLadderPrice,
+			name: "one ladder, named by default", prompt: ladderPrompt, interpreter: interpret.Demo(),
+			item: merchant.DemoLadderID, quantity: 1, price: merchant.DemoLadderPrice,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -539,7 +603,7 @@ func TestASentenceWithNoConditionBuysAtOnceRatherThanWaiting(t *testing.T) {
 					"one is no longer a claim about anything")
 
 			w := newWorld(t)
-			a := authoriseFor(t, w, tc.prompt)
+			a := authoriseWith(t, w, tc.prompt, tc.interpreter)
 			require.Equal(t, tc.item, a.auth.Item,
 				"buying the wrong offer would prove nothing about this one")
 			require.Equal(t, interpret.TriggerImmediate, a.auth.Trigger,
@@ -611,9 +675,9 @@ func TestASentenceWithNoConditionBuysAtOnceRatherThanWaiting(t *testing.T) {
 //
 // # Why the trigger is set by hand
 //
-// No scripted instruction names an offer its own cap refuses — the concert and
-// the ladders are affordable from their first price, which is what made them
-// #198's subject in the first place. The built scenario's flight is the
+// No scripted instruction names an offer its own cap refuses — the ladders are
+// affordable from their first price, which is what made them #198's subject in
+// the first place. The built scenario's flight is the
 // refusal this repository has: $240.00 against a cap of $200.00. So the
 // sentence's own reading is overridden here, and what is under test is the
 // loop rather than the interpretation. TestEachScenarioSaysWhenItsSentenceWantedToBuy
@@ -1337,11 +1401,9 @@ func TestEveryScriptedPromptFindsOneCandidate(t *testing.T) {
 	t.Parallel()
 
 	finds := map[string]string{
-		"buy a flight to Palma when it drops below $200, this summer":               merchant.DemoFlightID,
-		"buy a flight to Palma under $200, this summer":                             merchant.DemoFlightID,
-		"buy me this bicycle when it drops below $400":                              merchant.DemoBicycleID,
-		"two tickets to the Vlado Georgijev concert in November, up to $160 all in": merchant.DemoConcertID,
-		"find and buy telescopic ladders, cheapest":                                 merchant.DemoLadderID,
+		"buy a flight to Palma when it drops below $200, this summer": merchant.DemoFlightID,
+		"buy me this bicycle when it drops below $400":                merchant.DemoBicycleID,
+		"find and buy telescopic ladders, cheapest":                   merchant.DemoLadderID,
 	}
 
 	prompts := interpret.Demo().Prompts()

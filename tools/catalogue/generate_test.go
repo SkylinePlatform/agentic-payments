@@ -126,7 +126,7 @@ func TestNothingDerivedCollidesWithWhatAScriptedSentenceNarrowsOn(t *testing.T) 
 		assert.NotContains(t, Reserved.Identifiers, o.ID,
 			"%s is an identifier a scripted sentence names outright", o.ID)
 		assert.NotContains(t, Heroes, o.ID,
-			"%s would replace one of the four offers the demonstration is written around", o.ID)
+			"%s would replace one of the three offers the demonstration is written around", o.ID)
 
 		if _, repeated := identifiers[o.ID]; !assert.False(t, repeated,
 			"%s is derived twice, which makes item.id ambiguous to a mandate", o.ID) {
@@ -311,7 +311,7 @@ func TestRunningTheProgramTwiceChangesNothingTheSecondTime(t *testing.T) {
 }
 
 // TestTheHeroesComeBackOutExactlyAsTheyWentIn is the property the whole rewrite
-// is arranged around, and it is why the four are carried as raw JSON.
+// is arranged around, and it is why the heroes are carried as raw JSON.
 //
 // "Every hero offer keeps its prices and scenario, and every existing beat
 // reproduces unchanged" is issue #160's hardest requirement, and the way to fail
@@ -334,7 +334,7 @@ func TestTheHeroesComeBackOutExactlyAsTheyWentIn(t *testing.T) {
 			}
 		}
 	}
-	require.Len(t, before, len(Heroes), "the file no longer lists all four heroes")
+	require.Len(t, before, len(Heroes), "the file no longer lists every hero, so the property below would hold over whichever ones happened to still be there")
 
 	derived, err := derive()
 	require.NoError(t, err)
@@ -348,6 +348,6 @@ func TestTheHeroesComeBackOutExactlyAsTheyWentIn(t *testing.T) {
 	for _, id := range Heroes {
 		assert.True(t, slices.Contains(after, before[id]),
 			"%s did not come back out of the rewrite character for character, and its prices are "+
-				"what four tests and every screenshot are written against", id)
+				"what several tests and every screenshot are written against", id)
 	}
 }
