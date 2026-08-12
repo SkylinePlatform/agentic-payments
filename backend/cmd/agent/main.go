@@ -593,7 +593,17 @@ func serveConsole(
 }
 
 // consoleFor builds the console this process serves and starts the watch it was
-// configured with, writing anything a reader has to see about that watch to out.
+// configured with, writing what went *wrong* with that watch to out.
+//
+// **out is the failure stream and not the whole report**, which is worth stating
+// because the obvious reading is that everything about the boot watch goes
+// there. It does not: the two lines a watch that started prints — the sentence
+// and the run's own URL — go to stdout, beside ready's `[ ok ]` rows and the
+// console address serveConsole prints one line later, because they are that
+// banner's last two entries and a banner split across two streams is one nobody
+// can pipe. serveConsole passes os.Stderr, so what out carries is the report
+// that something did not happen, which is the half a test has to be able to
+// read back.
 //
 // Split from serveConsole so that the decision above is assertable without a
 // process, which is the same reason flagsAgree and interpreterFor are functions:

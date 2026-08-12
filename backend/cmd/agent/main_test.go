@@ -416,10 +416,15 @@ func TestABootWatchThatFindsNothingStillLeavesAConsoleServing(t *testing.T) {
 	events, err := roles.Events(clock.New(), "agent", "")
 	require.NoError(t, err)
 
+	// The address from the live report. Nothing binds it — consoleFor builds a
+	// handler and never listens — so it is here as the text the third line below
+	// has to name, not as a port.
+	const addr = "127.0.0.1:8086"
+
 	var said strings.Builder
 	handler, err := consoleFor(t.Context(),
 		agent.Endpoints{Merchant: aMerchantThatSellsNothing(t)}, events,
-		"127.0.0.1:8086",
+		addr,
 		watching{prompt: defaultPrompt, interpreter: interpret.Demo()},
 		true, &said)
 	require.NoError(t, err,
@@ -452,6 +457,16 @@ func TestABootWatchThatFindsNothingStillLeavesAConsoleServing(t *testing.T) {
 			"because the next person debugs the frontend")
 	assert.Contains(t, said.String(), defaultPrompt,
 		"the sentence is what makes the failure actionable to whoever is reading the terminal")
+	// The third line, and the only one whose absence the two above would not
+	// notice: dropping it on its own leaves this test green while the report
+	// reads exactly like the fatal error it replaced.
+	assert.Contains(t, said.String(), "serving regardless",
+		"the two lines above report a failure and stop there, which is what the old fatal error did; "+
+			"what tells a reader the process is still up is this line, and without it the terminal "+
+			"sends them to debug a console that is actually answering")
+	assert.Contains(t, said.String(), "http://"+addr+"/watches",
+		"naming the route is what makes the claim checkable in the next command rather than "+
+			"something the reader has to take on trust")
 }
 
 // TestABootWatchNobodyAskedForIsNotReported is the control on the test above.
