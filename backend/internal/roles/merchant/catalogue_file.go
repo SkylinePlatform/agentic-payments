@@ -1,6 +1,8 @@
 package merchant
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -387,14 +389,40 @@ func (o CatalogueEntry) validate(index int) error {
 // host, cannot 404 and cannot be fetched even by accident. mark.go argues why
 // that rather than the shop's own CDN, and why not simply leaving the picture
 // out.
+//
+// # Both shapes are checked for shape *and* for substance
+//
+// The prefix alone is only the first half, and on its own it would make this
+// branch the weaker of the two rather than the stronger. #215's failure was a
+// path that was perfectly shaped and resolved to nothing, and the answer to it
+// was TestEveryShippedImageURLNamesAFileThatExists — a second check, beside the
+// shape one, asking whether anything is actually there. An inline picture has no
+// file to resolve, so the equivalent question is whether what it carries decodes
+// to a picture, and `data:image/svg+xml;base64,` followed by a typo answers it
+// the same way a well-formed path to a deleted file answered #215: with a broken
+// image on the screen. That is why the payload is decoded here rather than taken
+// on the strength of its first twenty-six bytes.
 func (o CatalogueEntry) validateImage() error {
 	if o.Source == SourceLive {
-		if strings.HasPrefix(o.ImageURL, markDataURIPrefix) {
-			return nil
+		encoded, carried := strings.CutPrefix(o.ImageURL, markDataURIPrefix)
+		if !carried {
+			return fmt.Errorf("%w: fetched offer %q has image_url %q; a fetched offer names no file "+
+				"in this repository, so it has to carry its picture as %s… — anything else is a host "+
+				"nobody here operates", ErrInvalidCatalogue, o.ID, elide(o.ImageURL), markDataURIPrefix)
 		}
-		return fmt.Errorf("%w: fetched offer %q has image_url %q; a fetched offer names no file "+
-			"in this repository, so it has to carry its picture as %s… — anything else is a host "+
-			"nobody here operates", ErrInvalidCatalogue, o.ID, elide(o.ImageURL), markDataURIPrefix)
+		svg, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return fmt.Errorf("%w: fetched offer %q carries a picture that does not decode (%s); a "+
+				"data URI a browser cannot read is the broken image a root-relative path to a missing "+
+				"file would have been", ErrInvalidCatalogue, o.ID, err)
+		}
+		if !bytes.HasPrefix(svg, []byte("<svg")) {
+			return fmt.Errorf("%w: fetched offer %q carries %d bytes that decode to something other "+
+				"than an SVG; the rule is that the offer *is* the picture, and bytes that are not one "+
+				"keep the shape of that promise without keeping it",
+				ErrInvalidCatalogue, o.ID, len(svg))
+		}
+		return nil
 	}
 
 	switch {

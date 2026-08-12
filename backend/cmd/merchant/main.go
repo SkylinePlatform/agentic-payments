@@ -58,6 +58,15 @@ import (
 // exists to prevent one role along. It is a fixture for tests, and
 // TestOnlyTheRealShopCanBeAskedForALiveCatalogue is what says so.
 const (
+	// catalogueLiveFlag is the flag's own name, without its dash.
+	//
+	// A constant rather than a literal at the one place it is registered,
+	// because it is read in two others: TestMakeDemoDoesNotReachAShop checks
+	// that neither `make demo`'s recipe nor deploy/demo.json passes it, and both
+	// of those checks are worthless if they are looking for a spelling this
+	// binary no longer registers.
+	catalogueLiveFlag = "catalogue-live"
+
 	// catalogueLiveOff is the default: the committed file alone, no network,
 	// the same demonstration on every machine.
 	catalogueLiveOff = ""
@@ -105,7 +114,7 @@ func main() {
 	// Empty by default, and that default is the whole of what keeps `make demo`
 	// reproducible: no process it starts reaches a network, so the golden
 	// numbers in every screenshot are attributable. See this package's doc.
-	catalogueLive := flag.String("catalogue-live", catalogueLiveOff,
+	catalogueLive := flag.String(catalogueLiveFlag, catalogueLiveOff,
 		"also sell a public test shop's stock, fetched at start-up: `dummyjson`, or empty for the "+
 			"committed file alone. A shop that will not answer stops this process")
 	step := flag.Duration("step", merchant.DefaultStep,

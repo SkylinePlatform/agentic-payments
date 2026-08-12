@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz/constraint"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant"
@@ -147,6 +148,25 @@ func TestASentenceNobodyWroteFindsAnOfferNobodyPutInTheRepository(t *testing.T) 
 // schedule moves, which is the beat the autonomous flow exists for. Comparing
 // the two answers rather than asserting a count is what lets this test say
 // "unchanged" about both cases at once.
+//
+// # Both queries, because only one of them is the one that decides a purchase
+//
+// The whole constraint set is not what the agent sends. Client.candidates asks
+// the merchant with identifying(constraints) — constraint.Narrowing, which keeps
+// the *selective* fields and drops the rest — so "find and buy telescopic
+// ladders, cheapest" reaches GET /search as `item.category eq "ladders"` and
+// nothing else. Its cap is a term, evaluated at checkout and absent from the
+// query. settle then takes found[0] and ranks nothing, and NewCatalogue sorts by
+// identifier, which puts every `dummyjson:` offer ahead of every `gtin:`,
+// `event:` and `route:` one.
+//
+// Asserting only over the full set is therefore strictly weaker than the claim
+// this test's failure message makes. A fetched ladder priced *above* the cap
+// would be filtered out of both sides here and the test would stay green, while
+// in a real run it would sort first, become found[0], and be what the
+// demonstration bought. That is the gap settle's own doc comment names about
+// TestTheCatalogueAnswersTheScriptedPrompts, one package along; running the
+// narrowing query as well is what keeps this test from inheriting it.
 func TestTheLiveHalfChangesNoScriptedAnswer(t *testing.T) {
 	t.Parallel()
 
@@ -161,17 +181,59 @@ func TestTheLiveHalfChangesNoScriptedAnswer(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			constraints := constraintsFrom(t, tc.constraints)
+			full := constraintsFrom(t, tc.constraints)
 
-			before, err := committed.Search(constraints)
-			require.NoError(t, err)
-			after, err := mixed.Search(constraints)
-			require.NoError(t, err)
+			for _, q := range []struct {
+				name  string
+				query []generated.Constraint
+				why   string
+			}{
+				{
+					name: "the whole constraint set", query: full,
+					why: "what a mandate carrying this sentence would authorise, which is what the " +
+						"search box in front of a person shows",
+				},
+				{
+					name: "the query the agent sends", query: narrowing(t, full),
+					why: "what Client.candidates actually asks, and the only one of the two that " +
+						"decides which offer settle takes as found[0]",
+				},
+			} {
+				t.Run(q.name, func(t *testing.T) {
+					t.Parallel()
 
-			assert.Equal(t, slices.Sorted(maps.Keys(found(before))), slices.Sorted(maps.Keys(found(after))),
-				"a fetched offer answered a scripted sentence, and the agent takes the first candidate without ranking — so the demonstration would buy something nobody scripted")
+					before, err := committed.Search(q.query)
+					require.NoError(t, err)
+					after, err := mixed.Search(q.query)
+					require.NoError(t, err)
+
+					assert.Equal(t, slices.Sorted(maps.Keys(found(before))), slices.Sorted(maps.Keys(found(after))),
+						"a fetched offer answered a scripted sentence — %s — and the agent takes the first candidate without ranking, so the demonstration would buy something nobody scripted", q.why)
+				})
+			}
 		})
 	}
+}
+
+// narrowing is the query Client.candidates would send for a constraint set.
+//
+// It is identifying() in internal/agent, which this package cannot import and
+// would not want to: the merchant is the party being asked, and a test of the
+// shelf that reached into the buyer to build its question would be asserting
+// that two of our own packages agree. What it reaches for instead is the thing
+// both of them go through — constraint.Narrowing, in core, which is where the
+// selective/term distinction is actually decided.
+func narrowing(t *testing.T, constraints []generated.Constraint) []generated.Constraint {
+	t.Helper()
+
+	out := make([]generated.Constraint, 0, len(constraints))
+	for _, c := range constraints {
+		out = append(out, constraint.Narrowing(c)...)
+	}
+	require.NotEmpty(t, out,
+		"a scripted sentence narrows on nothing selective, so the agent would send an empty query — "+
+			"which is a different defect from the one this test is about, and one it must not hide")
+	return out
 }
 
 // TestTheHeroesBeatsSurviveALiveCatalogue is the guarantee issue #243 puts first

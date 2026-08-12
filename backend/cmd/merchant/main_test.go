@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -141,7 +142,11 @@ func TestMakeDemoDoesNotReachAShop(t *testing.T) {
 
 	recipe := regexp.MustCompile(`(?m)^demo:.*\n(?:\t.*\n)*`).FindString(string(raw))
 	require.NotEmpty(t, recipe, "no demo target found in the Makefile — has it been renamed?")
-	assert.NotContains(t, recipe, "-catalogue-live",
+	// A substring here rather than flagName below, and deliberately: the recipe
+	// is one blob of shell in which every spelling of the flag contains this
+	// one, so the loose check is the strict check. An args list is not, which is
+	// the whole of why the two halves of this test are written differently.
+	assert.NotContains(t, recipe, "-"+catalogueLiveFlag,
 		"`make demo` would fetch a shop, so the numbers in every committed screenshot would depend "+
 			"on somebody else's stock on the day")
 
@@ -165,9 +170,37 @@ func TestMakeDemoDoesNotReachAShop(t *testing.T) {
 	require.NotEmpty(t, manifest.Processes, "no processes were decoded, so the loop below would pass over an empty list")
 
 	for _, p := range manifest.Processes {
-		assert.NotContains(t, p.Args, "-catalogue-live",
-			"%s is started with a live catalogue by the manifest itself, which reaches `make demo` "+
-				"as well — that is the drift `-append` exists to avoid, and that file's own $comment "+
-				"argues it", p.Name)
+		for _, arg := range p.Args {
+			assert.NotEqual(t, catalogueLiveFlag, flagName(arg),
+				"%s is started with a live catalogue by the manifest itself, which reaches `make demo` "+
+					"as well — that is the drift `-append` exists to avoid, and that file's own $comment "+
+					"argues it", p.Name)
+		}
 	}
+}
+
+// flagName is the flag one argument sets, or "" if it does not look like one.
+//
+// # Why a comparison of whole strings was not enough
+//
+// The check above used to ask whether the args *contained* the string
+// "-catalogue-live", element by element. That is four spellings short of what
+// the flag package accepts: `--catalogue-live`, `-catalogue-live=dummyjson` and
+// `--catalogue-live=dummyjson` all set the flag and none of them equals it, so a
+// manifest carrying any of the three passed this test and reached a shop on
+// every `make demo`. The guard read as a claim about what a process would be
+// started with and was really a claim about one of the four ways of writing it.
+//
+// Normalising instead of listing the four is the difference between a check that
+// happens to cover today's spellings and one that covers the grammar: strip the
+// dashes the flag package strips, take what is left up to the first `=`, and
+// compare that. See flag.Parse, which does the same two steps in the same order.
+func flagName(arg string) string {
+	name, found := strings.CutPrefix(arg, "-")
+	if !found {
+		return ""
+	}
+	name = strings.TrimPrefix(name, "-")
+	name, _, _ = strings.Cut(name, "=")
+	return name
 }

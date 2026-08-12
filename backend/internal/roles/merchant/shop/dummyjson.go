@@ -59,8 +59,13 @@ const dummyJSONFields = "id,title,description,category,price,brand,sku,tags"
 
 // DummyJSON fetches a catalogue from a DummyJSON-shaped shop.
 //
-// It is the only thing in this module that opens a socket to somewhere this
-// project does not control, and it runs only under `make demo-live`.
+// It is the second thing in this module that opens a socket to somewhere this
+// project does not control, and the only one outside internal/agent/interpret:
+// interpret.Gemini is the first, and `make demo-live` is the single command
+// that turns both on. Naming this one "the only" would be the claim that
+// package's own doc already disproves, which is why the count is stated rather
+// than the exclusivity — the property that matters is that it runs only under
+// `make demo-live`, and that is true of both.
 type DummyJSON struct {
 	// Base is the shop's root, without a trailing slash. Empty means
 	// DummyJSONHost. A test points it at an httptest.Server, which is the whole

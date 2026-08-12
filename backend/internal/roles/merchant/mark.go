@@ -48,6 +48,18 @@ import (
 // repository ships; a fetched offer carries its picture with it. Neither may
 // point at a host.**
 //
+// # The one thing this now depends on, written down because nothing enforces it
+//
+// A `data:` URI in an img tag is a Content-Security-Policy decision. There is no
+// CSP anywhere in this repository today — not in frontend/index.html, not in
+// vite.config.ts, and the backend sets exactly two response headers, neither of
+// them this — so nothing blocks one. But `img-src 'self'` is the obvious first
+// line anybody adding a policy writes, and it would blank every fetched offer's
+// picture at once. Both img tags that render one carry `alt=""`, so the symptom
+// would be empty space rather than anything a reader would report. A policy
+// added later needs `img-src 'self' data:`, and this is the sentence that says
+// so.
+//
 // # It is a second implementation of tools/catalogue/mark.go, and that is checked
 //
 // The two cannot share code: tools/catalogue is a separate Go module and a

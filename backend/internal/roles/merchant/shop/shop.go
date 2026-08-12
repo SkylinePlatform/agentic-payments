@@ -32,6 +32,11 @@
 // it is what makes the failure paths — a 500, a body that is not JSON, an empty
 // catalogue — reachable at all: none of them can be provoked from a shop that
 // is working.
+//
+// It is the second such socket rather than the first. interpret.Gemini reaches
+// generativelanguage.googleapis.com and has since issue #17, and `make
+// demo-live` is the one command that turns both on — which is why this package
+// follows that one's shape instead of inventing a rule.
 package shop
 
 import (

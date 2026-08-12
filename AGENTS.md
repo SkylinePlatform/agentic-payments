@@ -260,11 +260,15 @@ These are enforced, not advisory.
    its answer instead — it runs the real decoder over a response recorded at
    `shop/data/`, and it is not in a `_test.go` file for `ScriptedInterpreter`'s
    exact reason: the package that needs it is `merchant`, one directory up.
-   `shop.DummyJSON` is the only type in the module that opens a socket to
-   somewhere this project does not control, it is exercised against an
-   `httptest.Server`, and `cmd/merchant`'s `-catalogue-live` refuses every value
-   but `dummyjson` — the recording included, because a run that said live and
-   served committed bytes is the screenshot nobody can attribute.
+   `shop.DummyJSON` is the **second** type in the module that opens a socket to
+   somewhere this project does not control, and the only one outside
+   `internal/agent/interpret` — `interpret.Gemini` is the first, and `make
+   demo-live` is the one command that turns both on at once. Saying "the only
+   one" would contradict the paragraphs above, which are about the first. It is
+   exercised against an `httptest.Server`, and `cmd/merchant`'s
+   `-catalogue-live` refuses every value but `dummyjson` — the recording
+   included, because a run that said live and served committed bytes is the
+   screenshot nobody can attribute.
 
 5. **Time goes through the injected clock.** Never call `time.Now()` directly, or
    signature expiry becomes untestable. Enforced by `forbidigo`;
@@ -309,8 +313,9 @@ backend/                ⬅ the Go module root. go.mod lives here, not at the to
     agent/interpret/    IntentInterpreter — the ONLY place an LLM may live
     roles/              mock role implementations
       merchant/shop/    fetches a catalogue from a public test shop. The only
-                        thing here that opens a socket to somewhere this project
-                        does not control, and only under `make demo-live`
+                        thing under roles/ that opens a socket to somewhere this
+                        project does not control — agent/interpret is the other
+                        one — and only under `make demo-live`
     platform/           crypto, store, clock, obs — implements core ports
   pkg/
     httpsig/            RFC 9421 — public standard, externally importable
