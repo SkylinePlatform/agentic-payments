@@ -106,6 +106,64 @@ func slug(id string) string {
 	}, id)
 }
 
+// accentOf is the second colour a mark draws some of its cells in, and it is
+// seeded on the offer's identifier.
+//
+// # Why not on the shelf, which is what it was
+//
+// Six shelves against four accents collide by pigeonhole, and the collision
+// issue #236 measured landed badly. graphite is the quietest of the four, and it
+// drew the flights and bicycles shelves entire — twenty of the sixty marks, a
+// third of the shop. Seeding on the identifier spreads all four through every
+// shelf instead: 14, 15, 14 and 17 as this snapshot falls, and no shelf drawn in
+// fewer than three of them.
+//
+// # What "quietest" means, since it is a claim about colour
+//
+// Not luminance, which is the measure the word usually points at and the one
+// that would be wrong here: against wash the four sit at 4.56, 4.60, 4.64 and
+// 4.86 to one, and graphite is third of the four rather than last. Chroma. A
+// cell is drawn in ink unless the shape hash accents it, so what a reader has to
+// see is the accent against *ink* — and graphite is the one that barely is, at
+// chroma 12 where ink itself is 17 and the other three are 34, 56 and 58. In
+// ΔE2000 against ink that is 21, where the others are 24, 34 and 41. A shelf of
+// graphite marks reads as a shelf drawn in one colour, which is what the issue
+// saw and what the adjective is for.
+//
+// # Whether a shelf sharing one accent was worth keeping
+//
+// A real question rather than an oversight, which is why it is answered here
+// instead of assumed. A reader scrolling a column could legitimately learn
+// *these ten are the same kind of thing* from a shared colour — in which case
+// the answer to the pigeonhole would have been six distinguishable accents
+// rather than a scatter, and this function would be keyed on the shelf on
+// purpose.
+//
+// It is settled as **no**, on the rule the rest of this file is already written
+// to: a mark claims nothing about what its offer is. An accent keyed on the
+// shelf is a weak version of exactly that claim, and weak in the direction that
+// makes it wrong rather than merely quiet — four colours cannot name six
+// shelves, so what a shared graphite actually told a reader was that flights and
+// bicycles are the same kind of thing. The honest version of the idea needs one
+// accent per shelf, and the palette is closed at seven tokens of which four can
+// be an accent at all, so it is not available at a price this repository is
+// willing to pay. Widening the palette to make a picture mean something is a
+// bigger change than the one it would buy.
+//
+// So the colour says nothing, deliberately, and a mark is now a function of the
+// identifier alone. TestAMarkSaysNothingAboutTheShelfItsOfferSitsOn is what
+// holds that, and it goes red if the category comes back into either this
+// function or its one call site.
+//
+// The argument is an identifier rather than the entry for that reason and not to
+// save a field access: a function handed the whole offer can reach the shelf, and
+// the merchant's copy of this drawing — backend/internal/roles/merchant/mark.go,
+// which the parity test there holds to the byte — dropped its category parameter
+// on the same ground rather than leaving it unread.
+func accentOf(id string) string {
+	return accents[draw(id, "accent", len(accents))]
+}
+
 // mark draws one offer's picture.
 //
 // A four by four grid, mirrored down the middle so the result is symmetrical and
@@ -114,7 +172,7 @@ func slug(id string) string {
 // four's, to the pixel.
 func mark(o entry) []byte {
 	sum := sha256.Sum256([]byte("mark\x00" + o.ID))
-	accent := accents[draw(o.Category, "accent", len(accents))]
+	accent := accentOf(o.ID)
 
 	// Two columns decided and two mirrored. Eight cells, each taking two bits of
 	// shape and one of colour out of its own byte, so a cell's appearance

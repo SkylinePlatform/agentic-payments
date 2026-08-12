@@ -8,12 +8,12 @@
   <rect x="6" y="6" width="188" height="188" rx="20" fill="#e8dfcc" stroke="#10243a" stroke-width="3"/>
   <circle cx="84" cy="52" r="12" fill="#10243a"/>
   <circle cx="116" cy="52" r="12" fill="#10243a"/>
-  <circle cx="52" cy="84" r="12" fill="#546375"/>
-  <rect x="72" y="72" width="24" height="24" rx="6" fill="#546375"/>
-  <rect x="104" y="72" width="24" height="24" rx="6" fill="#546375"/>
-  <circle cx="148" cy="84" r="12" fill="#546375"/>
+  <circle cx="52" cy="84" r="12" fill="#a14917"/>
+  <rect x="72" y="72" width="24" height="24" rx="6" fill="#a14917"/>
+  <rect x="104" y="72" width="24" height="24" rx="6" fill="#a14917"/>
+  <circle cx="148" cy="84" r="12" fill="#a14917"/>
   <rect x="40" y="104" width="24" height="24" rx="6" fill="#10243a"/>
   <rect x="136" y="104" width="24" height="24" rx="6" fill="#10243a"/>
-  <rect x="40" y="136" width="24" height="24" rx="6" fill="#546375"/>
-  <rect x="136" y="136" width="24" height="24" rx="6" fill="#546375"/>
+  <rect x="40" y="136" width="24" height="24" rx="6" fill="#a14917"/>
+  <rect x="136" y="136" width="24" height="24" rx="6" fill="#a14917"/>
 </svg>

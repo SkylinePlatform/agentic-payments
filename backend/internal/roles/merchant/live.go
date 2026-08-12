@@ -185,7 +185,7 @@ func entryFor(p shop.Product) CatalogueEntry {
 		Title:       p.Title,
 		Description: p.Description,
 		Retailer:    p.Retailer,
-		ImageURL:    markDataURI(p.ID, p.Category, p.Title),
+		ImageURL:    markDataURI(p.ID, p.Title),
 		// One price, because that is what a shop quoting today's price has to
 		// say. It is also the whole of what a live offer can and cannot
 		// demonstrate — see LiveCatalogueNotice.

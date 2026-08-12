@@ -66,7 +66,7 @@ func TestALiveMarkIsTheMarkThisShopAlreadyDraws(t *testing.T) {
 		committed, err := os.ReadFile(filepath.Join(publicDir, offer.ImageURL))
 		require.NoError(t, err, "a derived picture the catalogue names is missing from the tree")
 
-		assert.Equal(t, string(committed), string(markSVG(offer.ID, offer.Category, offer.Title, derivedNote(offer.ID))),
+		assert.Equal(t, string(committed), string(markSVG(offer.ID, offer.Title, derivedNote(offer.ID))),
 			"this package's drawing has drifted from tools/catalogue's, so the fetched half of the "+
 				"shelf and the derived half would no longer read as one shop")
 	}
@@ -89,7 +89,7 @@ func TestALiveOffersPictureTravelsWithIt(t *testing.T) {
 	t.Parallel()
 
 	const id = "dummyjson:154"
-	uri := markDataURI(id, "sunglasses", "Black Sun Glasses")
+	uri := markDataURI(id, "Black Sun Glasses")
 
 	encoded, found := strings.CutPrefix(uri, markDataURIPrefix)
 	require.True(t, found, "Validate checks for exactly this prefix, so a picture without it is one no fetched offer may carry")
@@ -97,7 +97,7 @@ func TestALiveOffersPictureTravelsWithIt(t *testing.T) {
 	svg, err := base64.StdEncoding.DecodeString(encoded)
 	require.NoError(t, err, "a data URI a browser cannot decode is a broken image with extra steps")
 
-	assert.Equal(t, string(markSVG(id, "sunglasses", "Black Sun Glasses", liveMarkNote(id))), string(svg),
+	assert.Equal(t, string(markSVG(id, "Black Sun Glasses", liveMarkNote(id))), string(svg),
 		"the URI has to carry this package's own drawing, or the picture on the screen is not the one this file argues about")
 	assert.Contains(t, string(svg), "<title>Black Sun Glasses</title>",
 		"the picture names the thing it is a picture of, which is what a screen reader is given in place of the mark")
@@ -117,7 +117,7 @@ func TestALiveMarkSaysWhereItCameFrom(t *testing.T) {
 	t.Parallel()
 
 	const id = "dummyjson:154"
-	live := string(markSVG(id, "sunglasses", "Black Sun Glasses", liveMarkNote(id)))
+	live := string(markSVG(id, "Black Sun Glasses", liveMarkNote(id)))
 
 	assert.NotContains(t, live, "make",
 		"a mark drawn at start-up must not claim `make catalogue` wrote it, and must not point at a "+
@@ -130,18 +130,29 @@ func TestALiveMarkSaysWhereItCameFrom(t *testing.T) {
 // reading as a mock-up of a shop.
 //
 // tools/catalogue rejected a small set of category illustrations on exactly that
-// ground — a table repeating one drawing every third row does not read as a
-// shop — and a copy of its drawing that seeded on something coarser, the
-// category rather than the identifier, would reintroduce it here without failing
-// the parity test above for any offer whose category happened to have one member.
+// ground: a table repeating one drawing every third row does not read as a shop.
+// What used to be worth saying here is that a copy of its drawing seeded on
+// something coarser than the identifier would bring that back, and bring it back
+// quietly — the parity test above compared sixty offers whose accents both
+// implementations took from the category, so a category-seeded copy passed it.
+//
+// Issue #236 closed both halves. The accent is seeded on the identifier on both
+// sides, so a copy reaching for the category now fails parity on most of the
+// sixty — thirty-nine, as this snapshot falls — and markSVG has no category
+// parameter to reach for, so it does not compile either.
+//
+// What is left is the claim the test always made, and the pair below no longer
+// has to share a shelf to make it, because there is no shelf to share: the
+// `"sunglasses"` both offers used to carry went with the parameter. Two
+// identifiers draw two pictures; one identifier drawn twice draws one.
 func TestTwoOffersGetTwoMarks(t *testing.T) {
 	t.Parallel()
 
-	first := markDataURI("dummyjson:154", "sunglasses", "Black Sun Glasses")
-	second := markDataURI("dummyjson:155", "sunglasses", "Classic Sun Glasses")
+	first := markDataURI("dummyjson:154", "Black Sun Glasses")
+	second := markDataURI("dummyjson:155", "Classic Sun Glasses")
 
 	assert.NotEqual(t, first, second,
-		"two offers in one category drew the same mark, so a fetched shelf would be one picture repeated")
-	assert.Equal(t, first, markDataURI("dummyjson:154", "sunglasses", "Black Sun Glasses"),
+		"two offers drew the same mark, so a fetched shelf would be one picture repeated")
+	assert.Equal(t, first, markDataURI("dummyjson:154", "Black Sun Glasses"),
 		"a mark that varied between calls would give one offer two pictures across two searches in one run")
 }

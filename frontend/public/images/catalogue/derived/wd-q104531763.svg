@@ -14,8 +14,8 @@
   <path d="M84,71 L97,84 L84,97 L71,84 Z" fill="#10243a"/>
   <path d="M116,71 L129,84 L116,97 L103,84 Z" fill="#10243a"/>
   <circle cx="148" cy="84" r="12" fill="#10243a"/>
-  <rect x="72" y="104" width="24" height="24" rx="6" fill="#1f5fbf"/>
-  <rect x="104" y="104" width="24" height="24" rx="6" fill="#1f5fbf"/>
+  <rect x="72" y="104" width="24" height="24" rx="6" fill="#a14917"/>
+  <rect x="104" y="104" width="24" height="24" rx="6" fill="#a14917"/>
   <path d="M84,135 L97,148 L84,161 L71,148 Z" fill="#10243a"/>
   <path d="M116,135 L129,148 L116,161 L103,148 Z" fill="#10243a"/>
 </svg>

@@ -11,8 +11,8 @@
   <rect x="104" y="40" width="24" height="24" rx="6" fill="#10243a"/>
   <path d="M148,39 L161,52 L148,65 L135,52 Z" fill="#10243a"/>
   <path d="M52,71 L65,84 L52,97 L39,84 Z" fill="#10243a"/>
-  <circle cx="84" cy="84" r="12" fill="#546375"/>
-  <circle cx="116" cy="84" r="12" fill="#546375"/>
+  <circle cx="84" cy="84" r="12" fill="#1f5fbf"/>
+  <circle cx="116" cy="84" r="12" fill="#1f5fbf"/>
   <path d="M148,71 L161,84 L148,97 L135,84 Z" fill="#10243a"/>
   <circle cx="52" cy="116" r="12" fill="#10243a"/>
   <circle cx="148" cy="116" r="12" fill="#10243a"/>
