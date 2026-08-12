@@ -569,21 +569,130 @@ function AttemptView({
   );
 }
 
-export function Lanes({
-  transaction,
-  inspecting,
+/**
+ * What a reader who has just arrived is looking at — issue #242.
+ *
+ * # The complaint, and why the obvious fix is the wrong one
+ *
+ * The head of this screen was the checkout digest, at the largest mono on the
+ * page, centred. Reported twice off live runs: to somebody who does not know
+ * what a checkout hash is, `UWu8gU3ruQ4D` is twelve random characters where a
+ * headline should be, and the honest reaction is *"what am I looking at?"*
+ *
+ * The tempting answer — swap the digest for the name — loses the one thing on
+ * this screen that is *proved* rather than asserted. So neither happens. The
+ * question turned out to be what a headline is **for**, and the answer is
+ * orienting: the name and the identifier go at the top, and the proof stays
+ * exactly where it was, at the size it was, on every attempt. #183's ruling that
+ * agreement wins where the two compete is untouched, because they do not compete
+ * — this is one line per transaction at the top, and the spine is one value per
+ * attempt in the middle.
+ *
+ * # The name is asserted, and this is the component that has to say so
+ *
+ * It is the merchant's own words, relayed by the Shopping Agent's console —
+ * `agent.Client.Describe` asked the shop and `console.summary` kept the answer.
+ * Nothing signs it and nothing can: `agent.Offer`'s own comment is that no
+ * verifier sees a title and no constraint addresses one. Three parties computed
+ * the digest independently; **one** party said the name.
+ *
+ * So the sentence beneath is not decoration. Without it the largest thing on the
+ * page would have gone from something nobody has to be trusted for to something
+ * resting entirely on the shop's word, with nothing on screen marking the
+ * change. `routes/protocol/Disclosure.tsx` set the precedent this follows: show
+ * the value, say where it came from, and let the reader check what can be
+ * checked.
+ *
+ * # The identifier in the parenthesis is the correlation id, not the digest
+ *
+ * They answer different questions. The digest is the protocol's and proves
+ * agreement; the correlation id is ours and proves nothing — but ADR 0003 sized
+ * it at six bytes, eight base64url characters, on the recorded ground that
+ * `corr: 7aQx-3Kf` is readable in a screenshot where a trace parent is not, and
+ * no hop regenerates one. It is the string a person can quote when asking for
+ * help, which is what a parenthesis after a name is for.
+ *
+ * It keeps the mono face inside a heading that does not, which is #159's rule
+ * applied rather than bent: mono is for code-like content, an identifier is
+ * code-like and a product name is not.
+ *
+ * # No name is a state, and it is drawn as the header that was always there
+ *
+ * The console and the collector are different processes, so a transaction whose
+ * events are on screen can legitimately be one no console has a record of — a
+ * restarted agent is the standing case, and a merchant that could not be asked
+ * is the other. Neither invents anything: the screen falls back to *Transaction
+ * / <id>* rather than showing a placeholder, and never substitutes the item
+ * identifier, which would be the string #242 was filed about wearing a name's
+ * clothes.
+ */
+function TransactionHead({
+  correlationId,
+  name,
 }: {
-  readonly transaction: Transaction;
-  readonly inspecting?: Inspecting;
+  readonly correlationId: string;
+  readonly name?: string;
 }) {
-  return (
-    <article className="flex flex-col gap-8">
+  if (name === undefined) {
+    return (
       <header className="flex items-baseline gap-3">
         <span className="font-sans text-xs uppercase tracking-widest text-graphite">
           Transaction
         </span>
-        <code className="font-mono text-sm text-ink">{transaction.correlationId}</code>
+        <code className="font-mono text-sm text-ink">{correlationId}</code>
       </header>
+    );
+  }
+
+  return (
+    <header className="flex flex-col gap-1">
+      <h2 className="font-display text-2xl leading-tight tracking-tight text-ink">
+        {name}{" "}
+        {/*
+          The parentheses are prose and stay in the heading's own face; only the
+          identifier is mono. A reader copying the value gets the id and not the
+          punctuation around it.
+        */}
+        <span className="font-sans text-base font-normal text-graphite">
+          (<code className="font-mono">{correlationId}</code>)
+        </span>
+      </h2>
+      <p
+        className="max-w-2xl font-sans text-xs text-graphite"
+        data-testid="name-provenance"
+      >
+        The name is the Shopping Agent&rsquo;s record of what it went looking for, in the
+        merchant&rsquo;s own words. Nothing signed it. The digest under each attempt below is the
+        value every party computed for itself, and that one is checkable.
+      </p>
+    </header>
+  );
+}
+
+export function Lanes({
+  transaction,
+  name,
+  inspecting,
+}: {
+  readonly transaction: Transaction;
+  /**
+   * What the thing being bought is called, when anything knows.
+   *
+   * **A prop rather than something this module fetches**, on `Inspecting`'s own
+   * split one declaration down: the lanes know where a name goes and the screen
+   * above knows how to get one. `Lanes` never learns that a console exists,
+   * which is what keeps this component testable against a transaction instead
+   * of against a connection.
+   *
+   * Undefined and empty are the same fact — no name — and the caller collapses
+   * them before this sees either. See {@link TransactionHead}.
+   */
+  readonly name?: string;
+  readonly inspecting?: Inspecting;
+}) {
+  return (
+    <article className="flex flex-col gap-8">
+      <TransactionHead correlationId={transaction.correlationId} name={name} />
 
       {/*
         In the order they happened. The watch's story is a refusal followed by a

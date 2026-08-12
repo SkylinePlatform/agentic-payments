@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
+import { useConsole } from "../../inspector/useConsole";
+import type { Watch } from "../../inspector/useConsole";
 import { EventLog } from "../../lanes/EventLog";
 import { Lanes } from "../../lanes/Lanes";
 import { useTransactions } from "../../lanes/useTransactions";
@@ -154,9 +156,52 @@ function Runs({
   );
 }
 
+/**
+ * What the agent's console calls the run a correlation id names — issue #242.
+ *
+ * # Why the screen has to go and ask
+ *
+ * The collector's stream carries no name and should not: ADR 0003 makes the
+ * event log observability and never evidence, and a merchant's presentation copy
+ * riding every frame of it would be that line crossed for a caption. `GET
+ * /watches` is where the agent keeps its own record of what it went looking for
+ * — `console.summary.title`, the merchant's words, asked for by
+ * `agent.Client.Describe` at the moment the watch began.
+ *
+ * # Absent and empty are one answer
+ *
+ * A watch this build's agent could not name answers `""`, and an older agent, or
+ * a console that has no record of this run at all, answers nothing. All of them
+ * mean *no name*, and collapsing them here rather than in the component is what
+ * lets `Lanes` take one optional string and have exactly two cases to draw.
+ *
+ * An empty string reaching the head would be the worst of the three: a heading
+ * with a lone `(7aQx-3Kf)` in it, which reads as a name that failed to load
+ * rather than as a run nobody named.
+ */
+function nameOf(watches: readonly Watch[], correlationId: string | undefined): string | undefined {
+  if (correlationId === undefined) return undefined;
+  const watch = watches.find((candidate) => candidate.correlation_id === correlationId);
+  const title = watch?.title;
+  return title === undefined || title === "" ? undefined : title;
+}
+
 export function Protocol() {
   const [params, setParams] = useSearchParams();
   const { transactions, records, state, gaps, reconnect } = useTransactions();
+  // The watch list, for the name at the head of the lanes and nothing else.
+  //
+  // The same hook `Disclosure` uses rather than a second reader of `/watches`,
+  // and the cost is one extra request while a panel is open — the list is small,
+  // and `useConsole` re-reads it on demand rather than polling precisely so that
+  // a screen somebody is reading does not reorder itself under a screenshot.
+  //
+  // Its `error` is deliberately not surfaced. A console that cannot be listed
+  // means this screen has no name to show, which it draws as no name; saying so
+  // twice — once as a missing headline and once as an error banner — would
+  // report a failed caption as a failed transaction. `Disclosure` still reports
+  // it where it matters, because there it explains an empty panel.
+  const { watches } = useConsole();
 
   // Which attempt's disclosure panel is open, and of which purchase. The
   // correlation id is part of it rather than a bare index, so switching runs
@@ -229,6 +274,7 @@ export function Protocol() {
         shown !== undefined && (
           <Lanes
             transaction={shown}
+            name={nameOf(watches, shown.correlationId)}
             inspecting={{
               open: open?.run === shown.correlationId ? open.attempt : null,
               onToggle: (attempt) => {

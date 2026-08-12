@@ -96,6 +96,46 @@ AP2 never manages, which is making the binding *obvious* rather than explained.
 
 Everything else stays quiet. One bold move, and the rest disciplined.
 
+### The head orients; the spine proves
+
+*Added 2026-08-12 (#242), after the same complaint off two live runs: the
+digest was the largest thing on the screen and to a reader who does not know
+what a checkout hash is it is twelve random characters where a headline should
+be.*
+
+**A headline is for orienting, not for stating the proof.** So the top of a
+transaction reads *Belgrade → Palma de Mallorca (oWnO9hZx)* — the name of the
+thing being bought, and beside it the correlation id — and the spine stays
+exactly where it was, at the size it was, on every attempt.
+
+Three decisions hold that together, and #183's ruling that agreement wins where
+the two compete is not disturbed by any of them, because they do not compete:
+one line per transaction at the top, one value per attempt in the middle.
+
+- **The identifier in the parenthesis is the correlation id, never the digest.**
+  ADR 0003 sized it at eight base64url characters on the recorded ground that
+  `corr: 7aQx-3Kf` reads in a screenshot, and no hop regenerates one. It is what
+  a person can quote when asking for help. The digest answers a different
+  question and keeps its own place.
+- **The name is asserted and the screen says so.** It is the merchant's own
+  words, relayed by the Shopping Agent's console — nothing signs a title and
+  nothing can, since no verifier sees one and no constraint addresses one. One
+  line under the head says whose word it is, which is `Disclosure`'s precedent:
+  show the value, name its source, let the reader check what can be checked.
+  Without it the largest thing on the page would have gone from something nobody
+  has to be trusted for to something resting entirely on the shop's word.
+- **No name is drawn as no name.** The console and the collector are different
+  processes, so a transaction on screen can legitimately be one no console knows
+  — a restarted agent, a merchant that could not be asked. The head falls back to
+  *Transaction / <id>*. It never substitutes the item identifier, which is the
+  string that started this complaint.
+
+**The repetition on the cards stays.** It is redundant *within* one attempt by
+construction — `split` in `lanes/model.ts` cuts a new attempt precisely when a
+digest changes, so every card of one attempt necessarily carries the same value
+— but seeing it match is how a reader learns what the value is for, and the
+comparison across a refused attempt and the bought one that follows is real.
+
 ## Tokens
 
 *Revised 2026-08-11 (#159): navy and cream, replacing the bond-paper palette

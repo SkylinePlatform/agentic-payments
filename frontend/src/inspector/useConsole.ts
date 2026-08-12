@@ -19,6 +19,26 @@ export interface Watch {
   readonly correlation_id?: string;
   readonly typed: string;
   readonly item?: string;
+
+  /**
+   * What the merchant calls {@link item} — `console.summary`'s `title`, added
+   * for issue #242.
+   *
+   * **The one field on this response that no signature covers and none ever
+   * will.** `agent.Offer`'s own comment is that no verifier sees a title and no
+   * constraint addresses one; the agent asked the shop and kept the answer, and
+   * that is the whole of its provenance. `item` beside it is the identifier the
+   * constraints were narrowed to, which *is* checkable against the mandates —
+   * so the two are different kinds of claim and a screen drawing either has to
+   * say which it has.
+   *
+   * Optional here and empty on the wire, which are the same fact reached two
+   * ways: a watch this build's agent did not name answers `""`, and a watch
+   * from an older agent answers nothing at all. Both mean no name, and
+   * `routes/protocol/Protocol.tsx` collapses them before drawing anything.
+   */
+  readonly title?: string;
+
   readonly state: string;
   /** How many purchase attempts it has made. Each one presented its own chains. */
   readonly attempts: number;
