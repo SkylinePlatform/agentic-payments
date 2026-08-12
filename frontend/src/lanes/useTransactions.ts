@@ -14,6 +14,7 @@ import type { ConnectionState, EventRecord, Gap, StreamOptions } from "../sse";
 
 import { group } from "./model";
 import type { Transaction } from "./model";
+import { PACE_MS, nextRelease, releasedNow } from "./pace";
 
 /**
  * How many records are kept.
@@ -25,11 +26,33 @@ import type { Transaction } from "./model";
  */
 const KEEP = 512;
 
+/**
+ * What the view wants of the stream, plus how fast it may draw it.
+ *
+ * `pace` is milliseconds between steps and `0` means none — see `pace.ts` for
+ * the ruling. It is an option rather than a constant so that a suite about
+ * *what* is drawn can say it is not about *when*, and so that the route can
+ * hold one number in one place rather than a component guessing at it.
+ */
+export interface ViewOptions extends StreamOptions {
+  readonly pace?: number;
+}
+
 export interface StreamView {
   /** Grouped into purchases, newest first. */
   readonly transactions: readonly Transaction[];
-  /** Every record, oldest first, for the log beneath the lanes. */
+  /** Every record the screen is drawing, oldest first, for the log beneath the lanes. */
   readonly records: readonly EventRecord[];
+  /**
+   * Records that have arrived and are not on screen yet.
+   *
+   * Zero except while the pacing is behind. The route says this out loud, which
+   * is the third clause of the ruling in `pace.ts`: a screen may be slower than
+   * the events were, and it may not be quietly slower.
+   */
+  readonly behind: number;
+  /** Draws everything that has arrived, now. */
+  readonly showEverything: () => void;
   /** Where the connection stands. */
   readonly state: ConnectionState;
   /**
@@ -46,10 +69,11 @@ export interface StreamView {
   readonly reconnect: () => void;
 }
 
-export function useTransactions(options: StreamOptions = {}): StreamView {
+export function useTransactions(options: ViewOptions = {}): StreamView {
   const [records, setRecords] = useState<readonly EventRecord[]>([]);
   const [state, setState] = useState<ConnectionState>("connecting");
   const [gaps, setGaps] = useState<readonly Gap[]>([]);
+  const [shown, setShown] = useState(0);
 
   // The stream is held in a ref rather than in state: reconnect() has to reach
   // the live one, and putting it in state would re-run the effect that made it.
@@ -60,7 +84,7 @@ export function useTransactions(options: StreamOptions = {}): StreamView {
   // depending on it directly would tear the connection down and open another on
   // each one — which under StrictMode is already two connections and would
   // become unbounded.
-  const { url, from, create } = options;
+  const { url, from, create, pace = PACE_MS } = options;
 
   useEffect(() => {
     const opened = connect({ url, from, create });
@@ -103,7 +127,43 @@ export function useTransactions(options: StreamOptions = {}): StreamView {
     stream.current?.reconnect();
   }, []);
 
-  const transactions = useMemo(() => group(records), [records]);
+  // Derived rather than stored, so the cap can move the screen forward without
+  // a render whose only job is to write the number down. `shown` is the count
+  // the ticks have released and this is what a reader may actually see, which
+  // differs whenever a reconnect has just replayed more than the cap allows.
+  const drawn = releasedNow(shown, records.length, pace);
 
-  return { transactions, records, state, gaps, reconnect };
+  useEffect(() => {
+    if (drawn >= records.length) return;
+    const tick = setTimeout(() => {
+      setShown(nextRelease(drawn, records.length, pace));
+    }, pace);
+    return () => {
+      clearTimeout(tick);
+    };
+  }, [drawn, records.length, pace]);
+
+  // Catches up, and does not turn the pacing off: whatever arrives next is
+  // paced again. Somebody who clicked it wanted the purchase on screen for a
+  // screenshot, not a different screen for the rest of the demonstration.
+  const total = records.length;
+  const showEverything = useCallback(() => {
+    setShown(total);
+  }, [total]);
+
+  const paced = useMemo(
+    () => (drawn >= records.length ? records : records.slice(0, drawn)),
+    [records, drawn],
+  );
+  const transactions = useMemo(() => group(paced), [paced]);
+
+  return {
+    transactions,
+    records: paced,
+    behind: records.length - drawn,
+    showEverything,
+    state,
+    gaps,
+    reconnect,
+  };
 }

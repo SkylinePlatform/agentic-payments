@@ -11,7 +11,8 @@ Human Present is the half that will not be built — see *What this is not*.
 **Issues:** #20, narrow slice of #45. Waited on #12, #16 and #15. Tokens
 revised by #159. *Indicators* added by #185 and consumed by #183, #184 and
 #186. *Where the data comes from* gained the User lane's authorisation card
-with #213.
+with #213. *The head orients* added by #242. *A card is a document* added by
+#241, which changed the unit a card draws and closed #217 and #218 with it.
 
 ## The standard this screen is held to
 
@@ -678,13 +679,39 @@ Every one of these is a colour or a shape moving. **No sentence in the table
 above is deleted by it**, and the four categories in *What prose is still for*
 are untouched.
 
+**Two of those rows name an element #241 has since renamed, and both mappings
+survive the rename.** `lanes/Lanes.tsx`'s `data-mark="check"` / `"cross"` and
+its `receipt_issued` now sit on a **hop** — a line on a document's card — rather
+than on a card of their own, because a card is no longer a step. Which mark each
+draws, and the fact that a receipt draws none, are unchanged; what moved is the
+element the mark is beside. The rows are left as written because they record
+what #185 corrected, and rewriting them to the current markup would lose the
+correction they exist to state. *A card is a document*, below, is where the
+element itself is specified.
+
 ### Two voices, one brand: what may differ
 
 The lanes teach a protocol; the console serves a buyer. **Density may differ.**
-The lanes draw a pair for every attempt and repeat the digest on every step
-card, because a reader is being taught to check it. The console draws one pair
-per run and one per mandate and repeats no digest, because a buyer is being told
-where things stand.
+The lanes draw a pair for every attempt and repeat the digest on every card,
+because a reader is being taught to check it. The console draws one pair per run
+and one per mandate and repeats no digest, because a buyer is being told where
+things stand.
+
+*That sentence read "on every step card" until #241, which is a correction
+rather than a relaxation: a card is now a document and a step is a line on it,
+so the digest is stated once per artefact instead of once per emission. The
+lanes still repeat it — five times on a clean attempt, once on each card that
+has a hop naming it, which is the two mandates and the three receipts — and the
+console still does not. The pair a reader actually checks against each other is
+the Checkout Mandate's and the Payment Mandate's, because those are the two
+documents the binding is between; the receipts carry it because the verifier
+that issued each one was answering about that checkout.* A card is a document
+*is the section below that changes the unit.*
+
+*The "every" is worth reading exactly: it is every card that has a digest to
+show, not every card. An open mandate never has one and structurally never can —
+see the degradation table below — so the two cards at the head of the User lane
+carry none, and the count above is of the closed attempt.*
 
 **The vocabulary may not differ.** Which mark a state takes, what a mark means,
 whether the word is present, and which colour may sit on which mark are the
@@ -833,31 +860,46 @@ mandate axis takes no ending: the acceptance was already stated once, on the
 run's own `check`.
 
 ```
-  THREE LANES
+  THREE LANES     — as #241 draws it: one card per document, hops inside
 
   attempt 1 of 2   ● ✗ refused   210.00 USD
                 7f3a2b91c4de
-  The binding held, and Merchant refused the purchase anyway.
+  The binding held, and Credential Provider refused the purchase anyway.
   That is a verifier enforcing a limit the user set.
 
-    USER              AGENT              MERCHANT
-    signed            signed             ✗ refused
-                      7f3a2b91c4de       7f3a2b91c4de
-                      presented          constraint_violated
-                      7f3a2b91c4de       receipt
+    USER              AGENT                    MERCHANT
+    [approved]        closed Checkout Mandate  closed Payment Mandate
+    [open Checkout]   210.00 USD 7f3a2b91c4de  210.00 USD 7f3a2b91c4de
+    [open Payment]    #14 signed  Agent        #15 signed     Agent
+                                               #16 presented  Agent
+                                               #17 ✗ refused  Cred Provider
+                                                  constraint_violated
+
+                                               7f3a2b91c4de
+                                               #18 receipt  Cred Provider
 
   attempt 2 of 2   ● ✓ bought    189.00 USD
                 c4de91b2f708
   Every party that named a checkout named this one.
   Different signatures, one purchase.
 
-    USER              AGENT              MERCHANT
-                      signed             ✓ verified
-                      c4de91b2f708       c4de91b2f708
-                      presented          Payment Processor
-                      c4de91b2f708       ✓ verified
-                                         c4de91b2f708
+    USER              AGENT                    MERCHANT
+    [approved]        Nothing here now.        closed Payment Mandate
+                                               189.00 USD c4de91b2f708
+                                               #20 signed     Agent
+                                               #21 presented  Agent
+                                               #22 ✓ verified Cred Provider
+                                               #26 presented  Merchant
+                                               #28 ✓ verified Payment Processor
 ```
+
+**Attempt 1's Agent column is the sketch's most valuable line and nothing put it
+there on purpose.** The Checkout Mandate reads `signed` and stops, because the
+Credential Provider refused the *payment* leg before any merchant saw the
+checkout — so that document was signed and never presented. Under one card per
+step that fact was a card among eleven; under one card per document it is a
+column with a single card sitting in it, and the card that looks empty is the
+finding.
 
 Five things a reader gets at a glance, and the point of each.
 
@@ -893,6 +935,236 @@ sentence saying which attempt a price belongs to. Those were the three things
 prose used to carry here, and each is now a mark, a word and a position. What
 survives is the paragraph that says **why** — which is the one thing no mark in
 this vocabulary can say, and the reason the reduction stops where it does.
+
+## A card is a document
+
+*Added 2026-08-12 (#241), after the same complaint off two live runs — this time
+about the cards rather than the head. It closes #217, which asked the digest to
+earn its place, and #218, which asked why nothing on the lanes moves; both were
+this complaint from narrower angles.*
+
+**The screen drew one card per step.** Eleven for one purchase, several of them
+saying almost the same words about the same artefact one hop apart, which is
+exactly the reading that was reported: *"na prvu mi je delovalo da imamo i viška
+kartica… izgleda kao da je sve duplo."* They were not duplicates — they were
+different states, which is what made it take a second look to notice — and that
+is the defect rather than the defence. **A viewer counting cards was counting
+emissions, and an emission is not a thing.**
+
+So the unit changes:
+
+> **A card is an artefact within one attempt — a mandate, or a receipt — and a
+> step is a line on it.**
+
+Measured against the demonstration's own stream rather than a fixture: eleven
+steps become five cards on the Human Not Present purchase and five on the Human
+Present one. Nothing is dropped. Every step is a hop on whichever card it
+happened to, with its own word, its own mark and its own sequence number, so
+*every step is visible* — the first of the three standards at the top of this
+document — survives the reduction intact. What goes is the party, the price and
+the digest restated once per emission.
+
+### #183 was right, and a mandate still travels
+
+That issue ruled that nothing travels between lanes, and it was right **about
+the item**: three parties independently compute the same twelve characters, and
+drawing a shopping bag sliding across would be a lie about what AP2 does.
+
+**A mandate is not the item.** The agent constructs a closed Payment Mandate and
+presents it to the Credential Provider; the merchant then presents it to the
+Payment Processor. That is one document put in front of one party after another,
+and it is the thing the protocol actually moves. So a card moves, and #183's
+ruling is untouched, because what it forbade was drawing the *item* as
+travelling.
+
+### The key, and why it is exact rather than approximate
+
+**Nothing on the wire identifies a mandate instance.** `MandateRef` is two closed
+enums — four possible values in the entire system — and `obs.Event` carries no
+mandate id, no `jti` and no per-mandate correlation. The digest cannot do the job
+and structurally never will: a Payment Mandate's `transaction_id` *is* the
+checkout hash, so both mandates of one purchase agree by design, and that
+agreement is the binding this screen exists to prove rather than a label it may
+borrow. `src/sse/events.ts` says so on the field itself.
+
+What is left is `(correlation_id, digest, mandate.type, mandate.state)` — and
+**inside one attempt the first two are already fixed.** `group` keys on the
+correlation ID, which ADR 0003 protects because no hop regenerates one; `split`
+cuts a new attempt precisely where a digest changes. So within an attempt the key
+is `(type, state)`.
+
+That is **exact rather than a heuristic**, and the difference matters because a
+heuristic would silently merge two documents on some run nobody was watching.
+AP2 v0.2 defines exactly two mandates; an attempt is one checkout; one checkout
+has one Checkout Mandate and one Payment Mandate. There is no arrangement of
+events in which two distinct mandates of one attempt share a `(type, state)`.
+
+**No wire field was needed, and none was added.** #245 therefore stays the only
+open question about this stream's shape — which is the point of having asked
+before building rather than after: a wire change made twice is worse than one
+made once.
+
+### The three payment chains are one card
+
+`Delegate` produces three delegations of one open Payment Mandate differing in
+`aud` and `nonce` and nothing else — same claims, same amount, same
+`transaction_id`. **#235 already ruled that the agent announces one construction
+for them**, on the ground that "three cards distinguishable by nothing but a
+sequence number is precisely the defect #201 fixed".
+
+This section is that ruling read one screen along. The agent's hop to the
+Credential Provider and the merchant's hop to the Processor are two
+*presentations of one document*, so they are two hops on one card. A screen that
+drew a card per chain would put three Payment Mandates where AP2 has one, having
+been told once already not to.
+
+### Where the key degrades, and what each degradation costs
+
+| Case | What the screen does | Why |
+|---|---|---|
+| a step naming no mandate | a card of its own, keyed by its sequence number | `receipt_issued` and `authorisation_refused` are the two kinds, and neither *is* a mandate: a receipt is a separately signed artefact, three per clean purchase, and a person declining refused before any mandate existed |
+| a refusal carrying `digest: ""` | lands on its mandate's card | the cards a reader most wants to place. The key inside an attempt does not use the digest, so an incomplete decode costs nothing here |
+| an open mandate, which never has a digest and never can | its own card, in the User lane | `state` in the key is what keeps the pair the user signed from merging with the pair the agent bound — AGENTS.md's *open/closed is a second fact, not a second pair of types*, made structural |
+| a step no lane claims | stays in *No lane yet*, unchanged | a card lives in a lane, so a step belonging to none cannot join one. Drawing it both there and as a hop would be one step twice, which is this issue in miniature. A TAP role emitting about a mandate is the only way to reach it and nothing does today |
+
+**Folding a receipt onto the mandate it receipts is the one join that was
+tempting and is forbidden.** The event carries no mandate; only `detail` names
+which, and `detail` is never parsed. A join the data cannot support is worse
+than three cards, because three cards are true.
+
+### The card carries no mark of its own
+
+**Its title is the artefact, its hops carry the marks, and there is no pip and
+no ending at its head.** That is *the mandate axis has no ending mark at all*
+read one screen along: the endings on a card belong to the parties that decided,
+one each, and a card-level `check` would restate one of them — *a mark per
+artefact that a single decision moved is one fact several times*.
+
+What a card-level pip would have to say is whether this document is still in
+play, and that is the **attempt's** state, which the attempt states once in its
+own badge directly above the columns. Stating it again per card would be the
+same rule broken from the other end.
+
+So the terminal states, per axis, and each drawn exactly once:
+
+| Axis | Terminal | Where it is drawn |
+|---|---|---|
+| the attempt | `refused` — `full` `cross`; `bought` — `full` `check` | the attempt's badge, above the columns |
+| the step, as a hop | `verified` — `check`; `refused` — `cross`; `declined` — `bar` | the hop's own line, on whichever card it happened to |
+| the card | — | its last hop **is** its ending |
+| the mandate (`authz.MandateState`) | — | not on this screen at all; it is the console's axis |
+
+**A card whose last hop is `signed` on a refused attempt is the finding rather
+than an omission.** It says the agent signed a Checkout Mandate that no merchant
+ever saw, because the payment leg was refused first — see the worked example
+above, where that is what attempt 1's Agent column is.
+
+**None of this needed a new mark, a new colour or a new row**, and that is the
+test the design had to pass: a redesign of the flagship screen that had to widen
+the vocabulary would have been a redesign inventing a second dialect, which is
+what *Indicators* exists to prevent.
+
+### Where a card lives while it moves, and what happened to the spine
+
+**A card's lane is the lane of the party that last acted on it**, and it moves
+when a hop arrives. On the demonstration each mandate crosses exactly once —
+`credprovider`, `merchant` and `mpp` share one column — so what a viewer follows
+is one document leaving the middle column and arriving on the right, once,
+rather than a shuttle.
+
+**The spine did not give, and it did not have to, because after the measurement
+the two do not compete.** `SpineHead` is drawn *above* the lane grid and the
+flight is scoped to the grid, so a card in flight is beneath the digest for the
+whole of its half second and cannot obscure it. That is asserted rather than
+asserted-in-a-comment: `Lanes.test.tsx` checks that the grid does not contain
+the spine and that the spine precedes it in document order, and moving
+`SpineHead` inside the grid turns both red. #183's ruling that agreement wins
+wherever the two compete stands unamended.
+
+**Motion is never the only carrier**, which is #185's rule for colour applied to
+the weaker of the two — motion is gone a second later, and a screenshot is this
+project's deliverable. Everything the flight says is already on the card in
+words: the head names the party that has the document, the trail names every
+party that had it before, and the column says the same thing a third time.
+`prefers-reduced-motion` is honoured in both the module and the stylesheet, and
+a reader who has set it loses the half second and nothing else.
+
+**A resize is not a hop.** Narrowing the window re-lays the grid out, every
+card's box changes at once and every one of them would fly — motion asserting a
+hop that never happened. The container's own width is the signal, because it is
+the one thing that cannot change when a step arrives. Found by looking at it
+running; jsdom computes no layout and no test could have caught it.
+
+**Neither is the page moving underneath it, which is the same defect in the
+other axis and was found the same way.** Anything above the lanes that grows or
+shrinks moves every card together: the *Pacing* notice being removed when the
+last held step is drawn, the *Purchases in the log* row arriving with a second
+transaction, the gap banner, an earlier attempt gaining a card. The pacing
+notice is the one that made it unmissable, because it is not an edge — it goes
+away at the end of *every* paced run, so the demonstration ended with the whole
+board twitching: seven cards across all three lanes, `dx=0 dy=38`, none of which
+had hopped. The fix is to measure each card **inside its own grid** rather than
+inside the viewport, so a shift that moves the origin and the card by the same
+amount reads as nothing. That is the right answer rather than a suppression: the
+browser has already redrawn the header, the prose and the log instantly at their
+new places, and a card animating across a gap everything else had closed is the
+one element on screen lagging the layout. Width and origin catch different
+things and both are needed — a resize moves the columns relative to the grid as
+well.
+
+### The empty lane has two spellings
+
+The consequence that had to be decided. On a clean purchase both mandates are
+signed in the Agent lane and both finish in the Merchant lane, so **the agent's
+column ends the attempt holding nothing**. *Nothing yet.* there would be flatly
+false — a great deal happened — and it is the defect #213 fixed one column to
+the left, where a User lane read *Nothing yet.* on a purchase somebody had
+personally signed for.
+
+So: *Nothing yet.* where nothing has reached this party, and **Nothing here
+now.** where it has moved past them. Two words apart, and where the steps went is
+on the cards, each of which names every party that held it.
+
+### Pace
+
+The demonstration's own steps land within a tenth of a second of each other —
+measured on `make demo` — so a faithful rendering of one purchase is a flicker on
+a screen whose one job is to teach. The ruling, and it is a ruling rather than a
+preference:
+
+> **The screen may draw a step later than it arrived. It may never draw one that
+> has not arrived, never draw them out of order, and never leave one undrawn
+> without saying so.**
+
+A presentation choosing to be legible is not a presentation telling a lie,
+*provided the order is the real order and the screen admits it is behind*. Both
+clauses are mechanical:
+
+- **It is a count and a prefix, so reordering is not expressible.** `pace.ts`
+  returns how many records may be on screen and the caller shows
+  `records.slice(0, count)`. A prefix of a sequence is a sequence: there is no
+  arrangement of one that permutes, inserts or invents anything. The count is
+  monotone, so a step already read cannot come off the screen either.
+- **The route says how far behind it is**, with a control that ends the wait.
+  A viewer who cannot tell a paced screen from a stalled one, or from a stack
+  that has stopped emitting, is being told something false about the run.
+
+Two numbers, both in `pace.ts` with their reasoning: 750ms between steps, which
+draws one purchase over about eight seconds and is longer than the 520ms card
+flight so that a card finishes arriving before the next step starts; and a cap of
+16, above the eleven one purchase emits, so a reconnect's 512-record replay lands
+at once and only the live edge is ever paced. Replaying an hour of history at
+presentation speed is theatre rather than legibility.
+
+**The event log is paced with the lanes rather than against them**, from one
+count, so the whole screen is always showing one consistent prefix. The
+timestamps are untouched: every card and every log row prints the event's own
+`at`, which is the emitting party's clock and not this screen's.
+
+**`prefers-reduced-motion` does not turn pacing off**, and that is deliberate.
+Pacing is timing rather than movement, and a screen that answered a request for
+less motion by dumping eleven cards at once would be *less* legible, not more.
+What that reader loses is the flight; what they keep is the one-at-a-time.
 
 ## Where the data comes from
 
