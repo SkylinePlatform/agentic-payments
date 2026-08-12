@@ -15,9 +15,19 @@
 // It hands one named process extra args on top of whatever the manifest
 // already gives it, repeatable for more than one process or more than one
 // flag against the same one. `make demo-live`, beside `make demo` in the
-// Makefile, is this flag applied once, to agent-watch, with `-interpreter
-// auto` — the same eight processes deploy/demo.json names, unmodified, run
-// with one of them handed a flag the manifest itself does not carry.
+// Makefile, is this flag applied twice: `-interpreter auto` to agent-watch,
+// so the agent reads a sentence nobody scripted, and `-catalogue-live
+// dummyjson` to the merchant, so that sentence arrives at a shelf nobody
+// wrote down. The same eight processes deploy/demo.json names, unmodified,
+// with two of them handed flags the manifest itself does not carry.
+//
+// **Repeatable is what that costs and what it buys.** It was one flag when
+// this was written; a second manifest would by now have to enumerate the eight
+// processes again for each combination somebody wanted, while -append composes
+// by being given twice. What each appended flag then makes true of the run is
+// printed under its process in the startup banner — see demo.Process.Appended,
+// which exists so that a screenshot of a run nobody can reproduce still says
+// what it was.
 //
 // That is the alternative to a second manifest, and the reason is drift: a
 // file enumerating the same eight processes a second time is a file that can

@@ -165,10 +165,29 @@ demo: generate-go generate-disclosure generate-ts ## Bring up every role, the co
 # target rather than the other one, and it is safe because the console states
 # which mode it is in before the box is touched, so a screenshot stays
 # attributable to whichever this run actually was.
+#
+# **Since issue #243 it appends a second flag, and the two are one argument.**
+# `-interpreter auto` lets the agent read a sentence nobody scripted;
+# `-catalogue-live dummyjson` gives that sentence a shelf nobody wrote down.
+# Either alone is half the point — free text against sixty-four committed offers
+# proves nothing a lookup table could not, and a wider shop nobody can address in
+# their own words is a longer table. The merchant states at start-up how many
+# offers it fetched and from where, and which sentences a fetched offer can
+# answer: it holds one price, so a condition ("when it drops below $200") can
+# only ever resolve against the committed offers, and an instruction is what a
+# live offer answers.
+#
+# This half is *not* conditional on an environment variable, which is the one
+# way it differs from the interpreter's. A shop that will not answer stops the
+# merchant rather than falling back to the file — an unset key is an answer, and
+# a shop asked for and not delivered is not — so this target needs a network
+# where `make demo` needs none.
 .PHONY: demo-live
-demo-live: generate-go generate-disclosure generate-ts ## Same stack as `make demo`, but the agent reads free text when GEMINI_API_KEY is set (needs Node)
+demo-live: generate-go generate-disclosure generate-ts ## Same stack as `make demo`, with free text when GEMINI_API_KEY is set and a shop fetched at start-up (needs Node and a network)
 	cd $(BACKEND) && $(GO) build -o bin/ ./cmd/...
-	$(BACKEND)/bin/demo -manifest deploy/demo.json -root . -append agent-watch=-interpreter,auto
+	$(BACKEND)/bin/demo -manifest deploy/demo.json -root . \
+		-append agent-watch=-interpreter,auto \
+		-append merchant=-catalogue-live,dummyjson
 
 .PHONY: frontend
 frontend: generate-disclosure generate-ts ## Run the frontend dev server (needs Node)

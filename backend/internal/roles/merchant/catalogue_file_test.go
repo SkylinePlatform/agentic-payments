@@ -415,6 +415,11 @@ func assertScenarioHolds(t *testing.T, f *merchant.CatalogueFile, offer merchant
 func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 	t.Parallel()
 
+	// One offer as CatalogueFile.Extend produces it, for the rows about the
+	// fetched half. See fetchedPrototype for why it is built rather than written
+	// out, and why each row gets its own copy.
+	fetched := fetchedPrototype(t)
+
 	for _, tc := range []struct {
 		name    string
 		mutate  func(*merchant.CatalogueFile)
@@ -630,6 +635,83 @@ func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 			}, wantErr: true,
 			why: "Inventory.New refuses it, so this would be a merchant that loaded and then " +
 				"would not start",
+		},
+
+		// The fetched half, which is issue #243. Every row below appends rather
+		// than replacing an offer, so nothing is removed and no row can be
+		// refused for the absence of something it did not mean to take away.
+		{
+			// The row that keeps the seven below honest. A branch that refused
+			// every fetched offer would satisfy all of them and would mean
+			// `make demo-live` could not start.
+			name: "a fetched offer, exactly as Extend produces one",
+			mutate: func(f *merchant.CatalogueFile) {
+				f.Offers = append(f.Offers, fetched())
+			}, wantErr: false,
+			why: "a mixed shelf is the whole design; a rule set that only accepted the committed " +
+				"half would be one no live catalogue could ever satisfy",
+		},
+		{
+			name: "a source this loader does not understand",
+			mutate: func(f *merchant.CatalogueFile) {
+				live := fetched()
+				live.Source = "cached"
+				f.Offers = append(f.Offers, live)
+			}, wantErr: true, mentions: "decides the rules below",
+			why: "this field picks which image rule and which scenario rule the offer is held " +
+				"to, so guessing at a value nobody defined would choose a rule on the offer's behalf",
+		},
+		{
+			name: "an offer the file lists carrying its picture inline",
+			mutate: func(f *merchant.CatalogueFile) {
+				entry(f).ImageURL = fetched().ImageURL
+			}, wantErr: true, mentions: "see the source field",
+			why: "the root-relative check refuses it anyway, and what the earlier case adds is " +
+				"the reason: an inline picture is not wrong, it is what the other kind of offer does",
+		},
+		{
+			name: "a fetched offer pointing at the shop's own host",
+			mutate: func(f *merchant.CatalogueFile) {
+				live := fetched()
+				live.ImageURL = "https://cdn.dummyjson.com/product-images/sunglasses/1.webp"
+				f.Offers = append(f.Offers, live)
+			}, wantErr: true, mentions: "has to carry its picture as",
+			why: "the rule gained a second shape and did not lose what it protects — a fetched " +
+				"offer whose picture is on the shop's CDN is a row that renders broken when that " +
+				"CDN is down, which is the state #215 ended",
+		},
+		{
+			name: "a fetched offer that says which sentence goes looking for it",
+			mutate: func(f *merchant.CatalogueFile) {
+				live := fetched()
+				live.Scenario = merchant.Scenario{Cap: 3000, Found: merchant.FoundAlways}
+				f.Offers = append(f.Offers, live)
+			}, wantErr: true, mentions: "Nobody wrote one",
+			why: "a scenario is a claim about a scripted prompt, and no scripted prompt was " +
+				"written for a product that arrived at start-up — the tests walking this file " +
+				"offer by offer would then be asserting it",
+		},
+		{
+			name: "a fetched offer with a schedule",
+			mutate: func(f *merchant.CatalogueFile) {
+				live := fetched()
+				live.Prices = []int{2999, 2499}
+				f.Offers = append(f.Offers, live)
+			}, wantErr: true, mentions: "one price the shop quotes",
+			why: "the merchant tells a viewer at start-up that a fetched offer holds one price " +
+				"and therefore answers no conditional sentence; a row with a schedule makes that " +
+				"sentence false on the screen it was printed above",
+		},
+		{
+			name: "a fetched offer describing a route",
+			mutate: func(f *merchant.CatalogueFile) {
+				live := fetched()
+				live.Attributes[routeOrigin] = "LHR"
+				live.Attributes[routeDestination] = "AMS"
+				f.Offers = append(f.Offers, live)
+			}, wantErr: true, mentions: "one price that never moves",
+			why: "GET /checkout?from=&to= quotes a route on that offer's own prices, so a public " +
+				"test shop's placeholder row would be sold as a seat",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

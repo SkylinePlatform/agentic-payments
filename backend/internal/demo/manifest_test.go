@@ -253,6 +253,31 @@ func TestAppendCalledTwiceAccumulates(t *testing.T) {
 
 	assert.Equal(t, []string{"-watch", "-interpreter", "auto", "-poll", "2s"}, m.Processes[0].Args,
 		"a second -append for the same process adds to the first, in the order the flags were given")
+	assert.Equal(t, []string{"-interpreter", "auto", "-poll", "2s"}, m.Processes[0].Appended,
+		"the banner says what this run is by printing these, so a second -append that did not "+
+			"accumulate here would leave the screen claiming a run somebody did not ask for")
+}
+
+// TestWhatTheManifestSaysIsNotWhatARunWasGiven keeps the two lists apart.
+//
+// Args is what the process is started with and includes everything the manifest
+// already stated; Appended is only the part this run added. Collapsing them
+// would make the banner print `-addr 127.0.0.1:8086 -watch -interpreter auto`
+// under every process, which says nothing about what makes this run different —
+// and that difference is the whole reason the line exists.
+func TestWhatTheManifestSaysIsNotWhatARunWasGiven(t *testing.T) {
+	t.Parallel()
+
+	m := demo.Manifest{Processes: []demo.Process{
+		{Name: "merchant", Args: []string{"-step", "3s"}},
+		{Name: "agent-buy", Args: []string{"-buy"}},
+	}}
+	require.NoError(t, m.Append("merchant", "-catalogue-live", "dummyjson"))
+
+	assert.Equal(t, []string{"-catalogue-live", "dummyjson"}, m.Processes[0].Appended,
+		"only what this run added belongs here; the manifest's own args are not what makes a run attributable")
+	assert.Empty(t, m.Processes[1].Appended,
+		"a process nobody appended to has nothing to say about this run, and `make demo` appends to none of them")
 }
 
 // TestAppendRejectsAnUnknownProcess is the fail-fast property: a typo in
