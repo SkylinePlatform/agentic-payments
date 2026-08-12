@@ -1,0 +1,64 @@
+#!/bin/sh
+#
+# Bring the gitignored generated code level with the tree git has just moved to.
+#
+# Not a hook. post-checkout, post-merge and post-rewrite are three ways of
+# saying the same thing — the working tree is not the one the generated files
+# were built from — and this is the one answer they share.
+#
+# It is a guardrail, not a gate, in the shape .githooks/pre-push already
+# established one operation along. It never fails the operation that invoked
+# it; there is no `git checkout --no-verify`, so the way out is
+# `git config hooks.regenerate false`. `make check` regenerates regardless, so
+# nothing here is what makes a build correct — it only stops the editor being
+# wrong between builds.
+
+set -eu
+
+if [ "$(git config --bool --get hooks.regenerate || echo true)" = "false" ]; then
+	exit 0
+fi
+
+# --show-toplevel is the worktree git ran the command in, not the main
+# checkout, which is the whole point: a `git worktree add` has to generate into
+# the tree it has just created, and .claude/worktrees/ makes that the common
+# case here.
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$root" || exit 0
+
+# A desktop git client invokes hooks with the PATH of the session that started
+# it, which routinely has /usr/bin but not the Go toolchain. Exiting silently
+# there would reproduce issue #265 exactly — stale output, no message — so this
+# says one line and stops. One line rather than the block below, because it is
+# not a failure and it would otherwise arrive on every checkout.
+if ! command -v make >/dev/null 2>&1 || ! command -v go >/dev/null 2>&1; then
+	echo "git hook: no Go toolchain on PATH, so generated code is now stale (issue #265). Run 'make check', or turn this off with 'git config hooks.regenerate false'." >&2
+	exit 0
+fi
+
+# GOPROXY=off is what keeps a git operation off the network. Everything this
+# builds is in the module cache after one `make setup`; on a cache that is
+# genuinely cold, generation fails loudly below instead of fetching modules
+# inside a `git checkout`. Nothing tests this line — a test would have to
+# observe the absence of a network — and it is here because it costs nothing,
+# not because anything is proving it.
+if output=$(GOPROXY=off make generated 2>&1); then
+	exit 0
+fi
+
+printf '%s\n' "$output" >&2
+cat >&2 <<'EOF'
+
+git hook: could not regenerate. The operation itself succeeded — these hooks
+never fail one — but backend/internal/core/generated/ and the mocks_test.go
+beside each mocked interface are now whatever the previous tree left behind.
+
+An editor reports that as undefined symbols in code that is fine, which is
+issue #265: "Describe undefined on MockWatcher" with nothing wrong in
+console.go. The error above is make's own.
+
+  make setup                           a clone or a new worktree needs this once
+  make generated                       run it again and watch it fail
+  git config hooks.regenerate false    turn this off
+EOF
+exit 0

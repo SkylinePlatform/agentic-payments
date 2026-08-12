@@ -223,7 +223,9 @@ purpose: a committed workspace would unify the two modules' build lists, and
 `backend/go.mod`, so a committed `go.work` would let `backend/` compile
 against modules CI never provides. `make` always runs with `GOWORK=off`, so
 whether that file exists never changes what `make check` builds — the
-workspace is for the editor, and for nothing else.
+workspace is for the editor, and for nothing else. `make setup` is that plus
+the generated code the workspace file does not contain, and the git hooks that
+keep it level after a checkout; AGENTS.md has the reasoning.
 
 The directory tree itself lives in AGENTS.md's Layout section and is not
 repeated here. A listing kept in two places disagrees with itself the first time

@@ -31,6 +31,23 @@ AP2 is Apache 2.0 (Copyright Google LLC). Incorporating or deriving from it is
 permitted, but the source file must carry the original attribution and the
 [NOTICE](NOTICE) file must be updated.
 
+## Setting up
+
+```bash
+make setup
+```
+
+Once, on a fresh clone. Generated code is not committed — the canonical model's
+Go types under `backend/internal/core/generated/`, and a `mocks_test.go` beside
+each interface in `backend/.mockery.yml` — so a clone has neither, and an editor
+opened before generating is full of undefined symbols in code that is correct.
+`make setup` generates them, points git at `.githooks/` so that a checkout, pull
+or rebase keeps them level, and writes the untracked `go.work` an editor opened
+at the repository root needs.
+
+`make check` regenerates too, so it is never the hooks that make a build
+correct — they only stop the editor being wrong between builds.
+
 ## Workflow
 
 All changes go through a pull request. This holds even for a solo contributor —
@@ -101,6 +118,7 @@ product.
 - No test may depend on a live LLM or an external network call
 
 ```bash
+make check     # the gate: generate, lint, test
 make test      # unit
 make lint      # golangci-lint, includes depguard
 make vectors   # conformance suite against golden vectors

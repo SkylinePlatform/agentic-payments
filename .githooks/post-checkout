@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# Regenerate after git has moved the working tree.
+#
+# This is the broad one: `git checkout`, `git switch`, `git worktree add`, every
+# step of a `git bisect`, and the point in a rebase where git lands on the
+# commit it is about to replay onto.
+
+set -eu
+
+old=$1
+new=$2
+
+# The only thing worth skipping, and it is one comparison rather than two.
+# `git checkout -b`, `git switch -c` and a rebase that turned out to be a no-op
+# all report the same sha twice; so does a file checkout — `git checkout -- path`
+# passes flag 0 and HEAD twice — so testing $3 as well would be a second guard
+# for a case the first already refuses, and no test could break it.
+[ "$old" != "$new" ] || exit 0
+
+# ${0%/*} rather than `dirname "$0"`: a git client can invoke a hook with a PATH
+# that has no coreutils on it, and a hook that cannot find dirname fails on every
+# checkout for a reason that has nothing to do with it. Parameter expansion is
+# the shell itself and needs no PATH at all.
+exec "${0%/*}/regenerate"

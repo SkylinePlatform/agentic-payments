@@ -20,7 +20,7 @@ help: ## Show this help
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-17s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: build
-build: ## Build every binary under backend/cmd
+build: generated ## Build every binary under backend/cmd
 	cd $(BACKEND) && $(GO) build ./...
 
 # Generated test doubles. mockery is pinned in tools/mockery/go.mod — its own
@@ -49,10 +49,34 @@ generate-mocks: $(MOCKERY) ## Regenerate the mocks configured in backend/.mocker
 	@cd $(BACKEND) && $(MOCKERY) --log-level warn
 	@echo "generate-mocks: $(BACKEND)/.mockery.yml -> mocks_test.go"
 
+# mockery loads the packages it mocks, and they do not compile until the
+# canonical model exists — internal/agent/console and internal/platform/obs both
+# import it from non-test files. On a tree nothing has generated into, this
+# target alone fails with go/packages naming the import rather than the missing
+# generator, which reads like a broken .mockery.yml. `check` and `generate`
+# happened to list generate-go first, so the dependency was real and satisfied
+# by the order prerequisites were written in; ordering is not a dependency, and
+# `make -j` may run them either way round.
+generate-mocks: generate-go generate-disclosure
+
 # Mocks are not the canonical model, so their target lives here rather than in
 # contracts/codegen.mk — but they are generated code that the tests need, so
 # `generate` produces them too.
 generate: generate-mocks
+
+# Everything a Go toolchain alone can generate, under one name because three
+# callers have to agree on it: `check`, which is the gate; the hooks in
+# .githooks/, which run it after any git operation that moves the working tree;
+# and a person on a fresh clone typing `make setup`. A hook naming the three
+# targets itself would be a fourth copy of a list, and the copy that drifts is
+# always the one nobody runs.
+#
+# generate-ts is deliberately out. AGENTS.md promises the gate needs only Go,
+# and a git hook that reached for npm would put a Node toolchain in front of a
+# checkout. generate-disclosure stays in even though it writes a .ts file — it
+# is a `go run`, and what it costs is what decides this, not what it emits.
+.PHONY: generated
+generated: generate-go generate-disclosure generate-mocks ## Regenerate everything a Go toolchain alone can produce
 
 # deploy/catalogue.json and the picture beside every row of it, derived from the
 # CC0 snapshot in tools/catalogue/data. A third tool-only module, on the rule
@@ -69,15 +93,30 @@ generate: generate-mocks
 # running the generator.
 CATALOGUE_TOOL := tools/catalogue
 
+# The suite over .githooks/ and over the tracked sentinel in the generated
+# package. A fourth tool-only module, and the one that generates nothing: its
+# subject is the repository rather than the model, and it must stay out of
+# backend/go.mod for the reason the other three do — backend/ is what gets
+# imported. It holds no non-test Go source, exactly as internal/suite holds
+# none.
+BOOTSTRAP_TOOL := tools/bootstrap
+
 .PHONY: catalogue
 catalogue: ## Re-derive deploy/catalogue.json and its images from tools/catalogue/data
 	$(GO) -C $(CATALOGUE_TOOL) run .
 
 .PHONY: test
-test: ## Unit tests
+test: generated ## Unit tests
 	cd $(BACKEND) && $(GO) test -race ./...
 	$(GO) -C $(CONTRACT_TOOLS) test ./...
 	$(GO) -C $(CATALOGUE_TOOL) test ./...
+# -count=1 is not belt-and-braces. The subject of this suite is four shell
+# scripts and one Go file outside the module, none of which the build cache
+# tracks: `go test` reported (cached) after post-merge had been deleted from the
+# tree. A suite that cannot see its own subject change is the thing it exists to
+# prevent. The comment sits at column 0 rather than inside the recipe, as
+# `clean`'s does, so that make does not echo five lines of prose on every run.
+	$(GO) -C $(BOOTSTRAP_TOOL) test -count=1 ./...
 
 # pkg/ is in scope alongside adapters/ because that is where implementations of
 # public standards live, and those are the ones with vectors published by
@@ -94,11 +133,11 @@ test: ## Unit tests
 # two agree on. See the paragraph in AGENTS.md beside this list for why the one
 # core rule that stayed out is still out.
 .PHONY: vectors
-vectors: ## Conformance suite against the golden vectors
+vectors: generated ## Conformance suite against the golden vectors
 	cd $(BACKEND) && $(GO) test ./internal/adapters/... ./internal/core/... ./pkg/... -run 'TestGolden' -v
 
 .PHONY: lint
-lint: ## golangci-lint, including the depguard architecture rules
+lint: generated ## golangci-lint, including the depguard architecture rules
 	cd $(BACKEND) && $(GOLANGCI_LINT) run
 
 .PHONY: fmt
@@ -238,14 +277,64 @@ hooks: ## Point git at the tracked hooks in .githooks
 # trade-off does not apply to the catalogue generator either — it requires
 # nothing but testify, which backend/ already builds against, so unifying its
 # build list moves no version.
+#
+# tools/bootstrap is listed on that same criterion — a _test.go is Go source
+# somebody opens — and, like the catalogue generator, it requires nothing but
+# testify.
 .PHONY: workspace
 workspace: ## Write the untracked go.work an editor opened at the root needs
 	@if [ -e go.work ]; then \
 		echo "go.work already exists — leaving it alone"; \
 	else \
-		$(GO) work init ./$(BACKEND) ./$(CONTRACT_TOOLS) ./$(CATALOGUE_TOOL) && \
+		$(GO) work init ./$(BACKEND) ./$(CONTRACT_TOOLS) ./$(CATALOGUE_TOOL) ./$(BOOTSTRAP_TOOL) && \
 		echo "wrote go.work — untracked on purpose, see AGENTS.md"; \
 	fi
+
+# The one command a fresh clone needs, and the only place its three steps are
+# written down in an order. git does not clone config, so core.hooksPath is
+# unset in a new checkout and nothing in .githooks/ can run until a person has
+# installed them once — which is why the first command is the one thing a hook
+# cannot be. `generated` comes first so that an editor opened straight after is
+# already right.
+.PHONY: setup
+setup: generated hooks workspace ## Prepare a fresh clone: generate, install the git hooks, write go.work
+	@if [ ! -f $(GENERATED_TS)/index.ts ]; then \
+		echo "setup: the frontend's generated types are not here — \`make generate\` writes those, and needs Node"; \
+	fi
+
+# `make setup` is a claim about a tree with nothing generated in it, and the
+# only honest way to check it is to run it in one.
+#
+# The copy is `git ls-files` through tar, which takes the tracked files as they
+# are on disk right now. `git worktree add --detach HEAD` was the obvious way to
+# get a pristine tree and is wrong in the one direction that matters: it
+# verifies the committed Makefile, so editing `setup` and running this passes
+# green against the version you are not testing.
+#
+# Two properties, each a mutation away from failing. NPM points at a command
+# that does not exist, so a Node step added to `setup` fails here rather than
+# passing on a machine that happens to have npm — every GitHub runner has one,
+# so absence can never be the check. And `go vet ./...` is the toolchain's own
+# package loader, the one gopls drives: it type-checks test files, so a missing
+# mock is a failure rather than a build that is clean without it.
+#
+# GIT is neutralised for the opposite reason NPM is: the copy has no .git of its
+# own, so `make hooks` inside it would reach up and configure *this* repository.
+# What is under test is what setup generates, not that `git config` can be
+# called.
+#
+# A failing run leaves the copy on disk to be looked at. The next run removes it.
+SETUP_VERIFY := $(abspath .setup-verify)
+
+.PHONY: setup-verify
+setup-verify: ## Prove `make setup` leaves a tree the toolchain can load, from nothing and with no npm
+	@rm -rf $(SETUP_VERIFY)
+	@mkdir -p $(SETUP_VERIFY)
+	@$(GIT) ls-files -z | tar --null -T - -cf - | tar -xf - -C $(SETUP_VERIFY)
+	@$(MAKE) --no-print-directory -C $(SETUP_VERIFY) setup NPM=npm-must-not-run GIT=true
+	@cd $(SETUP_VERIFY)/$(BACKEND) && GOWORK=off $(GO) vet ./...
+	@rm -rf $(SETUP_VERIFY)
+	@echo "setup-verify: a tree with nothing generated in it loads after \`make setup\`, with no npm on the path"
 
 # mermaid-cli pulls a headless Chromium, which is why this is not wired into
 # `check`: AGENTS.md promises that the gate needs only Go. Diagrams are
@@ -276,12 +365,16 @@ diagrams: ## Export inline mermaid from docs/ to SVG for the article series
 # pull request, so cross-language drift is still caught — just not on the path
 # of a Go-only contributor.
 .PHONY: check
-check: generate-go generate-disclosure generate-mocks lint test ## Lint and test against freshly generated Go types
+check: generated lint test ## Lint and test against freshly generated Go types
 
 # mocks_test.go is mockery's filename and nothing hand-written may take it —
 # .gitignore covers it, so a hand-written one would be invisible to git anyway.
 .PHONY: clean
 clean: ## Remove build output and generated types
 	cd $(BACKEND) && $(GO) clean -cache -testcache
-	rm -rf $(BACKEND)/bin $(GENERATED_GO) $(GENERATED_TS)
+	rm -rf $(BACKEND)/bin $(GENERATED_TS)
+# doc.go is tracked and is the only file under $(GENERATED_GO) that is not
+# generated. `rm -rf` on the directory would delete it and leave `make clean`
+# with a dirty tree behind it.
+	find $(GENERATED_GO) -type f ! -name doc.go -delete
 	find $(BACKEND) -name mocks_test.go -delete
