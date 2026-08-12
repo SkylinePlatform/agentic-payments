@@ -39,87 +39,159 @@
  * the wrong carrier for it, which is why the fix is a field and not a revert.
  */
 
+import { useRef } from "react";
 import type { ReactNode } from "react";
 
 import { Status } from "../status/Status";
 
 import type { AuthorisationRef } from "../sse";
 
+import { heldNothing, useFlight } from "./flight";
 import {
   ATTEMPT_META,
   LANES,
   STEP_META,
   amountOf,
   authorisationOf,
+  everHeld,
   mandateLabel,
   renderPrice,
   shortDigest,
-  stepsIn,
+  ticketsIn,
   timeOf,
   titleOf,
   verdictOf,
 } from "./model";
-import type { Attempt, Lane, Step, Transaction, Verdict } from "./model";
+import type { Attempt, Lane, Step, Ticket, Transaction, Verdict } from "./model";
 
-function StepCard({ step }: { readonly step: Step }) {
+/**
+ * One hop on a card: what happened, who did it, and its place in the sequence.
+ *
+ * The last hop is the card's current state and is drawn in `ink`; the ones
+ * before it are `graphite`. That is {@link Status}'s `subdued`, which is the
+ * vocabulary's own word for *the whole row is secondary* — and it deliberately
+ * does not reach the ending, so a `check` a verifier earned three hops ago is
+ * still `seal`. Three parties independently accepting is three facts and takes
+ * three marks; *Indicators* says so in as many words.
+ *
+ * **The sequence number is on every hop, and that is not decoration.** A card
+ * gathers steps that were not adjacent in the stream, so the one thing a
+ * reorder must never cost is the ability to see a gap. `#20 #21 #22 #26 #27`
+ * reads as exactly what it is.
+ */
+function Hop({ step, current }: { readonly step: Step; readonly current: boolean }) {
   const meta = STEP_META[step.kind];
 
   return (
-    <li className="flex flex-col gap-1 border border-graphite/40 bg-paper px-3 py-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-xs font-semibold tracking-tight">
-          <Status word={meta.label} ending={meta.ending} />
-        </span>
-        <span className="font-sans text-xs tabular-nums text-graphite">#{step.seq}</span>
-      </div>
-
-      {/*
-        The party, and beside it the artefact — issue #201. Two elements in one
-        row rather than one string, and in the same register `titleOf` already
-        renders: a mandate type is a label, never a lane and never a mark. The
-        step axis has no pip by design — the value is the mark — and which
-        mandate a step is about is not a verdict, so it takes neither.
-
-        A step about no mandate renders nothing here, the way an absent price
-        and an absent digest do. `receipt_issued` and `authorisation_refused`
-        are the two kinds that reach this branch, and both are honestly about no
-        mandate: the receipt names one as signed evidence of its own, and a
-        person declining an interpretation refused before any existed.
-      */}
-      <div className="flex flex-wrap items-baseline gap-x-2 font-sans text-xs text-graphite">
-        <span>{titleOf(step.role)}</span>
-        {step.mandate !== undefined && <span>{mandateLabel(step.mandate)}</span>}
-      </div>
-
+    <li className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+      <span
+        className={
+          "font-sans text-xs tabular-nums " + (current ? "font-semibold text-ink" : "text-graphite")
+        }
+      >
+        #{step.seq}
+      </span>
+      <span className={"text-xs " + (current ? "font-semibold tracking-tight" : "")}>
+        <Status subdued={!current} word={meta.label} ending={meta.ending} />
+      </span>
+      <span className={"font-sans text-xs " + (current ? "text-ink" : "text-graphite")}>
+        {titleOf(step.role)}
+      </span>
       {step.code !== undefined && step.code !== "" && (
         <code className="font-mono text-xs text-broken">{step.code}</code>
       )}
+    </li>
+  );
+}
 
-      {/*
-        The price this step is about, when it is about one — the four kinds
-        obs.Event's amountKinds permits. A step with none renders nothing here
-        rather than a placeholder: the digest above draws the same distinction
-        for the same reason, and a dash in place of an absent fact would read
-        as a value rather than as "not applicable to this step".
-      */}
-      {step.amount !== undefined && (
-        <span className="font-sans text-xs tabular-nums text-ink">{renderPrice(step.amount)}</span>
-      )}
-
-      {/*
-        The digest on the step itself, not only on the spine. This is what makes
-        the claim checkable by eye rather than taken on trust: a reader can see
-        that the merchant's twelve characters and the processor's twelve
-        characters are the same twelve characters, without following a line.
-      */}
-      {step.digest !== undefined && step.digest !== "" && (
-        <span
-          className="font-mono text-xs tracking-tight text-graphite"
-          title={step.digest}
-        >
-          {shortDigest(step.digest)}
+/**
+ * One document, and everywhere it has been — issue #241's card.
+ *
+ * # What it replaced, and why the replacement is not a summary
+ *
+ * The screen drew one card per step, so a purchase read as eleven of them and a
+ * viewer counting cards was counting emissions rather than things. This is one
+ * card per **artefact**: the closed Checkout Mandate, the closed Payment
+ * Mandate, each receipt. Nothing is dropped — every step is a {@link Hop} on
+ * whichever card it happened to, with its own word, its own mark and its own
+ * sequence number — so *every step is visible* survives the reduction intact.
+ * What goes is the repetition of the party, the price and the digest once per
+ * emission.
+ *
+ * # The head, and why it carries no mark of its own
+ *
+ * The title is the artefact — `closed Payment Mandate`, built by
+ * {@link mandateLabel} from the two closed vocabularies the wire carries — and
+ * beneath it the price and the digest, each stated once for the document rather
+ * than once per hop. Every card of one attempt necessarily carries the same
+ * digest, since `split` cuts precisely where a digest changes, and seeing the
+ * Checkout Mandate's twelve characters beside the Payment Mandate's is the
+ * binding this screen exists to demonstrate.
+ *
+ * **There is no pip and no ending on the head**, and that is *Indicators*'
+ * mandate-axis argument read one screen along. The endings on this card belong
+ * to the parties that decided, one each, drawn on their own hops; a card-level
+ * `check` would restate one of them, and *a mark per artefact that a single
+ * decision moved is one fact several times* is the rule that forbids it. What a
+ * card-level pip would have to say — whether this document is still in play —
+ * is the **attempt's** state, and the attempt states it once, in its own badge
+ * directly above these columns.
+ *
+ * A card therefore looks ended because its last hop is an ending: `✓ verified`,
+ * `✗ refused`, or a `receipt` that is neither. A card whose last hop is `signed`
+ * on a refused attempt is the finding rather than an omission — it says the
+ * agent signed a Checkout Mandate that no merchant ever saw, because the
+ * payment leg was refused first.
+ *
+ * # A moment nothing identifies gets a card of one hop
+ *
+ * A receipt and a person's refusal carry no mandate, so nothing can file them
+ * under a document — and neither is one. Those cards have no title row, which
+ * is the difference showing rather than being explained: the hop is the whole
+ * of what is known.
+ */
+function TicketCard({ ticket }: { readonly ticket: Ticket }) {
+  return (
+    <li
+      // The identity the flight is keyed on. It is this screen's own — nothing
+      // on the wire identifies a mandate instance — and it is unique within an
+      // attempt, which is the scope `useFlight` queries.
+      data-flight={ticket.key}
+      data-testid="ticket"
+      className="flex flex-col gap-1 border border-graphite/40 bg-paper px-3 py-2"
+    >
+      {ticket.mandate !== undefined && (
+        <span className="font-sans text-xs font-semibold text-ink">
+          {mandateLabel(ticket.mandate)}
         </span>
       )}
+
+      {(ticket.amount !== undefined || ticket.digest !== undefined) && (
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+          {/*
+            Stated once for the document rather than once per hop. Every hop of
+            one card is about one price and one checkout by construction — a
+            different digest would have started a different attempt — so a copy
+            on each line would be the duplication this card exists to remove.
+          */}
+          {ticket.amount !== undefined && (
+            <span className="font-sans text-xs tabular-nums text-ink">
+              {renderPrice(ticket.amount)}
+            </span>
+          )}
+          {ticket.digest !== undefined && (
+            <span className="font-mono text-xs tracking-tight text-graphite" title={ticket.digest}>
+              {shortDigest(ticket.digest)}
+            </span>
+          )}
+        </div>
+      )}
+
+      <ol className="flex flex-col gap-0.5">
+        {ticket.hops.map((hop) => (
+          <Hop key={hop.seq} step={hop} current={hop.seq === ticket.latest.seq} />
+        ))}
+      </ol>
     </li>
   );
 }
@@ -221,8 +293,32 @@ function Approval({ authorisation }: { readonly authorisation: AuthorisationRef 
   );
 }
 
+/**
+ * An empty column, in the two spellings it needs — issue #241.
+ *
+ * **The second one is what the redesign made common.** A card lives in the lane
+ * of the party that last acted on it, so on a clean purchase both mandates are
+ * signed in the Agent lane and both finish in the Merchant lane, and the
+ * agent's column ends the attempt holding nothing. *Nothing yet.* there would
+ * be flatly false — a great deal happened — and it is the same defect #213
+ * fixed one column to the left, where a User lane read *Nothing yet.* on a
+ * purchase somebody had personally signed for.
+ *
+ * Two words apart, and the difference is the whole of what a reader needs: one
+ * says the story has not reached this party, the other says it has moved past
+ * them. Where the steps went is on the cards, each of which names every party
+ * that held it.
+ */
+function EmptyLane({ held }: { readonly held: boolean }) {
+  return (
+    <p className="font-sans text-xs text-graphite">
+      {held ? "Nothing here now." : "Nothing yet."}
+    </p>
+  );
+}
+
 function LaneColumn({ lane, attempt }: { readonly lane: Lane; readonly attempt: Attempt }) {
-  const steps = stepsIn(attempt, lane.id);
+  const tickets = ticketsIn(attempt, lane.id);
   // The user's lane and no other, because the authorisation is the user's own
   // decision — the agent's column is what it did inside those limits and the
   // merchant's is what the verifiers made of it. The lane is named rather than
@@ -240,23 +336,24 @@ function LaneColumn({ lane, attempt }: { readonly lane: Lane; readonly attempt: 
       {authorisation !== undefined && <Approval authorisation={authorisation} />}
 
       {/*
-        "Nothing yet." only when there is genuinely nothing — the approval counts.
-        Under Human Present the user signs the closed mandates at the surface, in
-        this correlation, so that flow has steps here and no authorisation; under
-        Human Not Present it has an authorisation and, on the browser's path, no
-        steps. Neither can produce both halves of a duplicate, because the field
-        is only ever attached by a party holding an open mandate pair.
+        An empty column only when there is genuinely nothing — the approval
+        counts. Under Human Present the user signs the closed mandates at the
+        surface, in this correlation, so that flow has cards here and no
+        authorisation; under Human Not Present it has an authorisation and, on
+        the browser's path, no cards. Neither can produce both halves of a
+        duplicate, because the field is only ever attached by a party holding an
+        open mandate pair.
       */}
-      {steps.length > 0 && (
+      {tickets.length > 0 && (
         <ol className="flex flex-col gap-2">
-          {steps.map((step) => (
-            <StepCard key={step.seq} step={step} />
+          {tickets.map((ticket) => (
+            <TicketCard key={ticket.key} ticket={ticket} />
           ))}
         </ol>
       )}
 
-      {steps.length === 0 && authorisation === undefined && (
-        <p className="font-sans text-xs text-graphite">Nothing yet.</p>
+      {tickets.length === 0 && authorisation === undefined && (
+        <EmptyLane held={everHeld(attempt, lane.id)} />
       )}
     </section>
   );
@@ -308,6 +405,7 @@ function SpineHead({ verdict }: { readonly verdict: Verdict }) {
   return (
     <div className="flex justify-center">
       <span
+        data-testid="spine"
         // Concatenation rather than a template literal, matching
         // `EventLog.tsx` and `routes/MandateInspector.tsx`. It read as
         // load-bearing until #194: `src/test/source.ts` used to take a
@@ -505,6 +603,13 @@ function AttemptView({
   readonly inspecting?: Inspecting;
 }) {
   const verdict = verdictOf(attempt);
+  // Where every card in this attempt was at the last commit, held across
+  // commits so that a card which changed column can be put back and released.
+  // A ref rather than state: writing it must not cause the render that would
+  // then have to measure again.
+  const grid = useRef<HTMLDivElement | null>(null);
+  const held = useRef(heldNothing());
+  useFlight(grid, held.current);
   // The console counts attempts from 1, and so does this control. The index is
   // this screen's own, derived by cutting the stream where the digest changes;
   // `routes/protocol/Disclosure.tsx` carries the note on why the two countings
@@ -547,11 +652,19 @@ function AttemptView({
       <SpineHead verdict={verdict} />
 
       {/*
-        One column until there is room for three. Three columns of step cards on
-        a phone is three unreadable columns, and the left-to-right order the
+        One column until there is room for three. Three columns of cards on a
+        phone is three unreadable columns, and the left-to-right order the
         design fixes — user, agent, merchant — survives as top-to-bottom.
+
+        **The flight is scoped to this element, and that is the answer to
+        "where does a card live while it moves".** The spine head is drawn
+        directly above and is not inside this box, so a card crossing between
+        columns is below the digest for the whole of its half second and cannot
+        obscure it. #183's ruling that agreement wins where the two compete is
+        untouched, because after the measurement they do not compete: the spine
+        is one value per attempt above the grid, and the movement is inside it.
       */}
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+      <div ref={grid} data-testid="lane-grid" className="grid grid-cols-1 gap-6 md:grid-cols-3">
         {LANES.map((lane) => (
           <LaneColumn key={lane.id} lane={lane} attempt={attempt} />
         ))}
@@ -729,13 +842,27 @@ export function Lanes({
         // A role no column claims still gets shown. registry and proxy arrive
         // with TAP, and a step nobody drew would break the one standard this
         // screen is held to before the column for it existed.
+        //
+        // One card per step here rather than per artefact, which is the one
+        // place the two disagree and is why `ticketsOf` skips a step with no
+        // lane. A card lives in a lane, so a step that belongs to none cannot
+        // join one — and drawing it both here and as a hop on a mandate's card
+        // would be one step twice, which is the complaint this issue is about.
         <section className="border border-graphite/40 bg-wash p-3">
           <h4 className="mb-2 font-sans text-xs uppercase tracking-widest text-graphite">
             No lane yet
           </h4>
           <ol className="flex flex-col gap-2">
             {transaction.unplaced.map((step) => (
-              <StepCard key={step.seq} step={step} />
+              <li
+                key={step.seq}
+                data-testid="ticket"
+                className="flex flex-col gap-1 border border-graphite/40 bg-paper px-3 py-2"
+              >
+                <ol className="flex flex-col gap-0.5">
+                  <Hop step={step} current />
+                </ol>
+              </li>
             ))}
           </ol>
         </section>

@@ -252,3 +252,41 @@
     color: var(--color-ink);
   }
 }
+
+/*
+ * The one moving thing in this application — issue #241.
+ *
+ * A mandate genuinely travels: the agent signs it, presents it to the
+ * Credential Provider, then the merchant presents it to the processor. The
+ * three-lane view draws that as one card changing column, and this is the half
+ * second it takes. `src/lanes/flight.ts` carries the argument and puts the card
+ * back where it was; the duration and the curve are here, beside the palette,
+ * because a design token is a design token whether it is a colour or a time.
+ *
+ * Half a second, against the 750ms `PACE_MS` puts between steps: a card
+ * finishes arriving before the next one starts, which is the whole of what
+ * "slowly enough to follow in a room" asks for. The ease is fast out and slow
+ * in, so the eye is caught by the departure and led to the destination.
+ *
+ * Nothing on screen depends on it. Every fact this animation carries is written
+ * on the card in words — the party that has the document, the parties that had
+ * it, and the column it sits in — which is #185's rule for colour applied to
+ * motion, and motion is the weaker carrier of the two because it is gone a
+ * second later.
+ */
+@layer base {
+  .lane-flight {
+    transition: transform 520ms cubic-bezier(0.2, 0.75, 0.2, 1);
+  }
+
+  /*
+   * A reader who has asked for less movement gets none. `flight.ts` also checks
+   * the query and skips the transform entirely, so this rule is the backstop
+   * rather than the mechanism — a card is never left mid-flight by it.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    .lane-flight {
+      transition: none;
+    }
+  }
+}

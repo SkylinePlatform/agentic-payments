@@ -186,9 +186,59 @@ function nameOf(watches: readonly Watch[], correlationId: string | undefined): s
   return title === undefined || title === "" ? undefined : title;
 }
 
-export function Protocol() {
+/**
+ * What the screen has arrived and not yet drawn — issue #241.
+ *
+ * **This is the clause that makes pacing honest rather than a lie.** The screen
+ * is allowed to draw a step later than it arrived, because the demo's own steps
+ * land milliseconds apart and a faithful rendering is a flicker. What it is not
+ * allowed to do is be quietly behind: a viewer who cannot tell a paced screen
+ * from a stalled one, or from a stack that has stopped emitting, is being told
+ * something false about the run. So the count is stated, and the control that
+ * ends the wait is beside it.
+ *
+ * `src/lanes/pace.ts` carries the ruling and the two properties that go with it
+ * — the screen shows a prefix of the real sequence, and never a permutation of
+ * one.
+ */
+function Pacing({ behind, onShowAll }: { readonly behind: number; readonly onShowAll: () => void }) {
+  if (behind === 0) return null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-3" data-testid="pacing">
+      <span className="font-sans text-xs text-graphite">
+        {behind} {behind === 1 ? "step has" : "steps have"} arrived and{" "}
+        {behind === 1 ? "is" : "are"} still being drawn, one at a time.
+      </span>
+      <button
+        type="button"
+        onClick={onShowAll}
+        className="border border-graphite/40 px-2 py-1 font-sans text-xs text-graphite hover:border-ink hover:text-ink"
+      >
+        Draw them all now
+      </button>
+    </div>
+  );
+}
+
+export function Protocol({
+  pace,
+}: {
+  /**
+   * Milliseconds between drawn steps; `0` draws each as it arrives.
+   *
+   * Left to `useTransactions`'s own default in the application — the route
+   * names no number, so there is one place the pace is decided. It is a prop at
+   * all because a suite asserting *what* the screen draws should not have to
+   * become a suite about *when*: those tests pass `0`, and the paced behaviour
+   * has tests of its own that drive a clock.
+   */
+  readonly pace?: number;
+} = {}) {
   const [params, setParams] = useSearchParams();
-  const { transactions, records, state, gaps, reconnect } = useTransactions();
+  const { transactions, records, behind, showEverything, state, gaps, reconnect } = useTransactions({
+    pace,
+  });
   // The watch list, for the name at the head of the lanes and nothing else.
   //
   // The same hook `Disclosure` uses rather than a second reader of `/watches`,
@@ -234,6 +284,7 @@ export function Protocol() {
           to see what each of them was allowed to read.
         </p>
         <Connection state={state} onRetry={reconnect} />
+        <Pacing behind={behind} onShowAll={showEverything} />
         <Gaps gaps={gaps} />
       </header>
 

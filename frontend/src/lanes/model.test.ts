@@ -7,12 +7,15 @@ import { MANDATE_STATES, MANDATE_TYPES } from "../sse";
 import {
   amountOf,
   authorisationOf,
+  everHeld,
   group,
   laneOf,
   LANES,
   mandateLabel,
   shortDigest,
   stepsIn,
+  ticketsIn,
+  ticketsOf,
   timeOf,
   titleOf,
   verdictOf,
@@ -576,5 +579,233 @@ describe("the time a step or an authorisation is spelled with", () => {
       "a blank cell reads as a fact about the step; the raw value reads as a " +
         "value this build could not parse, which is what happened",
     ).toBe("not a timestamp");
+  });
+});
+
+/**
+ * A card is a document, and a step is a line on it — issue #241.
+ *
+ * The complaint this answers came off two live runs: the screen drew one card
+ * per step, so eleven cards for one purchase, several of them saying almost the
+ * same words about the same artefact one hop apart. A viewer counting cards was
+ * counting **emissions**, and an emission is not a thing.
+ *
+ * The sequence below is the one `make demo` actually emits — captured off the
+ * collector and reduced to the fields these assertions read — so the
+ * measurement is against the demonstration rather than against a fixture
+ * invented to make the number come out well.
+ */
+describe("the cards of one attempt", () => {
+  /** The eleven events one clean Human Not Present purchase emits, in order. */
+  function purchase(): EventRecord[] {
+    const price = { amount: 18900, currency: "USD" } as const;
+    const checkout = { type: "checkout", state: "closed" } as const;
+    const payment = { type: "payment", state: "closed" } as const;
+    return [
+      record({ kind: "mandate_constructed", role: "agent", digest: DIGEST, amount: price, mandate: checkout }),
+      record({ kind: "mandate_constructed", role: "agent", digest: DIGEST, amount: price, mandate: payment }),
+      record({ kind: "mandate_presented", role: "agent", digest: DIGEST, amount: price, mandate: payment }),
+      record({ kind: "mandate_verified", role: "credprovider", digest: DIGEST, amount: price, mandate: payment }),
+      record({ kind: "receipt_issued", role: "credprovider", digest: DIGEST }),
+      record({ kind: "mandate_presented", role: "agent", digest: DIGEST, amount: price, mandate: checkout }),
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST, amount: price, mandate: checkout }),
+      record({ kind: "mandate_presented", role: "merchant", digest: DIGEST, amount: price, mandate: payment }),
+      record({ kind: "mandate_verified", role: "mpp", digest: DIGEST, amount: price, mandate: payment }),
+      record({ kind: "receipt_issued", role: "mpp", digest: DIGEST }),
+      record({ kind: "receipt_issued", role: "merchant", digest: DIGEST }),
+    ];
+  }
+
+  function only(records: readonly EventRecord[]) {
+    const [transaction] = group(records);
+    return transaction.attempts[0];
+  }
+
+  it("draws five cards where the stream sent eleven steps", () => {
+    fresh();
+    const attempt = only(purchase());
+
+    expect(
+      ticketsOf(attempt).map((ticket) => ticket.key),
+      "two mandates and three receipts, against eleven cards before — which was " +
+        "a viewer counting emissions, and an emission is not a thing",
+    ).toEqual([
+      "mandate:closed:checkout",
+      "mandate:closed:payment",
+      "moment:5",
+      "moment:10",
+      "moment:11",
+    ]);
+  });
+
+  it("loses no step: every one of the eleven is a hop on exactly one card", () => {
+    fresh();
+    const attempt = only(purchase());
+
+    const hops = ticketsOf(attempt).flatMap((ticket) => ticket.hops.map((hop) => hop.seq));
+    expect(
+      [...hops].sort((a, b) => a - b),
+      "the standard this screen is held to is that every step is visible — not " +
+        "the outcome of a step, the step. A reduction that dropped one would be " +
+        "a summary, which is exactly what this card is not",
+    ).toEqual(attempt.steps.map((step) => step.seq));
+    expect(new Set(hops).size, "and none of them on two cards").toBe(hops.length);
+  });
+
+  it("keeps the two mandates apart even though their digests agree", () => {
+    fresh();
+    const mandates = ticketsOf(only(purchase())).filter((ticket) => ticket.mandate !== undefined);
+
+    expect(mandates).toHaveLength(2);
+    expect(
+      new Set(mandates.map((ticket) => ticket.digest)).size,
+      "a Payment Mandate's transaction_id *is* the checkout hash, so both " +
+        "mandates of one purchase agree by design — which is the binding this " +
+        "screen exists to prove, and exactly why it cannot also be the label",
+    ).toBe(1);
+    expect(
+      mandates.map((ticket) => ticket.mandate?.type),
+      "so the key is the mandate's own two closed enums, inside an attempt the " +
+        "correlation and the digest have already fixed",
+    ).toEqual(["checkout", "payment"]);
+  });
+
+  it("files the three payment presentations on one card, which is #235's ruling", () => {
+    fresh();
+    const payment = ticketsOf(only(purchase())).find((ticket) => ticket.mandate?.type === "payment");
+
+    expect(
+      payment?.hops.map((hop) => `${hop.role}:${hop.kind}`),
+      "Delegate produces three delegations differing in aud and nonce and " +
+        "nothing else, and #235 already ruled the agent announces one " +
+        "construction for them. This is that ruling read one screen along: the " +
+        "agent's hop to the Credential Provider and the merchant's to the " +
+        "processor are two presentations of one document",
+    ).toEqual([
+      "agent:mandate_constructed",
+      "agent:mandate_presented",
+      "credprovider:mandate_verified",
+      "merchant:mandate_presented",
+      "mpp:mandate_verified",
+    ]);
+  });
+
+  it("gives a step that names no mandate a card of its own", () => {
+    fresh();
+    const receipts = ticketsOf(only(purchase())).filter((ticket) => ticket.mandate === undefined);
+
+    expect(
+      receipts.map((ticket) => ticket.latest.role),
+      "three verifiers, three separately signed receipts. Folding one onto the " +
+        "mandate it receipts would be a join the data cannot support: the event " +
+        "carries no mandate, and only `detail` says which, which is never parsed",
+    ).toEqual(["credprovider", "mpp", "merchant"]);
+  });
+
+  it("keeps an open mandate and a closed one of the same type on different cards", () => {
+    fresh();
+    const attempt = only([
+      record({
+        kind: "mandate_constructed",
+        role: "surface",
+        mandate: { type: "checkout", state: "open" },
+      }),
+      record({
+        kind: "mandate_constructed",
+        role: "agent",
+        digest: DIGEST,
+        mandate: { type: "checkout", state: "closed" },
+      }),
+    ]);
+
+    expect(
+      ticketsOf(attempt).map((ticket) => ticket.key),
+      "AGENTS.md is emphatic that open and closed is a second fact rather than " +
+        "a second pair of mandate types — and on this screen it is what keeps " +
+        "the pair the user signed from merging with the pair the agent bound",
+    ).toEqual(["mandate:open:checkout", "mandate:closed:checkout"]);
+  });
+
+  it("lands a refusal that carries no digest on the mandate it refused", () => {
+    fresh();
+    // The degradation that matters most: a verifier refusing before the decode
+    // completes emits an empty digest, and those are the cards a reader most
+    // wants to place. The key inside an attempt is the mandate's own two enums,
+    // which such a step still carries.
+    const attempt = only([
+      record({
+        kind: "mandate_presented",
+        role: "agent",
+        digest: DIGEST,
+        mandate: { type: "payment", state: "closed" },
+      }),
+      record({
+        kind: "mandate_rejected",
+        role: "credprovider",
+        digest: "",
+        code: "mandate_version_unsupported",
+        mandate: { type: "payment", state: "closed" },
+      }),
+    ]);
+
+    const [payment] = ticketsOf(attempt);
+    expect(payment.hops.map((hop) => hop.seq), "one card, two hops").toEqual([1, 2]);
+    expect(
+      payment.digest,
+      "and the card still names the checkout, from the hop that did know it — " +
+        "an empty digest is an absence rather than a value",
+    ).toBe(DIGEST);
+  });
+
+  it("puts a card in the lane of the party that last acted on it", () => {
+    fresh();
+
+    expect(
+      ticketsOf(only(purchase())).map(
+        (ticket) => `${ticket.mandate?.type ?? "receipt"}:${ticket.lane}`,
+      ),
+      "a mandate genuinely travels — the agent signs it, presents it, and a " +
+        "verifier answers — so the column it is in is where the document has got " +
+        "to. #183's ruling that nothing travels was right about the *item*, " +
+        "which three parties compute independently and which never moves",
+    ).toEqual([
+      "checkout:merchant",
+      "payment:merchant",
+      "receipt:merchant",
+      "receipt:merchant",
+      "receipt:merchant",
+    ]);
+  });
+
+  it("orders a lane by when each card arrived there, not by when it was made", () => {
+    fresh();
+
+    expect(
+      // Identified by the step that made each card, so the assertion reads as
+      // "which card", and ordered by the hop that brought it into this column.
+      ticketsIn(only(purchase()), "merchant").map((ticket) => ticket.hops[0].seq),
+      "the Payment Mandate reached this column at #4, a receipt was issued into " +
+        "it at #5, and the Checkout Mandate only arrived at #7 — so the card " +
+        "made at #1 sits third, beneath one made after it. Ordering by creation " +
+        "would insert an arriving card above cards already there, which is a " +
+        "reorder a reader following one document cannot account for",
+    ).toEqual([2, 5, 1, 10, 11]);
+  });
+
+  it("says the difference between a lane nothing has reached and one it has left", () => {
+    fresh();
+    const attempt = only(purchase());
+
+    expect(
+      everHeld(attempt, "agent"),
+      "the agent signed both mandates and presented both, and its column ends " +
+        "the attempt empty. *Nothing yet.* there would be flatly false, which is " +
+        "the defect #213 fixed one column to the left",
+    ).toBe(true);
+    expect(ticketsIn(attempt, "agent"), "and it is empty").toEqual([]);
+    expect(
+      everHeld(attempt, "user"),
+      "where the user's column on this path genuinely has had nothing in it",
+    ).toBe(false);
   });
 });

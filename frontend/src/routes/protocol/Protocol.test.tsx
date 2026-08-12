@@ -121,10 +121,21 @@ function stubFetch(routes: Record<string, unknown>) {
   return calls;
 }
 
+/**
+ * The screen, with the pacing off.
+ *
+ * `pace={0}` because every test below is about **what** the screen draws and
+ * none is about **when**. #241 made the screen draw arrived steps one at a
+ * time — see `src/lanes/pace.ts` for why a presentation is allowed to be slower
+ * than the events were — and a suite that did not say so would be asserting the
+ * timer rather than the routing, and would go green or red on a number chosen
+ * for a room full of people. The paced behaviour has its own tests, at the foot
+ * of this file, which drive a clock.
+ */
 function renderAt(entry: string) {
   return render(
     <MemoryRouter initialEntries={[entry]}>
-      <Protocol />
+      <Protocol pace={0} />
     </MemoryRouter>,
   );
 }
@@ -327,5 +338,128 @@ describe("the protocol screen", () => {
       "the console and the collector are different processes; an empty table " +
         "here would report an absence this screen never established",
     ).toBeTruthy();
+  });
+});
+
+/**
+ * The ruling on pace, as the screen — issue #241.
+ *
+ * The demo's own eleven steps land within a tenth of a second of each other, so
+ * a faithful rendering is a flicker on a screen whose one job is to teach. The
+ * ruling is that the screen **may** draw them more slowly, on three conditions,
+ * and `src/lanes/pace.ts` carries the argument. Two of the three are properties
+ * of a count and are asserted there; the third is a sentence and a button, and
+ * this is where it is asserted.
+ *
+ * A real clock rather than a fake one. `userEvent` and fake timers need each
+ * other configured to co-operate, and what these tests need is only that time
+ * passes — so the pace is set to something short and `findBy` waits for it. The
+ * numbers below are this file's own, not the application's: what is being
+ * asserted is *that* the screen paces and says so, never how fast.
+ */
+describe("a screen slower than the events were", () => {
+  const BRISK = 5;
+
+  /** Five steps of one purchase, delivered in one burst the way the agent emits them. */
+  function burst() {
+    const source = sources[0];
+    act(() => {
+      source.open();
+      for (let seq = 1; seq <= 5; seq += 1) {
+        source.emit("mandate_verified", seq, { correlation_id: "c-run", digest: NEW });
+      }
+    });
+  }
+
+  function renderPaced(pace: number) {
+    return render(
+      <MemoryRouter initialEntries={["/protocol"]}>
+        <Protocol pace={pace} />
+      </MemoryRouter>,
+    );
+  }
+
+  it("draws a burst one step at a time, in the order it arrived", async () => {
+    renderPaced(BRISK);
+    burst();
+
+    // The log is the record and it is paced with the lanes rather than against
+    // them, so one clock decides what the whole screen is showing.
+    // The sequence number is the row's own header rather than a cell — see
+    // `COLUMNS` in `EventLog.tsx` — so a `td` query would read the timestamp
+    // beside it and this whole assertion would be about nothing.
+    const rows = () =>
+      [...screen.getByRole("table").querySelectorAll('tbody th[scope="row"]')].map((cell) =>
+        Number(cell.textContent),
+      );
+
+    await waitFor(() => {
+      expect(rows().length, "still arriving").toBeGreaterThan(0);
+    });
+    const drawn = rows();
+    expect(
+      [...drawn].sort((a, b) => a - b),
+      "a prefix of the real sequence, never a permutation of one and never a " +
+        "hole in the middle. The pacing is a cut rather than a schedule of " +
+        "per-record delays, which is what makes that free rather than something " +
+        "to be careful about",
+    ).toEqual(Array.from({ length: drawn.length }, (_, index) => index + 1));
+    expect(
+      drawn,
+      "and the log's own newest-first ordering is untouched by the pacing — what " +
+        "a reader sees is the log with fewer rows in it, not a different log",
+    ).toEqual([...drawn].sort((a, b) => b - a));
+
+    await waitFor(() => {
+      expect(rows(), "and it catches up on its own").toEqual([5, 4, 3, 2, 1]);
+    });
+  });
+
+  it("says how far behind it is rather than being quietly slow", async () => {
+    // Slow enough that the notice is still up when this reads it. A viewer who
+    // cannot tell a paced screen from a stalled one, or from a stack that has
+    // stopped emitting, is being told something false about the run.
+    renderPaced(50_000);
+    burst();
+
+    const pacing = await screen.findByTestId("pacing");
+    expect(
+      within(pacing).getByText(/steps have arrived and are still being drawn/),
+      "the third clause of the ruling: a screen may be slower than the events " +
+        "were, and it may not be quietly slower",
+    ).toBeTruthy();
+  });
+
+  it("draws everything at once when asked", async () => {
+    renderPaced(50_000);
+    burst();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Draw them all now" }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("pacing"),
+        "somebody taking a screenshot is not held up by a pace chosen for a room",
+      ).toBeNull();
+    });
+    expect(
+      [...screen.getByRole("table").querySelectorAll("tbody tr")].length,
+      "and the whole burst is on screen",
+    ).toBe(5);
+  });
+
+  it("never draws a step that has not arrived", async () => {
+    renderPaced(50_000);
+    act(() => {
+      sources[0].open();
+      sources[0].emit("mandate_verified", 1, { correlation_id: "c-run", digest: NEW });
+    });
+
+    await screen.findByTestId("pacing");
+    expect(
+      screen.queryByRole("article"),
+      "the one thing pacing must never become is a screen showing a sequence " +
+        "that did not happen — so it holds steps back and never runs ahead",
+    ).toBeNull();
   });
 });

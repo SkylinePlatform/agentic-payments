@@ -613,6 +613,190 @@ export function stepsIn(attempt: Attempt, lane: LaneId): readonly Step[] {
 }
 
 /**
+ * One document, and everywhere it has been — issue #241's unit.
+ *
+ * # Why a card is an artefact and not an emission
+ *
+ * The screen drew one card per step, so one purchase read as eleven cards,
+ * several of them saying almost the same words about the same document one hop
+ * apart. Reported twice off live runs, in the words this whole redesign is
+ * held to: *"izgleda kao da je sve duplo."* It was not duplication — those were
+ * different states — but a viewer counting cards was counting **emissions**,
+ * and an emission is not a thing.
+ *
+ * So a card is a **document within one attempt**, and a step is a line on it.
+ * Measured against the demo's own stream: the Human Not Present purchase goes
+ * from eleven cards to five, and the Human Present one from eleven to five, and
+ * in both the two mandates are visibly two documents rather than eight cards.
+ *
+ * # The key, and why it is not a mandate identifier
+ *
+ * **Nothing on the wire identifies a mandate instance.** `MandateRef` is two
+ * closed enums — four possible values in the entire system — and there is no
+ * `jti`, no mandate id, no per-mandate correlation. The digest cannot do it
+ * either and never will: a Payment Mandate's `transaction_id` *is* the checkout
+ * hash, so both mandates of one purchase agree by design, and that agreement is
+ * the binding this screen exists to prove rather than a label it can borrow.
+ * `sse/events.ts` says so in as many words on the field itself.
+ *
+ * What is left is `(correlation_id, digest, mandate.type, mandate.state)` — and
+ * inside one {@link Attempt} the first two are already fixed, because `group`
+ * keys on the correlation and {@link split} cuts precisely where the digest
+ * changes. So within an attempt the key is `(type, state)`, and it is exact
+ * rather than approximate: AP2 v0.2 defines two mandates, an attempt is one
+ * checkout, and a checkout has one Checkout Mandate and one Payment Mandate.
+ *
+ * **The three payment chains are one Payment Mandate, and #235 is the ruling
+ * that says so.** `Delegate` produces three delegations differing in `aud` and
+ * `nonce` and nothing else — same claims, same amount, same `transaction_id` —
+ * and that issue already decided the agent announces *one* construction for
+ * them, because "three cards distinguishable by nothing but a sequence number
+ * is precisely the defect #201 fixed". This grouping is that ruling read one
+ * screen along: the merchant's hop to the processor and the agent's hop to the
+ * Credential Provider are two presentations of one document.
+ *
+ * # Where the key degrades, and what each degradation costs
+ *
+ * - **A step about no mandate gets a card of its own**, keyed by its own
+ *   sequence number. `receipt_issued` and `authorisation_refused` are the two
+ *   kinds, and neither is a mandate: a receipt is a separate signed artefact —
+ *   three per clean purchase, one per verifier — and a person declining
+ *   refused before any mandate existed. Folding a receipt onto the mandate it
+ *   receipts would be **a join the data cannot support**: the event carries no
+ *   mandate, only `detail` says which, and `detail` is never parsed.
+ * - **A digest of `""` costs nothing here.** A refusal before the decode
+ *   completes carries an empty digest, and those are the cards a reader most
+ *   wants to place — but the key inside an attempt is `(type, state)`, which
+ *   such a step still carries, so it lands on its mandate's card rather than
+ *   floating.
+ * - **An open mandate never has a digest and structurally never can**, and it
+ *   is keyed like any other: the Trusted Surface's two `mandate_constructed`
+ *   steps are the open Checkout Mandate and the open Payment Mandate, one card
+ *   each, in the User lane. `state` in the key is what keeps them apart from
+ *   the closed pair rather than merging with it.
+ * - **A step no lane claims is not on a card at all.** It stays in
+ *   {@link Transaction.unplaced}, which is what already draws it, and this is
+ *   the one place a hop can go missing from a trail. It is a TAP role emitting
+ *   about a mandate, which nothing does today; the alternative was drawing that
+ *   step twice, which is the complaint this issue is about in miniature.
+ */
+export interface Ticket {
+  /** Unique within an attempt. Not an identifier anything off the wire carries. */
+  readonly key: string;
+  /** Which of AP2's two mandates, and whether it is bound — absent on a moment. */
+  readonly mandate?: MandateRef;
+  /** Every hop, in sequence order. Never empty. */
+  readonly hops: readonly Step[];
+  /** The most recent hop: where the document has got to. */
+  readonly latest: Step;
+  /** The lane it is in now, which is the lane of the party that last acted on it. */
+  readonly lane: LaneId;
+  /** The checkout it named, once any hop of it named one. */
+  readonly digest?: string;
+  /** The price it is about, on {@link amountOf}'s rule read over one document. */
+  readonly amount?: Amount;
+}
+
+/** The key a step's card is filed under. Exported for the test that drives it. */
+export function ticketKeyOf(step: Step): string {
+  return step.mandate === undefined
+    ? `moment:${String(step.seq)}`
+    : `mandate:${step.mandate.state}:${step.mandate.type}`;
+}
+
+/**
+ * The cards of one attempt, in the order their first hop happened.
+ *
+ * Steps no lane claims are skipped rather than grouped — see {@link Ticket}'s
+ * last degradation. Every ticket therefore has a lane, which is what lets
+ * {@link ticketsIn} return a card rather than a card and a maybe.
+ */
+export function ticketsOf(attempt: Attempt): readonly Ticket[] {
+  const byKey = new Map<string, Step[]>();
+
+  for (const step of attempt.steps) {
+    if (step.lane === null) continue;
+    const key = ticketKeyOf(step);
+    const held = byKey.get(key);
+    if (held === undefined) byKey.set(key, [step]);
+    else held.push(step);
+  }
+
+  const tickets: Ticket[] = [];
+  for (const [key, hops] of byKey) {
+    const latest = hops[hops.length - 1];
+    tickets.push({
+      key,
+      mandate: latest.mandate,
+      hops,
+      latest,
+      // Non-null by construction: every hop here had a lane, and `latest` is
+      // one of them. The assertion is the one place this file states that
+      // rather than re-deriving it.
+      lane: latest.lane as LaneId,
+      digest: hops.find((hop) => hop.digest !== undefined && hop.digest !== "")?.digest,
+      amount: lastAmount(hops),
+    });
+  }
+
+  return tickets;
+}
+
+/** The last price any hop of one document stated — {@link amountOf}'s rule, one card wide. */
+function lastAmount(hops: readonly Step[]): Amount | undefined {
+  for (let i = hops.length - 1; i >= 0; i -= 1) {
+    const amount = hops[i].amount;
+    if (amount !== undefined) return amount;
+  }
+  return undefined;
+}
+
+/**
+ * The cards in one lane, in the order they arrived **in that lane**.
+ *
+ * Not in the order they were created, which is the ordering that reads
+ * correctly and the one an earlier draft had. A card entering a lane appends at
+ * the bottom of it; a card already there does not move when a new one arrives.
+ * Ordering by first hop overall would have inserted an arriving card above
+ * cards that were already in the column, which is a reorder a reader following
+ * one document cannot account for.
+ *
+ * Nothing here can hide a sequence gap: every hop keeps its own `#seq` on the
+ * card, so the numbers a column shows are still the numbers the stream sent.
+ */
+export function ticketsIn(attempt: Attempt, lane: LaneId): readonly Ticket[] {
+  return ticketsOf(attempt)
+    .filter((ticket) => ticket.lane === lane)
+    .map((ticket) => ({ ticket, since: arrivedIn(ticket, lane) }))
+    .sort((a, b) => a.since - b.since)
+    .map((held) => held.ticket);
+}
+
+/** The sequence number of the hop that put this card in the lane it is in now. */
+function arrivedIn(ticket: Ticket, lane: LaneId): number {
+  let since = ticket.latest.seq;
+  for (let i = ticket.hops.length - 1; i >= 0; i -= 1) {
+    if (ticket.hops[i].lane !== lane) break;
+    since = ticket.hops[i].seq;
+  }
+  return since;
+}
+
+/**
+ * Whether this lane has held a card in this attempt, whatever it holds now.
+ *
+ * The empty lane has two meanings and they are not the same fact. Before #241
+ * only one could be drawn, and after it the other is the common one: on a clean
+ * purchase both mandates are signed in the Agent lane and both end up in the
+ * Merchant lane, so the agent's column finishes the attempt empty. *Nothing
+ * yet.* there would be false — a great deal happened, and every one of those
+ * steps is legible on the cards that carried them across.
+ */
+export function everHeld(attempt: Attempt, lane: LaneId): boolean {
+  return attempt.steps.some((step) => step.lane === lane);
+}
+
+/**
  * The price this attempt is about, for the badge beside its outcome —
  * issue #174's "each attempt states its price as a figure beside its
  * outcome."

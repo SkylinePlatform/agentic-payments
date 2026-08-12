@@ -582,10 +582,18 @@ describe("which of AP2's two mandates a step is about — issue #201", () => {
     ];
   }
 
-  /** Every step card's text, with the sequence number taken out. */
+  /**
+   * Every card's text, with the sequence numbers taken out.
+   *
+   * `[data-testid="ticket"]` rather than every `<li>`, which is what this was
+   * before #241 gave a card an ordered list of hops inside it. A bare `li`
+   * selector now matches the hops as well as the cards, so the count would be
+   * the emissions again — the exact thing a card is no longer one of, and the
+   * measurement whose absence this suite is about.
+   */
   function readings(container: HTMLElement): string[] {
-    return [...container.querySelectorAll("li")].map((card) =>
-      (card.textContent ?? "").replace(/#\d+/, "").trim(),
+    return [...container.querySelectorAll('[data-testid="ticket"]')].map((card) =>
+      (card.textContent ?? "").replace(/#\d+/g, "").trim(),
     );
   }
 
@@ -962,12 +970,18 @@ describe("the user's lane on a purchase they signed for earlier", () => {
     ).not.toMatch(/#\d/);
   });
 
-  it("leaves a Human Present purchase exactly as it was", () => {
+  it("draws no approval card on a Human Present purchase, and lets the mandates travel", () => {
     seq = 0;
     // The other mode: the user signs the *closed* mandates at the Trusted
     // Surface, inside this transaction, so their steps are here and there is no
     // open pair for anything to have been taken under. No emitter on that path
     // attaches the field, which is why a card cannot appear beside them.
+    //
+    // It is also the mode in which #241's movement is most visible, and this is
+    // where that shows: the Checkout Mandate the user signed is verified by the
+    // merchant three steps later, so its card is in the merchant's column and
+    // the user's own signature is a hop on it. The Payment Mandate nobody has
+    // acted on since stays where it was signed.
     showing([
       record({ kind: "mandate_constructed", role: "surface", mandate: CLOSED_CHECKOUT }),
       record({ kind: "mandate_constructed", role: "surface", mandate: CLOSED_PAYMENT }),
@@ -982,13 +996,31 @@ describe("the user's lane on a purchase they signed for earlier", () => {
     const user = screen.getByRole("region", { name: "User" });
     expect(
       within(user).queryByTestId("authorisation"),
-      "the user's own two signing steps are already in this lane; a card restating " +
+      "the user's own signing steps are in this transaction; a card restating " +
         "them would be the duplicate #213 says the fix must not create",
     ).toBeNull();
     expect(
-      within(user).queryAllByText("Trusted Surface"),
-      "and the steps themselves are untouched — one per closed mandate the user signed",
-    ).toHaveLength(2);
+      within(user).queryAllByTestId("ticket").map((card) => card.textContent),
+      "one card, for the one document still here — the other has moved on, and " +
+        "a copy left behind would be the duplication #241 was filed about",
+    ).toHaveLength(1);
+    expect(
+      within(user).queryByText("closed Payment Mandate"),
+      "and it is the one nobody has answered",
+    ).not.toBeNull();
+
+    const merchant = screen.getByRole("region", { name: "Merchant" });
+    const travelled = within(merchant).getByTestId("ticket");
+    expect(
+      within(travelled).queryByText("closed Checkout Mandate"),
+      "the document the merchant verified is in the merchant's column, because " +
+        "that is the party that last acted on it",
+    ).not.toBeNull();
+    expect(
+      within(travelled).queryByText("Trusted Surface"),
+      "and the user's own signature is still visible, as the hop it was — which " +
+        "is the static carrier the movement is never allowed to be the only one of",
+    ).not.toBeNull();
   });
 
   it("still says nothing yet when there is nothing", () => {
@@ -1319,5 +1351,208 @@ describe("the head of the transaction", () => {
     expect(screen.getAllByText(OTHER_SHOWN).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("heading", { level: 2 }), "one head for the transaction, not one per attempt")
       .toHaveLength(1);
+  });
+});
+
+/**
+ * A card is a document, and a step is a line on it — issue #241, drawn.
+ *
+ * `model.test.ts` holds the grouping; this holds what a reader sees of it. The
+ * eleven records below are the ones `make demo` emits for one clean purchase,
+ * in the order it emits them.
+ */
+describe("one card per document, and everywhere it has been", () => {
+  const PRICE = { amount: 18900, currency: "USD" } as const;
+  const CHECKOUT = { type: "checkout", state: "closed" } as const;
+  const PAYMENT = { type: "payment", state: "closed" } as const;
+
+  function purchase(): EventRecord[] {
+    return [
+      record({ kind: "mandate_constructed", role: "agent", digest: DIGEST, amount: PRICE, mandate: CHECKOUT }),
+      record({ kind: "mandate_constructed", role: "agent", digest: DIGEST, amount: PRICE, mandate: PAYMENT }),
+      record({ kind: "mandate_presented", role: "agent", digest: DIGEST, amount: PRICE, mandate: PAYMENT }),
+      record({ kind: "mandate_verified", role: "credprovider", digest: DIGEST, amount: PRICE, mandate: PAYMENT }),
+      record({ kind: "receipt_issued", role: "credprovider", digest: DIGEST }),
+      record({ kind: "mandate_presented", role: "agent", digest: DIGEST, amount: PRICE, mandate: CHECKOUT }),
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST, amount: PRICE, mandate: CHECKOUT }),
+      record({ kind: "mandate_presented", role: "merchant", digest: DIGEST, amount: PRICE, mandate: PAYMENT }),
+      record({ kind: "mandate_verified", role: "mpp", digest: DIGEST, amount: PRICE, mandate: PAYMENT }),
+      record({ kind: "receipt_issued", role: "mpp", digest: DIGEST }),
+      record({ kind: "receipt_issued", role: "merchant", digest: DIGEST }),
+    ];
+  }
+
+  it("draws five cards where the stream sent eleven steps", () => {
+    seq = 0;
+    showing(purchase());
+
+    expect(
+      screen.getAllByTestId("ticket"),
+      "the complaint was that a purchase read as duplicates — eleven cards, " +
+        "several saying almost the same words about the same artefact one hop " +
+        "apart. A viewer counting cards was counting emissions",
+    ).toHaveLength(5);
+  });
+
+  it("keeps every sequence number on screen, so a reorder cannot hide a gap", () => {
+    seq = 0;
+    const { container } = showing(purchase());
+
+    const numbered = [...container.querySelectorAll('[data-testid="ticket"]')]
+      .flatMap((card) => [...(card.textContent ?? "").matchAll(/#(\d+)/g)])
+      .map((match) => Number(match[1]))
+      .sort((a, b) => a - b);
+    expect(
+      numbered,
+      "a card gathers steps that were not adjacent in the stream, so the one " +
+        "thing the regrouping must never cost is the ability to see a gap. " +
+        "Every hop keeps its own number, and the numbers a column shows are " +
+        "still the numbers the stream sent",
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  });
+
+  it("carries no mark of its own — the endings belong to the parties that decided", () => {
+    seq = 0;
+    const { container } = showing(purchase());
+
+    expect(
+      marks(container),
+      "the attempt's own pair first, above the columns, and then one `check` per " +
+        "verifier that accepted. Three parties independently accepting is three " +
+        "facts and takes three marks; a fourth at the head of a card would be " +
+        "one of those decisions restated about an artefact it moved, which is " +
+        "the dilution *Indicators* forbids — and whether a document is still in " +
+        "play is the attempt's state, stated once in its badge",
+    ).toEqual(["full", "check", "check", "check", "check"]);
+  });
+
+  it("names the party that signed a card that has moved on", () => {
+    seq = 0;
+    showing(purchase());
+
+    const merchant = screen.getByRole("region", { name: "Merchant" });
+    const [checkout] = within(merchant)
+      .getAllByTestId("ticket")
+      .filter((card) => within(card).queryByText("closed Checkout Mandate") !== null);
+    expect(
+      within(checkout).queryAllByText("Shopping Agent"),
+      "motion is never the only carrier, and it is the weakest of them because " +
+        "it is gone a second later. A card in the merchant's column says in " +
+        "words that the agent signed it and presented it — which is what a " +
+        "screenshot, a printout and a reader with reduced motion have",
+    ).toHaveLength(2);
+  });
+
+  it("empties the agent's lane without claiming nothing happened there", () => {
+    seq = 0;
+    showing(purchase());
+
+    const agent = screen.getByRole("region", { name: "Agent" });
+    expect(
+      within(agent).queryAllByTestId("ticket"),
+      "both mandates were signed here and both have been answered elsewhere",
+    ).toHaveLength(0);
+    expect(
+      within(agent).queryByText("Nothing here now."),
+      "*Nothing yet.* would be flatly false — a great deal happened — and it is " +
+        "the defect #213 fixed one column to the left",
+    ).not.toBeNull();
+    expect(within(agent).queryByText("Nothing yet.")).toBeNull();
+  });
+
+  it("still says nothing yet where nothing has reached", () => {
+    seq = 0;
+    // The other half, so the assertion above cannot be satisfied by a lane that
+    // has stopped saying either sentence.
+    showing([record({ kind: "mandate_constructed", role: "agent", digest: DIGEST, mandate: CHECKOUT })]);
+
+    const merchant = screen.getByRole("region", { name: "Merchant" });
+    expect(within(merchant).queryByText("Nothing yet.")).not.toBeNull();
+    expect(within(merchant).queryByText("Nothing here now.")).toBeNull();
+  });
+
+  it("draws a receipt as a card with no mandate on it", () => {
+    seq = 0;
+    showing(purchase());
+
+    const receipts = screen
+      .getAllByTestId("ticket")
+      .filter((card) => within(card).queryByText("receipt") !== null);
+    expect(receipts, "one per verifier, each a separately signed artefact").toHaveLength(3);
+    for (const receipt of receipts) {
+      expect(
+        receipt.textContent,
+        "a receipt names no mandate on the wire, and only `detail` says which — " +
+          "which is never parsed. A title invented here would be a join the " +
+          "data cannot support",
+      ).not.toMatch(/Mandate/);
+    }
+  });
+
+  it("states the price and the digest once for a document, not once per hop", () => {
+    seq = 0;
+    showing(purchase());
+
+    const merchant = screen.getByRole("region", { name: "Merchant" });
+    const [payment] = within(merchant)
+      .getAllByTestId("ticket")
+      .filter((card) => within(card).queryByText("closed Payment Mandate") !== null);
+    expect(
+      within(payment).getAllByText("189.00 USD"),
+      "five hops, one price — every hop of one card is about one price by " +
+        "construction, and a copy on each line is the duplication the card " +
+        "exists to remove",
+    ).toHaveLength(1);
+    expect(within(payment).getAllByText(SHOWN), "and one digest").toHaveLength(1);
+  });
+});
+
+/**
+ * Where a card lives while it moves — issue #241's second question.
+ *
+ * #183 ruled that the digest spine is the vertical axis and that agreement wins
+ * wherever the two compete. This is the measurement that says they do not
+ * compete: the head is drawn above the grid the cards move inside, so a card in
+ * flight is below the digest for the whole of its half second.
+ */
+describe("the spine, with cards moving beneath it", () => {
+  it("is drawn outside the grid the cards move in", () => {
+    seq = 0;
+    showing([record({ kind: "mandate_verified", role: "merchant", digest: DIGEST })]);
+
+    const spine = screen.getByTestId("spine");
+    const grid = screen.getByTestId("lane-grid");
+    expect(
+      grid.contains(spine),
+      "a transform inside the grid cannot reach an element that is not in it. " +
+        "`contains` from the grid rather than `closest` from the spine, because " +
+        "`closest` starts at the element itself and would answer about the " +
+        "wrong node if either ever gained the other's test id",
+    ).toBe(false);
+    expect(
+      spine.compareDocumentPosition(grid) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "and it is above rather than merely elsewhere, which is what keeps a card " +
+        "leaving the top of a column from passing over it",
+    ).toBeGreaterThan(0);
+  });
+
+  it("keeps its own place when a card is in the lane beside it", () => {
+    seq = 0;
+    // The spine is the agent column's own head, so the case worth pinning is
+    // the one where the agent's column has a card in it: the digest is still
+    // the largest thing on the attempt and still outside the grid.
+    showing([
+      record({
+        kind: "mandate_constructed",
+        role: "agent",
+        digest: DIGEST,
+        mandate: { type: "checkout", state: "closed" },
+      }),
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+    ]);
+
+    const grid = screen.getByTestId("lane-grid");
+    expect(within(grid).getAllByTestId("ticket").length).toBeGreaterThan(0);
+    expect(grid.contains(screen.getByTestId("spine"))).toBe(false);
   });
 });
