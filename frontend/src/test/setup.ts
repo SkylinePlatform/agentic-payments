@@ -5,7 +5,49 @@
  */
 
 import { cleanup } from "@testing-library/react";
-import { afterEach } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { guardTables, unassertedPass } from "./vacuity";
+
+/**
+ * No `.each` may be handed a table with no rows.
+ *
+ * `it.each([])` registers no tests and reports the file green, which is how a
+ * run once showed 108 passing where 156 should have. `src/test/vacuity.ts`
+ * carries the argument; this is where it becomes true of every test file rather
+ * than of the ones whose author remembered.
+ *
+ * `it` and `test` are the same object in Vitest — `vacuity.test.ts` asserts
+ * that rather than assuming it, so a runner that ever splits them says so here
+ * rather than leaving half the suite unguarded.
+ */
+guardTables("it", it);
+guardTables("describe", describe);
+
+/**
+ * No test may pass without asserting anything.
+ *
+ * The other half of the same property, and the one the repository has been
+ * bitten by twice: an arm that went green with its collaborator entirely
+ * detached. `expect` counts its own calls per test, so this costs a comparison
+ * and needs nothing from the tests themselves.
+ *
+ * It runs *after* `cleanup` below, which is worth stating precisely because the
+ * obvious guess is the other way round: Vitest resolves `sequence.hooks` to
+ * `"stack"` unless told otherwise, and vite.config.ts does not, so `afterEach`
+ * hooks run in reverse registration order. Nothing here depends on that —
+ * neither hook can affect what the other reads, and unmounting a React tree
+ * cannot change an assertion count — but a comment that had the order backwards
+ * would be this file's own subject wearing a different hat.
+ */
+afterEach((ctx) => {
+  const complaint = unassertedPass(
+    ctx.task.result?.state,
+    expect.getState().assertionCalls,
+    ctx.task.name,
+  );
+  if (complaint !== null) throw new Error(complaint);
+});
 
 /**
  * Unmount whatever the previous test rendered.

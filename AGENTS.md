@@ -317,6 +317,9 @@ backend/                ⬅ the Go module root. go.mod lives here, not at the to
                         project does not control — agent/interpret is the other
                         one — and only under `make demo-live`
     platform/           crypto, store, clock, obs — implements core ports
+    suite/              one rule about every other _test.go file in this
+                        module: no test and no t.Run arm may assert nothing.
+                        Test files only, no source, nothing imports it
   pkg/
     httpsig/            RFC 9421 — public standard, externally importable
     sdjwt/              SD-JWT — public standard, externally importable
@@ -663,6 +666,49 @@ reconcile against the code for no benefit.
   milestone", "nothing produces it and here is what arrives instead" and "I
   could not construct an input" are three different things, and a wrong
   "unreachable" stops the next person looking.
+- **A comment claiming a check must be provable by breaking it.** When a comment
+  says that something prevents an attack or enforces a rule, there has to be a
+  test that fails when that check is disabled. Asserting that the check's
+  *artefact* exists is not the same thing and does not count: a test that an
+  issued token carries a `typ` header passes just as well when nothing ever
+  reads it, which is exactly how #76 stayed green while `VerifyJWT` discarded
+  the header entirely.
+
+  Pull requests touching a verification path carry the mutations they were run
+  against — the mutation, and what went red — and every claimed prevention gets
+  a row. Writing the row is what finds the gap: two of the three failures that
+  opened #78 would have been caught by the author trying to write one.
+
+  **Two shapes of this are mechanised, because they are the two a green run
+  cannot show you.** The rest is review, and deliberately so — whether a comment
+  overstates the code below it is a question about English, and a linter over
+  English is defeated by rephrasing and fires on prose.
+
+  | Shape | Enforced by |
+  |---|---|
+  | A test that asserts nothing passes | `frontend/src/test/vacuity.ts`, from `setup.ts`, fails any passing test whose `expect` count is zero. Go has no assertion counter, so `internal/suite` reads the source: no `Test*` function and no `t.Run` arm may contain a testify call, a `t.Fatal`/`t.Error`/`t.Skip`, or a call to a helper that makes one |
+  | A rule over a derived list can scan nothing | `it.each([])` registers no tests and reports the file **green** — one run showed 108 passing where 156 should have. `guardTables` in `setup.ts` makes an empty table throw, for every `.each` and `.for` on `it` and `describe` |
+
+  Both guards are themselves negative assertions, so both are run against the
+  instance they were built for: `frontend/src/test/vacuity.test.ts` and
+  `TestTheWalkCatchesWhatItClaimsTo`. Each also asserts on the **live** wiring
+  rather than on its own functions — `expect(() => it.each([])).toThrow()` runs
+  the real global, and `it.fails` over an empty body runs the real hook — so a
+  guard that was written and never switched on reads as red rather than as an
+  empty report.
+
+  **The Go half of the second shape is deliberately not mechanised**, and the
+  measurement is in `internal/suite`'s package comment. `for _, x := range
+  derived { t.Run(…) }` needed four layers of heuristic to get from 172
+  candidates to 10, which makes it a guard needing a guard. That one stays what
+  it already is: a hand-written non-vacuity check in the tests whose subject is
+  a scan, and review everywhere else. `interpret/reach_test.go` spells it
+  `require.NotEmpty(t, found, "the walk found nothing at all, so it is checking
+  nothing")`; `platform/problem/problem_test.go` asks it of the schema its table
+  is derived from, as `if len(schema.Enum) == 0 { t.Fatalf(…) }`. Two spellings
+  of one property, and worth naming as two — this paragraph said "both carry
+  one" of the first spelling until review went and looked, which is the rule
+  above failing on the rule above.
 
 Run everything from the repository root:
 
