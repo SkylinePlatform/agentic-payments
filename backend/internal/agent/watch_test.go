@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -790,6 +791,115 @@ func TestTheWatchBuysWhenTheMerchantsPriceComesIntoRange(t *testing.T) {
 		assert.Equal(t, want, agentEvents[i].Digest,
 			"event %d (%s) has to name the checkout its own artefact is bound to, not a value left over from the other attempt in this run", i, agentEvents[i].Kind)
 	}
+}
+
+// refusingSigner is the agent's own key, refusing from its nth call onward.
+//
+// Hand-rolled rather than generated, on the rule .mockery.yml's header states:
+// every call before the nth **computes** — the real ES256 key producing a real
+// signature over the real payload — and that is exactly what makes "the failure
+// arrived after the closed Checkout Mandate had been signed" a measured fact
+// rather than a stipulation. A double answering canned bytes would sign nothing,
+// and an arm asserting that nothing was announced would then be indistinguishable
+// from an attempt that never got as far as a signature.
+//
+// authz.Signer's generated mock is also already spoken for: .mockery.yml
+// redirects it to internal/roles/surface, where mockery writes it as a _test.go
+// file compiled into that package's test binary alone and unnameable from here.
+type refusingSigner struct {
+	authz.Signer
+
+	// from is the 1-based call that first refuses; every call from there on
+	// refuses too, which is what a retired key does.
+	from int
+
+	// calls counts every call, refused or not. Atomic because Delegate signs on
+	// whichever goroutine called it and this is read from the test's.
+	calls atomic.Int64
+}
+
+// errKeyGone stands in for the class of failure a signature can hit between two
+// others — a key rotated mid-attempt is the realistic one, and #221's own
+// residual test uses errKeyRetired for the same reason. What this test is about
+// is what the log says afterwards, which is the same whichever member of the
+// class arrives.
+var errKeyGone = errors.New("the agent's key stopped being usable mid-attempt")
+
+func (s *refusingSigner) Sign(ctx context.Context, payload []byte) ([]byte, error) {
+	if int(s.calls.Add(1)) >= s.from {
+		return nil, errKeyGone
+	}
+	return s.Signer.Sign(ctx, payload)
+}
+
+// TestNothingIsAnnouncedForAnAttemptThatWasNeverMinted is issue #228.
+//
+// Delegate signs four documents and used to announce the first one the moment it
+// existed, then sign the other three. Any of those three can fail, and the whole
+// attempt is then dropped — Delegate returns nil and nobody is ever handed the
+// Checkout Mandate the log has already said was constructed.
+//
+// # What the arms are, and why the order they run in is load-bearing
+//
+// The minted attempt runs **first**, on the same watch, the same emitter and the
+// same recorder every failing arm below uses. That is what makes the count at the
+// end a zero for the right reason: two entries prove the log was live throughout,
+// so the absence of a third is the finding rather than the shape of a test that
+// announced nothing anywhere. #227's review found exactly this hole in the arms
+// it shipped with — a zero satisfied perfectly by a role that never spoke — and
+// closing it here costs one extra Delegate.
+//
+// The per-arm control is the signature count. Each arm asserts that the signer
+// was reached exactly as many times as the document it names, which is what says
+// the closed Checkout Mandate really had been signed when the failure landed.
+// Without it an arm would pass just as well against a Delegate that failed at the
+// very first call, where there is nothing to announce prematurely.
+func TestNothingIsAnnouncedForAnAttemptThatWasNeverMinted(t *testing.T) {
+	t.Parallel()
+
+	recorded := newRecorder()
+	emitting := allEmitting(t, recorded)
+	w := newWorldEmitting(t, emitting)
+	a := authorise(t, w)
+
+	quoted, err := a.client.QuoteItem(t.Context(), a.auth.Item, 1)
+	require.NoError(t, err, "there is nothing to delegate until the merchant has made an offer")
+
+	minted, err := a.watch(t).Delegate(t.Context(), quoted)
+	require.NoError(t, err, "an attempt every signature succeeded for has to be handed back")
+	require.NotEmpty(t, minted.ID, "an attempt with no fingerprint is not one a re-delivery could recognise")
+
+	// The four documents Delegate signs, in the order it signs them. The closed
+	// Checkout Mandate is the first, and is deliberately not an arm: a failure
+	// there leaves nothing announced under either ordering, so it would prove
+	// nothing about this defect.
+	for _, failing := range []struct {
+		document string
+		call     int
+	}{
+		{"the Credential Provider's payment chain", 2},
+		{"the merchant's payment chain", 3},
+		{"the Merchant Payment Processor's payment chain", 4},
+	} {
+		watch := a.watch(t)
+		signer := &refusingSigner{Signer: watch.Signer, from: failing.call}
+		watch.Signer = signer
+
+		_, err := watch.Delegate(t.Context(), quoted)
+		require.ErrorIs(t, err, errKeyGone,
+			"%s could not be signed, so this attempt does not exist and Delegate has to say so",
+			failing.document)
+		assert.Equal(t, int64(failing.call), signer.calls.Load(),
+			"the failure has to land after the closed Checkout Mandate was signed, or this arm is "+
+				"asserting a silence it would get from an attempt that never began")
+	}
+
+	// Closed first, because the emitter delivers from its own goroutine and Close
+	// drains: reading the recorder before that races the flush.
+	require.NoError(t, emitting.agent.Close(context.Background()), "draining the agent's events")
+	assert.Equal(t, []obs.Kind{obs.KindMandateConstructed, obs.KindMandateConstructed}, recorded.kinds("agent"),
+		"two entries, both from the one attempt that was minted — an announcement carried for an "+
+			"attempt nobody was handed is a line nobody can appeal to and everybody reads")
 }
 
 // TestTheRefusalAtTwoHundredAndTenIsAVerifiersOwnSignedAnswer is beat 5 stated
