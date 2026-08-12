@@ -159,10 +159,10 @@ func TestASearchAnswerOverTheCapIsRefusedRatherThanShortened(t *testing.T) {
 //
 // Hard rule 4: no test reaches the network. shop.Snapshot runs the real decoder
 // over the response recorded at shop/data/, and on 12 August 2026 the live shop
-// answered the same request with the same 62,169 bytes — so this is not a smaller
-// stand-in for the live figure, it is the same catalogue. The hand measurement
-// beside maxResponse is what covers the part no test can: that the shop still
-// answers that way.
+// answered the same request with the same 81,780 bytes — so this is not a smaller
+// stand-in for the live figure, it is the same catalogue. What no test can cover
+// is that the shop still answers that way, and re-taking the recording is what
+// covers it: data/PROVENANCE.md is the one command that does.
 //
 // # Why it asserts a ratio and not a byte count
 //
@@ -208,19 +208,53 @@ func TestTheWidestAnswerAMerchantCanGiveFitsThisLimit(t *testing.T) {
 	size := body.Len()
 	require.Less(t, size, maxResponse,
 		"the widest answer a merchant can give is %d bytes over %d offers, against a %d-byte limit, "+
-			"and it no longer fits. Raising the constant is not the fix: most of that payload is the "+
-			"inline pictures in it. Issue #251 records the two answers that are — leaving pictures out "+
-			"of a search answer, and paginating — and deferred both, which is a decision to revisit "+
-			"here rather than a licence to widen the cap",
+			"and it no longer fits. Raising the constant is not the fix. Issue #251 records the two "+
+			"answers that are — leaving pictures out of a search answer, and paginating — and "+
+			"deferred both, which is a decision to revisit here rather than a licence to widen the cap",
 		size, len(results.Offers), maxResponse)
 
 	// A floor as well as a ceiling. If this test could pass over a catalogue that
 	// fits comfortably because the search returned three rows, it would be
 	// measuring nothing — and the number beside maxResponse would be describing a
 	// document nothing in this suite has ever assembled.
-	assert.Greater(t, size, 300<<10,
-		"the widest answer came to %d bytes over %d offers, far short of the 430.4 KiB recorded "+
+	//
+	// It was 300 KiB against a 430.4 KiB answer until issue #300, which took the
+	// answer to 124.5 KiB by replacing 1.7 KiB of inline mark per fetched offer
+	// with an 88-byte URL. The floor moved with it rather than being deleted: a
+	// bound nothing can fail is not a weaker guard than the ceiling, it is the
+	// vacuous half of a test whose whole job is that neither half is.
+	assert.Greater(t, size, 100<<10,
+		"the widest answer came to %d bytes over %d offers, far short of the 124.5 KiB recorded "+
 			"beside maxResponse — so either the shelf shrank or this stopped assembling the whole "+
 			"of it, and either way the comment there is describing something else",
 		size, len(results.Offers))
+
+	// The composition, because the number above is now mostly this project's own
+	// fields and the comment beside maxResponse says so in three lines that
+	// nothing else re-derives.
+	//
+	// Two bounds because the two ways of getting this wrong are opposite. All the
+	// pictures together are what an answer carrying inline marks again would blow
+	// through — that shape was 74.9% of the answer before #300 and would be four
+	// times the total below. The photograph URLs on their own are what a merchant
+	// silently falling back to marks would take to nothing, which is #300 reverted
+	// with every other number here unchanged.
+	pictures, photographs := 0, 0
+	for _, o := range results.Offers {
+		bytes := len(o.ImageURL) + 2 // as JSON encodes it, quotes included
+		pictures += bytes
+		if strings.HasPrefix(o.ImageURL, "https://") {
+			photographs += bytes
+		}
+	}
+	assert.Less(t, pictures, size/4,
+		"the pictures are %d of %d bytes; the rows beside maxResponse price them at 15.6%% of the "+
+			"answer, and the whole reason that constant has headroom again is that they stopped "+
+			"being most of it",
+		pictures, size)
+	assert.Greater(t, photographs, 10<<10,
+		"only %d bytes of this answer are photograph URLs, so most of the fetched half is not "+
+			"showing the shop's picture at all — which is issue #300 reverted without anything "+
+			"saying so",
+		photographs)
 }

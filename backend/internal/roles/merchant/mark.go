@@ -6,59 +6,94 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
+
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant/shop"
 )
 
-// The picture a fetched offer carries, and the rule it keeps.
+// The picture a fetched offer shows, the mark it falls back to, and what issue
+// #300 gave up to get there.
 //
-// # The rule, restated, because a live offer is where it gets tested
+// # What this file used to say, and what changed
 //
 // CatalogueEntry.ImageURL is root-relative and Validate refuses anything else,
 // on the recorded ground that an image from a host this project does not
 // control would make a screenshot depend on somebody else's uptime — and issue
 // #215 added TestEveryShippedImageURLNamesAFileThatExists after four broken
 // images shipped. A fetched offer has no file in this repository to point at,
-// so something has to give. Issue #243 named three ways and none of them is
-// free:
+// so something had to give. Issue #243 named three ways:
 //
 //   - **Point at the shop's CDN**, and relax the rule for offers that did not
-//     come from the file. Simple, and it is the one option that can put a
-//     broken image on the screen — which is precisely the state the rule exists
-//     to prevent, and precisely what #215 spent a pull request ending. It also
-//     concedes the rule rather than answering it: "no host we do not control"
-//     would become "no host we do not control, except here".
-//   - **No image at all**, and let the column render empty. It cannot be done
-//     honestly from this side of the tree: the product table renders an img per
-//     row, and `src=""` resolves to the page itself, so "no image" ships as a
-//     broken-image placeholder rather than as blank space. Making it blank is a
-//     change to frontend/, which is not what a merchant deciding what it sells
-//     should require.
+//     come from the file.
+//   - **No image at all**, and let the column render empty.
 //   - **A mark, derived from the offer's identifier** — issue #160's answer for
-//     the sixty derived offers, which is already what most of the shelf shows.
+//     the sixty derived offers, which is what most of the shelf shows.
 //
-// # What is different here, and why it is stricter rather than looser
+// #243 took the third and rejected the first, on the ground that it is the one
+// option that can put a broken image on the screen, and that "no host we do not
+// control" would become "no host we do not control, except here".
 //
-// The third one is taken, with the picture inlined as a `data:` URI instead of
-// written to a file. That is not a relaxation of the rule: a data URI **is** the
-// image, so it depends on no host at all, cannot 404, and cannot be fetched
-// even by accident. A root-relative path is the weaker of the two — it still
-// needs a file to exist at the other end, which is the failure #215 was about.
+// **Issue #300 reversed that, knowingly.** The first is now what a fetched offer
+// shows when the shop supplies one: `image_url` is the shop's own
+// `thumbnail`, an https URL on a CDN nobody here operates, and the browser
+// loads it. Both objections above still stand — nothing about them turned out
+// to be wrong — and what outweighed them is that everything else on a fetched
+// row is the shop's. Real title, real category, real price, a signed mandate
+// beside it. A drawn mark in that row is the one cell that is this project's
+// invention, and on a shelf whose whole argument is *"this stock is not ours and
+// the guarantees still hold"* it read as the shelf being ours after all.
 //
-// So the rule Validate keeps is unchanged in what it protects and now has two
-// shapes, one per kind of offer: **an offer from the file names a file this
-// repository ships; a fetched offer carries its picture with it. Neither may
-// point at a host.**
+// The second option is still rejected and for the reason it always was: the
+// product table renders an img per row and `src=""` resolves to the page
+// itself, so "no image" ships as a broken-image placeholder rather than as
+// blank space. That is what makes the fallback below mandatory rather than
+// tidy.
 //
-// # The one thing this now depends on, written down because nothing enforces it
+// # So there are three shapes now, and only one of them is new
 //
-// A `data:` URI in an img tag is a Content-Security-Policy decision. There is no
-// CSP anywhere in this repository today — not in frontend/index.html, not in
-// vite.config.ts, and the backend sets exactly two response headers, neither of
-// them this — so nothing blocks one. But `img-src 'self'` is the obvious first
-// line anybody adding a policy writes, and it would blank every fetched offer's
-// picture at once. Both img tags that render one carry `alt=""`, so the symptom
-// would be empty space rather than anything a reader would report. A policy
-// added later needs `img-src 'self' data:`, and this is the sentence that says
-// so.
+//   - **An offer the file lists names a file this repository ships.**
+//     Unchanged, and every rejection that used to apply to it still does —
+//     `http://`, `https://`, `//` and `data:` are all refused. The 63 committed
+//     offers are exactly what they were.
+//   - **A fetched offer shows the shop's photograph**, as an https URL. New,
+//     and the concession.
+//   - **A fetched offer the shop gave no usable photograph for carries a drawn
+//     mark**, inlined as a `data:` URI. This is #243's answer kept as the
+//     fallback rather than deleted — see pictureFor, which decides between the
+//     two.
+//
+// # What was given up, stated so a reader can disagree with it
+//
+// A fetched row can now render broken, which is the state #215 spent a pull
+// request ending. It renders broken when cdn.dummyjson.com is down, when the
+// shop moves a path, or when whoever is watching has no route to it — and it
+// renders broken *silently*, because both img tags carry `alt=""`.
+//
+// The substance check goes with it. Validate asks two questions of a committed
+// path (is it shaped right, and is a file actually there) and two of a data URI
+// (does it decode, and is what comes out an SVG). It can ask only the first of
+// an https URL, because the second needs a request and hard rule 4 forbids one.
+// That asymmetry is not an oversight to close later; it is the thing being
+// traded away, and validateImage says so where it makes the trade.
+//
+// What is **not** given up: `make demo`, `make check`, `make vectors` and CI
+// still reach no network, and no test does. Only a browser looking at
+// `make demo-live` fetches anything, and only for the fetched half of the shelf.
+//
+// # The Content-Security-Policy line this now needs
+//
+// There is no CSP anywhere in this repository — not in frontend/index.html, not
+// in vite.config.ts, and the backend sets exactly two response headers, neither
+// of them this — so nothing blocks either shape. But `img-src 'self'` is the
+// obvious first line anybody adding a policy writes, and it would blank every
+// fetched offer's picture at once. Since #300 the policy that keeps this screen
+// working is:
+//
+//	img-src 'self' data: https://cdn.dummyjson.com
+//
+// `data:` for the fallback marks, and the host for the photographs. NOTICE
+// carries the same line, because a policy is the place a reader would look for
+// which third-party hosts a page talks to, and NOTICE is where this repository
+// answers that question.
 //
 // # It is a second implementation of tools/catalogue/mark.go, and that is checked
 //
@@ -77,11 +112,18 @@ import (
 // # And what a mark deliberately does not do
 //
 // It claims nothing. A mark is not a photograph of a product and does not
-// pretend to be — which matters more for a fetched offer than for a derived
-// one, because everything else about a fetched offer is real. Real title, real
-// category, real price, a signed mandate beside it on the screen. A photograph
-// there would invite a reader to believe a purchase happened at a shop that
-// sells things, and nothing in this repository moves money or enrols a card.
+// pretend to be, which is why the sixty derived offers get one and why a
+// fetched offer with no photograph gets one rather than a stand-in picture of
+// something else.
+//
+// That argument used to run one step further and say a *photograph* on a
+// fetched row would invite a reader to believe a purchase happened at a shop
+// that sells things. #300 does not accept the step: what a photograph on that
+// row says is that DummyJSON lists this product with this picture, which is
+// true, and the reason nothing here is bought for real is that no card is ever
+// enrolled and no money moves — which is stated in NOTICE, in the scope section
+// of AGENTS.md and on the screen, none of which a drawn square was ever the
+// load-bearing part of.
 
 // The seven colours frontend/src/styles.css declares for the light theme, as
 // literal hex.
@@ -127,6 +169,54 @@ const (
 // TestALiveMarkIsTheMarkThisShopAlreadyDraws, which is why the duplication below
 // is safe and this paragraph is a pointer.
 var markAccents = []string{markSignal, markSeal, markBroken, markGraphite}
+
+// pictureFor is the choice this file's header argues: the shop's photograph
+// where there is one, and a drawn mark where there is not.
+//
+// # Why the shop is not simply believed
+//
+// `thumbnail` is a string somebody else's server chose, and several of the
+// values it could hold would each put a broken image on the screen: the empty
+// string, which resolves to the page itself; anything not carrying a host, which
+// resolves against whichever page rendered it; `http://` on a page served over
+// https, which a browser blocks as mixed content and never draws; and a value
+// with whitespace or a quote in it, which is a string on its way into an img
+// tag. So the question asked here is not "did the shop send something" but "is
+// this a thing a browser will load", and everything that fails it gets a mark.
+// The whole of the rule is `https://`, a host after it, and no whitespace or
+// quote anywhere in it.
+//
+// # Why a bad thumbnail costs a picture and not the row
+//
+// It could be refused instead — Validate would then stop the merchant, because
+// a fetched offer's image_url is checked and one it cannot accept fails the
+// merged catalogue. That is the wrong end of the same asymmetry
+// decodeDummyJSON already states: a constraint nobody understands is refused
+// because it is a limit a user set, and a row in somebody else's placeholder
+// shop is nobody's claim about anything. One malformed CDN path out of 194
+// should not be the difference between `make demo-live` running and not, and
+// the fallback costs exactly one drawn square.
+//
+// The **committed** half is untouched by all of this. pictureFor is reached
+// only from entryFor, which only Extend calls.
+func pictureFor(p shop.Product) string {
+	host, over := strings.CutPrefix(p.Thumbnail, liveImagePrefix)
+	if over && host != "" && !strings.ContainsAny(p.Thumbnail, " \t\r\n\"") {
+		return p.Thumbnail
+	}
+	return markDataURI(p.ID, p.Title)
+}
+
+// liveImagePrefix is what a fetched offer's photograph starts with, and what
+// Validate checks for. One constant for the same reason markDataURIPrefix is
+// one: the writer and the rule cannot disagree about it.
+//
+// The scheme and nothing else — not the shop's host. A merchant reads its stock
+// through shop.Fetcher and does not know which shop answered, so a rule naming
+// cdn.dummyjson.com would be this file knowing something the interface exists to
+// keep from it, and the second shop would arrive as a change here rather than as
+// a second file in shop/.
+const liveImagePrefix = "https://"
 
 // markDataURI is a mark for one offer, as the `data:` URI its image_url carries.
 //

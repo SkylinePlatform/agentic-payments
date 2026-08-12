@@ -142,12 +142,13 @@ type CatalogueEntry struct {
 	// **The guard exists only because the data moved**: an editor is now enough
 	// to change it, and nobody reviews an editor.
 	//
-	// Since issue #243 the rule has two shapes and Source decides which. A
-	// fetched offer has no file in this repository to name, so it carries its
-	// picture instead, as a `data:` URI — which depends on no host at all and so
-	// keeps what the original rule protects rather than conceding it. mark.go
-	// argues that at length, including the two ways of doing it that were
-	// rejected.
+	// Since issue #243 the rule has had more than one shape and Source decides
+	// which. A fetched offer has no file in this repository to name, so under
+	// #243 it carried its picture instead, as a `data:` URI, which depends on no
+	// host at all. Issue #300 added the shape that does concede the rule: a
+	// fetched offer may point at the shop's own CDN over https, and the mark is
+	// what it falls back to. mark.go argues all of it, including what was given
+	// up.
 	ImageURL string `json:"image_url"`
 
 	// Prices is what this costs over time, in the file's currency and its minor
@@ -372,43 +373,67 @@ func (o CatalogueEntry) validate(index int) error {
 
 // validateImage reports why an entry's picture cannot be shown, or nil.
 //
-// # One rule, two shapes, and the shapes are not the same strictness
+// # One rule, and since issue #300 it is not one rule
 //
-// What the rule protects has never changed: **no offer may point its image at a
-// host this project does not control.** An image that does makes a screenshot
-// depend on somebody else's uptime, and puts a network call one careless line
-// away from a test.
+// What it protected until #300 was this: **no offer may point its image at a
+// host this project does not control**, because an image that does makes a
+// screenshot depend on somebody else's uptime and puts a network call one
+// careless line away from a test.
 //
-// An offer the file lists keeps that by naming a file this repository ships,
-// which is a promise with a hole in it — the path can be perfectly shaped and
-// resolve to nothing, which is what shipped four broken images before issue
-// #215 and why TestEveryShippedImageURLNamesAFileThatExists exists beside this.
+// **An offer this file lists still keeps it exactly**, by naming a file this
+// repository ships. `http://`, `https://`, `//` and `data:` are each refused
+// below, and each with the message it always had. The promise has a hole in it —
+// a path can be perfectly shaped and resolve to nothing, which is what shipped
+// four broken images before issue #215 — which is why
+// TestEveryShippedImageURLNamesAFileThatExists sits beside this asking whether
+// the file is actually there.
 //
-// A fetched offer has no such file to name and keeps the rule the stronger way
-// instead: it carries the picture itself, as a data URI, which depends on no
-// host, cannot 404 and cannot be fetched even by accident. mark.go argues why
-// that rather than the shop's own CDN, and why not simply leaving the picture
-// out.
+// **A fetched offer no longer keeps it.** It may carry the shop's own
+// photograph, on the shop's own CDN, over https. That is the concession #300
+// made and mark.go is where the argument for making it is set out. The drawn
+// mark it used to carry is still accepted here and is still what pictureFor
+// produces when the shop supplies nothing usable, so a fetched image_url is one
+// of exactly two things and never the empty string.
 //
-// # Both shapes are checked for shape *and* for substance
+// # What the strictness of each shape actually is, since they now differ
 //
-// The prefix alone is only the first half, and on its own it would make this
-// branch the weaker of the two rather than the stronger. #215's failure was a
-// path that was perfectly shaped and resolved to nothing, and the answer to it
-// was TestEveryShippedImageURLNamesAFileThatExists — a second check, beside the
-// shape one, asking whether anything is actually there. An inline picture has no
-// file to resolve, so the equivalent question is whether what it carries decodes
-// to a picture, and `data:image/svg+xml;base64,` followed by a typo answers it
-// the same way a well-formed path to a deleted file answered #215: with a broken
-// image on the screen. That is why the payload is decoded here rather than taken
-// on the strength of its first twenty-six bytes.
+// A committed path is checked for shape here and for substance by the test
+// named above. A data URI is checked for both here: `data:image/svg+xml;base64,`
+// followed by a typo puts a broken image on the screen the same way a
+// well-formed path to a deleted file did in #215, so the payload is decoded and
+// looked at rather than taken on the strength of its first twenty-six bytes.
+//
+// **An https URL can only ever be checked for shape**, and there is no test
+// beside this one that closes the gap, because closing it means making a
+// request and hard rule 4 forbids one. So this branch asks the two questions
+// that do not need the network — is there a host after the scheme, and is the
+// value free of the whitespace and quoting that would break the img tag it
+// lands in — and the third question, *is anything there*, goes unasked for the
+// life of this decision. That is the trade #300 made rather than a check
+// somebody forgot; recording it here is what keeps it from reading as one.
 func (o CatalogueEntry) validateImage() error {
 	if o.Source == SourceLive {
+		if photograph, taken := strings.CutPrefix(o.ImageURL, liveImagePrefix); taken {
+			if photograph == "" {
+				return fmt.Errorf("%w: fetched offer %q has image_url %q, which is a scheme and no "+
+					"host; a browser resolves it against the page it is on and draws the broken-image "+
+					"placeholder, which is what an empty picture ships as",
+					ErrInvalidCatalogue, o.ID, o.ImageURL)
+			}
+			if strings.ContainsAny(o.ImageURL, " \t\r\n\"") {
+				return fmt.Errorf("%w: fetched offer %q has image_url %q, which carries whitespace or "+
+					"a quote; it is somebody else's string and it goes straight into an img tag",
+					ErrInvalidCatalogue, o.ID, elide(o.ImageURL))
+			}
+			return nil
+		}
+
 		encoded, carried := strings.CutPrefix(o.ImageURL, markDataURIPrefix)
 		if !carried {
-			return fmt.Errorf("%w: fetched offer %q has image_url %q; a fetched offer names no file "+
-				"in this repository, so it has to carry its picture as %s… — anything else is a host "+
-				"nobody here operates", ErrInvalidCatalogue, o.ID, elide(o.ImageURL), markDataURIPrefix)
+			return fmt.Errorf("%w: fetched offer %q has image_url %q, which is neither; a fetched "+
+				"offer names no file in this repository, so its picture is either the shop's own "+
+				"photograph over %s or the mark this project draws as %s…",
+				ErrInvalidCatalogue, o.ID, elide(o.ImageURL), liveImagePrefix, markDataURIPrefix)
 		}
 		svg, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {

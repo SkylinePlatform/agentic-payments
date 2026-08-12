@@ -180,8 +180,101 @@ func TestTwoOffersGetTwoMarks(t *testing.T) {
 		"a mark that varied between calls would give one offer two pictures across two searches in one run")
 }
 
+// TestTheShopsPhotographIsShownAndAnythingElseBecomesAMark is the decision
+// issue #300 made, at the one function that makes it.
+//
+// # Why the fallback needs a table rather than one case
+//
+// "Falls back when the shop gives no thumbnail" is the requirement, and taken
+// literally it is one row: the empty string. The other rows are the ones that
+// would each ship a broken image while satisfying a check written to the letter
+// of that sentence — a relative path, which resolves against whichever page
+// rendered it; `http://`, which a page served over https never draws at all;
+// and `https://` with nothing after it, which is `src=""` arrived at through the
+// branch that was supposed to prevent `src=""`.
+//
+// Every one of them ends in a mark rather than in a refusal, and that asymmetry
+// is pictureFor's own doc: a malformed CDN path is nobody's claim about
+// anything, and refusing it would make `make demo-live` hostage to one row in
+// 194.
+func TestTheShopsPhotographIsShownAndAnythingElseBecomesAMark(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name      string
+		thumbnail string
+		shown     bool
+		why       string
+	}{
+		{
+			name:      "the shop's own photograph",
+			thumbnail: "https://cdn.dummyjson.com/product-images/sunglasses/black-sun-glasses/thumbnail.webp",
+			shown:     true,
+			why: "this is the whole of issue #300, and a table where every row fell back would " +
+				"pass without measuring the decision at all",
+		},
+		{
+			name: "no thumbnail at all", thumbnail: "",
+			why: "the requirement as written; `src=\"\"` resolves to the page itself and ships the " +
+				"broken-image placeholder that issue #215 existed to end",
+		},
+		{
+			name: "a thumbnail that is only whitespace", thumbnail: "   ",
+			why: "a shop that sent spaces has sent no photograph, and this is the value that " +
+				"arrives here if the decoder's own trim is ever removed",
+		},
+		{
+			name: "a path relative to nothing", thumbnail: "product-images/1.webp",
+			why: "it resolves against whichever page rendered it, which is the failure a " +
+				"root-relative rule exists to prevent one kind of offer along",
+		},
+		{
+			name: "a root-relative path", thumbnail: "/product-images/1.webp",
+			why: "it resolves against this project's own server, where the shop's picture is not " +
+				"and never will be",
+		},
+		{
+			name: "a photograph over http", thumbnail: "http://cdn.dummyjson.com/1.webp",
+			why: "a page served over https draws nothing at all for it — the browser blocks it as " +
+				"mixed content — so it is strictly worse than the mark it now falls back to",
+		},
+		{
+			name: "a scheme and no host", thumbnail: "https://",
+			why: "this is what a prefix check alone accepts, and it is `src=\"\"` reached through " +
+				"the branch that was supposed to prevent one",
+		},
+		{
+			name: "a URL with a quote in it", thumbnail: "https://cdn.dummyjson.com/a\" onerror=\"x",
+			why: "it is somebody else's string on its way into an img tag, and a rule this package " +
+				"keeps is better than one borrowed from whatever renders the row",
+		},
+		{
+			name: "a URL with a newline in it", thumbnail: "https://cdn.dummyjson.com/a\nb.webp",
+			why: "the same, in the character that would break a header or a log line rather than " +
+				"an attribute",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := shop.Product{ID: "dummyjson:154", Title: "Black Sun Glasses", Thumbnail: tc.thumbnail}
+			got := pictureFor(p)
+
+			if tc.shown {
+				assert.Equal(t, tc.thumbnail, got, tc.why)
+				return
+			}
+			assert.Equal(t, markDataURI(p.ID, p.Title), got, tc.why)
+		})
+	}
+}
+
 // TestAFetchedOffersPictureIsDrawnFromItsOwnIdentifier is the caller's half of
 // what markSVG's missing category parameter cannot hold.
+//
+// Since issue #300 it reaches the drawing through pictureFor's fallback — the
+// product below states no thumbnail — which is the path it was always about:
+// what a mark is drawn *from* is only a question where a mark is drawn.
 //
 // Dropping that parameter stops the *drawing* reaching the shelf. It does not
 // stop entryFor handing the shelf over, because a category is a string and so is

@@ -19,8 +19,14 @@ for a licence *nobody has to interpret*, and this is the shortest such answer.
 The attribution below is therefore courtesy and provenance, not compliance.
 
 **Only the structured data is CC0.** Media files on Wikimedia Commons are not,
-and none are used here — every image this repository ships is drawn by it. See
-`tools/catalogue/mark.go`.
+and none are used here — every image file this repository ships is drawn by it.
+See `tools/catalogue/mark.go`.
+
+That sentence is about what is *shipped*, and since issue #300 it is not the
+whole of what a viewer sees: under `make demo-live` the browser also loads
+product photographs from DummyJSON's CDN, for the offers fetched from that shop.
+None of them is in this repository, none of them is derived from Wikidata, and
+nothing this program writes has changed. `NOTICE` records the terms.
 
 ## What was fetched, and how
 

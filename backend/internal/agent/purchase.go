@@ -132,8 +132,10 @@ type Client struct {
 // screen and no ceiling anywhere but the model's own 60 seconds.
 //
 // Fifteen seconds, chosen against the widest answer any of them gives rather
-// than measured as a latency. maxResponse's comment records that one: 430 KiB of
-// search results over loopback, which is milliseconds. Nothing in this project
+// than measured as a latency. maxResponse's comment records that one: 124.5 KiB
+// of search results over loopback, which is milliseconds — and it was 430.4 KiB
+// when this constant was chosen, which issue #300 took to a quarter of the size
+// without moving anything this number was weighed against. Nothing in this project
 // legitimately takes seconds — the roles are in-process mocks over a local
 // socket — so this is far enough above every real answer to never fire on one,
 // and far enough below a person's patience that a counterparty which has stopped
@@ -524,26 +526,29 @@ func (c *Client) call(ctx context.Context, method, url string, body, into any) e
 //
 // GET /search is the answer that fills this, and the widest one a merchant can
 // give is a query every offer satisfies against the catalogue `make demo-live`
-// assembles. Measured by hand on 12 August 2026, running
-// `cmd/merchant -catalogue-live dummyjson` against the live shop and asking for
-// `[{"op":"eq","field":"merchant.id","value":"air-serbia"}]`:
+// assembles: `[{"op":"eq","field":"merchant.id","value":"air-serbia"}]` over the
+// committed file plus the shop's whole stock, priced at 2026-08-12T12:00:00Z.
 //
 //	257 offers        63 from deploy/catalogue.json, 194 fetched from the shop
-//	440,759 bytes     430.4 KiB on the wire
-//	330,032 bytes     322.3 KiB of it inline data:image/svg+xml;base64 marks — 74.9%
-//	110,727 bytes     108.1 KiB is everything else, pictures removed
-//	2.38×             headroom against this constant
+//	127,442 bytes     124.5 KiB on the wire
+//	 17,109 bytes      16.7 KiB of it the shop's own photograph URLs — 13.4%
+//	110,333 bytes     107.7 KiB is everything else, pictures removed
+//	8.23×             headroom against this constant
 //
-// The trend is why the number is written down rather than the verdict: #234 took
-// the shop from 4 offers to 64, #243 added 194 more, and each step made the
-// pictures a larger share of the answer than the answer itself.
+// **Issue #300 is why that fourth line used to be the first three.** Until it,
+// every fetched offer carried an inline `data:image/svg+xml;base64` mark, and
+// the same query came to 440,753 bytes of which 322.3 KiB — 74.9% — was
+// pictures, at 2.38× headroom. Pointing a fetched offer at the shop's CDN
+// replaced roughly 1.7 KiB of base64 per row with an 88-byte URL, so the answer
+// lost 71% of its size as a side effect of a decision taken for entirely
+// different reasons. That is worth recording precisely because it was not the
+// argument: #251 named leaving the pictures out of a search answer as one of the
+// two ways to make this constant comfortable, and #300 did something adjacent to
+// it by accident.
 //
-// The architect review of PR #248 measured 399 KiB and 81.5% a few weeks
-// earlier, for the same 194 fetched offers. The base64 half of that figure is
-// within 0.3 KiB of the one above, so the pictures have not moved; the 31 KiB of
-// difference is in this project's own fields, which the row above prices at
-// 108.1 KiB in total. Where the two disagree, the larger number is the one to
-// plan against.
+// The trend is what the numbers are written down for: #234 took the shop from 4
+// offers to 64, #243 added 194 more. The offer count has not moved and will
+// again, and the next thing to grow will not be the pictures.
 //
 // **Widening this constant is not the answer to the next measurement that gets
 // close.** Issue #251 records the two that are — leaving the pictures out of a
@@ -554,11 +559,10 @@ func (c *Client) call(ctx context.Context, method, url string, body, into any) e
 // a cap that silently shortens a document is the wrong thing to be approaching
 // whatever the number is.
 //
-// TestTheWidestAnswerAMerchantCanGiveFitsThisLimit is the same measurement over
-// the committed recording, so it runs under `make check` and goes red on the
-// growth rather than waiting for somebody to take a reading by hand. It came to
-// **440,753 bytes** — six bytes off the live figure above, which is what a
-// recording taken from the same shop looks like when the shop has not moved.
+// TestTheWidestAnswerAMerchantCanGiveFitsThisLimit re-derives every figure above
+// under `make check`, over the response recorded at shop/data/ — which was
+// retaken from the live shop on 12 August 2026 and is byte for byte what it
+// answered, so this is the live measurement rather than a stand-in for one.
 const maxResponse = 1 << 20
 
 // idempotencyKey is a stable name for one step of one purchase.

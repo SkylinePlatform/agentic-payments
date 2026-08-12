@@ -664,21 +664,91 @@ func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 		{
 			name: "an offer the file lists carrying its picture inline",
 			mutate: func(f *merchant.CatalogueFile) {
-				entry(f).ImageURL = fetched().ImageURL
+				// The mark a fetched offer falls back to, spelled out rather
+				// than taken from fetched(): since issue #300 that prototype
+				// carries the shop's photograph, and the message this row is
+				// about is the one for an inline picture.
+				entry(f).ImageURL = "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4="
 			}, wantErr: true, mentions: "see the source field",
 			why: "the root-relative check refuses it anyway, and what the earlier case adds is " +
 				"the reason: an inline picture is not wrong, it is what the other kind of offer does",
 		},
 		{
+			// Issue #300 reversed this row. It read wantErr: true until then, on
+			// the ground that a picture on the shop's CDN renders broken when
+			// that CDN is down — which is still true and was overridden rather
+			// than answered. See mark.go.
 			name: "a fetched offer pointing at the shop's own host",
 			mutate: func(f *merchant.CatalogueFile) {
 				live := fetched()
 				live.ImageURL = "https://cdn.dummyjson.com/product-images/sunglasses/1.webp"
 				f.Offers = append(f.Offers, live)
-			}, wantErr: true, mentions: "has to carry its picture as",
-			why: "the rule gained a second shape and did not lose what it protects — a fetched " +
-				"offer whose picture is on the shop's CDN is a row that renders broken when that " +
-				"CDN is down, which is the state #215 ended",
+			}, wantErr: false,
+			why: "this is what a fetched offer shows since #300, and a rule set refusing it is one " +
+				"`make demo-live` could not start against",
+		},
+		{
+			name: "a fetched offer pointing at the shop's own host over http",
+			mutate: func(f *merchant.CatalogueFile) {
+				live := fetched()
+				live.ImageURL = "http://cdn.dummyjson.com/product-images/sunglasses/1.webp"
+				f.Offers = append(f.Offers, live)
+			}, wantErr: true, mentions: "which is neither",
+			why: "a page served over https draws nothing at all for an http image — the browser " +
+				"blocks it as mixed content — so this is the broken row with none of the " +
+				"compensation https bought",
+		},
+		{
+			name: "a fetched offer pointing at a host with the scheme left off",
+			mutate: func(f *merchant.CatalogueFile) {
+				live := fetched()
+				live.ImageURL = "//cdn.dummyjson.com/product-images/sunglasses/1.webp"
+				f.Offers = append(f.Offers, live)
+			}, wantErr: true, mentions: "which is neither",
+			why: "#300 admitted https and nothing else; a protocol-relative URL is the one shape " +
+				"that would sail through a check written as \"not http\"",
+		},
+		{
+			name: "a fetched offer whose picture is a scheme and no host",
+			mutate: func(f *merchant.CatalogueFile) {
+				live := fetched()
+				live.ImageURL = "https://"
+				f.Offers = append(f.Offers, live)
+			}, wantErr: true, mentions: "a scheme and no host",
+			why: "it is what a prefix check alone accepts, and a browser resolves it against the " +
+				"page it is on — the broken-image placeholder `src=\"\"` ships, arrived at through " +
+				"the branch that was supposed to end it",
+		},
+		{
+			name: "a fetched offer whose picture carries a quote",
+			mutate: func(f *merchant.CatalogueFile) {
+				live := fetched()
+				live.ImageURL = "https://cdn.dummyjson.com/a\" onerror=\"x.webp"
+				f.Offers = append(f.Offers, live)
+			}, wantErr: true, mentions: "whitespace or a quote",
+			why: "the value is somebody else's string and it goes into an img tag; React escapes " +
+				"it today, and a rule this file can keep is better than a guarantee borrowed from " +
+				"whatever renders the row next",
+		},
+		{
+			name: "a fetched offer carrying a picture that does not decode",
+			mutate: func(f *merchant.CatalogueFile) {
+				live := fetched()
+				live.ImageURL = "data:image/svg+xml;base64,not base64 at all"
+				f.Offers = append(f.Offers, live)
+			}, wantErr: true, mentions: "does not decode",
+			why: "the fallback mark is checked for substance as well as shape, which is the half " +
+				"an https URL cannot be checked for and the reason the two are not the same rule",
+		},
+		{
+			name: "a fetched offer carrying bytes that are not a picture",
+			mutate: func(f *merchant.CatalogueFile) {
+				live := fetched()
+				live.ImageURL = "data:image/svg+xml;base64,bm90IGFuIFNWRw=="
+				f.Offers = append(f.Offers, live)
+			}, wantErr: true, mentions: "other than an SVG",
+			why: "`data:image/svg+xml;base64,` followed by anything keeps the shape of the promise " +
+				"without keeping it, and renders exactly as a path to a deleted file did in #215",
 		},
 		{
 			name: "a fetched offer that says which sentence goes looking for it",

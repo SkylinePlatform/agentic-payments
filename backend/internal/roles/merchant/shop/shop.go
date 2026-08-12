@@ -71,9 +71,11 @@ var ErrFetch = errors.New("shop: could not fetch a live catalogue")
 // It is deliberately not a merchant.CatalogueEntry. An entry carries a Scenario
 // — a claim about which scripted sentence finds it — and a fetched product is
 // exactly the thing no scripted sentence was written for. It also carries an
-// image_url, and what picture a fetched offer gets is the merchant's decision
-// and not the shop's. Converting between the two is merchant.CatalogueFile's
-// job, in live.go, where both of those decisions are already made.
+// image_url, and what picture a fetched offer gets is still the merchant's
+// decision: Thumbnail below is what the shop *said*, and merchant/mark.go is
+// where it is either used or replaced by a drawn mark. Converting between the
+// two is merchant.CatalogueFile's job, in live.go, where both of those decisions
+// are already made.
 type Product struct {
 	// ID is scheme-prefixed, on the convention constraint.Item.ID states, and
 	// the scheme names the shop — "dummyjson:154". That is what makes a
@@ -103,6 +105,23 @@ type Product struct {
 	// them. That single price is the whole of what a live offer can and cannot
 	// demonstrate — see merchant.CatalogueFile.Extend.
 	Price generated.Amount
+
+	// Thumbnail is where the shop keeps a photograph of this product, verbatim
+	// and optional.
+	//
+	// It is not validated here, and that is the one field of the eight above it
+	// where absence costs nothing: every other one is a fact something in this
+	// project reads, so a row missing one is a row nothing can sell, while a row
+	// missing this one is a row that gets the mark the merchant would otherwise
+	// have drawn for it anyway. validate has nothing to say about it for the
+	// same reason.
+	//
+	// **A shop is not owed the assumption that this is loadable.** It is a
+	// string somebody else's server chose, and what a browser is asked to fetch
+	// is decided in merchant/mark.go against a rule this package does not carry
+	// — because the rule is about what this project will put on a screen, not
+	// about what a shop is allowed to say.
+	Thumbnail string
 }
 
 // Fetcher is where a live catalogue comes from.

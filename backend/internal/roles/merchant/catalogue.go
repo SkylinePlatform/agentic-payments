@@ -65,10 +65,16 @@ type Offer struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 
-	// ImageURL is a path rather than an absolute URL, and deliberately: an
-	// image fetched from a host this project does not control would make a
-	// screenshot depend on somebody else's uptime, and would put a network call
-	// one careless test away.
+	// ImageURL is a root-relative path for an offer this repository ships, and
+	// deliberately: an image fetched from a host this project does not control
+	// would make a screenshot depend on somebody else's uptime, and would put a
+	// network call one careless test away.
+	//
+	// A fetched offer is the exception and since issue #300 it is a real one —
+	// it carries the shop's own photograph, on the shop's own host, or a mark
+	// this project drew where the shop offered nothing usable. Which of the
+	// three an offer may hold is decided by Source, checked by
+	// CatalogueEntry.validateImage and argued in mark.go.
 	ImageURL string `json:"image_url"`
 
 	// Retailer is who is behind the counter. It is descriptive only — who the

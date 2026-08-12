@@ -32,10 +32,17 @@ import (
 //     never in the same catalogue never demonstrate that.
 //
 // What it costs is that every rule Validate keeps has to hold over a mixed set,
-// and exactly one of them could not: image_url. That is what this type is for.
-// The rule did not become weaker — see mark.go, where the two shapes are
-// argued — it became a rule with two shapes, and a shape is only choosable
-// once Validate can tell which kind of offer it is looking at.
+// and exactly one of them could not: image_url. That is what this type is for —
+// a shape is only choosable once Validate can tell which kind of offer it is
+// looking at.
+//
+// Under issue #243 the rule gained a second shape without becoming weaker: a
+// fetched offer carried its picture inline, which depends on no host at all.
+// Issue #300 **did** make it weaker, deliberately — a fetched offer may now
+// point at the shop's CDN, which is the objection #243 recorded and #300
+// overrode. mark.go is where that is argued and where what it cost is written
+// down. The committed half is untouched: this type is what keeps that true
+// rather than what threatens it.
 type Source string
 
 const (
@@ -170,8 +177,10 @@ func (f *CatalogueFile) Extend(ctx context.Context, fetcher shop.Fetcher) (int, 
 //
 //   - Source is SourceLive, which is what lets Validate hold this offer to the
 //     rules a fetched one can keep instead of the ones a committed one can.
-//   - ImageURL is a mark this project draws, carried inside the offer. See
-//     mark.go.
+//   - ImageURL is the shop's own photograph where it supplied a usable one, and
+//     a mark this project draws where it did not. Issue #300 is the decision to
+//     point a browser at somebody else's host and mark.go is where it is argued,
+//     including what was given up for it.
 //   - Scenario is left at its zero value, and Validate refuses a fetched offer
 //     that states one. A Scenario is a claim about which scripted sentence goes
 //     looking for this offer and what that sentence will find; no scripted
@@ -185,7 +194,7 @@ func entryFor(p shop.Product) CatalogueEntry {
 		Title:       p.Title,
 		Description: p.Description,
 		Retailer:    p.Retailer,
-		ImageURL:    markDataURI(p.ID, p.Title),
+		ImageURL:    pictureFor(p),
 		// One price, because that is what a shop quoting today's price has to
 		// say. It is also the whole of what a live offer can and cannot
 		// demonstrate — see LiveCatalogueNotice.
