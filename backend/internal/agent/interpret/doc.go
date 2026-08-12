@@ -44,11 +44,17 @@
 // the verifier and to nobody else. Deciding it from the sentence, once, before
 // anything is signed, is what keeps that true — see Trigger.
 //
-// A rank has a narrower bound still, and it is the reason a rank may be applied by
-// the agent at all: it reorders offers one merchant already said match the signed
-// constraints, so the worst a wrong one can do is buy a different offer the user
-// authorised. It never compares a price to a limit — that is
-// internal/agent.ranked's own line — and it never reaches the search.
+// A rank is bounded the same way and it is the reason a rank may be applied by the
+// agent at all: it reorders offers one merchant already said match the signed
+// constraints, so no rank can reach a purchase the constraints do not authorise. It
+// never compares a price to a limit — that is internal/agent.ranked's own line — and
+// it never reaches the search.
+//
+// What a wrong rank *can* cost is a run that collects a refusal it need not have,
+// because the search deliberately does not carry the user's price bound and a
+// descending preference will happily select a candidate above it. That is the
+// trigger's cost exactly, and internal/agent.ranked records why the obvious remedy —
+// skipping candidates over the cap — is the one thing the agent may not do.
 //
 // # Objectives are not constraints, and are not thrown away either
 //

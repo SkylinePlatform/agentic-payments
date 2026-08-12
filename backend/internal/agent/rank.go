@@ -47,13 +47,26 @@ import (
 //
 // # What a wrong rank costs, and what it cannot cost
 //
-// It cannot cost a purchase the user did not authorise — see the second point
-// above. What it can cost is buying a different authorised offer than the person
-// would have picked, which is a cost a *reader* can catch: the preference travels
-// to the consent screen beside every candidate the search found, so "this one,
-// because it is the cheapest of four" is checkable by the person about to sign.
-// interpret.Rank's "Why a rank need not be signed" section is that argument in
-// full.
+// It cannot cost a purchase the user did not authorise — see the second point above,
+// and interpret.Rank's "Why a rank need not be signed" for the argument in full.
+//
+// **What it can cost is more than "a different authorised offer", and the review of
+// this branch is what found the stronger case.** candidates deliberately omits the
+// amount term from the query — a search carrying the user's cap can only ever find
+// something the agent could already buy, which is the one case a watch is not for —
+// so candidates *above* the cap are in the set this function is handed. Nothing here
+// compares any of them to it. A descending preference therefore selects the dearest
+// candidate, which for a shelf straddling the bound is one the verifier will refuse:
+// the run ends in a refusal it need not have collected, where a rankless run would
+// have bought the merchant's first offer.
+//
+// That is the same shape as a wrong Trigger's cost — "a run that ends sooner than the
+// person hoped", collecting a visible refusal at a price the merchant was openly
+// asking — rather than a new kind of harm. **And the obvious fix is forbidden**, which
+// is why this is documented rather than closed: skipping candidates above the cap
+// would be the agent comparing an offer's price to the user's signed limit, which
+// AGENTS.md gives to the verifier and to nobody else. A refusal a reader can see beats
+// a filter nobody can audit, so the failure direction is the right one.
 
 // ErrCannotRank means the sentence stated a preference that cannot be applied to
 // the offers this merchant answered with.
@@ -71,6 +84,38 @@ import (
 // except that this time the agent would have had the preference in its hand.
 var ErrCannotRank = errors.New(
 	"agent: the offers this merchant answered with cannot be ordered by the preference the sentence stated")
+
+// applies is the preference that will actually be applied, given what the caller
+// already chose: the sentence's own, or none at all when the caller named an item.
+//
+// **One function rather than a condition at each site, because two sites read it and
+// they must not be able to disagree.** settle uses it to decide what to sort;
+// Propose uses it to decide what to *report* on Proposal.Rank, which is what the
+// consent screen turns into "the cheapest of the offers that matched". A screen
+// stating a reason the agent did not act on is worse than one stating none — it is a
+// false account of how the offer in front of the person was chosen, and the caller
+// named that offer by hand.
+//
+// # Why a named item wins
+//
+// A rank chooses among candidates. A caller who named one has already chosen — see
+// Intent.Item, where the console's product table is the thing doing the choosing —
+// so a preference read out of a sentence must not overrule a choice made by a
+// person.
+//
+// It is also what keeps settle's refusal honest. A search on item.id has exactly one
+// answer, and settle compares the merchant's *own first* answer against the
+// identifier that was asked for. Sorting first would let a merchant answering
+// `[something cheaper, the offer asked for]` sort its way past that check, so the
+// preference would have laundered a refusal into a purchase of an offer the caller
+// never picked. TestARankCannotLaunderAMerchantsWrongAnswer drives both price
+// orderings, because only one of the two can be got wrong silently.
+func applies(preference interpret.Rank, chosen string) interpret.Rank {
+	if chosen != "" {
+		return interpret.Rank{}
+	}
+	return preference
+}
 
 // ranked orders the candidates a search came back with by the preference the
 // sentence stated, and hands them back untouched when it stated none.
@@ -164,29 +209,46 @@ func ordering(d interpret.RankDirection) (int, bool) {
 // issue #262 again. A refusal names the thing this system cannot do, in the run
 // that asked it to, which is the only outcome a reader can act on.
 //
-// # An unnamed currency is refused too, and nothing on the wire can reach it
+// # An unnamed currency is refused too, and it is reachable
 //
 // A price carrying no currency code passes a uniformity check against another one
 // carrying none — "" equals "" — and tells us nothing about whether the two
 // integers beside them mean the same thing. That is the same trap with the label
 // missing rather than differing, so it fails here as well.
 //
-// **It is unreachable from candidates and that was worth checking rather than
-// assuming.** generated.Amount's own unmarshaller requires the field, so a merchant
-// answering `"price":{"amount":100}` fails the decode with "field currency in
-// Amount: required" and never gets this far; the only way in is a caller building a
-// candidate in Go, which is TestRankedRefusesOffersItCannotCompare.
+// **Two ways in, and the first draft of this comment claimed there were none.**
+// `"price":{"amount":100}` does fail earlier: generated.Amount's own unmarshaller
+// requires the field, so candidates reports "field currency in Amount: required" and
+// never gets here. But an offer with the `price` key **omitted entirely** never
+// invokes that unmarshaller at all — encoding/json leaves the field at its zero value
+// — so `{"offers":[{"id":"gtin:0001","title":"no price"}]}` decodes clean and arrives
+// here priced at nothing in nothing. TestRefusesToOrderOffersItCannotCompare drives
+// that one over the wire, and TestRankedRefusesOffersItCannotCompare drives the
+// in-Go one.
 //
-// It stays for the reason a duplicated check is normally *wrong* here and this one
-// is not. What would be wrong is a second list of field names or a second parser —
-// something that could come to disagree with the original and would drift in the
-// direction of accepting more. This is a precondition of a comparison, stated where
-// the comparison is, and its failure mode if the schema ever made currency optional
-// is that the comparison silently becomes meaningless. A check that costs one branch
-// and whose absence is undetectable is the shape to keep.
+// **An adjacent gap that is not this issue's to close**, named because finding it is
+// what corrected the paragraph above: for a sentence that ranks *nothing*, an offer
+// with no price at all is not refused anywhere. It becomes a candidate reading
+// `0.00` with no currency and can be found[0]. That is a defect in what candidates
+// accepts from a merchant rather than in what this function compares, and closing it
+// belongs with the identifier check beside it.
 //
-// # Two currencies is unreachable through `make demo` too, and that is not an
-// # argument against it either
+// # Refused over the whole set, not over the comparisons actually made
+//
+// One offer priced in another currency refuses the proposal even when the winner
+// would have been unambiguous without it. That is the intended unit, and the reason is
+// the alternative: ranking the comparable ones and ignoring the rest is the
+// "offers a person could have bought silently stop being candidates" line from the
+// table below, arriving through the back door. A preference is over the candidate
+// set, so a preference that cannot be applied to the candidate set cannot be applied.
+//
+// The cost is worth naming: a merchant publishing one EUR offer in a category can
+// suppress every ranked sentence in it. That is a loud refusal naming both currencies
+// rather than a quiet wrong answer, which is the trade this whole function is built
+// on.
+//
+// # Two currencies is unreachable through `make demo`, and that is not an
+// # argument against any of it
 //
 // deploy/catalogue.json is USD throughout and so is every offer merchant/shop
 // derives from a fetched one, so no committed path can provoke this. The check is

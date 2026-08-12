@@ -179,11 +179,34 @@ A wrong rank buys a different offer the user authorised. That is a real cost rat
 than nothing, and it is bounded the same way `Trigger`'s is: it is a cost a *reader*
 can catch. So the preference travels to the consent screen beside the limits, in a
 zone of its own headed *Why this offer* — `agent.Proposal.Rank`, `console`'s
-`proposed.rank`, and `frontend/src/consent/model.ts`'s `whyThisOffer`. The whole
-candidate list is sorted rather than the winner plucked out of an unsorted one,
-precisely so that the order shown *is* the reasoning shown: the person sees the
-preference, sees every candidate the agent had, and sees the chosen one at the head
-of them.
+`proposed.rank`, and `frontend/src/consent/model.ts`'s `whyThisOffer`.
+
+**There is a second cost and the review of this branch is what found it.** The search
+deliberately does not carry the user's price bound, so candidates *above* the cap are
+in the set `ranked` is handed. A **descending** preference therefore selects the
+dearest candidate, which on a shelf straddling the bound is one the verifier will
+refuse — the run ends in a refusal it need not have collected, where a rankless run
+would have bought. That is `Trigger`'s cost exactly rather than a new kind of harm,
+and **the obvious remedy is forbidden**: skipping candidates over the cap is the agent
+comparing an offer's price to the user's signed limit, which AGENTS.md gives to the
+verifier and to nobody else. A refusal a reader can see beats a filter nobody can
+audit.
+
+### What the screen can honestly show, and what it cannot
+
+The whole candidate list is sorted rather than the winner plucked out of an unsorted
+one, so the order the console's product table draws *is* the reasoning — and
+`frontend/src/catalogue/Table.tsx` now gives one of two reasons for the rows a person
+cannot buy, because "not what this search narrowed to" is false about offers that
+matched and lost on price.
+
+**The list is not on screen beside the signature, and an earlier draft of this
+argument said it was.** `routes/buying/Buying.tsx` swaps the console out for the
+consent zone, so the product table is gone by the time anybody signs. What the zone
+delivers instead is the preference and the *number* of candidates it chose among —
+"The cheapest of the 4 offers that matched what you asked for." That is concrete and
+it is what can honestly be put beside a signature; pointing at a table on the previous
+screen is not.
 
 ### One asymmetry on the consent screen, stated deliberately
 

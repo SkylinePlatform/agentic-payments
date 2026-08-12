@@ -319,11 +319,14 @@ func (c *Client) Authorise(ctx context.Context, in Intent) (Authorisation, error
 
 // Offer is the merchant's own description of one thing it sells.
 //
-// It exists so a consent screen can say what an identifier refers to. No
-// verifier sees it, no constraint addresses it, and nothing in this package
-// compares any of it — see candidate. It is deliberately not in contracts/:
-// how a shop describes its stock is presentation, and putting it in the
-// canonical model would mean core knew what a flight is.
+// It exists so a consent screen can say what an identifier refers to. No verifier
+// sees it and no constraint addresses it. **One field of it is compared**, and only
+// against another offer's: since issue #262 ranked orders candidates on Price when
+// the sentence stated a preference — see candidate, which is this type's own source
+// and carries the argument for why ordering two offers is not evaluating a limit.
+// Nothing else here is read at all. It is deliberately not in contracts/: how a shop
+// describes its stock is presentation, and putting it in the canonical model would
+// mean core knew what a flight is.
 //
 // Step and Final are the same two fields Quote carries for the offer a watch
 // is already running against — the position in the merchant's price schedule,
@@ -360,12 +363,19 @@ type Proposal struct {
 	// **That order is the merchant's catalogue order until a sentence states a
 	// preference**, and then it is the order the preference asked for; see
 	// ranked and Rank below. The list is sorted rather than left alone with the
-	// choice made out of band on purpose, and it is the property that makes an
-	// unsigned rank auditable: a person reading the consent screen sees the
-	// preference, sees every candidate the agent had, and sees the chosen one at
-	// the head of them. A screen showing the merchant's order beside a choice
+	// choice made out of band on purpose: the console's product table draws this
+	// array in order, so a table showing the merchant's order beside a choice
 	// taken from somewhere in the middle of it would be asking to be trusted
-	// instead.
+	// where a sorted one shows its reasoning. frontend/src/catalogue/Table.tsx
+	// says which of two reasons it gives for the rows a person cannot buy, and
+	// the answer depends on whether a preference was applied.
+	//
+	// **What this does not do is put the list in front of the signature.**
+	// routes/buying/Buying.tsx swaps the console out for the consent zone, so the
+	// table is gone by the time anybody signs — the review of #262 caught an
+	// earlier version of this comment claiming otherwise. The consent screen
+	// states the preference and the *number* of candidates instead, which is what
+	// can honestly be delivered there.
 	//
 	// #109's product table is why this exists: a browser that ran its own
 	// search would have to decide which of the interpretation's constraints
@@ -548,7 +558,14 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 		// offer and not one of the others — see Proposal.Rank. Zero when the
 		// sentence ranked nothing, and unlike the trigger there is nothing here
 		// for Validate to have refused: silence is a legitimate answer.
-		Rank: interpretation.Rank,
+		//
+		// **Through applies, not straight off the interpretation.** When the
+		// caller named an item, settle did not rank anything, and reporting the
+		// sentence's preference anyway would put "the cheapest of the offers that
+		// matched" on a consent screen for an offer the person picked by hand.
+		// That is a false account of a real choice, which is worse than no
+		// account — and both sites read the one function so they cannot drift.
+		Rank: applies(interpretation.Rank, in.Item),
 	}, nil
 }
 
@@ -563,17 +580,13 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 //
 // # A caller-named item outranks any preference
 //
-// The rank chooses among candidates. A caller who named one has already chosen, so
-// when chosen is set nothing here reorders what the merchant answered with — see
-// Intent.Item, and interpret.Rank for what a rank is allowed to decide.
-//
-// **That is a guarantee and not a tidiness.** A search on item.id has exactly one
-// honest answer, and the refusal below compares the merchant's own first answer
-// against the identifier that was asked for. Ranking first would let a merchant
-// that answered `[something cheaper, the offer asked for]` sort its way past that
-// check, so the preference would have laundered a refusal into a purchase of an
-// offer the caller never picked. TestARankCannotLaunderAMerchantsWrongAnswer is
-// the test that fails when the two are reordered.
+// The rank chooses among candidates, and a caller who named one has already chosen —
+// so nothing here reorders what the merchant answered with when chosen is set. The
+// rule lives in applies rather than in a condition below, because Propose reads the
+// same function to decide what to *report*: a consent screen must not say "the
+// cheapest of the offers that matched" about an offer a person picked by hand. See
+// applies for the whole argument, including why it also keeps the refusal below
+// honest against a merchant that answers with a different identifier.
 func (c *Client) settle(
 	ctx context.Context, constraints []generated.Constraint, chosen string,
 	preference interpret.Rank,
@@ -586,10 +599,12 @@ func (c *Client) settle(
 		return "", Offer{}, nil, fmt.Errorf("%w: the search matched no offer", ErrNothingToBuy)
 	}
 
-	if chosen == "" {
-		if found, err = ranked(found, preference); err != nil {
-			return "", Offer{}, nil, err
-		}
+	// applies is what decides whether the preference participates at all — a
+	// caller-named item outranks it. Read through that function rather than
+	// tested here, so that Propose reports exactly what this sorted by; see
+	// applies for why two sites reading one rule matters.
+	if found, err = ranked(found, applies(preference, chosen)); err != nil {
+		return "", Offer{}, nil, err
 	}
 
 	// The first result wins, and what decides which one that is now comes from the

@@ -103,13 +103,18 @@ type proposed struct {
 	// **It is on this response for a sharper version of Trigger's reason.** The
 	// trigger is here because a screen has to say which of two authorisations a
 	// person is signing. This is here because a screen has to say why *this*
-	// offer: the agent picked one row out of Offers, and without the preference
-	// beside them a reader has a chosen item, a list it came from, and no account
-	// of how the one came out of the other. Nothing signs a rank and no verifier
-	// will ever check one, so the screen is the only place it can be held to
-	// anything — interpret.Rank's "Why a rank need not be signed" leans on this
-	// field existing, which makes leaving it off a weakening of that argument
-	// rather than a smaller response.
+	// offer: the agent picked one row out of Offers, and without the preference a
+	// reader has a chosen item and no account of how it was chosen. Nothing signs
+	// a rank and no verifier will ever check one, so the screen is the only place
+	// it can be held to anything — interpret.Rank's "Why a rank need not be
+	// signed" leans on this field existing, which makes leaving it off a weakening
+	// of that argument rather than a smaller response.
+	//
+	// The browser turns it into a sentence carrying the length of Offers, because
+	// the product table is not on screen beside the signature — see
+	// frontend/src/consent/model.ts's PREFERRED. This response carries the
+	// preference and the list; which of the two a given screen can show is that
+	// screen's problem and not this field's.
 	//
 	// Absent is the ordinary case and needs no resolving here, unlike Quantity: a
 	// sentence that ranked nothing was answered in the merchant's own catalogue

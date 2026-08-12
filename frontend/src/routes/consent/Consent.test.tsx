@@ -239,12 +239,41 @@ describe("the consent screen", () => {
     // The second assertion is the one with teeth, for the basket size's reason:
     // nothing signs a preference, and a box headed "What you are signing" has to
     // be true of every line in it.
+    // Three candidates, because the sentence has to be able to say how many it
+    // chose among — the product table is not on this screen, so the count is the
+    // whole of what makes the claim concrete. `agent.Proposal.Offers` is sorted, so
+    // the chosen one heads the list.
+    const chosen = aProposal();
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent({
+      ...chosen,
+      offers: [
+        chosen.offer,
+        { ...chosen.offer, id: "gtin:0002", price: { amount: 30000, currency: "USD" } },
+        { ...chosen.offer, id: "gtin:0003", price: { amount: 40000, currency: "USD" } },
+      ],
+      rank: { by: "price", direction: "ascending" },
+    });
+
+    const preferred = await screen.findByTestId("preferred");
+    expect(within(preferred).getByText(/cheapest of the 3 offers that matched/i)).toBeTruthy();
+    expect(screen.getByTestId("signed-box").contains(preferred)).toBe(false);
+  });
+
+  it("claims no comparison when the sentence ranked but found one offer — `make demo`", async () => {
+    // The demonstration's own case: the ladders sentence says *cheapest* and the
+    // committed catalogue holds exactly one ladder. `aProposal()` carries no
+    // `offers`, so this is the one-candidate path, and the screenshot must not read
+    // "the cheapest of the 1 offers that matched".
     stubFetch({ "/authorise/preview": { body: aPreview() } });
     renderConsent({ ...aProposal(), rank: { by: "price", direction: "ascending" } });
 
     const preferred = await screen.findByTestId("preferred");
-    expect(within(preferred).getByText(/cheapest of the offers that matched/i)).toBeTruthy();
-    expect(screen.getByTestId("signed-box").contains(preferred)).toBe(false);
+    expect(within(preferred).getByText(/only offer that matched/i)).toBeTruthy();
+    expect(
+      within(preferred).queryByText(/cheapest/i),
+      "nothing was cheaper than anything, so the screen must not say a comparison decided",
+    ).toBeNull();
   });
 
   it("draws no such zone when the sentence named no preference", async () => {

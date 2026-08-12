@@ -141,14 +141,14 @@ describe("whyThisOffer", () => {
     // the merchant's own catalogue order, and a heading reading "Why this offer"
     // over "no preference" would be a row that exists to say nothing.
     expect(
-      whyThisOffer(undefined),
+      whyThisOffer(undefined, 4),
       "an absent preference is a fact about the sentence, not about this build",
     ).toBeUndefined();
   });
 
   it("says something different for each direction, and neither is the machine's word", () => {
-    const cheapest = whyThisOffer({ by: "price", direction: "ascending" });
-    const dearest = whyThisOffer({ by: "price", direction: "descending" });
+    const cheapest = whyThisOffer({ by: "price", direction: "ascending" }, 4);
+    const dearest = whyThisOffer({ by: "price", direction: "descending" }, 4);
 
     expect(cheapest?.sentence).not.toEqual(dearest?.sentence);
     // A sentence rather than a respelling, for `whenItBuys`' reason: `ascending`
@@ -171,7 +171,7 @@ describe("whyThisOffer", () => {
   });
 
   it("does not draw a preference it cannot read as one it can", () => {
-    const unknown = whyThisOffer({ by: "rating", direction: "descending" });
+    const unknown = whyThisOffer({ by: "rating", direction: "descending" }, 4);
 
     expect(
       unknown?.raw,
@@ -186,8 +186,8 @@ describe("whyThisOffer", () => {
     // build, exactly like an unknown word. Reading a missing direction as
     // ascending would put "the cheapest" on screen for a sentence that may have
     // asked for the opposite.
-    expect(whyThisOffer({ by: "price", direction: "" })?.sentence).toMatch(/does not recognise/i);
-    expect(whyThisOffer({ by: "", direction: "ascending" })?.sentence).toMatch(
+    expect(whyThisOffer({ by: "price", direction: "" }, 4)?.sentence).toMatch(/does not recognise/i);
+    expect(whyThisOffer({ by: "", direction: "ascending" }, 4)?.sentence).toMatch(
       /does not recognise/i,
     );
   });
@@ -202,7 +202,7 @@ describe("whyThisOffer", () => {
     // picked.
     const unreadable = { ...proposal(3), rank: { by: "rating", direction: "sideways" } };
 
-    expect(whyThisOffer(unreadable.rank)?.raw, "the screen cannot read this one").toBe(
+    expect(whyThisOffer(unreadable.rank, 4)?.raw, "the screen cannot read this one").toBe(
       "rating sideways",
     );
     expect(
@@ -212,6 +212,32 @@ describe("whyThisOffer", () => {
     ).toBe(true);
   });
 
+  it("does not claim a comparison when there was only one offer", () => {
+    // The case `make demo` actually shows: the ladders sentence says *cheapest* and
+    // the committed catalogue holds exactly one ladder, so the preference decided
+    // nothing. "The cheapest of the 1 offers that matched" would be bad English on
+    // the demonstration's own screenshot and a claim about a comparison that never
+    // happened.
+    const one = whyThisOffer({ by: "price", direction: "ascending" }, 1);
+
+    expect(one?.sentence).toMatch(/only offer/i);
+    expect(one?.sentence, "nothing was cheaper than anything").not.toMatch(/cheapest/i);
+    expect(one?.raw, "the preference was still perfectly readable").toBeUndefined();
+  });
+
+  it("names how many candidates it chose among, because the list is not on this screen", () => {
+    // The review of #262 caught this: `Buying.tsx` swaps the console out for the
+    // consent zone, so the product table showing every offer is gone by the time
+    // this sentence is read. An argument that a preference nobody signed is safe
+    // *because a reader can check it* has to deliver something checkable, and the
+    // count is what can honestly be delivered here.
+    //
+    // Two different numbers, so this is the field being read rather than a
+    // literal in the sentence.
+    expect(whyThisOffer({ by: "price", direction: "ascending" }, 4)?.sentence).toContain("4");
+    expect(whyThisOffer({ by: "price", direction: "ascending" }, 12)?.sentence).toContain("12");
+  });
+
   it("covers every field and direction this build declares", () => {
     // Derived from the exported sets rather than written out, so a second
     // orderable fact cannot arrive without a sentence. The PREFERRED table is a
@@ -219,7 +245,7 @@ describe("whyThisOffer", () => {
     // catches one filled in with an empty string to keep the compiler quiet.
     for (const direction of RANK_DIRECTIONS) {
       for (const by of RANK_FIELDS) {
-        const p = whyThisOffer({ by, direction });
+        const p = whyThisOffer({ by, direction }, 4);
         expect(p?.raw, `${by} ${direction} has to be readable by this build`).toBeUndefined();
         expect(p?.sentence, `${by} ${direction} needs a sentence of its own`).toBeTruthy();
       }

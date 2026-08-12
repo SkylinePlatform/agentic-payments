@@ -259,15 +259,23 @@ func (t Trigger) Known() bool {
 // merchant offer something it does not sell, and it cannot introduce a candidate
 // the constraints did not describe.
 //
-// **What it can do is pick a different authorised offer**, and that is a real
-// cost rather than nothing. The bound is the same shape as Trigger's: the run
-// buys something the user approved but might not have chosen, which is a cost a
-// *reader* can catch, and is why the answer travels to the consent screen beside
-// the limits — see agent.Proposal.Rank and console's proposed.Rank, which is
-// where Trigger already goes. The screen shows the preference next to every
-// candidate the search found, so the claim "this one, because it is the cheapest"
-// is checkable by the person about to sign rather than something only the agent
-// knows.
+// **What it can do is pick a different authorised offer, or none at all**, and both
+// are real costs rather than nothing. The bound is the same shape as Trigger's. The
+// run buys something the user approved but might not have chosen — or, for a
+// descending preference over a shelf straddling the cap, selects the dearest
+// candidate and collects a visible refusal where a rankless run would have bought.
+// agent.ranked records that second case and why the remedy for it is forbidden:
+// skipping candidates over the cap is the agent evaluating the user's limit.
+//
+// Both are costs a *reader* can catch, which is why the answer travels to the consent
+// screen beside the limits — see agent.Proposal.Rank and console's proposed.Rank,
+// which is where Trigger already goes. The screen states the preference and how many
+// candidates it chose among — "the cheapest of the 4 offers that matched what you
+// asked for" — so it is something the person about to sign is told rather than
+// something only the agent knows. **The candidates themselves are not on that
+// screen**, and the review of this branch is what caught an earlier draft saying they
+// were: the console's product table is swapped out for the consent zone, so the count
+// is what can be delivered beside a signature and the list is not.
 //
 // **And signing it would be worse than not.** A mandate is a set of limits a
 // verifier enforces. Putting `prefer the cheapest` in one would add a sentence to

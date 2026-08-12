@@ -215,15 +215,23 @@ func TestRefusesToOrderOffersItCannotCompare(t *testing.T) {
 				"is not that this pair inverts — it is that whether any pair inverts is unknowable " +
 				"here, so a run that happened to be right would be right by luck",
 		},
-		// A price carrying no currency at all is the third case ranked refuses and
-		// it is deliberately not a row here: generated.Amount's own unmarshaller
-		// requires the field, so such an offer never survives the decode in
-		// candidates and this call fails one layer earlier, with "field currency in
-		// Amount: required". Driving it from here would be asserting that the
-		// canonical model validates itself. It is
-		// TestRankedRefusesOffersItCannotCompare's arm instead, where a candidate
-		// can be built in Go — and onePriceCurrency records why the check stays
-		// given that nothing on the wire can reach it.
+		{
+			name: "an offer the merchant published with no price at all",
+			// The `price` key omitted rather than `{"amount":100}` with the
+			// currency missing. That distinction is the whole row: the second
+			// fails inside generated.Amount's unmarshaller, which requires the
+			// field, so candidates reports "field currency in Amount: required"
+			// and ranked is never reached. **Omitting the key entirely never
+			// invokes that unmarshaller**, so this decodes clean and arrives at
+			// the comparison priced at nothing in nothing. The review of this
+			// branch is what found it; the first version of this test said the
+			// case was unreachable over the wire and left the row out.
+			shelf:    `{"offers":[{"id":"gtin:0001","title":"Priced","retailer":"A","price":{"amount":100,"currency":"USD"}},` + "\n" + `{"id":"gtin:0002","title":"No price","retailer":"B"}]}`,
+			mentions: "gtin:0002",
+			why: "an unnamed currency passes a uniformity check against another unnamed one, " +
+				"which is the same trap with the label missing rather than differing — and this " +
+				"is the one refusal that can name the offer at fault, because one of them is",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -299,6 +307,38 @@ func TestOneOfferIsRankableWhateverItsCurrency(t *testing.T) {
 		"one offer is the cheapest offer, and a currency this repository does not ship is not "+
 			"a reason to refuse a comparison nobody has to make")
 	assert.Equal(t, "gtin:0001", got.Item, "the one candidate there was")
+}
+
+// TestACallerNamedItemIsNotReportedAsAPreference is the half of that precedence a
+// screen sees, and it is the finding the review of this branch turned up.
+//
+// settle does not rank when the caller named an item, so nothing was chosen by
+// preference. Reporting the sentence's rank anyway put "the cheapest of the offers
+// that matched" on a consent screen for an offer the person had picked by hand out of
+// #109's product table — a false account of a real choice, which is worse than no
+// account. The prompt below does carry a preference, so this drives the interaction
+// rather than a rankless path that would pass whatever Propose reported.
+func TestACallerNamedItemIsNotReportedAsAPreference(t *testing.T) {
+	t.Parallel()
+
+	client := &agent.Client{Endpoints: agent.Endpoints{
+		Surface: unreachableSurface(t),
+		Merchant: merchantReturning(t, `{"offers":[
+			{"id":"gtin:0001","title":"The offer the person clicked","retailer":"A","price":{"amount":50000,"currency":"USD"}}
+		]}`),
+	}}
+
+	got, err := client.Propose(t.Context(), agent.Intent{
+		Prompt:      ladderPrompt,
+		Interpreter: interpret.Demo(),
+		Item:        "gtin:0001",
+	})
+	require.NoError(t, err, "a caller-named item the merchant confirms has to produce a proposal")
+
+	assert.Equal(t, "gtin:0001", got.Item, "the offer the caller named, unchanged")
+	assert.False(t, got.Rank.Stated(),
+		"the preference was not applied, so a screen must not be handed one to explain a "+
+			"choice the person made themselves")
 }
 
 // The two preferences this agent cannot apply — a field or a direction nobody

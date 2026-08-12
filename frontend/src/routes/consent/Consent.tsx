@@ -55,8 +55,15 @@ import { Signing } from "./Signing";
  *    asked whether it was the one the buyer would have preferred, because the
  *    question is about the offers it was not asked about. So it cannot be a
  *    constraint, and zone 2 has nothing in it about how this offer was picked
- *    out of the list the console's product table is showing. Drawn only when
- *    the sentence named a preference, which is not most sentences.
+ *    out of the several the search returned. Drawn only when the sentence named
+ *    a preference, which is not most sentences.
+ *
+ *    **It states the number of candidates because the list of them is not on
+ *    this screen**, which the review of #262 caught an earlier draft getting
+ *    wrong. `Buying.tsx` swaps the console out for this zone, so the product
+ *    table showing every offer is gone by the time this is read — "the cheapest
+ *    of 4 offers that matched" is what can honestly be delivered here, and
+ *    pointing at a table on the previous screen is not.
  * 6. **What the identifier refers to** — the merchant's own words, outside the
  *    signed box. `Render()` produces `the item is gtin:05014477390221`, which
  *    is the identifier the constraint carries and the merchant evaluates, so
@@ -175,7 +182,7 @@ export function Consent({
   const buying = whenItBuys(proposal.trigger);
   // undefined when the sentence named no preference, which is what the zone below
   // renders nothing for. See whyThisOffer.
-  const preference = whyThisOffer(proposal.rank);
+  const preference = whyThisOffer(proposal.rank, (proposal.offers ?? [proposal.offer]).length);
 
   if (previewError !== null) {
     return (

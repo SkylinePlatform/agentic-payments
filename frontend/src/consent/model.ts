@@ -271,14 +271,27 @@ export type Preference =
   | { readonly sentence: string; readonly raw?: undefined }
   | { readonly sentence: string; readonly raw: string };
 
-/** The sentences, keyed by the agent's own words for a field and a direction. */
-const PREFERRED: Record<RankField, Record<RankDirection, string>> = {
+/**
+ * The sentences, keyed by the agent's own words for a field and a direction, each
+ * taking the number of candidates it chose among.
+ *
+ * **The count is in the sentence because the candidate list is not on this screen**,
+ * and the review of #262 is what caught the difference. `routes/buying/Buying.tsx`
+ * swaps the console out for this zone when the stage becomes `consent`, so the
+ * product table that shows every offer is *gone* by the time a person reads this —
+ * an earlier draft of the argument for why a rank need not be signed said the
+ * preference travels "beside every candidate the search found", and it does not.
+ * "The cheapest of 4 offers that matched" is what can honestly be delivered here: it
+ * makes the claim concrete and falsifiable-in-principle rather than gesturing at a
+ * table on the previous screen.
+ */
+const PREFERRED: Record<RankField, Record<RankDirection, (n: number) => string>> = {
   price: {
     // "Of the offers that matched" rather than "of all offers": the agent ranks the
     // candidates one merchant answered with, and this screen must not imply it
-    // searched a market. `offers` is on the same screen for a reader to count.
-    ascending: "The cheapest of the offers that matched what you asked for.",
-    descending: "The most expensive of the offers that matched what you asked for.",
+    // searched a market.
+    ascending: (n) => `The cheapest of the ${n} offers that matched what you asked for.`,
+    descending: (n) => `The most expensive of the ${n} offers that matched what you asked for.`,
   },
 };
 
@@ -291,7 +304,10 @@ const PREFERRED: Record<RankField, Record<RankDirection, string>> = {
  * - **No preference.** `undefined` in, `undefined` out. The sentence ranked nothing
  *   and the merchant's own order chose; there is nothing to draw and nothing to warn
  *   about.
- * - **A preference this build knows.** A sentence, with `raw` absent.
+ * - **A preference this build knows.** A sentence naming how many candidates it chose
+ *   among, with `raw` absent. `candidates` is `proposal.offers.length` — see
+ *   {@link PREFERRED} for why the number is in the sentence rather than left to a
+ *   table that is not on this screen.
  * - **A preference it does not.** A sentence saying so, and `raw` carrying the words
  *   for a reader to see — the agent grew a second orderable fact and this bundle
  *   predates it.
@@ -307,7 +323,10 @@ const PREFERRED: Record<RankField, Record<RankDirection, string>> = {
  * a missing explanation for a purchase the screen fully describes, and every
  * preference is applied among offers the constraints already authorise.
  */
-export function whyThisOffer(rank: Rank | undefined): Preference | undefined {
+export function whyThisOffer(
+  rank: Rank | undefined,
+  candidates: number,
+): Preference | undefined {
   if (rank === undefined) {
     return undefined;
   }
@@ -315,7 +334,19 @@ export function whyThisOffer(rank: Rank | undefined): Preference | undefined {
     (RANK_FIELDS as readonly string[]).includes(rank.by) &&
     (RANK_DIRECTIONS as readonly string[]).includes(rank.direction)
   ) {
-    return { sentence: PREFERRED[rank.by as RankField][rank.direction as RankDirection] };
+    // One candidate is the case `make demo` actually shows, and the preference
+    // decided nothing in it: the ladders sentence says *cheapest* and the committed
+    // catalogue holds exactly one ladder. "The cheapest of the 1 offers that
+    // matched" is both bad English and a claim about a comparison that did not
+    // happen, so this says what is true instead. Zero is unreachable — the agent
+    // refuses ErrNothingToBuy rather than proposing — and takes the same arm rather
+    // than a third.
+    if (candidates <= 1) {
+      return { sentence: "The only offer that matched what you asked for." };
+    }
+    return {
+      sentence: PREFERRED[rank.by as RankField][rank.direction as RankDirection](candidates),
+    };
   }
   return {
     sentence: "This console does not recognise what the agent said about which offer it preferred.",

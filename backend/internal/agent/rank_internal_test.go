@@ -90,11 +90,15 @@ func TestRankedRefusesAPreferenceItCannotApply(t *testing.T) {
 //
 // Two currencies is driven through Client.Propose by
 // TestRefusesToOrderOffersItCannotCompare, which is where it belongs — it is a shelf
-// somebody could really configure. **A price with no currency at all cannot be**:
-// generated.Amount requires the field, so candidates fails the decode with "field
-// currency in Amount: required" before ranked is called. That leaves exactly one way
-// to reach the arm, which is to build a candidate in Go, and it is why this row is
-// here rather than beside the other one.
+// somebody could really configure — and so is an offer published with no `price` key
+// at all, which decodes clean and reaches the comparison priced at nothing.
+//
+// **What only this file can reach is a price that carries an amount and no currency**
+// — `{"amount":100}` — because generated.Amount requires the field and candidates
+// fails the decode with "field currency in Amount: required" before ranked is called.
+// Building the candidate in Go is the only way past that, so the arm lives here.
+// onePriceCurrency records both halves and which one the review of this branch found
+// the comment getting wrong.
 func TestRankedRefusesOffersItCannotCompare(t *testing.T) {
 	t.Parallel()
 
