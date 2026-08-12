@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { Table } from "../../catalogue/Table";
+import { withQuantity } from "../../catalogue/quantity";
 import { fetchExamples, propose } from "../../consent/client";
 import type { Proposal } from "../../consent/model";
 import { Tracker } from "../../tracker/Tracker";
@@ -85,6 +86,8 @@ export function Console({
   // What #109 replaces the immediate navigation with: the proposal stays on
   // screen, as a table, until a row is bought.
   const [proposal, setProposal] = useState<Proposal | null>(null);
+  // The offer a second POST /proposals is being asked for, or null — see `choose`.
+  const [choosing, setChoosing] = useState<string | null>(null);
 
   useEffect(() => {
     // Not cancelled on unmount: this component is mounted afresh each time
@@ -127,6 +130,44 @@ export function Console({
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setPending(false);
+    }
+  }
+
+  /**
+   * Turns a picked row into something signable — issue #298.
+   *
+   * The row the search settled on is already pinned: `agent.narrow` appended
+   * `item.id eq proposal.item` before this screen saw the constraints, so that one
+   * needs no second call and gets none. **Any other row does**, because the
+   * proposal in hand names a different identifier and signing it would authorise
+   * an offer nobody clicked.
+   *
+   * `propose(prompt, id)` is the same endpoint the first call used, with the
+   * argument it has always accepted — so the second proposal is the agent's own
+   * work, interpreted from the same sentence, and the browser supplies no
+   * constraints in either direction. `internal/agent/rank.go` is what makes the
+   * two agree: a caller-named item beats a preference the sentence stated, so a
+   * "cheapest" that chose row one cannot quietly re-choose it here.
+   *
+   * A failure leaves the table exactly as it was and puts the agent's sentence in
+   * the error line. Nothing is signed on this path, so there is nothing to undo.
+   */
+  async function choose(offerID: string, quantity: number) {
+    if (proposal === null) return;
+    if (offerID === proposal.item) {
+      onBuy(withQuantity(proposal, quantity));
+      return;
+    }
+
+    setChoosing(offerID);
+    setError(null);
+    try {
+      const picked: Proposal = await propose(prompt, offerID);
+      onBuy(withQuantity(picked, quantity));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChoosing(null);
     }
   }
 
@@ -248,7 +289,7 @@ export function Console({
           <h2 className="font-display text-sm font-medium uppercase tracking-widest text-ink">
             What the merchant sells
           </h2>
-          <Table proposal={proposal} onBuy={onBuy} />
+          <Table proposal={proposal} onChoose={choose} choosing={choosing} />
         </div>
       )}
 

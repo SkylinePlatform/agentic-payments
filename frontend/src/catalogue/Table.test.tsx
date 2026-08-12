@@ -37,7 +37,7 @@ function aProposal(overrides: Partial<Proposal> = {}): Proposal {
 
 describe("the product table", () => {
   it("shows what the merchant published for each offer the search found", () => {
-    render(<Table proposal={aProposal()} onBuy={() => {}} />);
+    render(<Table proposal={aProposal()} onChoose={vi.fn()} choosing={null} />);
 
     expect(screen.getByText("Bicycle")).toBeTruthy();
     expect(screen.getByText("Two Wheels Ltd")).toBeTruthy();
@@ -50,7 +50,11 @@ describe("the product table", () => {
   it("renders one row per offer the search found, not only the one settled on", () => {
     const other = anOffer({ id: "gtin:0002", title: "A different bicycle" });
     render(
-      <Table proposal={aProposal({ offers: [anOffer(), other] })} onBuy={() => {}} />,
+      <Table
+        proposal={aProposal({ offers: [anOffer(), other] })}
+        onChoose={vi.fn()}
+        choosing={null}
+      />,
     );
 
     expect(screen.getByText("Bicycle")).toBeTruthy();
@@ -59,123 +63,141 @@ describe("the product table", () => {
 
   it("falls back to the single settled offer when the search list is absent", () => {
     const { offers: _offers, ...withoutOffers } = aProposal();
-    render(<Table proposal={withoutOffers as Proposal} onBuy={() => {}} />);
+    render(<Table proposal={withoutOffers as Proposal} onChoose={vi.fn()} choosing={null} />);
 
     expect(screen.getByText("Bicycle")).toBeTruthy();
   });
 
-  it("signs an open mandate for a quantity typed into the row, appended as a constraint, and hands it to onBuy", async () => {
-    const onBuy = vi.fn();
-    const proposal = aProposal();
-    render(<Table proposal={proposal} onBuy={onBuy} />);
+  it("reports the offer and the quantity a row was bought at, rather than building a proposal", async () => {
+    const onChoose = vi.fn();
+    render(<Table proposal={aProposal()} onChoose={onChoose} choosing={null} />);
 
     const quantityBox = screen.getByLabelText(/quantity/i);
     await userEvent.clear(quantityBox);
     await userEvent.type(quantityBox, "3");
     await userEvent.click(screen.getByRole("button", { name: /buy/i }));
 
-    expect(onBuy).toHaveBeenCalledTimes(1);
-    const [sent] = onBuy.mock.calls[0] as [Proposal];
+    expect(onChoose).toHaveBeenCalledTimes(1);
     expect(
-      sent.constraints,
-      "the interpreter's own constraint stays, with the chosen quantity appended — never a selection made outside what gets signed",
-    ).toEqual([...proposal.constraints, { op: "lte", field: "quantity", value: 3 }]);
-    expect(sent.quantity, "so Signing.tsx buys three rather than the hardcoded one").toBe(3);
+      onChoose.mock.calls[0],
+      "which offer and how many is all this component knows; turning that into something signable needs the prompt, which only the console holds",
+    ).toEqual(["gtin:05012345678900", 3]);
   });
 
   it("defaults the quantity to one when the row is bought without being touched", async () => {
-    const onBuy = vi.fn();
-    render(<Table proposal={aProposal()} onBuy={onBuy} />);
+    const onChoose = vi.fn();
+    render(<Table proposal={aProposal()} onChoose={onChoose} choosing={null} />);
 
     await userEvent.click(screen.getByRole("button", { name: /buy/i }));
 
-    const [sent] = onBuy.mock.calls[0] as [Proposal];
-    expect(sent.quantity).toBe(1);
+    expect(onChoose.mock.calls[0]?.[1]).toBe(1);
   });
 
-  it("disables buying a row the proposal did not settle on, rather than signing a mismatched item", async () => {
-    // Unreachable against today's catalogue — every scripted sentence narrows
-    // to exactly one candidate — but #160 widens it, and proposal.constraints
-    // is already committed to proposal.item by agent.narrow. Buying a
-    // different row without a fresh proposal would sign a mandate naming one
-    // item while showing another.
+  it("lets a row the proposal did not settle on be bought, and says which one it was — issue #298", async () => {
+    // The reported symptom: a $369 offer under a stated $500 cap, drawn and
+    // refused, because `agent.narrow` had pinned the mandate to the row the
+    // search settled on. The pin is still right; what was missing is that
+    // picking another row asks for a proposal pinned to *that* one instead.
     const settled = anOffer();
-    // Titled so it cannot collide with the sentence the disabled row states —
-    // the offer's own name and the component's reason are two different
-    // strings, and a fixture that borrowed the wording made the query below
-    // match both.
     const other = anOffer({ id: "gtin:0002", title: "A bicycle the search did not settle on" });
-    const onBuy = vi.fn();
-    render(<Table proposal={aProposal({ offers: [settled, other] })} onBuy={onBuy} />);
+    const onChoose = vi.fn();
+    render(
+      <Table proposal={aProposal({ offers: [settled, other] })} onChoose={onChoose} choosing={null} />,
+    );
 
     const buyButtons = screen.getAllByRole("button", { name: /buy/i });
     expect(buyButtons).toHaveLength(2);
-    expect(buyButtons[1].hasAttribute("disabled")).toBe(true);
+    expect(
+      buyButtons.every((b) => !b.hasAttribute("disabled")),
+      "every row the search returned can be bought — being shown a shop and allowed one row of it is what #298 reported",
+    ).toBe(true);
 
     await userEvent.click(buyButtons[1]);
-    expect(onBuy).not.toHaveBeenCalled();
-
-    // The reason is on the screen, not in a `title`: a disabled button is not
-    // focusable, so a tooltip on one is reachable by neither keyboard nor
-    // screen reader, and the guard would read as a bug.
-    const reason = screen.getByText(/not what this search narrowed to/i);
     expect(
-      buyButtons[1].getAttribute("aria-describedby"),
-      "the disabled button names the sentence that explains it, so the reason is announced with the control rather than found by hunting",
-    ).toBe(reason.id);
-    expect(
-      buyButtons[0].hasAttribute("aria-describedby"),
-      "the buyable row carries no such reason, or every row would claim one",
-    ).toBe(false);
+      onChoose.mock.calls[0]?.[0],
+      "the identifier reported is the row that was clicked, or the console would re-propose the wrong offer",
+    ).toBe("gtin:0002");
   });
 
-  it("gives the ranked reason for a row that matched and lost on price — issue #262", async () => {
-    // The row above states the reason that was the only possible one while the
-    // narrowing was the only thing that could exclude a row. A sentence stating a
-    // preference settles on the cheapest of *several* offers that all matched the
-    // same narrowing, so "not what this search narrowed to" would tell a person the
-    // search excluded rows the search in fact returned — the wrong explanation for
-    // exactly the decision the consent screen's *Why this offer* zone exists to
-    // expose.
-    //
-    // The rank is read for its presence only: what it *said* is the consent
-    // screen's to render, and a second sentence about it here would be a second
-    // place for one fact to drift.
-    const settled = anOffer();
-    const dearer = anOffer({ id: "gtin:0002", title: "A ladder that cost more" });
+  it("states neither of the sentences that used to explain a disabled row", () => {
+    // Both explained a state that no longer exists. Kept as an assertion rather
+    // than deleted with the code, because a sentence that outlives its cause is
+    // this repository's most expensive recurring defect and these two are the
+    // ones a copy-paste would bring back.
     render(
       <Table
         proposal={aProposal({
-          offers: [settled, dearer],
+          offers: [anOffer(), anOffer({ id: "gtin:0002", title: "Another" })],
           rank: { by: "price", direction: "ascending" },
         })}
-        onBuy={vi.fn()}
+        onChoose={vi.fn()}
+        choosing={null}
+      />,
+    );
+
+    expect(screen.queryByText(/not what this search narrowed to/i)).toBeNull();
+    expect(screen.queryByText(/matched, but not the offer your sentence preferred/i)).toBeNull();
+  });
+
+  it("shows what the purchase comes to once more than one is asked for — issue #298", async () => {
+    // `amount` bounds the total: merchant.Catalogue.Subject is handed
+    // Price × Quantity. Three of a $450 offer under a $500 cap was a mandate
+    // that could only be refused, and it used to be signed first.
+    render(<Table proposal={aProposal()} onChoose={vi.fn()} choosing={null} />);
+
+    expect(
+      screen.queryByText(/×/),
+      "at one, the total and the price are the same number, and printing it twice would teach a reader they are different things",
+    ).toBeNull();
+
+    const quantityBox = screen.getByLabelText(/quantity/i);
+    await userEvent.clear(quantityBox);
+    await userEvent.type(quantityBox, "3");
+
+    expect(
+      screen.getByText(/3 × \$450\.00 = \$1,350\.00/),
+      "the number the verifier will compare against the cap, before anything is signed",
+    ).toBeTruthy();
+  });
+
+  it("goes inert while a proposal for one of its rows is in flight", () => {
+    const settled = anOffer();
+    const other = anOffer({ id: "gtin:0002", title: "Another" });
+    render(
+      <Table
+        proposal={aProposal({ offers: [settled, other] })}
+        onChoose={vi.fn()}
+        choosing="gtin:0002"
       />,
     );
 
     const buyButtons = screen.getAllByRole("button", { name: /buy/i });
-    const reason = screen.getByText(/matched, but not the offer your sentence preferred/i);
     expect(
-      buyButtons[1].getAttribute("aria-describedby"),
-      "the disabled row names its own reason, and this row's reason is the preference",
-    ).toBe(reason.id);
+      buyButtons.every((b) => b.hasAttribute("disabled")),
+      "a second click is a second proposal, and the second would land on a screen the first is about to replace",
+    ).toBe(true);
     expect(
-      screen.queryByText(/not what this search narrowed to/i),
-      "the search did narrow to this row — it returned it — so that sentence is false here",
-    ).toBeNull();
+      screen.getByRole("status").textContent,
+      "the busy row says so in a polite live region, so the click is announced rather than only dimmed",
+    ).toMatch(/asking the agent/i);
   });
 
   it("shows whether a price can still move, so a row not yet worth its cap still reads as one worth watching", () => {
     render(
       <Table
         proposal={aProposal({ offers: [anOffer({ step: 0, final: false })] })}
-        onBuy={() => {}}
+        onChoose={vi.fn()}
+        choosing={null}
       />,
     );
     expect(screen.getByText(/may still change/i)).toBeTruthy();
 
     render(
-      <Table proposal={aProposal({ offers: [anOffer({ step: 2, final: true })] })} onBuy={() => {}} />,
+      <Table
+        proposal={aProposal({ offers: [anOffer({ step: 2, final: true })] })}
+        onChoose={vi.fn()}
+        choosing={null}
+      />,
     );
     expect(screen.getByText(/final price/i)).toBeTruthy();
   });

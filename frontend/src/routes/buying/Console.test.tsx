@@ -274,4 +274,76 @@ describe("the shopping console", () => {
     await screen.findByRole("textbox");
     expect(screen.queryByTestId("refusal-acknowledgement")).toBeNull();
   });
+
+  it("asks for a fresh proposal pinned to a row the search did not settle on — issue #298", async () => {
+    // The load-bearing half of #298. Making every row buyable is a one-word
+    // change in `Table`; what makes it *correct* is that a click on an unchosen
+    // row does not sign the proposal in hand. That one carries
+    // `item.id eq <the settled offer>`, appended by `agent.narrow` before this
+    // screen ever saw it, so signing it for a different row would authorise an
+    // offer nobody clicked.
+    //
+    // Body-aware rather than keyed on the path, because both calls are POST
+    // /proposals and the whole claim is about what is *in* them: the first
+    // names no item, the second names the row that was clicked.
+    const settled = {
+      id: "gtin:05014477390221",
+      title: "Telescopic ladder",
+      description: "",
+      image_url: "",
+      retailer: "",
+      price: { amount: 5000, currency: "USD" },
+    };
+    const other = { ...settled, id: "gtin:0002", title: "A dearer ladder" };
+    const first: Proposal = { ...aProposal(), offers: [settled, other] };
+    const second: Proposal = { ...first, item: other.id, offer: other };
+
+    const sent: unknown[] = [];
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      if (url === "/watches") return Promise.resolve(new Response(JSON.stringify({ watches: [] })));
+      if (url === "/examples") return Promise.resolve(new Response(JSON.stringify({ examples: [] })));
+      if (url !== "/proposals") return Promise.resolve(new Response("not stubbed: " + url, { status: 404 }));
+      const body = JSON.parse(String(init?.body ?? "{}")) as { item?: string };
+      sent.push(body);
+      return Promise.resolve(new Response(JSON.stringify(body.item === undefined ? first : second)));
+    });
+
+    renderConsole();
+    await userEvent.type(await screen.findByRole("textbox"), "two ladders");
+    await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
+
+    const buyButtons = await screen.findAllByRole("button", { name: /buy/i });
+    await userEvent.click(buyButtons[1]);
+
+    await waitFor(() => expect(bought).toHaveLength(1));
+    expect(
+      (sent[1] as { item?: string }).item,
+      "the second call names the row that was clicked, or the agent would pin the mandate to the one the search chose",
+    ).toBe("gtin:0002");
+    expect(
+      bought[0].item,
+      "what is handed to the surface is the agent's own second proposal, so the identifier inside the signed box is the offer on the row",
+    ).toBe("gtin:0002");
+  });
+
+  it("signs the proposal already in hand when the row bought is the one it settled on", async () => {
+    // The other side of the same rule: that row is already pinned to itself, so
+    // asking again would be a round trip that can only return what is here.
+    const calls: unknown[] = [];
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      if (url === "/watches") return Promise.resolve(new Response(JSON.stringify({ watches: [] })));
+      if (url === "/examples") return Promise.resolve(new Response(JSON.stringify({ examples: [] })));
+      if (url !== "/proposals") return Promise.resolve(new Response("not stubbed: " + url, { status: 404 }));
+      calls.push(JSON.parse(String(init?.body ?? "{}")));
+      return Promise.resolve(new Response(JSON.stringify(aProposal())));
+    });
+
+    renderConsole();
+    await userEvent.type(await screen.findByRole("textbox"), "one ladder");
+    await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /buy/i }));
+
+    await waitFor(() => expect(bought).toHaveLength(1));
+    expect(calls, "one proposal, not two — the row was already the pinned one").toHaveLength(1);
+  });
 });

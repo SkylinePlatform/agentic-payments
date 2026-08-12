@@ -2,7 +2,6 @@ import { useId, useState } from "react";
 
 import type { Offer, Proposal } from "../consent/model";
 import { formatAmount } from "../protocol";
-import { withQuantity } from "./quantity";
 
 /**
  * The product table — #109's second slice.
@@ -15,33 +14,57 @@ import { withQuantity } from "./quantity";
  * own account of the same catalogue from the consent screen's side. Built over
  * the array regardless, so nothing here has to change when #160 widens it.
  *
- * **Only the row the proposal settled on can be bought.**
- * `agent.narrow` already appended `item.id eq proposal.item` to
- * `proposal.constraints` before this component ever saw them, so a click on a
- * *different* row would sign a mandate naming one item while the screen showed
- * another — the console duplicating a decision that belongs to a fresh
- * `POST /proposals {item}` it does not make here. It is drawn anyway, disabled, so
- * a wider catalogue makes the table honest by construction instead of by a review
- * nobody remembers to ask for.
+ * **Every row the search returned can be bought**, and issue #298 is why that is a
+ * change rather than how it always was. The rows were drawn from the start and all
+ * but one were disabled, because `agent.narrow` appends `item.id eq proposal.item`
+ * to `proposal.constraints` before this component ever sees them: a click on a
+ * *different* row would have signed a mandate naming one item while the screen
+ * showed another. The reported symptom was a person reading a $369 offer under a
+ * stated $500 cap and not being allowed to buy it — being shown a shop and allowed
+ * one row of it.
  *
- * **The disabled branch stopped being dead with issue #262, and the reason it gives
- * had to change with it.** It used to be reachable only in theory — every scripted
- * sentence narrowed to one candidate — so "Not what this search narrowed to." was
- * both the only possible explanation and an accurate one. A sentence that states a
- * preference now settles on the cheapest of *several* offers that all matched the
- * same narrowing, so under `make demo-live` a person can meet three ladders with two
- * of them greyed out, and the old sentence would tell them the search excluded rows
- * the search in fact returned — the wrong explanation for exactly the decision the
- * consent screen's *Why this offer* zone exists to expose. `Row` takes the reason as
- * a prop for that reason: which of the two is true is the caller's fact, not the
- * row's.
+ * **The fix was already designed and unused, and this comment used to name it.** It
+ * said the decision "belongs to a fresh `POST /proposals {item}`" — an endpoint that
+ * has always taken `item` (`internal/agent/console`'s `propose`), a client function
+ * that has always had the parameter, and a browser that never passed it. So a click
+ * on an unchosen row does not sign anything here: it asks the agent for a proposal
+ * pinned to *that* identifier, and what gets signed is what `narrow` put in it.
+ * `internal/agent/rank.go` already settles the precedence a preference would
+ * otherwise contest — a caller-named item beats one a sentence ranked, because a
+ * preference read out of a sentence must not overrule a choice made by a person.
+ *
+ * **This component therefore reports a choice rather than building a proposal.**
+ * `onChoose` takes an identifier and a count; turning those into something signable
+ * is the console's, because only it holds the prompt the second call needs. That is
+ * also why `unbuyableBecause` is gone rather than reworded: both of its sentences
+ * explained a state that no longer exists.
+ *
+ * **The line total is here for the other half of #298.** `amount` bounds the
+ * *total* — `merchant.Catalogue.Subject` is handed `Price × Quantity`, and that is
+ * the number a mandate's amount constraint is compared against — so three of a $450
+ * offer under a $500 cap is a mandate that was never going to succeed. It used to
+ * be signed first and refused afterwards. The row now shows what the purchase comes
+ * to before anything is signed. **It states the arithmetic and decides nothing:**
+ * no constraint is read, nothing is compared to a cap, and the verifier refuses
+ * exactly what it refused before.
  */
 export function Table({
   proposal,
-  onBuy,
+  onChoose,
+  choosing,
 }: {
   readonly proposal: Proposal;
-  readonly onBuy: (signed: Proposal) => void;
+  /** The row a person picked: which offer, and how many. */
+  readonly onChoose: (offerID: string, quantity: number) => void;
+  /**
+   * The offer a second `POST /proposals` is currently being asked for, or null.
+   *
+   * Every other row's controls go inert while one is in flight, for the reason
+   * `client.ts` gives about the Interpret button: a fresh idempotency key per
+   * click means two clicks are two proposals, and the second would land on a
+   * screen the first is about to replace.
+   */
+  readonly choosing: string | null;
 }) {
   const offers = proposal.offers ?? [proposal.offer];
 
@@ -70,34 +93,14 @@ export function Table({
           <Row
             key={offer.id}
             offer={offer}
-            buyable={offer.id === proposal.item}
-            unbuyableBecause={unbuyableBecause(proposal)}
-            onBuy={(quantity) => onBuy(withQuantity(proposal, quantity))}
+            busy={choosing === offer.id}
+            blocked={choosing !== null && choosing !== offer.id}
+            onBuy={(quantity) => onChoose(offer.id, quantity)}
           />
         ))}
       </tbody>
     </table>
   );
-}
-
-/**
- * Why every row but one is disabled, in the words that are true of this proposal.
- *
- * Two reasons and they are not interchangeable. Without a preference, the rows
- * present are the search's answer and the one that is buyable is the one the
- * narrowing settled on — so the search is the honest explanation. With a preference,
- * every row matched the same narrowing and lost on price, and saying the search
- * excluded them would be false about a list the search returned.
- *
- * It reads `rank` for its presence only, and deliberately not for its words: what a
- * preference *said* is the consent screen's to render — `whyThisOffer` — and a second
- * sentence about it here would be a second place for the same fact to drift. All this
- * needs to know is which of two explanations applies.
- */
-function unbuyableBecause(proposal: Proposal): string {
-  return proposal.rank === undefined
-    ? "Not what this search narrowed to."
-    : "Matched, but not the offer your sentence preferred.";
 }
 
 /** Parses what the quantity box holds into a purchasable count, never fewer than one. */
@@ -108,14 +111,15 @@ function parsedQuantity(raw: string): number {
 
 function Row({
   offer,
-  buyable,
-  unbuyableBecause,
+  busy,
+  blocked,
   onBuy,
 }: {
   readonly offer: Offer;
-  readonly buyable: boolean;
-  /** What to say when this row cannot be bought — see `unbuyableBecause`. */
-  readonly unbuyableBecause: string;
+  /** A proposal for this offer is in flight. */
+  readonly busy: boolean;
+  /** A proposal for some *other* offer is in flight, so this row waits. */
+  readonly blocked: boolean;
   readonly onBuy: (quantity: number) => void;
 }) {
   // The box's own text, not the parsed number: a controlled input that
@@ -124,7 +128,9 @@ function Row({
   // typed, and parsedQuantity is only asked what that means at Buy.
   const [raw, setRaw] = useState("1");
   const quantityId = useId();
-  const reasonId = useId();
+
+  const quantity = parsedQuantity(raw);
+  const inert = busy || blocked;
 
   return (
     <tr className="border-b border-graphite/40 align-top">
@@ -143,7 +149,20 @@ function Row({
         )}
       </td>
       <td className="py-3 pr-3 font-sans text-graphite">{offer.retailer}</td>
-      <td className="py-3 pr-3 font-sans text-ink">{formatAmount(offer.price)}</td>
+      <td className="py-3 pr-3 font-sans text-ink">
+        {formatAmount(offer.price)}
+        {/*
+          Only once there is more than one, because at a quantity of one the
+          total and the price are the same number and printing it twice would
+          teach a reader that they are different things.
+        */}
+        {quantity > 1 && (
+          <span className="mt-1 block font-sans text-xs text-graphite">
+            {quantity} × {formatAmount(offer.price)} ={" "}
+            {formatAmount({ ...offer.price, amount: offer.price.amount * quantity })}
+          </span>
+        )}
+      </td>
       <td className="py-3 pr-3">
         <label htmlFor={quantityId} className="sr-only">
           Quantity of {offer.title}
@@ -154,7 +173,7 @@ function Row({
           min={1}
           step={1}
           value={raw}
-          disabled={!buyable}
+          disabled={inert}
           onChange={(event) => setRaw(event.target.value)}
           className="w-16 border border-graphite/40 bg-paper px-2 py-1 font-sans text-sm text-ink disabled:opacity-50"
         />
@@ -162,25 +181,26 @@ function Row({
       <td className="py-3">
         <button
           type="button"
-          disabled={!buyable}
-          aria-describedby={buyable ? undefined : reasonId}
-          onClick={() => onBuy(parsedQuantity(raw))}
+          disabled={inert}
+          onClick={() => onBuy(quantity)}
           className="border border-ink px-3 py-1.5 font-sans text-sm text-ink hover:bg-ink hover:text-paper disabled:cursor-not-allowed disabled:opacity-40"
         >
           Buy
         </button>
         {/*
-          Visible text rather than a `title`, and that is the whole point of
-          drawing the disabled branch at all. A disabled button is not
-          focusable, so a tooltip on one cannot be reached by keyboard and is
-          announced by nothing — the reason would exist in the markup and
-          nowhere a reader is. When #160 widens the catalogue this row is the
-          first thing somebody meets, and "the button is greyed out" without a
-          reason reads as a bug rather than as the guard it is.
+          `role="status"` — a polite live region — for the reason Signing.tsx
+          gives about the same choice: it announces the line itself when it
+          appears, so a screen-reader user is told the click was taken without
+          having been focused here when it was. Progress is polite; an outcome
+          would be `role="alert"`.
+
+          Only the busy row says anything. A blocked row's button is dim and its
+          own state is unremarkable — one sentence per screen is the honest
+          count when only one thing is happening.
         */}
-        {!buyable && (
-          <p id={reasonId} className="mt-1 font-sans text-xs text-graphite">
-            {unbuyableBecause}
+        {busy && (
+          <p role="status" className="mt-1 font-sans text-xs text-graphite">
+            Asking the agent for this one…
           </p>
         )}
       </td>
