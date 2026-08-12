@@ -45,6 +45,12 @@ type Run struct {
 	// no name, which is what it is. Nothing invents one: `gtin:05012345678900`
 	// substituted for a title would be the identifier wearing the name's
 	// clothes, and a screen has the identifier already.
+	//
+	// The third of those is the one with a control behind it rather than a
+	// circumstance: agent.maxTitle is what turns "answering nonsense" into an
+	// error Service.Start drops, and it refuses rather than truncates precisely
+	// so the answer arrives here as no name instead of as words the shop did not
+	// write.
 	title     string
 	quantity  int
 	expiresAt time.Time

@@ -108,7 +108,7 @@ transaction reads *Belgrade → Palma de Mallorca (oWnO9hZx)* — the name of th
 thing being bought, and beside it the correlation id — and the spine stays
 exactly where it was, at the size it was, on every attempt.
 
-Three decisions hold that together, and #183's ruling that agreement wins where
+Four decisions hold that together, and #183's ruling that agreement wins where
 the two compete is not disturbed by any of them, because they do not compete:
 one line per transaction at the top, one value per attempt in the middle.
 
@@ -129,6 +129,20 @@ one line per transaction at the top, one value per attempt in the middle.
   — a restarted agent, a merchant that could not be asked. The head falls back to
   *Transaction / <id>*. It never substitutes the item identifier, which is the
   string that started this complaint.
+- **A name is bounded before it is repeated, and it is bounded twice.** This is
+  the decision the other three create: a headline the merchant writes, on a page
+  that also shows signed mandates. `obs.maxIDLen` already makes the argument one
+  field along — an adopted correlation ID is capped "because an inbound header is
+  attacker-controlled and ends up in an SSE frame and a log line" — and a title
+  is the same kind of string in a much larger type. So `agent.maxTitle` caps its
+  *length* at 120 characters, nearly three times the longest name any catalogue
+  here ships, and **refuses rather than truncates**: an ellipsis would be the
+  agent putting words in the shop's mouth directly under a line saying these are
+  the shop's own words, where a refusal lands as the *no name* case above. And
+  because nothing can bound the *shape* of a name, the head wraps — one long word
+  inside the bound is still several times the column, and an `<h2>` that
+  overflows takes the whole document into a horizontal scroll, three-lane grid
+  included.
 
 **The repetition on the cards stays.** It is redundant *within* one attempt by
 construction — `split` in `lanes/model.ts` cuts a new attempt precisely when a

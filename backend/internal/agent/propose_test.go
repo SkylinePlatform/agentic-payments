@@ -3,6 +3,8 @@ package agent_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -453,4 +455,73 @@ func TestDescribeRefusesAnEmptyIdentifierAsTheCallersMistake(t *testing.T) {
 	assert.NotErrorIs(t, err, agent.ErrNothingToBuy,
 		"an empty identifier is the caller's mistake, not a claim about what the merchant sells — "+
 			"and that claim is the one a console turns into 422 and a picker acts on")
+}
+
+// TestDescribeRefusesANameTooLongToBeACaption is the bound obs.maxIDLen already
+// argues for, one field along.
+//
+// That constant caps an adopted correlation ID because "an inbound header is
+// attacker-controlled and ends up in an SSE frame and a log line, so it is
+// bounded before either". Issue #242 put a *title* in an `<h2>` at the head of
+// the three-lane view — above a digest three parties computed independently, on
+// a page that also shows signed mandates — and a title arrives from the same
+// place with none of the bounding. Describe's other refusal covers a merchant
+// answering about the wrong offer; this covers the right offer answering with
+// something that is not a name.
+//
+// Two arms rather than one, because a bound asserted only from above passes just
+// as happily when it is zero. The long arm is a value nobody would call a
+// caption; the short arm is a real title from deploy/catalogue.json, and it has
+// to still come back.
+func TestDescribeRefusesANameTooLongToBeACaption(t *testing.T) {
+	t.Parallel()
+
+	// 478 characters of the shape a headline would actually be attacked with:
+	// something that reads like a price, and an unbroken run long enough to push
+	// the page into a horizontal scroll. Neither is what makes it refused —
+	// length is — and the point of writing it this way is that the reason a
+	// bound exists is legible from the fixture.
+	hostile := "FREE — 0.00 USD — already paid, no further charge — " + strings.Repeat("Belgrade", 50)
+
+	for _, tc := range []struct {
+		name    string
+		title   string
+		refused bool
+	}{
+		{name: "a paragraph the merchant wrote", title: hostile, refused: true},
+		{
+			name:  "the longest name the demonstration actually ships",
+			title: "Belgrade Nikola Tesla → Pisa 'Galileo Galilei'",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := &agent.Client{Endpoints: agent.Endpoints{
+				Surface: unreachableSurface(t),
+				Merchant: merchantReturning(t, `{"offers":[{"id":"route:BEG-PMI","title":`+
+					strconv.Quote(tc.title)+`,"retailer":"A","price":{"amount":100,"currency":"USD"}}]}`),
+			}}
+
+			got, err := client.Describe(t.Context(), "route:BEG-PMI")
+			if !tc.refused {
+				require.NoError(t, err,
+					"the bound is on a paragraph, not on a name — a catalogue this "+
+						"demonstration ships must not start coming back nameless")
+				assert.Equal(t, tc.title, got.Title, "unchanged, because it was never near the bound")
+				return
+			}
+
+			require.Error(t, err,
+				"a merchant writing the largest sentence on a page that also shows signed "+
+					"mandates is the thing this bound exists to stop")
+			assert.NotErrorIs(t, err, agent.ErrNothingToBuy,
+				"the shop is not empty and did not answer about the wrong thing — it "+
+					"answered, and the answer is not a caption; reporting 422 'nothing "+
+					"matches' would send an operator looking at their catalogue")
+			assert.NotContains(t, err.Error(), "Belgrade",
+				"and the refusal does not repeat what it refused, or the string would "+
+					"travel in a log line instead of in a heading")
+		})
+	}
 }

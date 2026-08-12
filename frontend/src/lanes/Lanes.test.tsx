@@ -1201,7 +1201,41 @@ describe("the head of the transaction", () => {
         "never to assert it — and a name is the one thing here that cannot be " +
         "checked, so the screen has to name whose word it is",
     ).toMatch(/Shopping Agent/);
-    expect(said, "and say plainly that no signature covers it").toMatch(/signed/i);
+    // The negation, and it has to be asserted as one. `/signed/i` alone was
+    // what this line checked, and a provenance sentence rewritten to say the
+    // merchant *signed* the name passed it — the assertion matched the word it
+    // was there to deny. So: the denial in the shape the sentence makes it, and
+    // no claim anywhere in the paragraph that anything did sign.
+    expect(said, "and say plainly that no signature covers it").toMatch(/Nothing signed it/);
+    expect(
+      said,
+      "a name three parties did not compute must never be described as one " +
+        "anybody signed — this is the sentence standing between a merchant's " +
+        "words and the authority of the digest below them",
+    ).not.toMatch(/\b(is|was|were|are)\s+signed\b/i);
+  });
+
+  it("lets a name too wide for its column break rather than the page", () => {
+    // The one string on this screen a counterparty writes. `Describe` bounds
+    // its length at 120 characters; nothing can bound its *shape*, and a single
+    // 119-character word inside that bound is still four times this column.
+    // Without a wrap the `<h2>` overflows its own box and takes the whole
+    // document into a horizontal scroll — measured at scrollWidth 5520 against
+    // a 1905 viewport, three-lane grid and all.
+    //
+    // Asserted on the class, because jsdom lays nothing out — the same reason
+    // the spine's type scale is asserted that way one test down.
+    showingNamed(
+      [record({ kind: "mandate_verified", role: "merchant", digest: DIGEST })],
+      "Belgrade".repeat(14),
+    );
+
+    expect(
+      screen.getByRole("heading", { level: 2 }).className,
+      "break-words rather than break-all: a word breaks only when it cannot " +
+        "fit, so an ordinary product name is untouched and a hostile one " +
+        "cannot reach past its column",
+    ).toMatch(/\bbreak-words\b/);
   });
 
   it("keeps the digest at the size it had, one section down and still repeated", () => {

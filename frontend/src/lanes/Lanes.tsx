@@ -646,7 +646,24 @@ function TransactionHead({
 
   return (
     <header className="flex flex-col gap-1">
-      <h2 className="font-display text-2xl leading-tight tracking-tight text-ink">
+      {/*
+        `break-words` is the only thing in this component that is about a
+        merchant rather than about a design, and it is load-bearing. A name is
+        the one string on this screen a counterparty writes, and
+        `agent.Client.Describe` bounds its *length* — see maxTitle — but nothing
+        can bound the shape of it. One 119-character word inside the bound is
+        still four times the width of this column, and without this the `<h2>`
+        overflows its own box and puts the whole document into a horizontal
+        scroll, three-lane grid included. Measured: a 478-character run took
+        `document.scrollWidth` to 5520 against a 1905 viewport.
+
+        `break-words` and not `break-all`, which `inspector/Inspector.tsx` uses
+        for mandate blobs: that breaks every line at the edge regardless, which
+        is right for base64 and wrong for a product name. This one breaks a word
+        only when the word cannot fit, so a title that reads normally is
+        untouched.
+      */}
+      <h2 className="font-display text-2xl leading-tight tracking-tight break-words text-ink">
         {name}{" "}
         {/*
           The parentheses are prose and stay in the heading's own face; only the

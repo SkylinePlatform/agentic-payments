@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
@@ -721,6 +722,8 @@ func (c *Client) Discover(ctx context.Context, constraints []generated.Constrain
 // So a caller that draws this has to say whose word it is; a caller that
 // *decides* anything from it has misread what it is for, exactly as with
 // Offer itself.
+//
+// **And because nothing signs it, the answer is bounded here** — see maxTitle.
 func (c *Client) Describe(ctx context.Context, item string) (Offer, error) {
 	if item == "" {
 		// QuoteItem guards the same argument the same way. Without it the query
@@ -751,8 +754,46 @@ func (c *Client) Describe(ctx context.Context, item string) (Offer, error) {
 			"%w: %w: asked the merchant to describe the offer identified as %q and it answered with %q instead",
 			ErrMerchantAnsweredDifferently, ErrNothingToBuy, item, found[0].ID)
 	}
+	// The right offer can still answer with something that is not a name. See
+	// maxTitle: the identity check above cannot catch it, because the offer is
+	// the one that was asked about.
+	if n := utf8.RuneCountInString(found[0].Title); n > maxTitle {
+		return Offer{}, fmt.Errorf(
+			"agent: the merchant's name for %q is %d characters and a caption is bounded at %d",
+			item, n, maxTitle)
+	}
 	return Offer(found[0]), nil
 }
+
+// maxTitle is how long a name this call will repeat can be.
+//
+// **obs.maxIDLen's argument, one field along and one type size up.** That
+// constant bounds an adopted correlation ID on the recorded ground that "an
+// inbound header is attacker-controlled and ends up in an SSE frame and a log
+// line, so it is bounded before either" — and a title is the same kind of
+// string with more of a screen behind it. Issue #242 put it in an `<h2>` at the
+// head of the three-lane view, above a digest three parties computed
+// independently, so the merchant now writes the largest sentence on a page that
+// also shows signed mandates. Describe's other refusal covers a merchant
+// answering about the *wrong* offer; this one covers the right offer answering
+// with something that is not a name.
+//
+// It is a bound on *this agent's willingness to repeat*, not a claim about what
+// a shop may call its own stock. What sets the number is what a caption is: the
+// longest title deploy/catalogue.json ships is 46 characters and the longest of
+// the 194 in issue #160's wider snapshot is 41, so 120 is nearly three times the
+// longest real one and still refuses a paragraph. Runes rather than bytes,
+// because `Belgrade → Palma de Mallorca` is 28 characters and 30 bytes and the
+// bound is about what a person reads.
+//
+// **Refused rather than truncated, and that is the whole of the choice.** An
+// ellipsis would be this agent putting words in the shop's mouth under a line
+// that says these are the shop's own words — settle's rule, which Describe's own
+// comment quotes, forbidding exactly that. A refusal lands on console.Run.title
+// as no name, which is the state that type already documents for "a counterparty
+// answering nonsense" and which the screen already draws as the header it drew
+// before #242.
+const maxTitle = 120
 
 // identifying returns the constraints that say what to go looking for.
 //

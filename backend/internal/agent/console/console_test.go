@@ -1664,6 +1664,29 @@ func TestAWatchWhoseMerchantCouldNotBeAskedStillRuns(t *testing.T) {
 			"showing a title somebody would take for the merchant's")
 	assert.Equal(t, item, listed.Watches[0].Item,
 		"and the identifier is still there, because that one came from the authorisation")
+
+	// On the bytes, because a decode cannot tell an empty string from an absent
+	// field and summary.Title's own comment claims the difference is deliberate:
+	// `omitempty` is left off so a consumer distinguishes "no name" from "this
+	// build does not serve the field". Asserted through the decoded struct that
+	// claim was a comment nothing held — adding `omitempty` kept every test in
+	// this package green.
+	raw := body(t, server.URL+"/watches")
+	assert.Contains(t, raw, `"title":""`,
+		"served as an empty name rather than omitted, which is the distinction "+
+			"summary.Title says it is keeping")
+}
+
+// body is the raw bytes of a GET, for the one assertion that is about the wire
+// rather than about what a decode makes of it.
+func body(t *testing.T, url string) string {
+	t.Helper()
+
+	resp := doRequest(t, http.MethodGet, url, "", nil)
+	defer func() { _ = resp.Body.Close() }()
+	read, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	require.NoError(t, err, "reading the answer")
+	return string(read)
 }
 
 // TestTheNameIsAskedForRatherThanTakenFromTheBrowser is the reason Describe
