@@ -78,16 +78,23 @@ import (
 
 // Watcher is the agent this console drives.
 //
-// Four methods. Three of them are moments: Propose inside one request,
-// Authorise inside another, Watch in the goroutine that one leaves behind. The
-// fourth, Examples, is not a moment at all — it is a static lookup with
-// nothing to call it at, answered from whatever the interpreter was built
-// with. One port rather than a Proposer beside a Watcher: two fields would
-// allow a Service wired to propose from one agent and watch with another,
-// which is a state nobody wants and nothing would prevent.
+// Five methods. Three of them are moments: Propose inside one request,
+// Authorise inside another, Watch in the goroutine that one leaves behind.
+// Examples is not a moment at all — it is a static lookup with nothing to call
+// it at, answered from whatever the interpreter was built with. Describe is a
+// read of somebody else's catalogue with nothing of this agent's in it. One
+// port rather than a Proposer beside a Watcher: two fields would allow a
+// Service wired to propose from one agent and watch with another, which is a
+// state nobody wants and nothing would prevent.
 type Watcher interface {
 	// Propose reads the prompt and settles on an offer, signing nothing.
 	Propose(ctx context.Context, prompt, item string) (agent.Proposal, error)
+
+	// Describe asks the merchant what one offer is, so that a row can be named
+	// by something a person can read rather than by the identifier a constraint
+	// carries. See agent.Client.Describe, and note what it says about whose word
+	// the answer is: nothing signs a title and nothing ever will.
+	Describe(ctx context.Context, item string) (agent.Offer, error)
 
 	// Examples lists the sentences this agent's interpreter is scripted for,
 	// empty when it has none. A model-backed interpreter has no menu because
@@ -331,6 +338,30 @@ func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 		return nil, err
 	}
 
+	// The name, asked of the party that publishes it — issue #242. A console
+	// listing a watch has an identifier and no prompt, and
+	// `gtin:05012345678900` is the string a constraint carries rather than
+	// anything a person can act on.
+	//
+	// **Asked on both routes into this function, rather than carried on the
+	// authorisation.** A title on agent.Authorisation is the field this looks
+	// like it wants, and it is the wrong one: that type is also the wire shape a
+	// browser posts — see Watching.Authorisation — so the name would be one this
+	// console republished on the word of whoever made the request, and the two
+	// routes would then differ in who said it. One call answers both.
+	//
+	// **The error is dropped, and this is the only place in Start that drops
+	// one.** Every other call here is something the watch cannot proceed
+	// without; this one is a caption. Refusing a signature the user has already
+	// given because a shop's own words could not be fetched would be the tail
+	// wagging the dog — and the watch is about to poll that same merchant for
+	// the price, so a merchant that is really gone still ends the run, on the
+	// axis where that is a fact rather than a missing label.
+	var title string
+	if offer, describeErr := s.Watcher.Describe(ctx, auth.Item); describeErr == nil {
+		title = offer.Title
+	}
+
 	run := &Run{
 		id: id,
 		// From the context rather than minted here: under the handler it is the
@@ -342,6 +373,7 @@ func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 		typed:         in.Prompt,
 		signed:        append([]string(nil), auth.Rendered...),
 		item:          auth.Item,
+		title:         title,
 		quantity:      quantity,
 		expiresAt:     auth.ExpiresAt,
 		index:         make(map[string]int),

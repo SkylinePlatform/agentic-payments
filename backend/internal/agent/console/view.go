@@ -118,14 +118,31 @@ type examples struct {
 // summary is one row of GET /watches: enough for a reloaded console to redraw
 // its list, and no attempt detail.
 type summary struct {
-	ID            string    `json:"id"`
-	CorrelationID string    `json:"correlation_id"`
-	Typed         string    `json:"typed"`
-	Item          string    `json:"item"`
-	Quantity      int       `json:"quantity"`
-	ExpiresAt     time.Time `json:"expires_at"`
-	State         string    `json:"state"`
-	Attempts      int       `json:"attempts"`
+	ID            string `json:"id"`
+	CorrelationID string `json:"correlation_id"`
+	Typed         string `json:"typed"`
+	Item          string `json:"item"`
+
+	// Title is the merchant's own name for Item — issue #242's field, and the
+	// one thing on this response that no signature covers and none ever will.
+	//
+	// It sits beside Item rather than replacing it, and both travel because they
+	// answer different questions: Item is what the constraints were narrowed to
+	// and is checkable against the mandates, and Title is what a person calls
+	// it. A consumer that decided anything from this string would be deciding
+	// from a caption; agent.Offer's own comment is that no verifier sees a title
+	// and no constraint addresses one, and this field inherits that whole.
+	//
+	// `omitempty` is deliberately absent. A run whose merchant could not be
+	// asked answers `"title": ""`, which is the honest shape — a consumer then
+	// distinguishes "no name" from "this field is not served by this build"
+	// without having to know which release it is talking to.
+	Title string `json:"title"`
+
+	Quantity  int       `json:"quantity"`
+	ExpiresAt time.Time `json:"expires_at"`
+	State     string    `json:"state"`
+	Attempts  int       `json:"attempts"`
 }
 
 // view is the whole of GET /watches/{id}, which is the endpoint a console polls.
@@ -144,7 +161,10 @@ type view struct {
 	Typed         string   `json:"typed"`
 	Signed        []string `json:"signed"`
 
-	Item      string    `json:"item"`
+	Item string `json:"item"`
+	// Title is summary.Title, on this response for the same reason and with the
+	// same caveat: a name nothing signs, beside the identifier that is checkable.
+	Title     string    `json:"title"`
 	Quantity  int       `json:"quantity"`
 	ExpiresAt time.Time `json:"expires_at"`
 
@@ -313,6 +333,7 @@ func (r *Run) summary() summary {
 		CorrelationID: r.correlationID,
 		Typed:         r.typed,
 		Item:          r.item,
+		Title:         r.title,
 		Quantity:      r.quantity,
 		ExpiresAt:     r.expiresAt,
 		State:         r.state.String(),
@@ -331,6 +352,7 @@ func (r *Run) view() view {
 		Typed:         r.typed,
 		Signed:        sentences(r.signed),
 		Item:          r.item,
+		Title:         r.title,
 		Quantity:      r.quantity,
 		ExpiresAt:     r.expiresAt,
 		State:         r.state.String(),

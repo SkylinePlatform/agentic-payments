@@ -42,6 +42,13 @@ function showing(records: readonly EventRecord[]) {
   return render(<Lanes transaction={transaction} />);
 }
 
+/** The same, with the agent's console having a name for what was bought. */
+function showingNamed(records: readonly EventRecord[], name: string) {
+  seq = 0;
+  const [transaction] = group(records);
+  return render(<Lanes transaction={transaction} name={name} />);
+}
+
 /**
  * Every mark on the screen, in the order it is drawn.
  *
@@ -1133,5 +1140,184 @@ describe("the lanes show sentences and render none", () => {
     expect(reached, "a renderer two hops away is still a renderer on this screen").toEqual([
       "constraint/render.ts",
     ]);
+  });
+});
+
+/**
+ * The head of the screen, and what a reader who has just arrived is asking.
+ *
+ * Issue #242, reported twice off live runs: `UWu8gU3ruQ4D` at `text-2xl`,
+ * centred, was the largest thing on the page, and to somebody who does not know
+ * what a checkout hash is it is twelve random characters where a headline
+ * should be.
+ *
+ * The resolution is about what a headline is *for*. Orienting comes first — the
+ * name, and beside it the identifier a person could quote when asking for help
+ * — and the proof stays one section down at the size it had, on every attempt,
+ * still comparable by eye against the twelve characters on each card. #183's
+ * ruling that agreement wins where the two compete is not disturbed by this,
+ * because they do not compete: one is per transaction at the top, the other is
+ * per attempt in the middle.
+ *
+ * **The name is the half of this screen that is asserted rather than proved**,
+ * and every test below is really about that. It is the merchant's own words,
+ * relayed by the Shopping Agent's console, signed by nobody and checkable
+ * against nothing — `agent.Offer` says no verifier sees a title and no
+ * constraint addresses one. So the screen has to say so, in the place it says
+ * it, or the largest thing on the page goes from something nobody has to be
+ * trusted for to something that rests entirely on the shop's word.
+ */
+describe("the head of the transaction", () => {
+  it("leads with the name and puts the identifier beside it", () => {
+    showingNamed([record({ kind: "mandate_verified", role: "merchant", digest: DIGEST })],
+      "Vitesse Urbain 7");
+
+    const head = screen.getByRole("heading", { level: 2 });
+    expect(
+      head.textContent,
+      "'what am I looking at' is the question a reader arrives with, and a digest " +
+        "answers a different one",
+    ).toBe("Vitesse Urbain 7 (c-1a2b3c)");
+    expect(
+      within(head).getByText("c-1a2b3c").tagName,
+      "the correlation id is code-like and keeps the mono face; a product name is " +
+        "not and does not",
+    ).toBe("CODE");
+    expect(
+      head.className,
+      "and the heading itself is not mono — src/architecture.test.ts holds that " +
+        "for every heading, and this is the one it would be most tempting to break",
+    ).not.toMatch(/font-mono/);
+  });
+
+  it("says the name is the agent's own record and that nothing signed it", () => {
+    showingNamed([record({ kind: "mandate_verified", role: "merchant", digest: DIGEST })],
+      "Vitesse Urbain 7");
+
+    const said = screen.getByTestId("name-provenance").textContent ?? "";
+    expect(
+      said,
+      "the Inspector's precedent is to show a value and let the reader check it, " +
+        "never to assert it — and a name is the one thing here that cannot be " +
+        "checked, so the screen has to name whose word it is",
+    ).toMatch(/Shopping Agent/);
+    // The negation, and it has to be asserted as one. `/signed/i` alone was
+    // what this line checked, and a provenance sentence rewritten to say the
+    // merchant *signed* the name passed it — the assertion matched the word it
+    // was there to deny. So: the denial in the shape the sentence makes it, and
+    // no claim anywhere in the paragraph that anything did sign.
+    expect(said, "and say plainly that no signature covers it").toMatch(/Nothing signed it/);
+    expect(
+      said,
+      "a name three parties did not compute must never be described as one " +
+        "anybody signed — this is the sentence standing between a merchant's " +
+        "words and the authority of the digest below them",
+    ).not.toMatch(/\b(is|was|were|are)\s+signed\b/i);
+  });
+
+  it("lets a name too wide for its column break rather than the page", () => {
+    // The one string on this screen a counterparty writes. `Describe` bounds
+    // its length at 120 characters; nothing can bound its *shape*, and a single
+    // 119-character word inside that bound is still four times this column.
+    // Without a wrap the `<h2>` overflows its own box and takes the whole
+    // document into a horizontal scroll — measured at scrollWidth 5520 against
+    // a 1905 viewport, three-lane grid and all.
+    //
+    // Asserted on the class, because jsdom lays nothing out — the same reason
+    // the spine's type scale is asserted that way one test down.
+    showingNamed(
+      [record({ kind: "mandate_verified", role: "merchant", digest: DIGEST })],
+      "Belgrade".repeat(14),
+    );
+
+    expect(
+      screen.getByRole("heading", { level: 2 }).className,
+      "break-words rather than break-all: a word breaks only when it cannot " +
+        "fit, so an ordinary product name is untouched and a hostile one " +
+        "cannot reach past its column",
+    ).toMatch(/\bbreak-words\b/);
+  });
+
+  it("keeps the digest at the size it had, one section down and still repeated", () => {
+    const { container } = showingNamed(
+      [
+        record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+        record({ kind: "mandate_verified", role: "mpp", digest: DIGEST }),
+      ],
+      "Vitesse Urbain 7",
+    );
+
+    const shown = screen.getAllByText(SHOWN);
+    expect(
+      shown.length,
+      "on the spine and on each step that named it — the repetition is what lets a " +
+        "reader see the merchant's twelve characters and the processor's are the " +
+        "same twelve characters, and #242 is explicit that it stays",
+    ).toBeGreaterThan(2);
+
+    // The spine head keeps the type scale the design reserves for it. Asserted
+    // on the class rather than on a computed style because jsdom computes none,
+    // and this is the one number the issue promised would not move.
+    const spine = [...container.querySelectorAll("span")].filter(
+      (element) => element.textContent === SHOWN && /text-xl/.test(element.className),
+    );
+    expect(
+      spine.map((element) => /sm:text-2xl/.test(element.className)),
+      "the digest was not demoted to buy the name its place; it is one section " +
+        "further down at exactly the size it was",
+    ).toEqual([true]);
+  });
+
+  it("draws the header it always drew when the console has no name for the run", () => {
+    // The ordinary case rather than an edge one: the agent's console is a
+    // different process from the collector, so a transaction whose events are
+    // on screen can legitimately be one no console has a record of — a
+    // restarted agent is the standing example, and Disclosure.tsx says so in as
+    // many words.
+    showing([record({ kind: "mandate_verified", role: "merchant", digest: DIGEST })]);
+
+    expect(
+      screen.queryByRole("heading", { level: 2 }),
+      "no name means no headline claiming one, rather than a placeholder or the " +
+        "identifier wearing a name's clothes",
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("name-provenance"),
+      "and nothing saying where a name came from, because none did",
+    ).toBeNull();
+    expect(
+      screen.getByText("Transaction"),
+      "what the screen drew before #242, unchanged — the correlation id is still " +
+        "the thing a reader can quote",
+    ).toBeTruthy();
+    expect(screen.getByText("c-1a2b3c")).toBeTruthy();
+  });
+
+  it("still shows a refusal's binding holding, with the name above it", () => {
+    // The demonstration's sharpest beat, and the one thing a headline must not
+    // cost: the refused attempt and the bought one carry the digest each was
+    // bound to, and the name above says nothing about either.
+    showingNamed(
+      [
+        record({
+          kind: "mandate_rejected",
+          role: "mpp",
+          digest: DIGEST,
+          code: "amount_exceeds_limit",
+        }),
+        record({ kind: "mandate_verified", role: "mpp", digest: OTHER }),
+      ],
+      "Vitesse Urbain 7",
+    );
+
+    expect(
+      screen.queryByText(/The binding held/),
+      "a verifier enforcing a limit the user set is the protocol working, and the " +
+        "digest matching across the refusal is what says so",
+    ).not.toBeNull();
+    expect(screen.getAllByText(SHOWN).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(OTHER_SHOWN).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("heading", { level: 2 }), "one head for the transaction, not one per attempt")
+      .toHaveLength(1);
   });
 });

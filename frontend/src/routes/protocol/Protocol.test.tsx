@@ -261,6 +261,59 @@ describe("the protocol screen", () => {
     expect(within(panel).getByText("that watch made no such attempt")).toBeTruthy();
   });
 
+  it("heads the lanes with what the agent's console calls the run", async () => {
+    // The join #242 turns on: the collector's stream carries no name — ADR 0003
+    // keeps the event log observability and never evidence — so the screen asks
+    // the agent's own console, keyed on the correlation id it is already
+    // drawing.
+    stubFetch({
+      "/watches": {
+        watches: [
+          { id: "w-9", correlation_id: "c-new", typed: "", title: "Not this run", state: "watching", attempts: 0 },
+          { id: "w-1", correlation_id: "c-old", typed: "", title: "Vitesse Urbain 7", state: "bought", attempts: 1 },
+        ],
+      },
+    });
+    renderAt("/protocol?run=c-old");
+    twoPurchases();
+
+    const head = await screen.findByRole("heading", { level: 2 });
+    expect(
+      head.textContent,
+      "the row whose correlation id matches the run on screen, not the first row " +
+        "or the newest — two watches with one list between them is the ordinary " +
+        "demonstration, and taking the wrong one would name this purchase after " +
+        "another",
+    ).toBe("Vitesse Urbain 7 (c-old)");
+    expect(
+      within(screen.getByRole("article")).getAllByText(OLD_SHOWN).length,
+      "and the proof is still on the page, one section down, unchanged",
+    ).toBeGreaterThan(0);
+  });
+
+  it("draws no name when the console answers an empty one", async () => {
+    // `console.summary.title` is served without `omitempty`, so a watch whose
+    // merchant could not be asked answers `""`. Reaching the head, that would
+    // draw a heading holding nothing but `(c-old)` — which reads as a name that
+    // failed to load rather than as a run nobody named.
+    stubFetch({
+      "/watches": {
+        watches: [{ id: "w-1", correlation_id: "c-old", typed: "", title: "", state: "bought", attempts: 1 }],
+      },
+    });
+    renderAt("/protocol?run=c-old");
+    twoPurchases();
+
+    expect(await screen.findByRole("article"), "the lanes are drawn either way").toBeTruthy();
+    await waitFor(() => {
+      expect(screen.queryByRole("heading", { level: 2 })).toBeNull();
+    });
+    expect(
+      screen.getByText("Transaction"),
+      "the header this screen drew before #242, which is what no-name looks like",
+    ).toBeTruthy();
+  });
+
   it("says so when the agent's console has no record of the run on screen", async () => {
     stubFetch({ "/watches": { watches: [] } });
     renderAt("/protocol?run=c-old");
