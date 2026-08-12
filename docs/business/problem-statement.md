@@ -82,9 +82,12 @@ the chain proves consent.
 ```mermaid
 flowchart LR
     U["User"] --> A["AI agent"]
-    A -->|"no verifiable identity"| M1["Merchant<br/>bot mitigation blocks it"]
-    A -->|"unbounded authority"| M2["Merchant<br/>cannot tell approved from invented"]
-    A -->|"raw card number"| M3["PSP<br/>no scoping, no evidence"]
+    A -->|"no verifiable identity"| M1["`Merchant
+    bot mitigation blocks it`"]
+    A -->|"unbounded authority"| M2["`Merchant
+    cannot tell approved from invented`"]
+    A -->|"raw card number"| M3["`PSP
+    no scoping, no evidence`"]
     M1 --- X1(["blocked"])
     M2 --- X2(["disputed"])
     M3 --- X3(["unbounded loss"])

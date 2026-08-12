@@ -174,13 +174,19 @@ ignored.
 
 ```mermaid
 flowchart TD
-    B["evidence.Bundle<br/>Checkout JWT · 2 mandates · 2 receipts"] --> S1
+    B["`evidence.Bundle
+    Checkout JWT · 2 mandates · 2 receipts`"] --> S1
 
-    S1["1 · checkout_authorised<br/><i>the Checkout Mandate is genuine, live,<br/>the right type, and binds this document</i>"]
-    S2["2 · checkout_answered<br/><i>the Checkout Receipt is the merchant's<br/>and answers this presentation</i>"]
-    S3["3 · payment_authorised<br/><i>the Payment Mandate is genuine, live,<br/>the right type</i>"]
-    S4["4 · one_purchase<br/><i>both mandates name one purchase,<br/>and it is the document in the bundle</i>"]
-    S5["5 · payment_answered<br/><i>the Payment Receipt is the answerer's<br/>and answers this presentation</i>"]
+    S1["`1 · checkout_authorised
+    *the Checkout Mandate is genuine, live, the right type, and binds this document*`"]
+    S2["`2 · checkout_answered
+    *the Checkout Receipt is the merchant's and answers this presentation*`"]
+    S3["`3 · payment_authorised
+    *the Payment Mandate is genuine, live, the right type*`"]
+    S4["`4 · one_purchase
+    *both mandates name one purchase, and it is the document in the bundle*`"]
+    S5["`5 · payment_answered
+    *the Payment Receipt is the answerer's and answers this presentation*`"]
 
     S1 --> S2 --> S3 --> S4 --> S5 --> H["Report.Holds()"]
 

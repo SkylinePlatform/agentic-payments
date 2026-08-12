@@ -11,18 +11,23 @@ and a complete transaction uses both.
 ```mermaid
 flowchart TB
     subgraph L1["Identity — who is this agent?"]
-        TAP["Visa TAP<br/>RFC 9421 HTTP Message Signatures"]
+        TAP["`Visa TAP
+        RFC 9421 HTTP Message Signatures`"]
     end
     subgraph L2["Authorization — what did the user approve, within what limits?"]
-        AP2["Google AP2<br/>SD-JWT mandates, constraints"]
+        AP2["`Google AP2
+        SD-JWT mandates, constraints`"]
     end
     subgraph L3["Instrument — what pays, and how is it scoped?"]
-        MC["Mastercard Agentic Tokens<br/><i>out of scope: no self-serve path</i>"]
+        MC["`Mastercard Agentic Tokens
+        *out of scope: no self-serve path*`"]
     end
     L1 --> CORE
     L2 --> CORE
     L3 -.-> CORE
-    CORE["internal/core<br/>three independent axes<br/>identity · authz · instrument"]
+    CORE["`internal/core
+    three independent axes
+    identity · authz · instrument`"]
 ```
 
 Adapters populate the axes; `core` never learns which protocol filled one.
@@ -40,14 +45,19 @@ is the design. The enforcement is `golangci-lint`, not the Go compiler:
 
 ```mermaid
 flowchart RL
-    core["internal/core<br/><b>imports nothing in this module</b>"]
+    core["`internal/core
+    **imports nothing in this module**`"]
     ap2["internal/adapters/ap2"]
     tap["internal/adapters/tap"]
-    platform["internal/platform<br/>crypto · clock · store · obs"]
+    platform["`internal/platform
+    crypto · clock · store · obs`"]
     roles["internal/roles"]
-    pkg["pkg/httpsig · pkg/sdjwt<br/>public standards, extractable"]
-    collector["internal/collector<br/>event log — cmd/collector only"]
-    console["internal/agent/console<br/>watch state — cmd/agent only"]
+    pkg["`pkg/httpsig · pkg/sdjwt
+    public standards, extractable`"]
+    collector["`internal/collector
+    event log — cmd/collector only`"]
+    console["`internal/agent/console
+    watch state — cmd/agent only`"]
 
     ap2 --> core
     tap --> core
@@ -97,15 +107,20 @@ this document only states where the boundary sits in the module layout.
 ```mermaid
 flowchart LR
     subgraph MAY["LLM permitted"]
-        I["internal/agent/interpret<br/>prompt → typed constraints"]
+        I["`internal/agent/interpret
+        prompt → typed constraints`"]
     end
     subgraph NEVER["LLM forbidden — deterministic only"]
-        SIGN["mandate construction<br/>and signing"]
-        VER["verification and<br/>constraint evaluation"]
-        TS["Trusted Surface<br/><b>non-agentic by specification</b>"]
+        SIGN["`mandate construction
+        and signing`"]
+        VER["`verification and
+        constraint evaluation`"]
+        TS["`Trusted Surface
+        **non-agentic by specification**`"]
     end
     P["user prompt"] --> I
-    I -->|"typed constraints,<br/>schema-validated"| TS
+    I -->|"`typed constraints,
+    schema-validated`"| TS
     TS -->|"user signature"| SIGN
     SIGN --> VER
 ```
