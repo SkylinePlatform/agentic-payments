@@ -32,10 +32,37 @@ which defaults to `../deploy/catalogue.json` — a path that resolves from
 `backend/`, the working directory every Go command in this repository runs from
 and the one `demo.json` starts the process with.
 
-Adding a fifth product is an edit here. Nothing above the catalogue was ever the
-obstacle: `item.attr.<name>` is open by construction, the constraint field
-registry names nothing aviation, and search evaluates constraints against an
-offer without knowing what it is selling.
+Selling a product takes no source change in the merchant. Nothing above the
+catalogue was ever the obstacle: `item.attr.<name>` is open by construction, the
+constraint field registry names nothing aviation, and search evaluates
+constraints against an offer without knowing what it is selling.
+
+**Most of the file is derived**, since issue #160. The first four offers are the
+demonstration's own; the sixty after them are written by `tools/catalogue` from
+a CC0 snapshot of Wikidata committed inside that module, and so are the pictures
+under `frontend/public/images/catalogue/derived`.
+
+```bash
+make catalogue   # re-derive both, from the committed snapshot
+```
+
+A person runs that, and nothing else does — not CI, not `make demo`, not `make
+check`. The generator reaches no network, and it is kept out of the build for
+the reason issue #158 gives: a catalogue that filled differently between runs
+would make *"the refusal at \$210 happens on every run, and a test says so"*
+unwritable. What keeps the committed file honest is a test rather than a
+rebuild — `TestTheCommittedCatalogueIsWhatThisProgramProduces` re-derives it
+under `make test` and compares, so a hand edit to a derived row fails the gate.
+`tools/catalogue/data/PROVENANCE.md` records the source, the licence and the
+queries.
+
+**Which is also where a new product goes now.** A row added to this file by hand
+fails that same test, because the next re-derivation would drop an offer the
+generator did not produce — so a sixty-fifth product is a shelf in
+`tools/catalogue/select.go`, or an entry in `Heroes` if a scripted sentence is
+meant to find it. A catalogue the generator does not own, handed to
+`cmd/merchant -catalogue`, is still just a file somebody wrote, and
+`TestAProductAddedToTheFileIsSoldWithoutASourceChange` is what holds that open.
 
 The rules are `merchant.CatalogueFile.Validate` and nowhere else, and a
 malformed file stops the process rather than producing a merchant that answers
@@ -45,13 +72,26 @@ malformed file stops the process rather than producing a merchant that answers
   `lte 40000 USD` cap sit against a `38000 EUR` price, and a money comparison
   across two currencies is refused rather than converted — so the symptom is a
   prompt that matches nothing, with nothing failing anywhere.
-- **The offer carrying `route.origin` and `route.destination` is the flight**,
-  and the inventory the Human Present flow buys through quotes that route on
-  that offer's own prices. Exactly one may carry them.
+- **An offer carrying `route.origin` and `route.destination` is a flight**, and
+  the inventory the Human Present flow buys through quotes that route on that
+  offer's own prices. **No two offers may describe the same route**, and a file
+  describing none at all is refused too. The rule used to be *exactly one* offer
+  may carry them; what it protected was one answer for the route
+  `GET /checkout?from=&to=` names, which a shop selling a dozen departures gives
+  perfectly well as long as no two of them are the same departure.
 - **`scenario` is the offer saying what it is for**: `cap` is the bound the
   prompt that goes looking for it names, and `found` is `always`,
   `at-the-last-price` or `never`. A price edited past its cap fails a test
   rather than quietly producing a search box that answers nothing.
+
+And one rule that is not the loader's, because nothing could enforce it there.
+Two of the five scripted sentences find their offer by something other than an
+identifier — the ladders by category alone, the flight by its two route codes —
+and the agent buys the first candidate a search returns without ranking. A
+second offer on either of those two hooks loads, validates and searches
+perfectly well; it changes what the demonstration buys.
+`tools/catalogue`'s `Reserved` keeps the generator off them, and
+`TestEveryScriptedPromptFindsOneCandidate` measures it through the real query.
 
 ## `implemented: false`
 

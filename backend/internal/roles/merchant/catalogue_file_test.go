@@ -48,8 +48,9 @@ func shippedCatalogue(t *testing.T) *merchant.CatalogueFile {
 // a price edited in deploy/catalogue.json cannot quietly move the demonstration
 // off the documentation it is written about.
 //
-// It says nothing about a fifth product, deliberately — nothing here could.
-// That is what each offer's own scenario block is for.
+// It says nothing about the sixty offers beside them, deliberately — nothing
+// here could. That is what each offer's own scenario block is for, and
+// TestTheShopIsWideEnoughForASentenceToNarrowIt is what says there are sixty.
 func TestTheCatalogueFileIsTheDocumentedScenario(t *testing.T) {
 	t.Parallel()
 
@@ -61,10 +62,9 @@ func TestTheCatalogueFileIsTheDocumentedScenario(t *testing.T) {
 	assert.Equal(t, merchant.DemoMerchantCategory, f.Merchant.Category,
 		"a mandate constraining merchant.category is written against this MCC")
 
-	route, err := f.Route()
-	require.NoError(t, err, "the file describes no single route, so the Human Present flow has "+
-		"nothing to quote")
-	assert.Equal(t, merchant.DemoRoute, route,
+	routes, err := f.Routes()
+	require.NoError(t, err, "the file describes no route the Human Present flow could quote")
+	assert.Contains(t, routes, merchant.DemoRoute,
 		"the flight the demonstration is written about is BEG→PMI, and the prompt that goes "+
 			"looking for it constrains on both codes by name")
 
@@ -95,24 +95,100 @@ func TestTheCatalogueFileIsTheDocumentedScenario(t *testing.T) {
 		},
 	}
 
-	require.Len(t, f.Offers, len(documented),
-		"the demonstration is written around four products; a fifth is welcome, but it has to "+
-			"arrive with the documentation that describes it")
-
-	for _, offer := range f.Offers {
-		want, documented := documented[offer.ID]
-		require.True(t, documented,
-			"%s is not one of the four identifiers seed.go names, and two of those are matched "+
-				"character for character by the scripted prompts", offer.ID)
+	listed := offersByID(f)
+	for id, want := range documented {
+		offer, stocked := listed[id]
+		require.True(t, stocked,
+			"%s is one of the four identifiers seed.go names and the file no longer lists it; "+
+				"two of the four are matched character for character by the scripted prompts",
+			id)
 
 		assert.Equal(t, want.prices, offer.Prices,
 			"%s is priced differently from the figures every diagram of a real transaction "+
-				"reuses", offer.ID)
+				"reuses", id)
 		assert.Equal(t, want.bound, offer.Scenario.Cap,
-			"%s names a bound the prompt going looking for it does not place", offer.ID)
+			"%s names a bound the prompt going looking for it does not place", id)
 		assert.Equal(t, want.found, offer.Scenario.Found,
-			"%s claims a different beat of the demonstration from the one it is in", offer.ID)
+			"%s claims a different beat of the demonstration from the one it is in", id)
 	}
+}
+
+// offersByID indexes the file, which nearly every test below wants and none of
+// them wants to write twice now that the list is long enough to make a linear
+// scan an implementation detail worth hiding.
+func offersByID(f *merchant.CatalogueFile) map[string]merchant.CatalogueEntry {
+	out := make(map[string]merchant.CatalogueEntry, len(f.Offers))
+	for _, o := range f.Offers {
+		out[o.ID] = o
+	}
+	return out
+}
+
+// TestTheShopIsWideEnoughForASentenceToNarrowIt is what issue #160 put in place
+// of the assertion that the file holds exactly four offers.
+//
+// The four were the whole shop, so every scripted sentence found its own item by
+// there being nothing else — a claim about *scarcity* wearing the clothes of a
+// claim about narrowing. A catalogue that is only ever searched for the four
+// things in it is a search box in a screenshot.
+//
+// What has to hold instead is two-sided, and both sides are here because they
+// fail in opposite directions. The shop has to be **wide**, or `GET /search`
+// still has nothing to answer and #109's product table still has four rows. And
+// the three facts a scripted sentence narrows on have to stay **unique**, or the
+// agent — which takes the first candidate a search returns and asks nobody, see
+// settle in internal/agent/authorise.go — starts buying something else.
+//
+// The uniqueness half is stated through the demonstration's own identifiers
+// rather than through the category and route strings, because those strings live
+// in internal/agent/interpret and core-isolation keeps this package from naming
+// them. What is asserted is therefore the shape of the claim — *the ladders are
+// the only thing on their shelf* — which is exactly what a second ladder would
+// break, and it stays true under a rename of the shelf.
+//
+// TestEveryScriptedPromptFindsOneCandidate, over in internal/agent, is the same
+// property measured through the real query. This is the half a merchant can
+// check on its own, and it fails with a message about the catalogue rather than
+// about a watch.
+func TestTheShopIsWideEnoughForASentenceToNarrowIt(t *testing.T) {
+	t.Parallel()
+
+	f := shippedCatalogue(t)
+	listed := offersByID(f)
+
+	assert.GreaterOrEqual(t, len(f.Offers), 40,
+		"a scripted sentence has to narrow a shop rather than exhaust one, and a search box in "+
+			"front of a handful of products is a search box in a screenshot")
+
+	alone := func(id string) int {
+		var n int
+		for _, o := range f.Offers {
+			if o.Category == listed[id].Category {
+				n++
+			}
+		}
+		return n
+	}
+
+	assert.Equal(t, 1, alone(merchant.DemoLadderID),
+		"the ladders sentence narrows on the category and nothing else, and the agent buys the "+
+			"first candidate without ranking — so a second thing on that shelf does not fail to "+
+			"load and does not fail to search, it quietly changes what the demonstration buys")
+	assert.Greater(t, alone(merchant.DemoFlightID), 1,
+		"the flight sentence narrows on a route rather than on the category, which is a claim "+
+			"about narrowing only while the shop sells more than one route")
+
+	routes, err := f.Routes()
+	require.NoError(t, err, "the file describes no route the Human Present flow could quote")
+	var demoRoute int
+	for _, r := range routes {
+		if r == merchant.DemoRoute {
+			demoRoute++
+		}
+	}
+	assert.Equal(t, 1, demoRoute,
+		"the route the demonstration is written about has to have one answer, which is the whole "+
+			"of what the load-time rule on routes protects")
 }
 
 // TestTheScenarioBlockAgreesWithTheScriptedPrompt closes the remaining gap
@@ -129,10 +205,7 @@ func TestTheScenarioBlockAgreesWithTheScriptedPrompt(t *testing.T) {
 	t.Parallel()
 
 	f := shippedCatalogue(t)
-	entries := make(map[string]merchant.CatalogueEntry, len(f.Offers))
-	for _, o := range f.Offers {
-		entries[o.ID] = o
-	}
+	entries := offersByID(f)
 
 	for _, tc := range []struct {
 		name        string
@@ -214,8 +287,13 @@ func TestEveryOfferFindsItselfWhenItsScenarioSaysItShould(t *testing.T) {
 // Two products, neither of which appears anywhere in Go: one inside its own
 // bound, which a search finds, and one well outside it, which a search never
 // returns. The second is what makes a screenshot of the first mean anything —
-// a list that shows everything is not a filtered list — and it is the only
-// coverage FoundNever has, since nothing the demonstration ships is scenery.
+// a list that shows everything is not a filtered list.
+//
+// It used to be the only coverage FoundNever had, and since issue #160 it is
+// not: the shipped file claims that value on four of its derived offers. What
+// this still holds on its own is the *added* half — that a product nothing in
+// Go has heard of is sold on the terms it states — which is the issue's
+// headline and is what no assertion over the shipped offers can reach.
 func TestAProductAddedToTheFileIsSoldWithoutASourceChange(t *testing.T) {
 	t.Parallel()
 
@@ -494,31 +572,55 @@ func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 		{
 			name: "no offer describing a route",
 			mutate: func(f *merchant.CatalogueFile) {
-				// Bound once: deleting the origin is what makes flightIn stop
-				// finding it, so a second call would be looking for an offer
-				// this line has already grounded.
-				flight := flightIn(f)
-				delete(flight.Attributes, routeOrigin)
-				delete(flight.Attributes, routeDestination)
+				// Every one of them, not just the demonstration's own. Since
+				// issue #160 the shop sells a dozen routes, and stripping one
+				// would leave eleven — a file this rule has nothing to say
+				// about, and a row that passed for no reason.
+				for i := range f.Offers {
+					if _, describes := f.Offers[i].Attributes[routeOrigin]; !describes {
+						continue
+					}
+					delete(f.Offers[i].Attributes, routeOrigin)
+					delete(f.Offers[i].Attributes, routeDestination)
 
-				// And something is put back, because those two are the whole of
-				// what the flight states about itself: without this the offer
-				// carries no attributes at all, and the row is refused for that
-				// instead. It was passing that way until the check it names was
-				// deleted and the test stayed green.
-				flight.Attributes["cabin"] = "economy"
+					// And something is put back, because those two are the whole
+					// of what a flight states about itself: without this the
+					// offer carries no attributes at all, and the row is refused
+					// for that instead. It was passing that way until the check
+					// it names was deleted and the test stayed green.
+					f.Offers[i].Attributes["cabin"] = "economy"
+				}
 			}, wantErr: true,
 			why: "the Human Present flow buys through GET /checkout?from=&to=, and there would " +
 				"be no route for the inventory to quote",
 		},
 		{
-			name: "two offers describing a route",
+			// Issue #160's rule, and the row that says what replaced the old
+			// one. Two offers describing a route is now ordinary — the shop
+			// sells a dozen — and the ambiguity is refused where it is actually
+			// an ambiguity: two offers answering to *one* route.
+			name: "two offers describing the same route",
+			mutate: func(f *merchant.CatalogueFile) {
+				flight := flightIn(f)
+				grounded := groundedIn(f)
+				grounded.Attributes[routeOrigin] = flight.Attributes[routeOrigin]
+				grounded.Attributes[routeDestination] = flight.Attributes[routeDestination]
+			}, wantErr: true, mentions: "quotes a route once",
+			why: "GET /checkout?from=&to= would have two answers, and picking by iteration " +
+				"order is not a choice",
+		},
+		{
+			// The other half of the same rule, and the reason it is a row rather
+			// than a sentence: the old rule refused this file, and a wide
+			// catalogue is exactly this file with a dozen of them.
+			name: "another offer describing a route of its own",
 			mutate: func(f *merchant.CatalogueFile) {
 				grounded := groundedIn(f)
 				grounded.Attributes[routeOrigin] = "LHR"
 				grounded.Attributes[routeDestination] = "AMS"
-			}, wantErr: true,
-			why: "the inventory quotes one route, and picking by iteration order is not a choice",
+			}, wantErr: false,
+			why: "a second flight is stock; only a second offer answering to one route is a " +
+				"question with two answers",
 		},
 		{
 			name: "a route with an origin and no destination",
@@ -579,17 +681,23 @@ const (
 // entry is the offer these rows mutate when it does not matter which one it is.
 func entry(f *merchant.CatalogueFile) *merchant.CatalogueEntry { return &f.Offers[0] }
 
-// flightIn is the offer describing a route.
+// flightIn is the demonstration's own flight, asked for by identifier.
+//
+// By identifier rather than by "the first offer carrying route.origin", which is
+// what it used to be and what stopped being an answer when the shop acquired a
+// dozen routes: the rows below are about the route the Human Present flow
+// quotes, and a helper that returned whichever flight happened to sort first
+// would go on compiling while testing a different one.
 func flightIn(f *merchant.CatalogueFile) *merchant.CatalogueEntry {
 	for i := range f.Offers {
-		if _, describes := f.Offers[i].Attributes[routeOrigin]; describes {
+		if f.Offers[i].ID == merchant.DemoFlightID {
 			return &f.Offers[i]
 		}
 	}
 	return nil
 }
 
-// groundedIn is an offer that is not the flight, for the row that needs a
+// groundedIn is an offer that describes no route, for the rows that need a
 // second one to become one.
 func groundedIn(f *merchant.CatalogueFile) *merchant.CatalogueEntry {
 	for i := range f.Offers {

@@ -113,6 +113,15 @@ jobs:
         working-directory: contracts/tools
         run: go test ./...
 
+      # The catalogue generator, and the one step that keeps deploy/catalogue.json
+      # honest. `make catalogue` is run by a person and by nothing here — a build
+      # that regenerated it would make the committed file unfalsifiable — so what
+      # runs instead is the suite that re-derives it and compares. A hand-edited
+      # derived row, or a change to the derivation that nobody re-ran, fails here.
+      - name: Test catalogue generator
+        working-directory: tools/catalogue
+        run: go test ./...
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

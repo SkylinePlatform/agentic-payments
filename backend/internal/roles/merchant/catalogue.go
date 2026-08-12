@@ -137,9 +137,9 @@ type QuotedOffer struct {
 // Immutable after construction, and for the reason Inventory states: a merchant
 // whose catalogue could change under a running demonstration would make two
 // screenshots taken a second apart disagree for a reason that has nothing to do
-// with the protocol. Widening from one route to four offers does not weaken
-// that — offers are supplied to NewCatalogue and copied on the way in and on the
-// way out, so no caller retains a handle on what a search will see.
+// with the protocol. Widening from one route to a shop of sixty-odd offers does
+// not weaken that — offers are supplied to NewCatalogue and copied on the way in
+// and on the way out, so no caller retains a handle on what a search will see.
 //
 // It is safe to read concurrently on exactly those terms.
 type Catalogue struct {

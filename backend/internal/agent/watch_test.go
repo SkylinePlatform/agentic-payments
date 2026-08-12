@@ -1176,6 +1176,23 @@ func (r *recorder) eventsOf(role string) []obs.Event {
 // core-isolation keeps them from sharing a table. It is held here, at the one
 // place both are in scope.
 //
+// # Since issue #160 it is a claim about narrowing rather than about scarcity
+//
+// It used to be neither, and could not tell the difference. The catalogue held
+// four offers and there were five sentences, so "this prompt matches exactly
+// one" was satisfied by there being nothing else in the shop — and a search box
+// in front of four products demonstrates a search box rather than a search.
+// The shop now holds sixty-odd, so the assertion below is that a sentence picks
+// one out of all of them.
+//
+// Which is why the first thing measured is what the sentence narrows *from*, and
+// why it is measured through Discover rather than counted off the file: a
+// constant here would be a second statement of the catalogue's size, and the
+// number that matters is the one the merchant actually answers with.
+// TestTheShopIsWideEnoughForASentenceToNarrowIt, over in internal/roles/merchant,
+// holds the half a merchant can check on its own — that nothing else sits on the
+// ladders' shelf, and that the shop sells more than one route.
+//
 // **It is not TestTheCatalogueAnswersTheScriptedPrompts over again.** That test
 // searches with the whole constraint set, which is the query discover
 // deliberately does not send — and under it two of these prompts match nothing
@@ -1200,6 +1217,18 @@ func TestEveryScriptedPromptFindsOneCandidate(t *testing.T) {
 	prompts := interpret.Demo().Prompts()
 	require.Len(t, prompts, len(finds),
 		"a prompt was scripted without saying what it should find, which is a demo that watches nothing")
+
+	// The whole shop, asked for the way a sentence asks for part of it: one
+	// selective constraint, over the wire, answered by the same evaluator. Every
+	// offer carries the merchant's own category, so this is the catalogue.
+	category := "merchant.category"
+	shop, err := newWorld(t).client().Discover(t.Context(), []generated.Constraint{
+		{Op: "eq", Field: &category, Value: merchant.DemoMerchantCategory},
+	})
+	require.NoError(t, err, "a query on the merchant's own category has to return its catalogue")
+	require.Greater(t, len(shop), 40,
+		"each sentence below narrows this list to one, and that is a claim about the sentence "+
+			"only while the list is long; over four offers it was a claim about the shop being empty")
 
 	for _, prompt := range prompts {
 		want, named := finds[prompt]

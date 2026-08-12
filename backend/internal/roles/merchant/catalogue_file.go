@@ -17,14 +17,14 @@ import (
 // ErrInvalidCatalogue is returned for a catalogue a merchant cannot sell from.
 var ErrInvalidCatalogue = errors.New("merchant: invalid catalogue")
 
-// The two attributes the offer describing a flight carries.
+// The two attributes an offer describing a flight carries.
 //
 // They are load-bearing rather than conventional. The scripted prompt that goes
 // looking for the flight constrains on both by name — see flightToPalma in
 // search_test.go — so renaming one here without renaming it there produces a
 // search that finds nothing and no failing test on either side.
 //
-// They are also how the inventory finds its route; see CatalogueFile.Inventory.
+// They are also how the inventory finds its routes; see CatalogueFile.Inventory.
 const (
 	routeOriginAttribute      = "route.origin"
 	routeDestinationAttribute = "route.destination"
@@ -68,9 +68,14 @@ const (
 	// product the search is meant *not* to return, which is what shows a reader
 	// that the list was filtered rather than merely short.
 	//
-	// Nothing in deploy/catalogue.json claims it today, so the value's only
-	// coverage is TestAProductAddedToTheFileIsSoldWithoutASourceChange, which
-	// adds one.
+	// Nothing shipped claimed it until issue #160, when the value stopped being
+	// a possibility the loader admitted and became something the shop is made
+	// of: a seventh of the derived offers are priced past their own cap on
+	// purpose, and tools/catalogue's price.go argues the proportion. So the
+	// coverage is now TestEveryOfferFindsItselfWhenItsScenarioSaysItShould over
+	// the file itself, and TestAProductAddedToTheFileIsSoldWithoutASourceChange
+	// is what covers a value this file has *stopped* using rather than the only
+	// thing exercising this one.
 	FoundNever Found = "never"
 )
 
@@ -267,7 +272,7 @@ func (f *CatalogueFile) Validate() error {
 		seen[o.ID] = struct{}{}
 	}
 
-	_, err := f.flight()
+	_, err := f.routeOffers()
 	return err
 }
 
@@ -357,54 +362,72 @@ func (o CatalogueEntry) route() (Route, bool) {
 	return Route{Origin: origin, Destination: destination}, true
 }
 
-// Route is the route the inventory quotes: the one the file's flight offer
-// describes.
-func (f *CatalogueFile) Route() (Route, error) {
-	o, err := f.flight()
+// Routes lists every route the file describes, in the order the offers
+// describing them are listed.
+func (f *CatalogueFile) Routes() ([]Route, error) {
+	offers, err := f.routeOffers()
 	if err != nil {
-		return Route{}, err
+		return nil, err
 	}
-	r, _ := o.route()
-	return r, nil
+	routes := make([]Route, 0, len(offers))
+	for _, o := range offers {
+		r, _ := o.route()
+		routes = append(routes, r)
+	}
+	return routes, nil
 }
 
-// flight returns the single entry describing a route.
+// routeOffers returns every entry describing a route, at most one per route.
 //
-// Exactly one, and both the zero case and the two case are load-time refusals.
-// The inventory sells one route — see Inventory — so two would mean choosing,
-// and taking the first would put that choice on the order entries happen to sit
-// in, which is the one thing about this file nothing else depends on. None would
-// mean a merchant whose Human Present flow, which buys through
-// GET /checkout?from=&to=, has nothing to sell.
+// # What this rule replaced, and what it kept
 //
-// The rule is the attributes and not the category, deliberately. "flights" is a
-// string the file's author picked and core does not know what a flight is;
-// route.origin and route.destination are already load-bearing, because the
-// prompt that goes looking for this offer constrains on both.
-func (f *CatalogueFile) flight() (CatalogueEntry, error) {
-	var flights []CatalogueEntry
+// Until issue #160 the rule was that **exactly one** offer could describe a
+// route, and the reasoning was that the inventory quotes one route, so two
+// offers would mean choosing between them and taking the first would put that
+// choice on the order entries happen to sit in — the one thing about this file
+// nothing else depends on.
+//
+// The premise was true and the conclusion was too strong. What the Human Present
+// flow needs is that `GET /checkout?from=BEG&to=PMI` have **one answer for the
+// route it names**, and a catalogue with a dozen flights in it gives that
+// perfectly well as long as no two of them are the same flight. So the rule is
+// now that no route may be described twice, and the inventory sells all of them:
+// the ambiguity is refused exactly where it would have been an ambiguity, and a
+// shop is no longer forbidden from having a second departure.
+//
+// The zero case is still a refusal, for the reason it always was: a merchant
+// whose Human Present flow has nothing to sell would start, report itself
+// healthy, and answer that endpoint with a refusal for every route on earth.
+//
+// The rule is the attributes and not the category, and that has not moved.
+// "flights" is a string the file's author picked and core does not know what a
+// flight is; route.origin and route.destination are already load-bearing,
+// because the prompt that goes looking for the demonstration's own flight
+// constrains on both. A second offer in category "flights" is stock; a second
+// offer describing BEG→PMI is a question with two answers.
+func (f *CatalogueFile) routeOffers() ([]CatalogueEntry, error) {
+	var offers []CatalogueEntry
+	described := make(map[Route]string, len(f.Offers))
 	for _, o := range f.Offers {
-		if _, describes := o.route(); describes {
-			flights = append(flights, o)
+		r, describes := o.route()
+		if !describes {
+			continue
 		}
+		if first, twice := described[r]; twice {
+			return nil, fmt.Errorf("%w: offers %q and %q both describe the route %s; the "+
+				"inventory quotes a route once, and picking by iteration order is not a choice",
+				ErrInvalidCatalogue, first, o.ID, r)
+		}
+		described[r] = o.ID
+		offers = append(offers, o)
 	}
 
-	switch len(flights) {
-	case 1:
-		return flights[0], nil
-	case 0:
-		return CatalogueEntry{}, fmt.Errorf("%w: no offer carries %s and %s, so there is no "+
+	if len(offers) == 0 {
+		return nil, fmt.Errorf("%w: no offer carries %s and %s, so there is no "+
 			"route for the inventory to quote", ErrInvalidCatalogue,
 			routeOriginAttribute, routeDestinationAttribute)
-	default:
-		ids := make([]string, 0, len(flights))
-		for _, o := range flights {
-			ids = append(ids, o.ID)
-		}
-		return CatalogueEntry{}, fmt.Errorf("%w: %d offers describe a route (%s); the "+
-			"inventory quotes one, and picking by iteration order is not a choice",
-			ErrInvalidCatalogue, len(flights), strings.Join(ids, ", "))
 	}
+	return offers, nil
 }
 
 // Catalogue returns what the file lists, sold by merchantID and priced against
@@ -474,10 +497,10 @@ func (f *CatalogueFile) catalogue(
 	return NewCatalogue(clk, constraint.Party{ID: merchantID, Category: f.Merchant.Category}, offers...)
 }
 
-// Inventory returns the one route this file describes, on the schedule the offer
-// describing it is priced by.
+// Inventory returns every route this file describes, each on the schedule the
+// offer describing it is priced by.
 //
-// # Why it reads the offer rather than a list of prices of its own
+// # Why it reads the offers rather than a list of prices of its own
 //
 // The route the inventory quotes and the offer the catalogue lists are the same
 // flight. Two price sequences assembled separately would agree on the day they
@@ -488,34 +511,38 @@ func (f *CatalogueFile) catalogue(
 //
 // A Go function used to close that hole. A data file re-opens it, because a
 // second "prices" list is one line of JSON away, so what closes it now is that
-// there is nowhere else for the route's prices to come from: this reads the
-// flight entry, Catalogue reads the same entry, and both go through schedule.
-// TestTheCatalogueAndTheInventoryQuoteOneFlight is what fails if that stops
-// being true.
+// there is nowhere else for a route's prices to come from: this reads the offers
+// describing routes, Catalogue reads those same entries, and both go through
+// schedule. TestTheCatalogueAndTheInventoryQuoteOneFlight is what fails if that
+// stops being true.
 //
 // **That argument only holds for a fixed step.** Two calls to schedule for the
 // same entry agree today because the arithmetic is deterministic; under a
 // drawn width — jitteredSchedule's, and so NewCyclingJitteredSchedule's — they
-// would not, since each call draws its own. That is why NewDemoService does
-// not call this method for the flight
-// when DemoOptions.StepMax is set — it builds the catalogue first and reads
-// the flight's own Schedule back out of it, so there is exactly one draw
-// rather than two that might disagree. This method is unaffected and stays
-// exactly what it was for every caller that still wants one route priced on
-// its own, step fixed.
+// would not, since each call draws its own. That is why NewDemoService does not
+// call this method at all when DemoOptions.StepMax is set — it builds the
+// catalogue first and reads each flight's own Schedule back out of it, so there
+// is exactly one draw per route rather than two that might disagree. This method
+// is unaffected and stays exactly what it was for every caller that still wants
+// the file's routes priced on their own, step fixed.
 func (f *CatalogueFile) Inventory(
 	clk authz.Clock, start time.Time, step time.Duration,
 ) (*Inventory, error) {
-	flight, err := f.flight()
+	offers, err := f.routeOffers()
 	if err != nil {
 		return nil, err
 	}
-	schedule, err := f.schedule(flight, start, step)
-	if err != nil {
-		return nil, err
+
+	routes := make(map[Route]*Schedule, len(offers))
+	for _, o := range offers {
+		schedule, err := f.schedule(o, start, step)
+		if err != nil {
+			return nil, err
+		}
+		route, _ := o.route()
+		routes[route] = schedule
 	}
-	route, _ := flight.route()
-	return New(clk, map[Route]*Schedule{route: schedule})
+	return New(clk, routes)
 }
 
 // schedule builds one entry's price sequence, in the file's currency.

@@ -15,8 +15,10 @@ import (
 
 // The errors an inventory lookup can produce.
 var (
-	// ErrNoSuchRoute means the inventory does not sell that route. The mock
-	// merchant carries one route, so this is what every other query gets.
+	// ErrNoSuchRoute means the inventory does not sell that route. It carries
+	// one entry per route the catalogue describes — a dozen or so since issue
+	// #160 widened the file — so this is what every query outside that list
+	// gets.
 	ErrNoSuchRoute = errors.New("merchant: no such route")
 
 	// ErrEmptySchedule means a route was added with no prices. A schedule with

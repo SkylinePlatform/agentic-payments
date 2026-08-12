@@ -44,8 +44,25 @@ THIRD-PARTY WORKS COMMITTED IN THIS REPOSITORY
 -------------------------------------------------------------------------------
 
 Almost every dependency of this project is resolved at build time and is not
-redistributed here. Two kinds are, and are therefore listed: fonts, committed
-as binaries, and component source copied into the tree rather than installed.
+redistributed here. Three kinds are, and are therefore listed: fonts, committed
+as binaries; component source copied into the tree rather than installed; and a
+dataset snapshot committed so that nothing in the build has to fetch it.
+
+Wikidata
+  Structured data, dedicated to the public domain under CC0 1.0 Universal
+  https://creativecommons.org/publicdomain/zero/1.0/
+  https://www.wikidata.org
+  The CSV files under tools/catalogue/data/ are frozen results of the SPARQL
+  queries committed beside them, retrieved 2026-08-11 from
+  https://query.wikidata.org/sparql. They are the source deploy/catalogue.json's
+  product titles, descriptions, manufacturers and airport codes are derived
+  from. CC0 requires no attribution; this entry is provenance, and it records
+  which committed files are not this project's own work.
+
+  Only Wikidata's structured data is CC0. Media on Wikimedia Commons is not, and
+  none is used: every image this repository ships is drawn by it, by hand under
+  frontend/public/images/catalogue or by tools/catalogue/mark.go under the
+  derived/ directory beside them.
 
 IBM Plex Mono and IBM Plex Sans
   Copyright (c) 2017 IBM Corp. with Reserved Font Name "Plex"
@@ -93,3 +110,11 @@ This project is an independent implementation and is NOT affiliated with,
 endorsed by, or sponsored by Visa Inc., Mastercard International Incorporated,
 or Google LLC. All trademarks are referenced nominatively to identify the
 protocols implemented.
+
+The product, manufacturer and airport names in deploy/catalogue.json are also
+third-party trademarks, carried through from the Wikidata snapshot listed above.
+CC0 dedicates copyright and says nothing about trademark, so the same rule
+applies to them: they are used nominatively, to name what an offer refers to, in
+a demonstration catalogue whose prices, retailers, pictures and shop are all
+invented. No affiliation or endorsement is implied and nothing is offered for
+sale.

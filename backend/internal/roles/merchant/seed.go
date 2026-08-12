@@ -50,13 +50,18 @@ const (
 	DemoPriceAccepted = 18900 // beat 6 — below the cap, so the flow completes
 )
 
-// DemoRoute is Belgrade to Palma de Mallorca, the one route the mock merchant
-// sells.
+// DemoRoute is Belgrade to Palma de Mallorca, the route the demonstration is
+// written about.
 //
-// The running merchant does not read this: its route is derived from the offer
-// in deploy/catalogue.json that carries route.origin and route.destination. This
-// is the documented figure that offer has to agree with, on the terms the
-// prices above are stated on.
+// Not the only one the mock merchant sells: since issue #160 the catalogue
+// describes a dozen, and the inventory quotes all of them. It is the one every
+// diagram of a real transaction reuses, and the one the scripted prompt narrows
+// to by naming both codes.
+//
+// The running merchant does not read this: its routes are derived from the
+// offers in deploy/catalogue.json that carry route.origin and route.destination.
+// This is the documented figure one of those offers has to agree with, on the
+// terms the prices above are stated on.
 var DemoRoute = Route{Origin: "BEG", Destination: "PMI"}
 
 // DefaultStep is how long each price holds in a live demonstration.
@@ -375,8 +380,8 @@ func NewDemoService(role roles.Role, opts DemoOptions) (*Service, error) {
 		role.Clock = demoClock
 	}
 
-	// One instant seeds both, so the flight the catalogue lists and the route
-	// the inventory quotes step through their prices together. Read twice they
+	// One instant seeds both, so a flight the catalogue lists and the route the
+	// inventory quotes step through their prices together. Read twice they
 	// would be a schedule apart, and a search and a checkout taken a moment
 	// later would disagree about what one flight costs.
 	//
@@ -388,7 +393,7 @@ func NewDemoService(role roles.Role, opts DemoOptions) (*Service, error) {
 	// # Why the catalogue is built first, and the inventory from it
 	//
 	// CatalogueFile.Inventory used to be called here directly, alongside
-	// Catalogue, each independently deriving the flight entry's Schedule from
+	// Catalogue, each independently deriving a flight entry's Schedule from
 	// opts.Step. That agreed by construction while step was a fixed duration —
 	// two calls to the same arithmetic always land on the same answer — but
 	// stops being true the moment opts.StepMax makes it a draw: two independent
@@ -396,8 +401,8 @@ func NewDemoService(role roles.Role, opts DemoOptions) (*Service, error) {
 	// (Inventory) and GET /checkout?item=&quantity= (Catalogue) would name
 	// different prices for the one product this demonstration is about. What
 	// closes that hole under a draw is not calling Inventory a second time at
-	// all — the flight's Schedule is built exactly once, inside the catalogue,
-	// and the inventory below reads that same *Schedule back out rather than
+	// all — each flight's Schedule is built exactly once, inside the catalogue,
+	// and the inventory below reads those same *Schedules back out rather than
 	// building its own.
 	start := role.Clock.Now()
 
@@ -412,18 +417,22 @@ func NewDemoService(role roles.Role, opts DemoOptions) (*Service, error) {
 		return nil, err
 	}
 
-	flight, err := opts.Catalogue.flight()
+	flights, err := opts.Catalogue.routeOffers()
 	if err != nil {
 		return nil, err
 	}
-	route, _ := flight.route()
-	flightOffer, err := catalogue.Find(flight.ID)
-	if err != nil {
-		// Unreachable: catalogue was just built from this same file's offers,
-		// flight.ID among them.
-		return nil, fmt.Errorf("merchant: the flight offer is missing from the catalogue built from its own file: %w", err)
+	routes := make(map[Route]*Schedule, len(flights))
+	for _, flight := range flights {
+		listed, err := catalogue.Find(flight.ID)
+		if err != nil {
+			// Unreachable: catalogue was just built from this same file's
+			// offers, flight.ID among them.
+			return nil, fmt.Errorf("merchant: a flight offer is missing from the catalogue built from its own file: %w", err)
+		}
+		route, _ := flight.route()
+		routes[route] = listed.Schedule
 	}
-	inventory, err := New(role.Clock, map[Route]*Schedule{route: flightOffer.Schedule})
+	inventory, err := New(role.Clock, routes)
 	if err != nil {
 		return nil, err
 	}
