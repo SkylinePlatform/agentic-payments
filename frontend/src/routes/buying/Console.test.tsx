@@ -703,8 +703,13 @@ describe("the shopping console", () => {
     const other = { ...aProposal().offer, id: "gtin:0002", title: "A dearer ladder" };
     const first: Proposal = { ...aProposal(), offers: [aProposal().offer, other] };
 
+    // The second reading is deliberately unlike the first. In production the two
+    // are the same sentence read twice and would agree; making them differ is
+    // what lets the assertion below distinguish *the console kept the reading it
+    // just made* from *the console still holds the one the agent has forgotten*.
     const { readings } = stubDiscovery({
-      interpret: () => json(aReading()),
+      interpret: (n) =>
+        json(n === 0 ? aReading() : { ...aReading(), interpretation_id: "reading-2", quantity: 5 }),
       candidates: (_body, n) =>
         n === 0
           ? json(first)
@@ -727,5 +732,70 @@ describe("the shopping console", () => {
       screen.getByTestId("product-table-section"),
       "and the table a person was looking at is still there to click again",
     ).toBeTruthy();
+
+    // Left usable, which is the half of *the table is still there* that a table
+    // alone does not deliver. The recovery sets a phase of its own, and this is
+    // the one path that reaches the end of `choose` without navigating away — so
+    // a phase left standing here disables the box and pins *Looking for what
+    // matches…* on screen for ever, over a table whose rows a person is being
+    // invited to click again.
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("happening"),
+        "the console is not still claiming to be working after it gave up",
+      ).toBeNull();
+    });
+    expect(
+      (screen.getByRole("textbox") as HTMLTextAreaElement).disabled,
+      "and the box takes a new sentence, because giving up is an outcome and not a wait",
+    ).toBe(false);
+
+    // The reading that survives is the one just made, not the one the agent has
+    // already said it no longer holds. This is what stops the screen settling
+    // into a state where every further click on the table spends the dead
+    // identifier first and pays for a re-read to get past it — the one-retry
+    // bound is per click, so a console that never adopted the fresh reading
+    // would honour it and still never converge.
+    expect(
+      within(screen.getByTestId("reading")).getByText(/quantity 5/i),
+      "the console kept the reading it made recovering, not the one that was refused",
+    ).toBeTruthy();
+  });
+
+  it("stops showing what the agent understood once a new sentence is refused", async () => {
+    // The reading block is the one thing on this screen that outlives the call
+    // that produced it, so it is the one thing that can go out of step with what
+    // a person just typed. A second *Interpret* the agent refuses must clear it:
+    // otherwise the refusal for the new sentence is read beside *What the agent
+    // understood* for the old one, which is a screen stating a reading of a
+    // sentence that was never read.
+    const { readings } = stubDiscovery({
+      interpret: (n) =>
+        n === 0
+          ? json(aReading())
+          : new Response("agent: this agent has no script for that sentence\n", { status: 422 }),
+      candidates: () => json(aProposal()),
+    });
+
+    renderConsole();
+    const box = await screen.findByRole("textbox");
+    await userEvent.type(box, "two ladders");
+    await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
+    expect(await screen.findByTestId("reading"), "the first sentence was read").toBeTruthy();
+
+    await userEvent.clear(box);
+    await userEvent.type(box, "buy me a yacht");
+    await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
+
+    expect(await screen.findByText(/no script for that sentence/)).toBeTruthy();
+    expect(readings, "both sentences reached the agent").toEqual(["two ladders", "buy me a yacht"]);
+    expect(
+      screen.queryByTestId("reading"),
+      "and nothing on screen still claims the agent understood anything",
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("product-table-section"),
+      "the offers found for the previous sentence go with it, which this screen already did",
+    ).toBeNull();
   });
 });

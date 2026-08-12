@@ -201,6 +201,66 @@ func TestTheBrowserCannotSupplyTheLimitsOrTheSentence(t *testing.T) {
 		"the sentence a proposal says it came from is the console's own copy")
 	assert.Equal(t, proposal().Constraints, body.Constraints,
 		"and the limits are the agent's reading, not the ones the request arrived carrying")
+
+	// The response alone cannot carry this claim, and that is the whole reason
+	// the two assertions below exist. The mocked Watcher answers proposal()
+	// whatever it is handed, so a handler that took the request's constraints and
+	// passed them to ProposeFrom would answer byte for byte identically to one
+	// that ignored them — and in production those are the constraints settle
+	// searches on, narrow pins and sign puts in front of a person. What the agent
+	// was *asked* is the only place the difference shows.
+	asked, handed, ok := handedToTheSearch(c)
+	require.True(t, ok, "the search has to have run, or there is nothing to assert about it")
+	assert.Equal(t, "two ladders", asked,
+		"the sentence the search is for is the store's copy and never the request's")
+	assert.Equal(t, interpretation(), handed,
+		"and the reading is the one this console made, field for field: a request able to "+
+			"replace any part of it would put limits on a consent screen that this agent was "+
+			"told rather than ones it read, with nothing downstream able to tell")
+}
+
+// handedToTheSearch reports the sentence and the reading the first ProposeFrom
+// call was given, and whether there was one.
+//
+// assert-free and returning a bool rather than failing itself, on AGENTS.md's
+// rule about shared assertion helpers: a helper carrying require is safe only
+// until somebody calls it off the test goroutine, and the call there may be one
+// word long. The caller does the asserting, where t is unambiguously its own.
+//
+// Reading Mock.Calls directly is TestOneReadingIsSearchedTwiceWithoutReadingThe
+// SentenceAgain's own move and safe for the same reason: these consoles run
+// `nothing` for a watch, so no goroutine is inside the mock appending to the
+// slice while this reads it.
+func handedToTheSearch(c *scripted) (string, interpret.Interpretation, bool) {
+	for _, call := range c.watcher.Calls {
+		if call.Method != "ProposeFrom" {
+			continue
+		}
+		prompt, promptOK := call.Arguments.Get(1).(string)
+		what, whatOK := call.Arguments.Get(3).(interpret.Interpretation)
+		return prompt, what, promptOK && whatOK
+	}
+	return "", interpret.Interpretation{}, false
+}
+
+func TestAReadingThatNamedNoCountBuysOneRatherThanNone(t *testing.T) {
+	t.Parallel()
+
+	// proposed.Quantity's rule, one call earlier, which is where #299 moved the
+	// number a person first reads. Zero means one and it is resolved at this
+	// edge, because the browser on the other side has no fallback of its own.
+	// Without it the console draws *Quantity 0* beside the interpretation and the
+	// consent screen draws *1* a moment later — two baskets for one sentence, on
+	// the screen whose whole job is to say what the agent understood.
+	c := newConsoleWith(t, func(w *console.MockWatcher) {
+		silent := interpretation()
+		silent.Quantity = 0
+		w.EXPECT().Interpret(mock.Anything, mock.Anything).Return(silent, nil).Maybe()
+	})
+
+	_, body := read(t, c, t.Name(), "a telescopic ladder")
+	assert.Equal(t, 1, body.Quantity,
+		"a sentence that named no count buys one, and it is this edge that says so")
 }
 
 func TestAReadingThisConsoleNoLongerHoldsIsGone(t *testing.T) {
