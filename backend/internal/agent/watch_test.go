@@ -854,6 +854,18 @@ func (s *refusingSigner) Sign(ctx context.Context, payload []byte) ([]byte, erro
 // the closed Checkout Mandate really had been signed when the failure landed.
 // Without it an arm would pass just as well against a Delegate that failed at the
 // very first call, where there is nothing to announce prematurely.
+//
+// # The count alone is a count of calls, and the arms have to name documents
+//
+// A count says n signatures were reached, not which four documents they were —
+// that reading comes from Delegate's own signing order, which nothing here would
+// otherwise assert. So each arm also pins the verifier its refused chain was
+// addressed to, which delegatePayment writes into the error it wraps. The three
+// arms then name positions 2, 3 and 4, and position 1 is the closed Checkout
+// Mandate by elimination: reorder Delegate's four signatures any way at all and
+// an arm's nth call lands on a document it is not named for. That is what turns
+// "the failure landed after the Checkout Mandate existed" from a reading of the
+// implementation into something this test would notice losing.
 func TestNothingIsAnnouncedForAnAttemptThatWasNeverMinted(t *testing.T) {
 	t.Parallel()
 
@@ -875,11 +887,15 @@ func TestNothingIsAnnouncedForAnAttemptThatWasNeverMinted(t *testing.T) {
 	// nothing about this defect.
 	for _, failing := range []struct {
 		document string
+		// audience is the verifier that chain is addressed to, and it is what
+		// makes document a checked fact rather than a label: delegatePayment
+		// writes it into the error it wraps.
+		audience string
 		call     int
 	}{
-		{"the Credential Provider's payment chain", 2},
-		{"the merchant's payment chain", 3},
-		{"the Merchant Payment Processor's payment chain", 4},
+		{"the Credential Provider's payment chain", credProviderID, 2},
+		{"the merchant's payment chain", merchantID, 3},
+		{"the Merchant Payment Processor's payment chain", processorID, 4},
 	} {
 		watch := a.watch(t)
 		signer := &refusingSigner{Signer: watch.Signer, from: failing.call}
@@ -888,6 +904,10 @@ func TestNothingIsAnnouncedForAnAttemptThatWasNeverMinted(t *testing.T) {
 		_, err := watch.Delegate(t.Context(), quoted)
 		require.ErrorIs(t, err, errKeyGone,
 			"%s could not be signed, so this attempt does not exist and Delegate has to say so",
+			failing.document)
+		assert.ErrorContains(t, err, failing.audience,
+			"the arm's nth signature has to be %s, or the count below is a count of calls rather "+
+				"than of documents and nothing here says the first one was the Checkout Mandate",
 			failing.document)
 		assert.Equal(t, int64(failing.call), signer.calls.Load(),
 			"the failure has to land after the closed Checkout Mandate was signed, or this arm is "+
