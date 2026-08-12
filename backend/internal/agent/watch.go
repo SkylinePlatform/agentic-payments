@@ -35,8 +35,9 @@ import (
 //     merchant's TestCyclingJitteredScheduleRejectsNonsense pins exactly that.
 //     Its step would then never change either, so no attempt would ever be
 //     minted and the branch below would never be *reached*. Issue #192 is what
-//     that cost deploy/catalogue.json's concert and ladders before they each
-//     gained a second price: a browser starting either from GET /examples took
+//     that cost deploy/catalogue.json's ladders — and the concert offer beside
+//     them, until issue #244 — before they gained a second price: a browser
+//     starting either from GET /examples took
 //     a baseline that could never step, and could therefore never buy. Every
 //     offer the file ships now has at least two prices, so this second route is
 //     presently unreachable for the simpler reason that nothing here is single
@@ -46,8 +47,8 @@ import (
 // Neither route is an instruction's, and that is not a third case: a run whose
 // Authorisation.Trigger is immediate reads no step and waits for nothing, so it
 // ends at ErrPurchaseRefused or at a purchase long before either paragraph
-// above applies. Since issue #198 the concert and the ladders are exactly such
-// runs, which is what makes their second price no longer load-bearing.
+// above applies. Since issue #198 the ladders are exactly such a run, which is
+// what makes their second price no longer load-bearing.
 //
 // Either way the watch polls for as long as the process runs, minting nothing
 // and reporting nothing, rather than reaching this. ErrAuthorisationExpired is
@@ -115,7 +116,7 @@ var ErrPurchaseRefused = errors.New("agent: the purchase this sentence asked for
 // Everything below describes the conditional one — "buy a flight to Palma when
 // it drops below $200" — which is what this type is named for and what it does
 // unless told otherwise. A sentence carrying no condition asks for something
-// else: "two tickets to the concert, up to $160 all in" is an instruction, and
+// else: "find and buy telescopic ladders, cheapest" is an instruction, and
 // answering it with a wait is issue #198.
 //
 // Which of the two this run is comes from Authorisation.Trigger, decided once

@@ -22,8 +22,8 @@ import type { Proposal } from "../consent/model";
  * `constraint.Field.Name` for the quantity registered in
  * `internal/core/authz/constraint/field.go` — "the quantity", `KindNumber`,
  * which is why `lte` is the operator below rather than `eq`: a ceiling is what
- * the user is agreeing to, the same shape the concert prompt's own
- * interpretation already produces for the same field.
+ * the user is agreeing to, the same shape an interpretation that read a count
+ * out of the sentence produces for the same field.
  */
 const QUANTITY_FIELD = "quantity";
 
@@ -33,9 +33,11 @@ const QUANTITY_FIELD = "quantity";
  * `routes/consent/Signing.tsx`'s `startWatch` call to read.
  *
  * Appended rather than replacing anything: if the interpretation already
- * carries its own quantity constraint — the concert prompt's "two tickets…"
- * does, per #133 — both travel. #133 is the interpreter producing a bound the
- * watch does not honour, and it is out of scope here; this function's job is
+ * carries its own quantity constraint — a sentence naming a count produces
+ * one, per #133, and no sentence `interpret.Scenarios()` still ships does
+ * since #244 removed the concert prompt — both travel. #133 is the interpreter
+ * producing a bound the watch does not honour, and it is out of scope here;
+ * this function's job is
  * only to make the count a person chose on this screen part of what gets
  * signed; it does not attempt to reconcile it with a second bound the
  * interpreter may have already placed on the same field.

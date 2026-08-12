@@ -113,9 +113,9 @@ type PricedOffer struct {
 // type rather than a second return value. PricedOffer.Price is what one costs —
 // the number a schedule holds and a search shows — and LinePrice is what the
 // purchase costs, which is the number a mandate's amount constraint has to be
-// compared against and the number a Payment Mandate has to pay. Three concert
-// tickets at $75 are a $75 offer and a $225 purchase, and a type carrying one
-// field for both would make "the price" mean whichever the last reader assumed.
+// compared against and the number a Payment Mandate has to pay. Three ladders at
+// $139 are a $139 offer and a $417 purchase, and a type carrying one field for
+// both would make "the price" mean whichever the last reader assumed.
 type QuotedOffer struct {
 	PricedOffer
 

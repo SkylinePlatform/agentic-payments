@@ -347,6 +347,17 @@ only ones that did not move: they are carried through the generator as raw JSON,
 so their prices, caps and `scenario` blocks are byte for byte what this table
 says. The other sixty are derived and no scripted sentence goes looking for one.
 
+**#244 has since taken two rows out of the menu**, and the table below is what
+these screens were built against rather than what a reader will be offered today.
+The flight's second wording — *…under \$200…* — went because showing the same
+purchase twice on a menu of five reads as padding; the alias mechanism it
+illustrated is unchanged and is witnessed in `interpret`'s own tests. The concert
+row went with its offer, leaving sixty-three offers and three sentences. Two
+things below turn on that row and are worth reading in its light: it was the only
+scripted sentence that named a count, and one of the two that bought without
+waiting. The count is now the ladders' in `internal/agent`'s tests; the buying
+without waiting is the ladders' in the menu.
+
 | sentence | offer | prices (USD) | cap | what happens |
 |---|---|---|---|---|
 | *buy a flight to Palma when it drops below \$200, this summer* (and *…under \$200…*) | `route:BEG-PMI` | 240 → 210 → **189** | 200 | waits, **is refused at 210**, buys at 189 |
@@ -691,7 +702,10 @@ Gates: `make check` and `make frontend-check`.
   and not a line of these screens moved for it.
 
 - **No fix for the concert prompt's quantity, and the screen will make it
-  visible.** #133: *two tickets… up to \$160* interprets to `quantity lte 2`,
+  visible.** #133 — and #244 has since removed the prompt rather than the defect,
+  so what follows describes a shape the interpreter can still produce and no
+  scripted sentence still reaches. #133: *two tickets… up to \$160* interprets to
+  `quantity lte 2`,
   which is signed and enforced, while the watch takes its quantity from
   `-quantity` and buys one. Nothing is violated — one satisfies `lte 2` — but the
   consent screen now renders *"the quantity is at most 2"* to a person who then

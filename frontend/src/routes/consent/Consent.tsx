@@ -46,8 +46,9 @@ import { Signing } from "./Signing";
  *    signs it: the surface never sees a count, no mandate carries one, and the
  *    only thing about a quantity a signature covers is a bound such as `the
  *    quantity is at most 2` — a limit, which appears in zone 2 where limits
- *    belong. For the concert prompt both are on this screen at once; they are
- *    different kinds of fact and so they are in different boxes.
+ *    belong. For a sentence that names a count both are on this screen at
+ *    once; they are different kinds of fact and so they are in different
+ *    boxes.
  * 5. **What the identifier refers to** — the merchant's own words, outside the
  *    signed box. `Render()` produces `the item is gtin:05014477390221`, which
  *    is the identifier the constraint carries and the merchant evaluates, so

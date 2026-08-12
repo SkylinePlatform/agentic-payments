@@ -131,7 +131,7 @@ describe("signing", () => {
   });
 
   it("carries the basket size to the agent, not a number this screen invents — issue #133", async () => {
-    // The concert scenario's own number, distinct from every other fixture's
+    // A basket size a sentence named, distinct from every other fixture's
     // default of 1 so a version that silently sent 1 regardless is caught by
     // the value rather than by coincidence.
     const calls = stubFetch({

@@ -99,9 +99,9 @@ const (
 	// the pair's own expiry is the fact that still lets it conclude and report
 	// "this will never happen" rather than sitting at stateWatching for as long
 	// as the process runs. Before issue #192 this was also the state a browser
-	// starting the concert or the ladders prompt from GET /examples ended on,
-	// an hour after starting, because both named an offer whose single price
-	// could never step. Neither offer is single priced any longer, so nothing
+	// starting the ladders prompt from GET /examples ended on, an hour after
+	// starting, because it named an offer whose single price could never step.
+	// No offer the file ships is single priced any longer, so nothing
 	// interpret.Scenarios() serves reaches this state today; it stays reachable
 	// for a prompt naming a schedule the user's cap never meets, or a
 	// counterparty that stops answering.

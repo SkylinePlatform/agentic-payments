@@ -675,9 +675,9 @@ func TestASentenceWithNoConditionBuysAtOnceRatherThanWaiting(t *testing.T) {
 //
 // # Why the trigger is set by hand
 //
-// No scripted instruction names an offer its own cap refuses — the concert and
-// the ladders are affordable from their first price, which is what made them
-// #198's subject in the first place. The built scenario's flight is the
+// No scripted instruction names an offer its own cap refuses — the ladders are
+// affordable from their first price, which is what made them #198's subject in
+// the first place. The built scenario's flight is the
 // refusal this repository has: $240.00 against a cap of $200.00. So the
 // sentence's own reading is overridden here, and what is under test is the
 // loop rather than the interpretation. TestEachScenarioSaysWhenItsSentenceWantedToBuy

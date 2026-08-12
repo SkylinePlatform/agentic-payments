@@ -1274,10 +1274,16 @@ const maxSignedSize = 8 * maxRenderedSize
 // number is defended from both ends.
 //
 // From below, by measurement. The largest offer this repository's merchant
-// signs is **399 bytes** — GET /checkout?item=event:vlado-georgijev-2026-11-14,
-// the longest identifier in deploy/catalogue.json, quoted through the real
-// handler — and the whole approval it belongs to, both mandates encoded, is
-// **760 bytes**, answering with 1,461. Thirty-two kilobytes is forty-three times
+// signs was **399 bytes** — GET /checkout?item=event:vlado-georgijev-2026-11-14,
+// the longest identifier deploy/catalogue.json then held, quoted through the
+// real handler — and the whole approval it belongs to, both mandates encoded,
+// **760 bytes**, answering with 1,461. Issue #244 has since removed that offer,
+// and the longest identifier the file now holds is thirteen characters shorter,
+// so the figures below are an over-estimate of today's largest purchase rather
+// than a description of it. They are left as measured because the argument runs
+// one way: a bound defended from below only gets safer when the thing it was
+// measured against shrinks, and re-measuring would restate the same conclusion
+// with a smaller number. Thirty-two kilobytes is forty-three times
 // that complete purchase. In claim terms it is a Checkout JWT of some 24 KB of
 // JSON, and this merchant states a line of a purchase in about 45 bytes of
 // claim: a cart of several hundred lines, or a hundred lines carrying titles,
