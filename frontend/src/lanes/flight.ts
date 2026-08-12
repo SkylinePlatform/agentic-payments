@@ -28,23 +28,66 @@
  * transition, then release it. What is unusual is only that "the old one" was a
  * different element.
  *
- * # Under jsdom this does nothing, and that is not a gap being tolerated
+ * # Under jsdom there is no layout, but there is still a decision to test
  *
- * jsdom computes no layout, so every rect is zero and {@link flightsBetween}
- * finds no movement. Nothing here can be asserted in a suite that has no
- * geometry, so nothing here is asserted there: what the suite holds is the pure
- * function, driven with boxes of its own, and the static carriers on the card.
- * The motion itself was checked by running it — which is the only way it ever
- * could have been.
+ * jsdom computes no layout, so every rect it produces on its own is zero and
+ * {@link flightsBetween} would find no movement. **That is a reason to script
+ * the geometry, not a reason to test nothing** — which is what this comment
+ * used to say, and what left {@link useFlight} with no test at all: replacing
+ * its whole body with `{}` kept the suite green, on a module whose entire
+ * subject is motion.
+ *
+ * `getBoundingClientRect` is a method, so `flight.test.ts` renders this hook in
+ * a component and tells it what to answer across two commits. What it asserts
+ * is the transform written here, which is the one observable that is empty when
+ * nothing animates — the three suppressions below and the origin subtraction
+ * above all have a case that goes red.
+ *
+ * What still cannot be asserted is that a browser *painted* the half second:
+ * the easing, the 520ms and the fact that a reader perceives one document
+ * moving were checked by running `make demo` in both themes, at two widths and
+ * under `prefers-reduced-motion`, which is the only way they ever could be.
  */
 
 import { useLayoutEffect } from "react";
 import type { RefObject } from "react";
 
-/** Where a card was, in viewport coordinates. */
+/** Where a card was, in the coordinates of the grid it lives in — see {@link relativeTo}. */
 export interface Box {
   readonly x: number;
   readonly y: number;
+}
+
+/**
+ * A card's place inside its own grid, rather than inside the viewport.
+ *
+ * **The second half of "a resize is not a hop", found the same way — by looking
+ * at it running.** {@link reflowed} catches the grid changing *width*; this
+ * catches it changing *place*. Anything above the lanes that grows or shrinks
+ * moves every card on the page down or up together: the *Pacing* notice
+ * disappearing when the last step is drawn, the *Purchases in the log* row
+ * arriving with a second transaction, the gap banner, an earlier attempt gaining
+ * a card. Measured in viewport coordinates every one of those is a movement, so
+ * every card flew at once — which is a hop asserted for all of them and taken by
+ * none.
+ *
+ * The pacing notice is the case that made it unmissable, because it is not an
+ * edge: it goes away at the end of *every* paced run, so the demonstration ended
+ * with the whole board twitching. Seven cards, `dx=0 dy=38`, on a stopwatch.
+ *
+ * Subtracting the container's own origin is what makes the question the right
+ * one. A hop moves a card *within* the grid and still reads as movement here; a
+ * page-level shift moves the origin and the card by the same amount and reads as
+ * nothing, which is correct, because the browser has already redrawn the header,
+ * the prose and the log instantly at their new places. A card that animated
+ * across a gap everything else had already closed would be the one element on
+ * screen lagging the layout, which is what it looked like.
+ *
+ * It does not replace {@link reflowed}: a resize moves the columns *relative to*
+ * the grid as well, so both are needed and they catch different things.
+ */
+export function relativeTo(origin: Box, box: Box): Box {
+  return { x: box.x - origin.x, y: box.y - origin.y };
 }
 
 /** How far a card has to travel back before it is released. */
@@ -136,6 +179,32 @@ export function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+/**
+ * Whether the tab is one nothing can be animated in.
+ *
+ * **Found by looking at it running, in the one way a card can be left where it
+ * never belonged.** The flight is two steps: put the card back with no
+ * transition, then release it on the next animation frame. Chrome throttles
+ * `requestAnimationFrame` to *nothing* in a background tab, so the second step
+ * never runs — and a reader who opens this screen, switches away while the demo
+ * is drawing and comes back finds cards parked at the position they were
+ * released from, one of them far enough out of the grid to put the whole page
+ * into a horizontal scroll.
+ *
+ * It is worse than it looks, because the next commit measures with
+ * `getBoundingClientRect`, which reports the *transformed* box. A stranded card
+ * poisons the geometry the following flight is computed from, so the damage
+ * outlives the tab coming back.
+ *
+ * Refusing to start a flight is the whole fix and it costs nothing: a hidden tab
+ * has no viewer, motion is never the only carrier, and the boxes are still
+ * recorded — so the first commit after the reader returns compares against
+ * where the cards actually are and the next real hop flies normally.
+ */
+function hidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
 /** The transition itself is a class, so the duration is in the stylesheet with every other token. */
 const FLIGHT_CLASS = "lane-flight";
 
@@ -151,18 +220,24 @@ export function useFlight(container: RefObject<HTMLElement | null>, held: Held):
     const root = container.current;
     if (root === null) return;
 
-    const width = root.getBoundingClientRect().width;
+    // The grid's own box is both the width {@link reflowed} watches and the
+    // origin every card is measured against — one read, because they are two
+    // questions about the same rectangle.
+    const box = root.getBoundingClientRect();
+    const width = box.width;
+    const origin = { x: box.left, y: box.top };
+
     const now = new Map<string, Box>();
     const nodes = new Map<string, HTMLElement>();
     for (const node of root.querySelectorAll<HTMLElement>("[data-flight]")) {
       const key = node.dataset.flight;
       if (key === undefined || key === "") continue;
       const rect = node.getBoundingClientRect();
-      now.set(key, { x: rect.left, y: rect.top });
+      now.set(key, relativeTo(origin, { x: rect.left, y: rect.top }));
       nodes.set(key, node);
     }
 
-    const still = prefersReducedMotion() || reflowed(held.width, width);
+    const still = prefersReducedMotion() || hidden() || reflowed(held.width, width);
     const flights = still ? new Map<string, Flight>() : flightsBetween(held.boxes, now);
     held.width = width;
 

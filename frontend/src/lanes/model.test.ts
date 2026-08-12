@@ -792,6 +792,34 @@ describe("the cards of one attempt", () => {
     ).toEqual([2, 5, 1, 10, 11]);
   });
 
+  it("keeps a step no lane claims off every card, and still shows it", () => {
+    fresh();
+    // The fourth row of the spec's degradation table, and the only one that had
+    // no test: `ticketsOf` skips a step whose role no column claims. A card
+    // lives in a lane, so a step belonging to none cannot join one — and drawing
+    // it both here and in *No lane yet* would be one step twice, which is the
+    // complaint this whole issue is about in miniature. `registry` and `proxy`
+    // arrive with TAP and nothing emits about a mandate from them today, so this
+    // is the only place the rule is exercised at all.
+    const closed = { type: "checkout", state: "closed" } as const;
+    const [transaction] = group([
+      record({ kind: "mandate_constructed", role: "agent", digest: DIGEST, mandate: closed }),
+      record({ kind: "mandate_presented", role: "registry", digest: DIGEST, mandate: closed }),
+    ]);
+    const [attempt] = transaction.attempts;
+
+    expect(
+      ticketsOf(attempt).flatMap((ticket) => ticket.hops.map((hop) => hop.role)),
+      "the registry's step names the same mandate and would otherwise land on " +
+        "the agent's card as a hop, giving that card a lane no column draws",
+    ).toEqual(["agent"]);
+    expect(
+      transaction.unplaced.map((step) => step.role),
+      "and it is not lost by being skipped — *No lane yet* is what already draws " +
+        "it, which is the half of the rule that keeps every step visible",
+    ).toEqual(["registry"]);
+  });
+
   it("says the difference between a lane nothing has reached and one it has left", () => {
     fresh();
     const attempt = only(purchase());

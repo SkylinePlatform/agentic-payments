@@ -700,10 +700,18 @@ things stand.
 *That sentence read "on every step card" until #241, which is a correction
 rather than a relaxation: a card is now a document and a step is a line on it,
 so the digest is stated once per artefact instead of once per emission. The
-lanes still repeat it — twice on a clean attempt, on the Checkout Mandate's card
-and on the Payment Mandate's, which is where a reader can actually see the two
-agree — and the console still does not.* A card is a document *is the section
-below that changes the unit.*
+lanes still repeat it — five times on a clean attempt, once on each card that
+has a hop naming it, which is the two mandates and the three receipts — and the
+console still does not. The pair a reader actually checks against each other is
+the Checkout Mandate's and the Payment Mandate's, because those are the two
+documents the binding is between; the receipts carry it because the verifier
+that issued each one was answering about that checkout.* A card is a document
+*is the section below that changes the unit.*
+
+*The "every" is worth reading exactly: it is every card that has a digest to
+show, not every card. An open mandate never has one and structurally never can —
+see the degradation table below — so the two cards at the head of the User lane
+carry none, and the count above is of the closed attempt.*
 
 **The vocabulary may not differ.** Which mark a state takes, what a mark means,
 whether the word is present, and which colour may sit on which mark are the
@@ -1086,6 +1094,23 @@ card's box changes at once and every one of them would fly — motion asserting 
 hop that never happened. The container's own width is the signal, because it is
 the one thing that cannot change when a step arrives. Found by looking at it
 running; jsdom computes no layout and no test could have caught it.
+
+**Neither is the page moving underneath it, which is the same defect in the
+other axis and was found the same way.** Anything above the lanes that grows or
+shrinks moves every card together: the *Pacing* notice being removed when the
+last held step is drawn, the *Purchases in the log* row arriving with a second
+transaction, the gap banner, an earlier attempt gaining a card. The pacing
+notice is the one that made it unmissable, because it is not an edge — it goes
+away at the end of *every* paced run, so the demonstration ended with the whole
+board twitching: seven cards across all three lanes, `dx=0 dy=38`, none of which
+had hopped. The fix is to measure each card **inside its own grid** rather than
+inside the viewport, so a shift that moves the origin and the card by the same
+amount reads as nothing. That is the right answer rather than a suppression: the
+browser has already redrawn the header, the prose and the log instantly at their
+new places, and a card animating across a gap everything else had closed is the
+one element on screen lagging the layout. Width and origin catch different
+things and both are needed — a resize moves the columns relative to the grid as
+well.
 
 ### The empty lane has two spellings
 
