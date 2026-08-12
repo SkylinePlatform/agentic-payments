@@ -520,6 +520,28 @@ func TestFlushReachesTheUnderlyingWriter(t *testing.T) {
 // asked for. Counting handler runs is therefore the assertion — comparing the
 // two responses would pass even with the bug present, because what a hijacked
 // connection sends is not the recorder's to compare.
+//
+// # Why the second request waits for a channel and not for the client
+//
+// Issue #128 is what this cost when it did not. A hijacking handler answers on
+// the raw connection, so the client is holding a complete 101 while the
+// middleware is still unwinding — and the key is given back by a deferred
+// Release that has not run yet. A second request sent on the strength of the
+// first client call having returned is racing that unwind, and when it loses it
+// is told 409 idempotency_in_flight and the handler does not run: the two
+// numbers this test then reports are the ones a remembered hijack would
+// produce, so the flake was indistinguishable from the bug being looked for.
+//
+// The middleware exposes nothing that says when a key is free, and it should
+// not: a caller cannot act on the answer, and a method that reported it would
+// be an invitation to poll. The ordering comes from wrapping instead. Release is
+// deferred inside the guarded handler, so it has run by the time ServeHTTP
+// returns to the wrapper below, which is before the send on settled — a real
+// happens-before edge, where a sleep would only have been a longer guess.
+//
+// TestAHijackKeepsItsKeyWhileItRuns is the other half: the 409 the flake saw is
+// the correct answer to a request that arrives inside that window, not a defect
+// that got covered over here.
 func TestHijackIsNotRemembered(t *testing.T) {
 	t.Parallel()
 
@@ -541,7 +563,16 @@ func TestHijackIsNotRemembered(t *testing.T) {
 
 	m, err := transport.NewIdempotency(clock.NewFake(base))
 	require.NoError(t, err, "NewIdempotency")
-	srv := httptest.NewServer(m.Wrap(h))
+
+	// Buffered for both requests, so that a failure which stops the test early
+	// cannot leave a handler parked on the send — that would hang srv.Close in
+	// wg.Wait and turn a failing test into one that never reports.
+	settled := make(chan struct{}, 2)
+	guarded := m.Wrap(h)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		guarded.ServeHTTP(w, r)
+		settled <- struct{}{}
+	}))
 	defer srv.Close()
 
 	upgrade := func() int {
@@ -557,10 +588,105 @@ func TestHijackIsNotRemembered(t *testing.T) {
 
 	assert.Equal(t, http.StatusSwitchingProtocols, upgrade(),
 		"the first upgrade did not reach the handler")
+	<-settled // the middleware has unwound, so the key is back before the retry
 	assert.Equal(t, http.StatusSwitchingProtocols, upgrade(),
 		"the second upgrade was answered from the store — the empty 200 a hijack leaves behind")
+	<-settled
 	assert.Equal(t, int64(2), runs.Load(),
 		"a hijacked response was remembered, so the retry never re-ran the handler")
+}
+
+// TestAHijackKeepsItsKeyWhileItRuns pins the answer a request gets inside the
+// window the test above steps over, because #128 spent a CI run and an
+// investigation on mistaking it for a bug.
+//
+// A hijacked connection belongs to the handler until it returns, which for the
+// upgrades a hijack is used for is the life of the stream. The key stays claimed
+// for exactly that long, so a second request presenting it is refused as
+// in-flight — the attempt really has not finished — and told to come back rather
+// than told it made a mistake. What it must never be given is the empty 200 the
+// recorder is holding, which is the failure TestHijackIsNotRemembered names.
+//
+// # The window is not unique to hijack, only unbounded there
+//
+// Worth stating, because the tidier sentence — Complete runs inside the handler
+// chain, before net/http writes the terminating bytes, so no client can hold a
+// complete answer while the key is claimed — is true of the plain case and too
+// strong as a rule. A handler that sets Content-Length, flushes and then keeps
+// working has already given its client the whole answer, and a retry arriving
+// before it returns is answered 409 here too; measured, not reasoned. What
+// hijack changes is duration: an ordinary handler's gap ends when it returns,
+// a hijacked one's lasts as long as the stream. Nothing in this repository is
+// in the first shape — the only flushing handler is the collector's SSE stream,
+// which is a GET and never reaches this middleware — and if one were, the
+// answer below would still be the true one for it.
+//
+// Nothing here is timed. The first handler is parked on a channel the test
+// closes, so the key is provably still held when the second request arrives.
+func TestAHijackKeepsItsKeyWhileItRuns(t *testing.T) {
+	t.Parallel()
+
+	var runs atomic.Int64
+	release := make(chan struct{})
+	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		runs.Add(1)
+		// assert, not require: the server's goroutine, where FailNow is not legal.
+		conn, buf, err := http.NewResponseController(w).Hijack()
+		if !assert.NoError(t, err, "the handler could not hijack through the middleware") {
+			return
+		}
+		defer func() { assert.NoError(t, conn.Close(), "close the hijacked connection") }()
+		_, err = buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: demo\r\nConnection: Upgrade\r\n\r\n")
+		assert.NoError(t, err, "write the upgrade response")
+		assert.NoError(t, buf.Flush(), "flush the upgrade response")
+		<-release
+	})
+
+	m, err := transport.NewIdempotency(clock.NewFake(base))
+	require.NoError(t, err, "NewIdempotency")
+	srv := httptest.NewServer(m.Wrap(h))
+	// LIFO: the parked handler is freed first, so srv.Close has something to
+	// wait for rather than something to wait on forever — including when an
+	// assertion below stops the test before the last line.
+	defer srv.Close()
+	defer close(release)
+
+	do := func() (int, string) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL,
+			strings.NewReader(`{"amount":100}`))
+		require.NoError(t, err, "build the request")
+		req.Header.Set(transport.KeyHeader, "k1")
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err, "the request failed")
+		defer func() { assert.NoError(t, resp.Body.Close(), "close the response body") }()
+
+		// The body of a 101 is the upgraded connection, which the handler above
+		// holds until this test releases it. Reading it waits for the stream to
+		// end, and the stream ends when this test does — so asking for it is a
+		// deadlock, not a slow read.
+		if resp.StatusCode == http.StatusSwitchingProtocols {
+			return resp.StatusCode, ""
+		}
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err, "read the response body")
+		return resp.StatusCode, string(body)
+	}
+
+	status, _ := do()
+	require.Equal(t, http.StatusSwitchingProtocols, status,
+		"the stream this test parks has to have started, or the key below is held by nothing")
+
+	status, body := do()
+	assert.Equal(t, http.StatusConflict, status,
+		"a stream still running is an attempt still running, and its key is not free")
+
+	var p problem.Problem
+	assert.NoErrorf(t, json.Unmarshal([]byte(body), &p),
+		"a caller reading .Code off a body that did not decode is asserting nothing; body: %s", body)
+	assert.Equal(t, generated.ErrorCodeIdempotencyInFlight, p.Code,
+		"in-flight tells the caller to come back; a conflict would tell it to correct a request that was right")
+	assert.Equal(t, int64(1), runs.Load(),
+		"a second stream was opened under a key the first one still holds")
 }
 
 // TestResponseControllerReachesTheUnderlyingWriter pins what Unwrap buys. The
