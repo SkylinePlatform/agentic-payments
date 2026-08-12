@@ -172,10 +172,16 @@ const markDataURIPrefix = "data:image/svg+xml;base64,"
 // **It cannot see the offer's category, and that is the point.** It took one
 // until issue #236, for the accent, and the parameter is gone rather than merely
 // unread: a mark claims nothing about what its offer is, and the way to keep a
-// rule like that is to leave the caller nothing to hand over. Restoring the
-// category-seeded accent here is now a signature change rather than a
-// one-word one — the same reasoning AGENTS.md gives for joseVerifier having no
-// KeyID method.
+// rule like that is to leave the drawing nothing to claim it with. Restoring the
+// category-seeded accent *here* is now a signature change rather than a one-word
+// one — the same reasoning AGENTS.md gives for joseVerifier having no KeyID
+// method.
+//
+// What it does not do is stop the caller handing the shelf over, because a
+// category is a string and so is an identifier: markDataURI(p.Category, p.Title)
+// in entryFor compiles, and it would draw one picture per category for every
+// fetched offer. The signature cannot reach that and a test has to, which is
+// TestAFetchedOffersPictureIsDrawnFromItsOwnIdentifier.
 //
 // Byte-identical to tools/catalogue/mark.go's `mark` for the same offer, given
 // that program's own comment block as note — which is the one thing the two

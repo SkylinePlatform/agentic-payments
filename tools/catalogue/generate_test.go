@@ -64,22 +64,48 @@ func TestTheCommittedCatalogueIsWhatThisProgramProduces(t *testing.T) {
 // over in internal/roles/merchant, says a file is there. Neither says the file
 // is the one this program draws — so a mark edited by hand, or a change to the
 // drawing that nobody re-ran, would pass both.
+//
+// # Why it draws through writeMarks rather than calling mark itself
+//
+// Because "the one this program draws" is a claim about what the program
+// *writes*, and since mark takes an identifier and a title rather than the whole
+// offer there is somewhere else to get that wrong. A category is a string and so
+// is an identifier, so `mark(o.Category, o.Title)` at the call site compiles,
+// draws one picture per shelf for all sixty offers, and would leave a test that
+// called mark itself agreeing with it exactly — the same "revert the call site
+// and every count stays as it is" shape issue #279 found one function along.
+// Routing through writeMarks also means a picture written under a name the
+// catalogue does not point at fails here rather than at the next `make
+// catalogue`.
 func TestEveryDerivedMarkIsTheOneCommittedBesideIt(t *testing.T) {
 	t.Parallel()
 
 	derived, err := derive()
 	require.NoError(t, err)
+	require.NotEmpty(t, derived, "an empty shop would compare no pictures and pass")
+
+	// The program's own write path, into a tree of its own. Never imagesPath: a
+	// test that wrote the repository would be a build that regenerated the
+	// catalogue, which is the one thing this module's doc comment, the Makefile
+	// and the CI workflow all say must not happen.
+	drawn := t.TempDir()
+	require.NoError(t, writeMarks(drawn, derived))
 
 	for _, o := range derived {
 		t.Run(o.ID, func(t *testing.T) {
 			t.Parallel()
 
-			path := filepath.Join(imagesPath, derivedDir, filepath.Base(o.ImageURL))
-			committed, err := os.ReadFile(path)
+			name := filepath.Base(o.ImageURL)
+			committed, err := os.ReadFile(filepath.Join(imagesPath, derivedDir, name))
 			if !assert.NoError(t, err, "%s names a picture that is not in the tree", o.ID) {
 				return
 			}
-			assert.Equal(t, string(mark(o.ID, o.Title)), string(committed),
+			redrawn, err := os.ReadFile(filepath.Join(drawn, derivedDir, name))
+			if !assert.NoError(t, err, "this program wrote nothing at %s, which is the file the "+
+				"catalogue points %s at", name, o.ID) {
+				return
+			}
+			assert.Equal(t, string(redrawn), string(committed),
 				"the mark committed for %s is not the one this program draws, so `make "+
 					"catalogue` has not been run since the drawing changed", o.ID)
 		})
@@ -94,8 +120,13 @@ func TestEveryDerivedMarkIsTheOneCommittedBesideIt(t *testing.T) {
 // Issue #279 replaced it with something stronger: mark and accentOf take an
 // identifier and a title, so there is no category to put back, and a test written
 // against the old signature would now compare mark(o.ID, o.Title) with itself.
-// That asserts nothing, which this module's own suite rule forbids and which
-// AGENTS.md spends a table on.
+// That asserts nothing, which AGENTS.md spends a table on — and is a rule kept by
+// hand here, since internal/suite's walk is rooted in backend/ and says in its own
+// comment that this file is not one it reads.
+//
+// What the signature does not stop is the *caller* handing a category over, and
+// that is why TestEveryDerivedMarkIsTheOneCommittedBesideIt draws through
+// writeMarks. See the paragraph there.
 //
 // The claim it made is still worth stating, because it is why the signature is
 // what it is. A picture carries the authority of a picture: a reader who noticed
@@ -169,9 +200,10 @@ func TestEveryMarkIsDrawnInTheAccentItsIdentifierChose(t *testing.T) {
 //
 // Five per cent of an even share is about six standard deviations at this sample
 // size, so a fair hash clears it by a distance no run would ever close, while a
-// seeding favouring one accent by even a twentieth fails. Both identifier shapes
-// this program produces are drawn, because the prefix is part of what gets
-// hashed.
+// seeding favouring one accent by more than a twentieth fails — InDelta compares
+// with <=, so a twentieth exactly is the last thing it lets through. Both of the
+// identifier shapes this program produces are drawn, because the prefix is part
+// of what gets hashed.
 //
 // What pins the shipped shop is not here and does not need to be:
 // TestEveryDerivedMarkIsTheOneCommittedBesideIt compares all sixty marks byte for

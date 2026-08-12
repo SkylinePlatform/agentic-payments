@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant/shop"
 )
 
 // The two paths this file reaches, from this package's directory.
@@ -167,4 +169,34 @@ func TestTwoOffersGetTwoMarks(t *testing.T) {
 	assert.Equal(t, markDataURI("dummyjson:154", "Black Sun Glasses"),
 		markDataURI("dummyjson:154", "Black Sun Glasses"),
 		"a mark that varied between calls would give one offer two pictures across two searches in one run")
+}
+
+// TestAFetchedOffersPictureIsDrawnFromItsOwnIdentifier is the caller's half of
+// what markSVG's missing category parameter cannot hold.
+//
+// Dropping that parameter stops the *drawing* reaching the shelf. It does not
+// stop entryFor handing the shelf over, because a category is a string and so is
+// an identifier — markDataURI(p.Category, p.Title) compiles, and it draws one
+// picture per category for all 194 offers the recorded shop sells. That is the
+// repeated shelf the test above refuses, arrived at down the one path that
+// actually puts a picture on a fetched offer.
+//
+// Nothing else pins that path. The parity test and the two markDataURI tests all
+// call the drawing themselves, and the tests that drive Extend see only what
+// Validate asks of a fetched image_url — the data-URI prefix, which a picture
+// drawn from the wrong string carries just as happily.
+func TestAFetchedOffersPictureIsDrawnFromItsOwnIdentifier(t *testing.T) {
+	t.Parallel()
+
+	p := shop.Product{
+		ID:       "dummyjson:154",
+		Category: "sunglasses",
+		Title:    "Black Sun Glasses",
+	}
+
+	assert.Equal(t, markDataURI(p.ID, p.Title), entryFor(p).ImageURL,
+		"a fetched offer carries a picture drawn from something other than its own identifier, so "+
+			"the shelf on the screen says what kind of thing a row is — which is the one claim a "+
+			"mark is not allowed to make, and every offer on a shelf drawing the same picture is "+
+			"the loudest way to make it")
 }

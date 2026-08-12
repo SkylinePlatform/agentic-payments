@@ -154,17 +154,31 @@ func slug(id string) string {
 // bigger change than the one it would buy.
 //
 // So the colour says nothing, deliberately, and a mark is a function of the
-// identifier alone. **What holds that is the signature rather than a test**:
-// neither this function nor [mark] is handed anything but an identifier and a
-// title, so putting the accent back on the shelf is a compile error and not a
-// one-word edit for a test to notice. Issue #279 is where it stopped being a
-// test — the one written for it recomputed this function's answer instead of
-// reading the drawing, and passed under the reversion it was named after.
+// identifier alone. **What keeps the drawing from reaching the shelf is the
+// signature**: neither this function nor [mark] is handed anything but an
+// identifier and a title, so seeding the accent on a category inside either is
+// `undefined: o` rather than a one-word edit for a test to notice. Issue #279 is
+// where that stopped resting on a test — the one written for it recomputed this
+// function's answer instead of reading the drawing, and passed under the
+// reversion it was named after.
 //
 // That is the reasoning AGENTS.md gives for joseVerifier having no KeyID method,
 // and the merchant's copy of this drawing —
 // backend/internal/roles/merchant/mark.go, which the parity test there holds to
 // the byte — dropped its own category parameter first, on the same ground.
+//
+// # Where the signature stops, which is worth stating rather than assuming
+//
+// It stops at the caller. A category is a string and so is an identifier, so
+// `mark(o.Category, o.Title)` in [writeMarks] compiles, and it is a worse
+// reversion than the one this section is about: the accent is not the only part
+// of the drawing a whole shelf would then share, the shape hash is too, so the
+// shelf becomes six drawings rather than sixty — which is the
+// category-illustration answer [writeMarks] rejects in its own comment. A
+// signature over two strings cannot
+// reach that, so a test does: TestEveryDerivedMarkIsTheOneCommittedBesideIt draws
+// through [writeMarks] rather than calling [mark] itself, for exactly this
+// reason.
 func accentOf(id string) string {
 	return accents[draw(id, "accent", len(accents))]
 }
