@@ -30,6 +30,24 @@ import (
 // would be the browser stating the instant, which is exactly what must be
 // impossible. The browser does send the mandates, and this reads them.
 //
+// # Why this is not the argument surface.authorised makes for the expiry
+//
+// The tension is worth naming rather than leaving for a reader to find. That
+// type returns ExpiresAt and PaymentInstrument to the agent on the stated
+// grounds that "reading it out of the mandate would mean parsing a credential
+// to learn a fact the issuer already knows" — which is the opposite of what
+// this method does.
+//
+// It is the opposite because the two values are for different things. An agent
+// *acts* on both of those: the expiry bounds the watch loop, and the instrument
+// has to be reproduced unchanged in every closed Payment Mandate or
+// authz.checkPinned refuses the purchase. Getting either wrong means no
+// purchase, so they belong in the answer, stated by the party that chose them.
+// Nothing acts on this one. It is a caption on a screenshot — obs.Event and one
+// card — and for a caption the cost of a wire field is not worth paying: four
+// hops that can drop it, and a caller in a position to state a moment it was not
+// present for. Reading it costs one base64 decode of a document already in hand.
+//
 // # The open Checkout Mandate rather than the Payment one, or both
 //
 // The Trusted Surface reads one clock and stamps it into both — roles/surface's
