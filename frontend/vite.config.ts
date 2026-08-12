@@ -6,6 +6,60 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 /**
+ * The oldest Node this package runs on, refused here rather than downstream.
+ *
+ * `engines` in package.json is the declaration and `.npmrc`'s `engine-strict`
+ * makes npm act on it — but only on **install**. npm does not check `engines` on
+ * `npm run`, which was measured rather than assumed: with the range temporarily
+ * set to `^99.0.0`, `npm run typecheck` ran to completion and exited 0. So a tree
+ * installed under a supported Node and then run under an older one gets no
+ * warning from npm at any point.
+ *
+ * That gap matters because of `execArgv` in the `test` block below.
+ * `--no-experimental-webstorage` is a *bad option* on a Node that never had
+ * `--experimental-webstorage` to negate, so every forked worker exits before it
+ * loads a test and Vitest reports `Worker exited unexpectedly` once per test
+ * file. Measured on Node 20.19.5: **360 seconds, 44 errors, no tests run**, and
+ * nothing in that output names a Node version or an option. It is the worst error
+ * message in this package, and `nvm use 20 && npm test` over an existing
+ * `node_modules` is all it takes to reach it.
+ *
+ * Two lines instead, in the file the runner loads first. This is the argument
+ * `backend/internal/core/generated/doc.go` makes one language across: fail in the
+ * place that can say why, rather than at the first thing downstream that happens
+ * to notice.
+ *
+ * # Why the version is read off `globalThis` rather than from `process` directly
+ *
+ * Because `src/topology.test.ts` imports this file, and that puts it in
+ * `tsconfig.app.json`'s program as well as `tsconfig.node.json`'s. The app
+ * program is the one with `types: []` and a `node` stand-in ahead of
+ * `@types/node` in `typeRoots`, so a bare `process` here is `TS2591: Cannot find
+ * name 'process'` in `npm run typecheck` — measured, and the first shape this
+ * check was written in. Adding the types back is not the fix: keeping `process`
+ * out of every component is what #222 built and what
+ * `src/test/no-node-globals.ts` fails the build to protect.
+ *
+ * So the global is asked for structurally, which needs no Node types in either
+ * program and reads as what it is — a host that may or may not have a `process`.
+ * Somewhere without one yields `NaN`, and `NaN < 22` is false, so a
+ * non-Node host is let through rather than refused on a version it does not
+ * have. This file is never bundled into a browser; that is the reason the cast
+ * says `?` rather than a reason it can be dropped.
+ */
+const OLDEST_NODE = 22;
+const nodeVersion = (globalThis as { process?: { versions?: { node?: string } } }).process?.versions
+  ?.node;
+if (nodeVersion !== undefined && Number(nodeVersion.split(".")[0]) < OLDEST_NODE) {
+  throw new Error(
+    `This package needs Node ${OLDEST_NODE}.13 or newer and is running on v${nodeVersion}. ` +
+      "See .nvmrc and `engines` in frontend/package.json. Node 20 reached end of life on 2026-04-30 " +
+      "and was dropped in #269: the test worker is started with --no-experimental-webstorage, which " +
+      "an older Node refuses as a bad option before running a single test.",
+  );
+}
+
+/**
  * The collector's default listen address, matching `-addr` in
  * backend/cmd/collector. Overridable with VITE_COLLECTOR_URL so the demo runner
  * can move it without editing this file.

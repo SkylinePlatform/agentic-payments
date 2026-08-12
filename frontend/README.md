@@ -68,19 +68,24 @@ jsdom, the strictest dependency in the tree, excludes them; npm only warns on a
 mismatch and it warns naming jsdom, a package nobody here chose directly, so the
 range is also written where somebody would think to look.
 
-`.nvmrc` at the repository root names one of those versions rather than leaving a
-range and a hope, and the two say different things on purpose: `engines` is what
-works, `.nvmrc` is what CI builds and type-checks with. Both ends of the range
-are tested — the *Contracts* job runs this suite on `.nvmrc`'s version and again
-on the newest release — which is the arrangement #269 put in, after fourteen
-tests were red on Node 26 with every check green because every job pinned one
-version.
+`.nvmrc` at the repository root names one line out of that range rather than
+leaving a range and a hope, and the two say different things on purpose:
+`engines` is what works, `.nvmrc` is what CI builds and type-checks with. It is
+the major on its own, so `nvm install` and `actions/setup-node` both take the
+newest patch of it; `engines` is what holds the floor at 22.13, and
+`engine-strict` in `.npmrc` is what makes an older 22.x a refusal at `npm ci`
+rather than a warning to scroll past. Both ends are tested — the *Contracts* job
+runs this suite on `.nvmrc`'s version and again on whatever Node is current —
+which is the arrangement #269 put in, after fourteen tests were red on Node 26
+with every check green because every job pinned one version.
 
 Node 20 was in that range until #269 and is not any more. It reached end of life
 on 2026-04-30, nothing ever tested it, and it is the one version that cannot run
 the suite now: `vite.config.ts` passes `--no-experimental-webstorage` to the test
-worker, and a Node without `--experimental-webstorage` to negate refuses to start
-at all.
+worker, and a Node without `--experimental-webstorage` to negate refuses it as a
+bad option before running a single test. That file therefore refuses an
+unsupported Node itself, at the top and by name — `npm ci` cannot be the only
+guard, because npm does not check `engines` on `npm run` at all.
 
 ## Tests
 

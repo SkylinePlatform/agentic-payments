@@ -98,11 +98,15 @@ You need **Go 1.26+** and **Node 22.13+**. Older Go toolchains download the righ
 one on their own; Node is needed because the frontend is part of the stack.
 Nothing else — no Docker, no database, no accounts, no keys.
 
-`.nvmrc` names the Node that CI builds and type-checks with, so `nvm use` at the
-repository root gets you exactly that. Anything newer works too and is tested —
-the frontend suite runs on both that version and the current release, which is
-what stopped a Node-version-dependent break from being invisible ([#269](https://github.com/SkylinePlatform/agentic-payments/issues/269)).
-Node 20 is out: it reached end of life on 2026-04-30.
+`.nvmrc` names the Node **line** CI builds and type-checks with — the major on
+its own, so that `nvm install` and `actions/setup-node` both take the newest
+patch of it rather than freezing on one. `engines` in `frontend/package.json`
+names the floor inside that line, `^22.13.0`, and an older 22.x is refused by
+name at `npm ci` instead of failing later. Anything newer works too and is
+tested: the frontend suite runs on `.nvmrc`'s version and again on the current
+release, which is what stopped a Node-version-dependent break from being
+invisible ([#269](https://github.com/SkylinePlatform/agentic-payments/issues/269)).
+Node 20 is out — it reached end of life on 2026-04-30.
 
 ### What actually comes up today
 

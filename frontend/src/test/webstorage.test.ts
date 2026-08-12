@@ -100,13 +100,21 @@ describe("the Web Storage this suite runs against", () => {
       throw new Error("storage is unavailable");
     });
 
-    expect(
-      () => localStorage.getItem(PROBE),
-      "the double has to reach the object under test. It is patched one level " +
-        "up from it, so this holds only while both come from jsdom",
-    ).toThrow("storage is unavailable");
-
-    getItem.mockRestore();
+    // `finally` rather than a plain call after the assertion, because the case
+    // this file exists to catch is that assertion *failing*: `vite.config.ts`
+    // sets no `restoreMocks`, so an unguarded restore is skipped on the one run
+    // where it matters and every later test in the file inherits a storage that
+    // throws. Being the last test today is not a reason — the next one appended
+    // below would inherit it.
+    try {
+      expect(
+        () => localStorage.getItem(PROBE),
+        "the double has to reach the object under test. It is patched one level " +
+          "up from it, so this holds only while both come from jsdom",
+      ).toThrow("storage is unavailable");
+    } finally {
+      getItem.mockRestore();
+    }
     expect(
       localStorage.getItem(PROBE),
       "and it comes off again, or every later file in this run inherits a " +

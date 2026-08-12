@@ -86,9 +86,19 @@ jobs:
       # The build and the type-check deliberately stay on .nvmrc's version. `tsc`
       # reads no Node global, so a second pass would cost minutes to re-prove
       # what the first one proved.
+      #
+      # `current` rather than a pinned major, and that is the part worth arguing
+      # for: a pin at the newest Node *today* stops covering the newest Node the
+      # month after next, which is #269's own failure wearing a later number. The
+      # cost is accepted rather than overlooked — this leg can go red on a Node
+      # release nobody here made, and the likeliest way is the fix it guards, since
+      # `--no-experimental-webstorage` is a bad option on a Node that has retired
+      # the flag it negates. A run that goes red the week Node ships and names this
+      # step is the outcome being bought; finding out from somebody's laptop a year
+      # later is what was being sold.
       - uses: actions/setup-node@v4
         with:
-          node-version: 26
+          node-version: current
 
       - name: Frontend tests on the newest supported Node
         working-directory: frontend
