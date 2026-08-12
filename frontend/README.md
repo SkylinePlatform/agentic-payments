@@ -63,16 +63,20 @@ and that is correct rather than unfriendly: `src/protocol/generated` is build
 output, not source.
 
 Node 22.13, or 24 and up — `^22.13.0 || >=24.0.0`, and `engines` in package.json
-says exactly that rather than a round `>=22`. The odd majors are excluded because
-jsdom, the strictest dependency in the tree, excludes them; npm only warns on a
-mismatch and it warns naming jsdom, a package nobody here chose directly, so the
-range is also written where somebody would think to look.
+says exactly that rather than a round `>=22`. Node 23 is the one gap in it and it
+is jsdom's: jsdom is the strictest dependency in the tree and its own range skips
+that major. Everything from 24 is in, odd majors included, which is what makes
+CI's `current` leg a version the range already claims rather than one this
+package would have to widen for. npm only warns on a mismatch and it warns naming
+jsdom, a package nobody here chose directly, so the range is also written where
+somebody would think to look.
 
 `.nvmrc` at the repository root names one line out of that range rather than
 leaving a range and a hope, and the two say different things on purpose:
 `engines` is what works, `.nvmrc` is what CI builds and type-checks with. It is
 the major on its own, so `nvm install` and `actions/setup-node` both take the
-newest patch of it; `engines` is what holds the floor at 22.13, and
+newest patch of it — `nvm use` takes the newest one *installed*, which is why the
+floor is enforced rather than assumed. `engines` holds it at 22.13, and
 `engine-strict` in `.npmrc` is what makes an older 22.x a refusal at `npm ci`
 rather than a warning to scroll past. Both ends are tested — the *Contracts* job
 runs this suite on `.nvmrc`'s version and again on whatever Node is current —
@@ -80,12 +84,16 @@ which is the arrangement #269 put in, after fourteen tests were red on Node 26
 with every check green because every job pinned one version.
 
 Node 20 was in that range until #269 and is not any more. It reached end of life
-on 2026-04-30, nothing ever tested it, and it is the one version that cannot run
-the suite now: `vite.config.ts` passes `--no-experimental-webstorage` to the test
-worker, and a Node without `--experimental-webstorage` to negate refuses it as a
-bad option before running a single test. That file therefore refuses an
-unsupported Node itself, at the top and by name — `npm ci` cannot be the only
-guard, because npm does not check `engines` on `npm run` at all.
+on 2026-04-30, nothing ever tested it, and it cannot run the suite now:
+`vite.config.ts` passes `--no-experimental-webstorage` to the test worker, and a
+Node without `--experimental-webstorage` to negate refuses it as a bad option
+before running a single test. **22.0 through 22.3 are in the same position** —
+that flag arrived in 22.4 — so the floor is a major *and* a minor, and the check
+is a pair comparison rather than a look at the major. That file therefore refuses
+an unsupported Node itself, at the top and by name, with
+`src/test/node-floor.test.ts` driving it over both sides of 22.13 — `npm ci`
+cannot be the only guard, because npm does not check `engines` on `npm run` at
+all.
 
 ## Tests
 
