@@ -1,7 +1,8 @@
 {
   "$comment": [
-    "What the mock Merchant sells. `cmd/merchant -catalogue` reads it, and a product is an edit",
-    "here rather than a source change, a pull request and a review.",
+    "What the mock Merchant sells. `cmd/merchant -catalogue` reads it, and selling a product",
+    "takes no source change in the merchant: Validate and Catalogue.Search never learn what a",
+    "flight is. Where a new one goes has moved since issue #160, and the next paragraph is why.",
     "",
     "**Most of it is derived rather than typed**, which is issue #160. Everything after the first",
     "four offers is written by tools/catalogue from a CC0 snapshot of Wikidata committed beside",
@@ -11,6 +12,12 @@
     "TestTheCommittedCatalogueIsWhatThisProgramProduces re-derives the whole thing under `make",
     "test` and compares — so a hand-edited derived row fails the gate rather than drifting away",
     "from the program that owns it.",
+    "",
+    "**A hand-added row fails it too**, and that is what deriving the file costs. The next",
+    "re-derivation would drop an offer this program did not produce, so the test refuses it",
+    "first. A sixty-fifth product is therefore a shelf in tools/catalogue/select.go, or an entry",
+    "in Heroes if a scripted sentence is meant to find it — and a catalogue this program does not",
+    "own, passed to `cmd/merchant -catalogue`, is still just a file somebody wrote.",
     "",
     "The first four are the demonstration's own and are copied through character for character.",
     "Their prices, caps and scenario blocks are the beats every diagram of a real transaction",

@@ -32,10 +32,10 @@ which defaults to `../deploy/catalogue.json` — a path that resolves from
 `backend/`, the working directory every Go command in this repository runs from
 and the one `demo.json` starts the process with.
 
-Adding a product is an edit here. Nothing above the catalogue was ever the
-obstacle: `item.attr.<name>` is open by construction, the constraint field
-registry names nothing aviation, and search evaluates constraints against an
-offer without knowing what it is selling.
+Selling a product takes no source change in the merchant. Nothing above the
+catalogue was ever the obstacle: `item.attr.<name>` is open by construction, the
+constraint field registry names nothing aviation, and search evaluates
+constraints against an offer without knowing what it is selling.
 
 **Most of the file is derived**, since issue #160. The first four offers are the
 demonstration's own; the sixty after them are written by `tools/catalogue` from
@@ -55,6 +55,14 @@ rebuild — `TestTheCommittedCatalogueIsWhatThisProgramProduces` re-derives it
 under `make test` and compares, so a hand edit to a derived row fails the gate.
 `tools/catalogue/data/PROVENANCE.md` records the source, the licence and the
 queries.
+
+**Which is also where a new product goes now.** A row added to this file by hand
+fails that same test, because the next re-derivation would drop an offer the
+generator did not produce — so a sixty-fifth product is a shelf in
+`tools/catalogue/select.go`, or an entry in `Heroes` if a scripted sentence is
+meant to find it. A catalogue the generator does not own, handed to
+`cmd/merchant -catalogue`, is still just a file somebody wrote, and
+`TestAProductAddedToTheFileIsSoldWithoutASourceChange` is what holds that open.
 
 The rules are `merchant.CatalogueFile.Validate` and nowhere else, and a
 malformed file stops the process rather than producing a merchant that answers

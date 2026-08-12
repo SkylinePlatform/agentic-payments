@@ -68,9 +68,14 @@ const (
 	// product the search is meant *not* to return, which is what shows a reader
 	// that the list was filtered rather than merely short.
 	//
-	// Nothing in deploy/catalogue.json claims it today, so the value's only
-	// coverage is TestAProductAddedToTheFileIsSoldWithoutASourceChange, which
-	// adds one.
+	// Nothing shipped claimed it until issue #160, when the value stopped being
+	// a possibility the loader admitted and became something the shop is made
+	// of: a seventh of the derived offers are priced past their own cap on
+	// purpose, and tools/catalogue's price.go argues the proportion. So the
+	// coverage is now TestEveryOfferFindsItselfWhenItsScenarioSaysItShould over
+	// the file itself, and TestAProductAddedToTheFileIsSoldWithoutASourceChange
+	// is what covers a value this file has *stopped* using rather than the only
+	// thing exercising this one.
 	FoundNever Found = "never"
 )
 

@@ -245,6 +245,71 @@ func TestADerivedOfferSaysEnoughToBeSoldAtAll(t *testing.T) {
 	}
 }
 
+// TestRunningTheProgramTwiceChangesNothingTheSecondTime drives run, which is
+// the whole program, and it is the only test that reaches the two things run
+// does that nothing else can: it writes.
+//
+// The tests above check the derivation — a pure function against its own
+// recorded output. What they cannot see is the half that touches a tree, and
+// that half carries the two claims a reader of this module is most entitled to.
+// **`make catalogue` is a no-op**, so a person can run it to find out whether it
+// is, rather than to discover sixty changed files. And **only `derived/` is
+// emptied**, which is the entire mechanism keeping the four illustrations issue
+// #215 drew by hand safe from a generator that has never heard of them — stated
+// in mark.go as a comment beside an os.RemoveAll, which is the kind of sentence
+// that stops being true without anything failing.
+//
+// It runs against a copy in a temporary tree rather than against the real one,
+// because a test that wrote the repository would be a build that regenerated the
+// catalogue — the one thing the Makefile, the CI workflow and this module's own
+// doc comment all say must not happen. Both claims are the same either way.
+func TestRunningTheProgramTwiceChangesNothingTheSecondTime(t *testing.T) {
+	t.Parallel()
+
+	committed, err := os.ReadFile(cataloguePath)
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	catalogue := filepath.Join(dir, "catalogue.json")
+	require.NoError(t, os.WriteFile(catalogue, committed, 0o600))
+
+	images := filepath.Join(dir, "images")
+	require.NoError(t, os.MkdirAll(filepath.Join(images, derivedDir), 0o755))
+	// One file standing in for a hand-drawn illustration, beside the directory
+	// this program owns, and one stale file inside it. The first must survive
+	// and the second must not.
+	handDrawn := filepath.Join(images, "bicycle-vitesse-urbain-7.svg")
+	require.NoError(t, os.WriteFile(handDrawn, []byte("<svg>drawn by a person</svg>"), 0o600))
+	stale := filepath.Join(images, derivedDir, "wd-q0000000.svg")
+	require.NoError(t, os.WriteFile(stale, []byte("<svg>a mark for an offer that has gone</svg>"), 0o600))
+
+	require.NoError(t, run(catalogue, images), "the program will not run against a copy of its own output")
+
+	kept, err := os.ReadFile(handDrawn)
+	require.NoError(t, err, "the generator removed a picture beside derived/, which is where the "+
+		"four hand-drawn illustrations live and where nothing it writes belongs")
+	assert.Equal(t, "<svg>drawn by a person</svg>", string(kept),
+		"the generator overwrote a hand-drawn illustration, and a drawing nobody can regenerate "+
+			"is not one a program should be able to reach")
+
+	_, err = os.Stat(stale)
+	assert.Error(t, err, "a mark for an offer no longer derived survived the run, so the shipped "+
+		"set would grow a file with nothing pointing at it every time a shelf changed")
+
+	written, err := os.ReadFile(catalogue)
+	require.NoError(t, err)
+	assert.Equal(t, string(committed), string(written),
+		"running the generator over the file it already wrote changed it, so `make catalogue` is "+
+			"something a person has to think before running rather than something they can run "+
+			"to find out")
+
+	require.NoError(t, run(catalogue, images), "the program will not run a second time")
+	again, err := os.ReadFile(catalogue)
+	require.NoError(t, err)
+	assert.Equal(t, string(written), string(again),
+		"a second run disagreed with the first, so nothing downstream can assert what the shop sells")
+}
+
 // TestTheHeroesComeBackOutExactlyAsTheyWentIn is the property the whole rewrite
 // is arranged around, and it is why the four are carried as raw JSON.
 //

@@ -287,8 +287,13 @@ func TestEveryOfferFindsItselfWhenItsScenarioSaysItShould(t *testing.T) {
 // Two products, neither of which appears anywhere in Go: one inside its own
 // bound, which a search finds, and one well outside it, which a search never
 // returns. The second is what makes a screenshot of the first mean anything —
-// a list that shows everything is not a filtered list — and it is the only
-// coverage FoundNever has, since nothing the demonstration ships is scenery.
+// a list that shows everything is not a filtered list.
+//
+// It used to be the only coverage FoundNever had, and since issue #160 it is
+// not: the shipped file claims that value on four of its derived offers. What
+// this still holds on its own is the *added* half — that a product nothing in
+// Go has heard of is sold on the terms it states — which is the issue's
+// headline and is what no assertion over the shipped offers can reach.
 func TestAProductAddedToTheFileIsSoldWithoutASourceChange(t *testing.T) {
 	t.Parallel()
 

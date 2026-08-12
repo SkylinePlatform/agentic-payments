@@ -337,10 +337,15 @@ different decision and takes a new one.
 
 ## What a demonstration can be driven with
 
-The screens below are built against what exists, and what exists is four offers
-in `deploy/catalogue.json` and five scripted sentences in
+The screens below are built against what exists. When this was written that was
+four offers in `deploy/catalogue.json` and five scripted sentences in
 `interpret.Scenarios()` — the flight carries two wordings of one intent, declared
 as two entries rather than matched fuzzily.
+
+**#160 has since widened the shop to sixty-four**, and the four below are the
+only ones that did not move: they are carried through the generator as raw JSON,
+so their prices, caps and `scenario` blocks are byte for byte what this table
+says. The other sixty are derived and no scripted sentence goes looking for one.
 
 | sentence | offer | prices (USD) | cap | what happens |
 |---|---|---|---|---|
@@ -359,9 +364,14 @@ This is also the first time any of the five is reachable without a command line.
 `GET /examples` puts them under the box, so the four scenarios stop being
 something a reader has to find in a Go file.
 
-**Four is not enough and that is #160**, not this issue. Every scripted sentence
-narrows to exactly one offer, so `GET /search` answers a list of one and #109's
-table would have a single row. Nothing in this design depends on the number: the
+**Four was not enough and that was #160**, not this issue — and #160 has landed.
+Every scripted sentence still narrows to exactly one offer; what changed is what
+it narrows *from*, which was the whole point. Over four offers "this prompt
+matches exactly one" was a claim about the shop being empty; over sixty-four it
+is a claim about the sentence, and `TestEveryScriptedPromptFindsOneCandidate`
+measures it through the real query rather than off the file.
+
+Nothing in this design depended on the number, which is why none of it moved: the
 proposal settles on one offer, the consent screen describes that one, and both
 behave identically against a catalogue of two hundred.
 
@@ -496,12 +506,15 @@ premise of Human Not Present, stated by two numbers rather than by a paragraph.
 
 **And it is where a wrong item becomes catchable.** `agent.discover` takes
 `found[0]` under a comment saying that choosing among candidates is a product
-decision this demo does not make. With today's four offers every scripted
-sentence narrows to exactly one, so the choice never shows. When #160 widens the
-catalogue it will, and until #109 puts the picking in front of a person, this
-card is the only place a user can notice that the agent went looking for a
-bicycle and found a ladder. That is a reason to build it now rather than with the
-table.
+decision this demo does not make. Every scripted sentence narrows to exactly one,
+so for those five the choice never shows — and since #160 that is held on
+purpose rather than by there being nothing else in the shop: `tools/catalogue`'s
+`Reserved` keeps the generator off the ladders' shelf and off BEG→PMI, and
+`TestEveryScriptedPromptFindsOneCandidate` measures the result. **A sentence a
+model-backed interpreter accepts carries no such guarantee**, and until #109 puts
+the picking in front of a person, this card is the only place a user can notice
+that the agent went looking for a bicycle and found a ladder. That is a reason to
+build it now rather than with the table.
 
 The card scales to a catalogue of any size because it describes **one** offer —
 the one the proposal settled on. Nothing about it changes when there are two
@@ -671,9 +684,11 @@ Gates: `make check` and `make frontend-check`.
 - **No catalogue, no quantity, no tracker.** Those are #109, and the seam is the
   proposal.
 
-- **No wider catalogue.** #160. Four offers is what these screens are built
-  against and what they are honest about; nothing here has to change when it
-  grows.
+- **No wider catalogue.** #160, and it has since landed. Four offers is what
+  these screens were built against and what they were honest about; the claim
+  that nothing here would have to change when it grew is the one thing this
+  bullet can now be checked against, and it held — the shop is sixty-four offers
+  and not a line of these screens moved for it.
 
 - **No fix for the concert prompt's quantity, and the screen will make it
   visible.** #133: *two tickets… up to \$160* interprets to `quantity lte 2`,
