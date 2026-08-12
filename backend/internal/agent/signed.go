@@ -41,9 +41,14 @@ import (
 // not to need. The bound on the damage is the one internal/adapters/ap2's digest
 // readers already stand on, and it is not "nobody can lie" but "nothing
 // downstream believes this": the card is a screenshot, and the purchase it is
-// about is judged by three verifiers that check the user's signature over the
-// very same mandate before anything happens. A forged `iat` buys a mislabelled
-// card on a transaction that then fails.
+// about is judged by verifiers that check the user's signature over the open
+// pair before anything happens. Being exact about which, because the count is
+// easy to overstate: the Merchant checks it over *this* mandate, as the root of
+// the Checkout Mandate chain, and it is the only party that does — the three
+// that run AuthorisePaymentChain (the Credential Provider, the Merchant Payment
+// Processor and the Merchant again) check it over the open Payment Mandate,
+// which the section below is about and which carries the identical instant. A
+// forged `iat` buys a mislabelled card on a transaction that then fails.
 //
 // console.Watching's own comment stays true through all of this — "this package
 // does not parse them, evaluate them or believe anything about them" is about

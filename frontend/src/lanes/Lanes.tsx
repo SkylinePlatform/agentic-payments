@@ -254,9 +254,12 @@ function TicketCard({ ticket }: { readonly ticket: Ticket }) {
  * posting a self-signed open mandate to `POST /watches` gets a card drawn from
  * whatever `iat` it wrote, looking exactly like a genuine one. What bounds that is
  * what this card is: `obs.Event` is observability and never evidence, and the
- * purchase it describes is judged by three verifiers that do check the user's
- * signature over the same mandate. A forged instant buys a mislabelled card on a
- * transaction that then fails.
+ * purchase it describes is judged by verifiers that do check the user's signature
+ * over the pair this instant was read from — the Merchant over the open Checkout
+ * Mandate itself, and the Credential Provider, the Merchant Payment Processor and
+ * the Merchant again over the open Payment Mandate, which carries the same
+ * instant. A forged instant buys a mislabelled card on a transaction that then
+ * fails.
  *
  * An earlier version of this card said only *"authorises until"*, on the reading
  * that no hop carried a signing instant. The hops still do not — `POST

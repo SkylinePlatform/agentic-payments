@@ -244,6 +244,13 @@ type Watch struct {
 	// Once rather than a plain bool, so that a caller driving Attempt from its own
 	// goroutine while the loop runs cannot race the read. The zero value is usable,
 	// so nothing about constructing a Watch changes.
+	//
+	// It does make a Watch uncopyable, which is the one consequence of this field
+	// visible from outside the package: `go vet`'s copylocks refuses `w := *watch`
+	// from the day it exists. Nothing changes today — cmd/agent and console.Agent
+	// both build one as `&agent.Watch{…}`, and every method on it takes a pointer
+	// receiver — and a future caller wanting a copy would be copying one watch's
+	// memo into another, which is not a thing to want.
 	signedOnce sync.Once
 	signedAt   *time.Time
 }

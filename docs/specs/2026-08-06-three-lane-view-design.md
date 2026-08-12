@@ -1232,13 +1232,18 @@ of the mandate is the one this repository took**, and the reason is that it adds
 no field to any of those four hops: `iat` is a plain claim rather than a
 disclosable one, so the party holding an open mandate can read it straight out of
 the signed document. `ap2.IssuedAtOfMandate` is the reader and
-`agent.Authorisation.SignedAt` is the holder side — derived on every event rather
-than stored, so there is nothing for a hop to drop, and nothing a caller
-assembling an authorisation by hand can put there instead. The unverified-read
-argument is `internal/adapters/ap2/digest.go`'s, made for the digest on the claim
-beside this one and cited rather than restated: the value lands in one
-`obs.Event` field and one card, ADR 0003 calls that log observability and never
-evidence, and every verifier that matters checks the signatures for itself.
+`agent.Authorisation.SignedAt` is the holder side — derived from that document
+rather than held in a field somebody fills, so there is nothing for a hop to drop
+and nothing a caller assembling an authorisation by hand can put there instead. A
+watch reads it once and memoises it, which moves where the value comes from not at
+all: the mandate cannot change while a watch runs, and what the memo saves is a
+diagnostic printed on every event of every attempt rather than once. The
+unverified-read argument is `internal/adapters/ap2/digest.go`'s, made for the
+digest on the claim beside this one and cited rather than restated: the value
+lands in one `obs.Event` field and one card, ADR 0003 calls that log observability
+and never evidence, and every verifier that matters checks the signatures for
+itself — including, in one direction only, this very claim, which
+`ap2.IssuedAtOfMandate` is exact about.
 
 One member does cross a wire, because the agent and the browser are separate
 processes: `obs.Authorisation.SignedAt`, a pointer so that `null` means *nobody
