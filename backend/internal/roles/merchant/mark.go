@@ -104,9 +104,10 @@ const (
 //
 // Which of the four an offer draws in is seeded on its identifier, and issue
 // #236 is where that was decided: it was seeded on the category, six shelves
-// collided over four accents, and graphite — the lowest-contrast of them — drew
-// a third of the shop. The argument for scattering rather than for giving each
-// shelf a colour of its own is written out once, beside the seeding in
+// collided over four accents, and graphite — the quietest of them, in the sense
+// that file measures rather than the one the word usually means — drew a third
+// of the shop. The argument for scattering rather than for giving each shelf a
+// colour of its own is written out once, beside the seeding in
 // tools/catalogue/mark.go's accentOf, and deliberately not restated here. Two
 // copies of a decision drift; two copies of a *drawing* are held to the byte by
 // TestALiveMarkIsTheMarkThisShopAlreadyDraws, which is why the duplication below

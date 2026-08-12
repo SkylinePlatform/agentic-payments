@@ -112,11 +112,23 @@ func slug(id string) string {
 // # Why not on the shelf, which is what it was
 //
 // Six shelves against four accents collide by pigeonhole, and the collision
-// issue #236 measured landed badly. graphite is the lowest-contrast of the four,
-// and it drew the flights and bicycles shelves entire — twenty of the sixty
-// marks, a third of the shop, in the quietest colour available. Seeding on the
-// identifier spreads all four through every shelf instead: 14, 15, 14 and 17 as
-// this snapshot falls, and no shelf drawn in fewer than three of them.
+// issue #236 measured landed badly. graphite is the quietest of the four, and it
+// drew the flights and bicycles shelves entire — twenty of the sixty marks, a
+// third of the shop. Seeding on the identifier spreads all four through every
+// shelf instead: 14, 15, 14 and 17 as this snapshot falls, and no shelf drawn in
+// fewer than three of them.
+//
+// # What "quietest" means, since it is a claim about colour
+//
+// Not luminance, which is the measure the word usually points at and the one
+// that would be wrong here: against wash the four sit at 4.56, 4.60, 4.64 and
+// 4.86 to one, and graphite is third of the four rather than last. Chroma. A
+// cell is drawn in ink unless the shape hash accents it, so what a reader has to
+// see is the accent against *ink* — and graphite is the one that barely is, at
+// chroma 12 where ink itself is 17 and the other three are 34, 56 and 58. In
+// ΔE2000 against ink that is 21, where the others are 24, 34 and 41. A shelf of
+// graphite marks reads as a shelf drawn in one colour, which is what the issue
+// saw and what the adjective is for.
 //
 // # Whether a shelf sharing one accent was worth keeping
 //
