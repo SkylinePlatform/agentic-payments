@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -137,6 +141,11 @@ func TestAfterWatch(t *testing.T) {
 // is a shell prompt after one purchase, and together they are a request nothing
 // can satisfy. Refusing at parse time is what keeps a caller from discovering
 // which one won by watching a process it expected to still be there.
+//
+// TestBuyAndAddrCannotBothBeGiven is the same shape for the second pair, added by
+// #257 on this one's reasoning. Two tables rather than one with a third column:
+// the sentence above is a claim about four rows, and the pairs are separate
+// decisions that happen to share a function.
 func TestOnceAndAddrCannotBothBeGiven(t *testing.T) {
 	t.Parallel()
 
@@ -166,7 +175,7 @@ func TestOnceAndAddrCannotBothBeGiven(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := flagsAgree(tc.addr, tc.once)
+			err := flagsAgree(tc.addr, tc.once, false)
 			if !tc.wantErr {
 				assert.NoError(t, err, tc.why)
 				return
@@ -175,6 +184,68 @@ func TestOnceAndAddrCannotBothBeGiven(t *testing.T) {
 			assert.Contains(t, err.Error(), "-addr",
 				"a refusal that does not name both flags leaves the caller to guess which one to drop")
 			assert.Contains(t, err.Error(), "-once")
+		})
+	}
+}
+
+// TestBuyAndAddrCannotBothBeGiven is issue #257's half of flagsAgree, and it is
+// the sibling of the table above rather than a new kind of check.
+//
+// The pair is one this build used to permit and that nothing in this repository
+// runs. `bin/agent -buy -addr …` asked for a server that runs a Human Present
+// purchase before it starts listening and exits if that purchase fails — which is
+// about as coherent as -once beside -addr, and refusing it is what stops #257
+// having to decide what a console should say about a failed purchase on a path
+// nobody uses.
+//
+// The three rows above the last are what keep the refusal from over-reaching, and
+// each is an invocation somebody actually runs: -addr alone is agent-watch, -buy
+// alone is agent-buy, and -buy with -once is the documented smoke test that prints
+// the receipts and gives the shell back.
+func TestBuyAndAddrCannotBothBeGiven(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		addr    string
+		buy     bool
+		once    bool
+		wantErr bool
+		why     string
+	}{
+		{
+			name: "neither", why: "the default is a client that stays up, which is what it always was",
+		},
+		{
+			name: "addr alone", addr: "127.0.0.1:8086",
+			why: "this is deploy/demo.json's agent-watch, and refusing it would take down `make demo`",
+		},
+		{
+			name: "buy alone", buy: true,
+			why: "this is deploy/demo.json's agent-buy, which has no business listening and does not",
+		},
+		{
+			name: "buy with once", buy: true, once: true,
+			why: "the package doc's own smoke test: one purchase, the receipts printed, the shell back",
+		},
+		{
+			name: "both", addr: "127.0.0.1:8086", buy: true, wantErr: true,
+			why: "a server that runs a purchase first and exits if it fails is one nobody can rely on " +
+				"being there, and a browser is on the other side of it",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := flagsAgree(tc.addr, tc.once, tc.buy)
+			if !tc.wantErr {
+				assert.NoError(t, err, tc.why)
+				return
+			}
+			require.Error(t, err, tc.why)
+			assert.Contains(t, err.Error(), "-addr",
+				"a refusal that does not name both flags leaves the caller to guess which one to drop")
+			assert.Contains(t, err.Error(), "-buy")
 		})
 	}
 }
@@ -504,7 +575,8 @@ func TestABootWatchNobodyAskedForIsNotReported(t *testing.T) {
 // and it is what keeps the fix from flattening two paths into one.
 //
 // `bin/agent -watch` with no -addr is a combination this build permits —
-// flagsAgree refuses only -once beside -addr — and cmd/agent's package doc
+// flagsAgree refuses -once and -buy beside -addr, and -watch is neither — and
+// cmd/agent's package doc
 // documents it as a supported way to run this binary. That invocation has no
 // console to fall back to: there is nothing for it to be if the watch it was
 // asked for cannot start, so exiting is the only honest answer. run reaches it
@@ -518,7 +590,7 @@ func TestABootWatchNobodyAskedForIsNotReported(t *testing.T) {
 func TestAWatchWithNoConsoleStillStopsTheProcess(t *testing.T) {
 	t.Parallel()
 
-	require.NoError(t, flagsAgree("", false),
+	require.NoError(t, flagsAgree("", false, false),
 		"-watch with no -addr has to be a combination this build permits, or the path below is unreachable")
 
 	var said strings.Builder
@@ -528,6 +600,380 @@ func TestAWatchWithNoConsoleStillStopsTheProcess(t *testing.T) {
 	require.Error(t, err, "an invocation with no console to fall back to has nothing left to be")
 	assert.ErrorIs(t, err, agent.ErrNothingToBuy,
 		"and the reason has to survive to the exit status's message, not be replaced by one about serving")
+}
+
+// nothingIsListeningAt is a base URL whose port the kernel handed out and nobody
+// holds, so a request to it is refused straight away rather than answered or hung.
+//
+// A closed port rather than a server returning an error, and the difference is the
+// whole of what the two tests below are about: ready waits for a counterparty to be
+// *there*, and something listening that answers badly is a different fact from a
+// stack that is down. aMerchantThatSellsNothing above is the mirror image, for the
+// same reason one file along.
+//
+// require rather than assert, on this file's own rule for helpers read carefully:
+// a port that was never handed out leaves nothing to build a URL from, so there is
+// no continuing, and nothing calls this from anywhere but a test goroutine.
+func nothingIsListeningAt(t *testing.T) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err, "the kernel would not hand out a port to leave closed")
+	addr := listener.Addr().String()
+	require.NoError(t, listener.Close(), "a port still held is one something answers on")
+	return "http://" + addr
+}
+
+// runWith drives run as the process would have been started with args, and hands
+// back what it answered.
+//
+// # Why the flag set is swapped rather than passed
+//
+// cmd/collector's run takes its arguments and builds its own set, which is the
+// shape to copy and is not available here: this run declares its flags on the
+// process-wide flag.CommandLine because roles.CollectorFlag registers -collector
+// there, and that function exists precisely so the six binaries that emit describe
+// that flag identically. Giving this run an args parameter means either dropping
+// that guarantee or changing a package five other commands share, and neither
+// belongs in an issue about two early returns.
+//
+// So the swap is the narrow move. A fresh set per call, because run redeclares
+// every flag and a second declaration on one set panics; and both globals restored
+// afterwards, so nothing else in this package sees them changed.
+//
+// # PanicOnError, and it is the difference between these tests working and looking
+// like they work
+//
+// run calls flag.Parse and **discards its error** — legitimately, because the real
+// flag.CommandLine is ExitOnError and has already stopped the process by then. A
+// set that merely reported the error would hand that licence to a test: parsing
+// stops at the first argument the build does not recognise, every flag after it
+// silently reverts to its default, and run carries on. Measured on the first
+// version of this helper, one bogus flag ahead of the others left
+// TestCounterpartiesDownDenyTheConsoleThatABootWatchDoesNot **passing** — it had
+// dropped -addr and all four endpoints, dialled the default localhost:8084, and
+// still read `surface is unreachable`. The only visible difference was that it
+// took thirty seconds instead of fifty milliseconds.
+//
+// A panic is therefore the honest analogue of the exit production takes: an
+// argument this build does not accept is a defect in the test rather than an input
+// to be handled, and it fails loudly at the line that wrote it instead of quietly
+// re-running the default invocation.
+//
+// **Callers must not be parallel.** Go runs a package's sequential tests to
+// completion before resuming any test that paused on t.Parallel, which is what
+// makes the swap invisible to the rest of this file — and a t.Parallel() in a
+// caller is what would end that.
+func runWith(t *testing.T, args ...string) error {
+	t.Helper()
+
+	argv, set := os.Args, flag.CommandLine
+	t.Cleanup(func() { os.Args, flag.CommandLine = argv, set })
+
+	flag.CommandLine = flag.NewFlagSet("agent", flag.PanicOnError)
+	flag.CommandLine.SetOutput(io.Discard)
+	os.Args = append([]string{"agent"}, args...)
+
+	return run()
+}
+
+// TestCounterpartiesDownDenyTheConsoleThatABootWatchDoesNot is issue #257's
+// decision, and it is the pair to
+// TestABootWatchThatFindsNothingStillLeavesAConsoleServing.
+//
+// Both invocations pass -addr with something wrong upstream, and they are answered
+// differently on purpose. A demonstration nobody typed must not take away the
+// surface a person is about to use — that is #252, and the test above holds it.
+// Counterparties that never answered are not that case: nothing could be asked of
+// this process that it could answer, so a browser's refused connection is *true*
+// here, and a console that served anyway would pass its own /healthz while
+// demo.Runner reported the agent up over a stack nobody can transact on.
+//
+// # The unbindable -addr is the mechanism, not a detail
+//
+// run is called on the test goroutine and what discriminates is which error comes
+// back, not how long it takes. A version that reported ready's failure and carried
+// on would reach roles.Run, fail on the listener and answer about the address —
+// so the two assertions below go red immediately, where a bindable address would
+// have left run serving until a signal that never arrives and this test hanging
+// until the package timeout. 256.256.256.256:99999 is cmd/collector's own
+// unbindable address, for its own reason: there is no port 99999.
+func TestCounterpartiesDownDenyTheConsoleThatABootWatchDoesNot(t *testing.T) {
+	down := nothingIsListeningAt(t)
+
+	err := runWith(t,
+		"-addr", "256.256.256.256:99999",
+		"-surface", down, "-merchant", down, "-credprovider", down, "-mpp", down,
+		"-wait", "50ms", "-collector", "")
+
+	require.Error(t, err,
+		"a console served over counterparties that never answered is a demo banner reporting a "+
+			"stack nobody can transact on as up")
+	assert.Contains(t, err.Error(), "unreachable",
+		"the diagnosis has to be the counterparty rather than the console's own address, or the "+
+			"failure was reported and carried past and this process is serving")
+	assert.Contains(t, err.Error(), "surface",
+		"which counterparty did not answer is what sends the reader to the right process")
+}
+
+// TestCounterpartiesDownStopTheProcessBeforeItAttemptsAPurchase is the second
+// invocation, and it is what stops the two from being flattened into one.
+//
+// `bin/agent -buy` with no -addr is what deploy/demo.json's agent-buy runs, and it
+// is the one path #257 touched that stays exactly as it was: ready gates it, and
+// the purchase is never attempted against a stack that is down. What the assertion
+// pins is which failure comes back — the counterparty that did not answer, not the
+// quote that could not be taken.
+//
+// A change that moved the wait inside serveConsole, so that only a serving process
+// waited for its counterparties, would leave the test above green and this one red
+// with a dial error about the merchant — a purchase failing for a reason nobody
+// should have to debug.
+func TestCounterpartiesDownStopTheProcessBeforeItAttemptsAPurchase(t *testing.T) {
+	down := nothingIsListeningAt(t)
+
+	err := runWith(t, "-buy",
+		"-surface", down, "-merchant", down, "-credprovider", down, "-mpp", down,
+		"-wait", "50ms", "-collector", "")
+
+	require.Error(t, err, "an agent whose counterparties are down has nothing to buy from")
+	assert.Contains(t, err.Error(), "unreachable",
+		"the counterparties are what failed, and a quote attempted anyway reports the dial instead")
+	assert.Contains(t, err.Error(), "surface",
+		"ready stops at the first counterparty that did not answer, which is before any merchant is quoted")
+}
+
+// TestAnInterpreterThatCannotBeBuiltDeniesTheConsole is the sixth site out of
+// run(), found by the review that closed #257 and decided there rather than left
+// for the next walk.
+//
+// It sits with consoleFor's failures, not with the boot watch's. An interpreter is
+// not a nicety a console can serve without: POST /watches is the route it exists
+// for, every watch opens with one interpretation, and a console that came up
+// without one would take a sentence and fail it — a process passing its own
+// /healthz while unable to do its job, which is the failure the ready decision
+// turns on. Carrying on would also hand back the scripted table under a flag that
+// named a model, which is the silent fallback interpreterFor refuses and the
+// screenshot nobody can attribute.
+//
+// The key is emptied rather than assumed absent, so the answer is the same on a
+// machine that exports one. Legal under hard rule 4 for TestInterpreterFor's own
+// structural reason: interpret.NewGemini and interpret.NewModel perform no I/O, and
+// the refusal here happens before ready dials anything at all — which is also why
+// the counterparties below are never reached.
+func TestAnInterpreterThatCannotBeBuiltDeniesTheConsole(t *testing.T) {
+	t.Setenv(geminiKeyVar, "")
+
+	err := runWith(t,
+		"-addr", "256.256.256.256:99999",
+		"-interpreter", interpreterGemini,
+		"-surface", nothingIsListeningAt(t), "-wait", "50ms", "-collector", "")
+
+	require.Error(t, err,
+		"a console whose interpreter was asked for and could not be built would accept a sentence "+
+			"and fail it, having reported itself healthy")
+	assert.Contains(t, err.Error(), geminiKeyVar,
+		"the refusal has to name what is missing, or the operator is left with a console that "+
+			"came up and a flag that did nothing")
+	assert.NotContains(t, err.Error(), "unreachable",
+		"this must fail before anything is dialled — a refusal arriving after thirty seconds of "+
+			"waiting for four counterparties reports the wrong cause")
+}
+
+// invocation is which of the three flags flagsAgree reads a list of process
+// arguments passes.
+//
+// Normalised the way the flag package normalises them, for cmd/merchant's
+// flagName's reason: `-addr x`, `-addr=x`, `--addr x` and `--addr=x` all set the
+// flag and none of them equals the last. A check that compared whole strings would
+// read as a claim about what a process is started with and really be a claim about
+// one of four ways of writing it.
+//
+// Duplicated rather than lifted somewhere both can import. The other one answers a
+// different question about a different flag, and a test-helper package for two
+// short functions is the internal/shared this repository does not have.
+func invocation(args []string) (addr string, once, buy bool) {
+	for i, arg := range args {
+		name, dashed := strings.CutPrefix(arg, "-")
+		if !dashed {
+			continue
+		}
+		name = strings.TrimPrefix(name, "-")
+		name, value, joined := strings.Cut(name, "=")
+
+		switch name {
+		case "addr":
+			// A boolean's value is always joined; a string flag's may be the next
+			// argument instead, which is how the manifest writes this one.
+			addr = value
+			if !joined && i+1 < len(args) {
+				addr = args[i+1]
+			}
+		case "once":
+			once = boolFlag(value, joined)
+		case "buy":
+			buy = boolFlag(value, joined)
+		}
+	}
+	return addr, once, buy
+}
+
+// boolFlag is what the flag package makes of a boolean argument.
+//
+// Present with no value is true, and an explicit one goes through
+// strconv.ParseBool — which is the function flag's own boolValue.Set calls, so
+// `-buy=0` and `-buy=F` are false here because they are false to the process.
+// Comparing against the string "false" instead covers one of the six spellings and
+// reads as though it covered them all, which would refuse a topology the binary
+// would have started.
+//
+// A value ParseBool cannot read at all is false, and that is not a judgement:
+// flag.Parse rejects it, so the process never reaches flagsAgree and `make demo`
+// is already broken one step earlier than anything this reports on.
+func boolFlag(value string, joined bool) bool {
+	if !joined {
+		return true
+	}
+	set, err := strconv.ParseBool(value)
+	return err == nil && set
+}
+
+// TestTheShippedTopologyAsksForNothingThisBuildRefuses is the other half of the
+// refusal #257 added: flagsAgree grew a pair it rejects, and the one file in this
+// repository that starts this binary without a person typing it must not be
+// passing that pair.
+//
+// A manifest entry that did would fail at parse time, before any port was bound —
+// so demo.Runner would report the agent as failed and `make demo` would come up
+// with nothing on the address the frontend proxies to. That is #252's reported
+// symptom arriving from #257's fix, which is the one way this change could break
+// the demonstration it is meant to protect.
+//
+// Decoded rather than grepped, on TestMakeDemoDoesNotReachAShop's own reasoning:
+// that file's $comment discusses these flags at length, so a search of its text
+// finds the argument and reports it as the thing the argument forbids. What matters
+// is what a process would be started with.
+func TestTheShippedTopologyAsksForNothingThisBuildRefuses(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile("../../../deploy/demo.json")
+	require.NoError(t, err, "this test has to read the manifest `make demo` starts, or it pins nothing")
+
+	var manifest struct {
+		Processes []struct {
+			Name    string   `json:"name"`
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"processes"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &manifest),
+		"the manifest has to parse, or the loop below reads nothing")
+
+	started, serving, buying := 0, 0, 0
+	for _, p := range manifest.Processes {
+		if !strings.HasSuffix(p.Command, "/agent") {
+			continue
+		}
+		started++
+		addr, once, buy := invocation(p.Args)
+		if addr != "" {
+			serving++
+		}
+		if buy {
+			buying++
+		}
+		assert.NoError(t, flagsAgree(addr, once, buy),
+			"%s is started with a combination this build refuses at parse time, so `make demo` would "+
+				"bring up a stack with no console on the address the frontend proxies to", p.Name)
+	}
+
+	// The check above is a NoError, so it passes on flags nobody read: an
+	// invocation that reported nothing would leave it comparing two zero values
+	// and calling that agreement. What grounds it is that this topology
+	// demonstrably has both an agent that serves and an agent that buys — the
+	// $comment in that file is largely about why they are two processes — so
+	// reading neither is reading nothing.
+	require.NotZero(t, started,
+		"no process in the manifest starts this binary, so the loop above checked nothing")
+	assert.NotZero(t, serving,
+		"nothing in the topology was read as passing -addr, so the flags above were not read at all "+
+			"— `make demo` serves the console the frontend proxies to")
+	assert.NotZero(t, buying,
+		"nothing in the topology was read as passing -buy, which is the flag this refusal is about")
+}
+
+// TestEveryWayOfWritingAFlagIsRead is what makes invocation's claim about the
+// grammar checkable rather than a comment.
+//
+// It matters because the check it feeds is a NoError: a spelling invocation does
+// not recognise is reported as a flag not passed, so a manifest that asked for the
+// refused pair in any of the forms deploy/demo.json does not currently use would
+// pass the test above. That is the same failure cmd/merchant's flagName was written
+// to close, one flag along.
+//
+// The two boolean rows are the pair that has to be there. A flag named and turned
+// off is not a flag passed, and `0` is one of the six spellings of off that
+// strconv.ParseBool accepts — so a reading that compared against the string
+// "false" would refuse a topology the binary would have started, having looked
+// like it covered the grammar.
+func TestEveryWayOfWritingAFlagIsRead(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		wantAddr string
+		wantOnce bool
+		wantBuy  bool
+		why      string
+	}{
+		{
+			name: "as the manifest writes them", args: []string{"-addr", "127.0.0.1:8086", "-buy"},
+			wantAddr: "127.0.0.1:8086", wantBuy: true,
+			why: "this is deploy/demo.json's own spelling, so a reading that missed it would make " +
+				"the check over that file vacuous today rather than eventually",
+		},
+		{
+			name: "joined by an equals sign", args: []string{"-addr=127.0.0.1:8086", "-buy=true"},
+			wantAddr: "127.0.0.1:8086", wantBuy: true,
+			why: "the flag package accepts it and a process started this way asks for exactly the " +
+				"same thing",
+		},
+		{
+			name: "with two dashes", args: []string{"--addr", "127.0.0.1:8086", "--once", "--buy"},
+			wantAddr: "127.0.0.1:8086", wantOnce: true, wantBuy: true,
+			why: "flag.Parse strips the second dash, so a check that does not is reading a different " +
+				"command from the one that would run",
+		},
+		{
+			name:     "a boolean turned off the long way",
+			args:     []string{"-addr", "127.0.0.1:8086", "-once=false", "-buy=false"},
+			wantAddr: "127.0.0.1:8086",
+			why: "a flag named and disabled is not a flag passed, and reporting it as one would " +
+				"refuse a combination the process would have accepted",
+		},
+		{
+			name:     "a boolean turned off the short way",
+			args:     []string{"-addr", "127.0.0.1:8086", "-buy=0"},
+			wantAddr: "127.0.0.1:8086",
+			why: "flag reads its booleans with strconv.ParseBool, so 0 is off — and a comparison " +
+				"against the word false covers one spelling while reading as though it covered all six",
+		},
+		{
+			name: "neither, among flags this refusal knows nothing about",
+			args: []string{"-merchant", "http://localhost:8081", "-poll", "1s"},
+			why:  "a value is not a flag, and no flag here is one of the three",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			addr, once, buy := invocation(tc.args)
+			assert.Equal(t, tc.wantAddr, addr, tc.why)
+			assert.Equal(t, tc.wantOnce, once, tc.why)
+			assert.Equal(t, tc.wantBuy, buy, tc.why)
+		})
+	}
 }
 
 // getJSON reads a route and decodes what it answered, returning the status.

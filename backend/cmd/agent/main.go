@@ -112,10 +112,26 @@
 // is about to type into. -watch with no -addr is the other path and still exits,
 // because it has nothing else to be.
 //
-// -once with -addr is refused at parse time. The two ask for opposite things: a
-// server that exits after its first watch is a server nobody can use, and
-// answering that with a precedence rule would leave whoever passed both to find
-// out which one won by watching.
+// **What does stop the console is the counterparties being down**, and issue
+// #257 is where that was decided rather than assumed. It is not #252's case read
+// differently: a boot watch is a scripted convenience nobody typed, and a
+// counterparty that never answered means there is nothing this process could be
+// asked that it could answer. The argument is written at ready's call site in
+// run, because that is where the early return is.
+//
+// So does an interpreter that was asked for and could not be built, and that one
+// sits with consoleFor's failures — no identity, no key, no blinder, no routes —
+// rather than with the boot watch's. The console exists to answer POST /watches
+// and every watch opens with one interpretation, so a console without one accepts
+// a sentence and fails it. The argument is at interpreterFor's call site.
+//
+// -once with -addr is refused at parse time, and so is -buy with -addr. Each
+// pair asks for opposite things: a server that exits after its first watch is a
+// server nobody can use, and a server that runs one Human Present purchase first
+// and exits if that purchase fails is a server nobody can rely on being there.
+// Answering either with a precedence rule would leave whoever passed both to find
+// out which one won by watching. flagsAgree holds both, and #257 added the
+// second on the first's own reasoning.
 //
 // # Two signal handlers fire under -addr, and that is correct
 //
@@ -216,7 +232,7 @@ func run() error {
 	collector := roles.CollectorFlag()
 	flag.Parse()
 
-	if err := flagsAgree(*addr, *once); err != nil {
+	if err := flagsAgree(*addr, *once, *buy); err != nil {
 		return err
 	}
 
@@ -228,6 +244,25 @@ func run() error {
 	// nowhere else in backend/ and should not start inside a library package: a
 	// package that reads the environment behaves differently depending on who
 	// called it, and makes tests depend on the order they ran in.
+	//
+	// **This denies the console too, and it belongs with consoleFor's failures
+	// rather than with the boot watch's.** #257 accounted for five sites and the
+	// review that closed it found this sixth, so the verdict is written here
+	// rather than left to be re-derived. An interpreter is not a nicety the
+	// console can serve without: `POST /watches` is the one route it exists for,
+	// every watch starts with one interpretation, and a console that came up
+	// without one would accept a sentence and fail it — the same /healthz-passes-
+	// while-the-job-cannot-be-done failure the ready decision below turns on.
+	// So this is the process being unable to *be* the console it was asked for,
+	// which is exactly no identity, no key, no blinder, no routes.
+	//
+	// The boot watch is not the comparison to reach for, and the difference is
+	// interpreterFor's own: `-interpreter gemini` with no key is *asked for and
+	// could not have*, where a boot watch is *did not ask*. Carrying on here
+	// would mean handing back the scripted table under a flag that named a model
+	// — the silent fallback that function exists to refuse, and a screenshot
+	// nobody can attribute. TestAnInterpreterThatCannotBeBuiltDeniesTheConsole
+	// drives it on the served path.
 	reader, reading, err := interpreterFor(*interpreter, os.Getenv(geminiKeyVar), *geminiModel, clock.New())
 	if err != nil {
 		return err
@@ -248,10 +283,38 @@ func run() error {
 		}
 	}()
 
+	// **No console outlives this, -addr or not**, and issue #257 is where that was
+	// decided rather than left as whatever the code happened to do.
+	//
+	// The case for serving anyway is #252's read one step along: a console
+	// answering 422 with an explanation is better for a person than a refused
+	// connection, whatever is wrong upstream. It is declined because ready failing
+	// is not the same kind of failure. A boot watch is a scripted convenience
+	// nobody typed — serveConsole's own comment is the argument — whereas a
+	// counterparty that never answered means there is nothing this process could
+	// be asked that it could answer. The frontend's `connect ECONNREFUSED
+	// 127.0.0.1:8086` is *true* here, where under #252 it was misleading.
+	//
+	// **What decides it is what a console serving anyway would cost.** This
+	// process's /healthz answers from the handler and knows nothing about the
+	// merchant, so agent-watch would pass its health check; demo.Runner settles
+	// each process's state during startup and demo.Banner prints it once, neither
+	// revised afterwards. The demonstration would therefore report the agent **up**
+	// over a stack nobody can transact on. A banner that lies is worse than a
+	// connection that is refused, and it would be a new failure rather than one
+	// already here — so the console that survives a boot watch is not a precedent
+	// for surviving this.
+	//
+	// TestCounterpartiesDownDenyTheConsoleThatABootWatchDoesNot is the pair to
+	// #252's own test, and between them they are what keeps the two from being
+	// flattened into one.
 	if err := ready(ctx, endpoints, *wait); err != nil {
 		return err
 	}
 
+	// Reached only without -addr, because flagsAgree refuses the pair: a purchase
+	// that fails still returns, and there is no console here for that to take
+	// away.
 	if *buy {
 		if err := buyOnce(ctx, endpoints, events, *from, *to); err != nil {
 			return err
@@ -303,20 +366,46 @@ func run() error {
 
 // flagsAgree refuses a combination that cannot be honoured.
 //
-// At parse time rather than when the console is built, because it is a
+// At parse time rather than when the console is built, because each is a
 // contradiction in what was asked for rather than a failure to do it — and
 // because the alternative is a precedence rule, which leaves whoever passed both
 // to find out which one won by watching. -once wants the shell back after one
 // purchase; -addr wants a server. There is no reading of the pair that serves
 // both.
 //
-// A function rather than four lines inside run, so that the decision is
-// assertable without a process: TestOnceAndAddrCannotBothBeGiven is what holds
-// it.
-func flagsAgree(addr string, once bool) error {
+// # -buy beside -addr is the second pair, on the first's reasoning
+//
+// Issue #257 added it. It is a combination this function used to permit and that
+// nothing in this repository runs: deploy/demo.json gives -buy and -addr to two
+// processes rather than one, and its own $comment says why — a failed Human
+// Present purchase returns from run, so a single process would exit before the
+// watch had authorised anything. With -addr that exit is a server going away, and
+// "a server that runs one Human Present purchase first and exits if it fails" is
+// about as coherent as the pair above it.
+//
+// Refusing it here is what makes the alternative unnecessary. The other way to
+// answer #257 was to let a failed purchase report through the console the way a
+// failed boot watch does, which would mean two failure paths past -addr with
+// different answers and a third to argue about the next time one is found. A
+// combination nothing runs is better removed than given a behaviour.
+//
+// The -once pair is checked first, so `-buy -once -addr` is answered by that
+// message. Either way the answer names -addr, which is the flag both pairs
+// conflict over, and dropping it is what makes the rest of the command work.
+//
+// A function rather than lines inside run, so that the decision is assertable
+// without a process: TestOnceAndAddrCannotBothBeGiven and
+// TestBuyAndAddrCannotBothBeGiven are what hold the two, one per invocation.
+func flagsAgree(addr string, once, buy bool) error {
 	if addr != "" && once {
 		return errors.New("agent: -once and -addr ask for opposite things — " +
 			"a server that exits after its first watch is a server nobody can use")
+	}
+	if addr != "" && buy {
+		return errors.New("agent: -buy and -addr ask for opposite things — " +
+			"a server that runs one Human Present purchase first and exits if it fails is " +
+			"a server nobody can rely on being there; run the purchase as its own process, " +
+			"which is what deploy/demo.json does")
 	}
 	return nil
 }
@@ -579,6 +668,13 @@ func afterWatch(out io.Writer, err error, once bool) error {
 // TestAWatchWithNoConsoleStillStopsTheProcess is the pair to this file's
 // TestABootWatchThatFindsNothingStillLeavesAConsoleServing, and between them
 // they are what keeps the two paths from being flattened into one.
+//
+// **What this is not a precedent for is surviving ready.** Nothing here is
+// reached when a counterparty never answered: run returns first, deliberately,
+// and the argument for the difference is at that call site. This function's
+// reasoning is about a demonstration nobody typed failing while the stack is
+// otherwise up — read as a general licence to serve through anything, it would
+// have the demo banner reporting an agent that cannot reach its merchant as up.
 func serveConsole(
 	ctx context.Context, e agent.Endpoints, events *obs.Emitter,
 	addr string, cfg watching, initial bool,
