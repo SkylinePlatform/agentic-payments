@@ -951,6 +951,33 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 
 	paymentReceipt, settled, err := s.initiate(r.Context(), mode, req)
 	if err != nil {
+		// **Every way of not obtaining the processor's verdict arrives here**,
+		// including merchant.ErrSettlementInFlight — the processor answering that
+		// this same settlement is already running under this same key. Issue #232
+		// is that it did not: it reached the branch below instead and was
+		// rendered to the buyer as a decline.
+		//
+		// One code for all of them, and 503 rather than the processor's own 409
+		// forwarded, on two grounds. The first is that idempotency_in_flight is a
+		// statement about the key the *caller* presented, and the key that is held
+		// is this merchant's on its own hop — a buyer told that would go looking
+		// at a key that is not the problem. The second is decisive:
+		// transport.Idempotency remembers everything under 500 and releases the
+		// key on a 5xx, so a forwarded 409 would be replayed to every retry for
+		// the life of the window, and a purchase whose processor was busy for a
+		// moment could never complete. A 503 hands the key back, and the retry
+		// reaches a processor that has by then finished and replays its answer.
+		//
+		// **What it costs, stated rather than discovered.** "Try again" is right
+		// for every answer that is transient and merely honest for one that is
+		// not: a processor answering request_malformed to a processor_nonce it
+		// never issued — the buyer's own value, forwarded — is permanent, and the
+		// watch re-delivers the same documents rather than re-minting them, so
+		// that retries until it stops. It does stop, and not on this hop: the
+		// delegations carry the user's expiry, and once it passes this merchant
+		// refuses them at decideChain and answers 422 with a receipt, which is a
+		// verdict and ends the run. Answering "refused" instead would end it
+		// sooner by asserting a decision nobody reached, which is #232.
 		roles.Fail(w, generated.ErrorCodeVerifierUnavailable,
 			fmt.Sprintf("initiating payment: %v", err))
 		return
@@ -958,7 +985,10 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 
 	status := http.StatusOK
 	if !settled {
-		// The processor refused. The merchant's own receipt still says the
+		// The processor refused, and since #232 that is a verdict rather than an
+		// inference: present reports settled false only over the processor's own
+		// signed receipt, and answers everything it could not obtain a verdict
+		// from as the error above. The merchant's own receipt still says the
 		// mandate was good, because it was — and the processor's says why the
 		// money did not move. Two signed answers to two different questions,
 		// which is what lets a dispute tell them apart.

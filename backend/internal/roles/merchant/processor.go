@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,6 +41,14 @@ type Processor interface {
 	// InitiatePayment presents the payment side of a purchase and returns the
 	// processor's signed answer. A refusal is not an error — the receipt is the
 	// answer either way, and settled is what says which it was.
+	//
+	// **settled false with no receipt is not a refusal and an implementation
+	// must not report one.** A refusal is a verdict, and AP2 has a verdict
+	// answered with a receipt, so the two values together are what say the
+	// processor declined; either alone is the zero value of a struct nobody
+	// filled in. An implementation that could not obtain a verdict returns an
+	// error — see ErrSettlementInFlight for the case that made the difference
+	// matter, and HTTPProcessor.present for what it costs to get this wrong.
 	InitiatePayment(
 		ctx context.Context,
 		paymentMandate string,
@@ -71,6 +80,31 @@ type Processor interface {
 	) (receipt string, settled bool, err error)
 }
 
+// ErrSettlementInFlight means the processor is already settling this exact
+// payment under this exact key, and has not finished.
+//
+// It is the processor's transport.Idempotency answering idempotency_in_flight,
+// which is not a refusal and was reported as one until issue #232 — the middle
+// of a settlement rendered to the buyer as a settled decline.
+//
+// **Nothing about money is at risk when it arrives**, which is why it took an
+// architect review to find. present derives its key from the URL and the body,
+// so the attempt already running under that key is *this* settlement; the
+// processor answering this way is the guarantee working, not failing. What was
+// wrong is only what the buyer was told, and telling a buyer their payment was
+// declined when it may yet go through is the failure this project's whole error
+// vocabulary exists to prevent.
+//
+// A sentinel rather than one more unexported wrapped error, because it is the
+// one answer on this hop whose remedy is "present the identical request again":
+// everything else present can fail on has to change first. Nothing in this
+// package branches on it today — settle answers verifier_unavailable to every
+// failure to reach the processor, and correctly, since none of them is a verdict
+// about the buyer's mandate — so this is what lets a caller that needs the
+// distinction have it without parsing a sentence.
+var ErrSettlementInFlight = errors.New(
+	"merchant: the processor is already settling this payment under the key it was presented under")
+
 // HTTPProcessor talks to a Merchant Payment Processor over HTTP.
 type HTTPProcessor struct {
 	// Base is the processor's root, e.g. "http://localhost:8083".
@@ -85,10 +119,15 @@ var _ Processor = (*HTTPProcessor)(nil)
 
 // InitiatePayment sends the Payment Mandate and the credential to the processor.
 //
-// A 4xx is a refusal rather than a transport failure, and it carries a receipt.
-// Returning an error on the status would discard the processor's signed account
-// of why it would not move the money — which is the one thing a merchant will
-// want when the customer asks.
+// A refusal is not a transport failure, and it carries a receipt. Returning an
+// error on the status would discard the processor's signed account of why it
+// would not move the money — which is the one thing a merchant will want when
+// the customer asks.
+//
+// That sentence used to read "a 4xx is a refusal", and the correction is issue
+// #232: the receipt is what makes an answer a refusal, and it is one of the four
+// non-2xx statuses under 500 this processor can send that carries one. 422 does;
+// 400, 409 and 413 are Problem Details and carry nothing. See present.
 func (p *HTTPProcessor) InitiatePayment(
 	ctx context.Context,
 	paymentMandate string,
@@ -145,7 +184,9 @@ func (p *HTTPProcessor) InitiatePaymentChain(
 // Shared by the two entry points because nothing about the call differs between
 // them except which member carries the presentation: same path, same
 // idempotency key derivation, same correlating client, same reading of the
-// answer. Two copies would be two places for the 5xx rule below to drift.
+// answer. Two copies would be two places for the rules below to drift — and
+// there are two of them now rather than one, which is the second argument for
+// this having stayed one function.
 func (p *HTTPProcessor) present(
 	ctx context.Context, payload map[string]any,
 ) (string, bool, error) {
@@ -173,9 +214,16 @@ func (p *HTTPProcessor) present(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// Both shapes in one decode, because both are JSON and which one arrived is
+	// what this function has to work out. receipt and settled are the outcome
+	// internal/roles/mpp answers a verdict with; code and detail are RFC 9457's,
+	// which is what internal/platform/problem writes for everything that is not
+	// one. A body carrying neither pair is neither, and falls out below.
 	var out struct {
-		Receipt string `json:"receipt"`
-		Settled bool   `json:"settled"`
+		Receipt string              `json:"receipt"`
+		Settled bool                `json:"settled"`
+		Code    generated.ErrorCode `json:"code"`
+		Detail  string              `json:"detail"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
 		return "", false, fmt.Errorf("decoding the processor's answer: %w", err)
@@ -185,6 +233,40 @@ func (p *HTTPProcessor) present(
 	// answer in it to pass on.
 	if resp.StatusCode >= 500 {
 		return "", false, fmt.Errorf("the processor answered %s", resp.Status)
+	}
+
+	// And below 500 the same question has to be asked, which it was not until
+	// issue #232. A refusal is a *verdict*, and this processor answers a verdict
+	// with its signed receipt — every other answer it can give is Problem Details
+	// with no receipt in it, which decodes to an empty receipt and settled false.
+	// That is byte for byte what a genuine decline looks like to the code below,
+	// so the merchant was reporting "the processor declined this payment" for an
+	// answer that said no such thing.
+	//
+	// **Which way the default goes is the whole of the fix.** The test is what
+	// came back rather than which status it came back under: an answer that
+	// neither settles nor carries the processor's account of why it did not is
+	// the processor having reached no conclusion this merchant may repeat. A list
+	// of statuses to exclude would default the other way and would be wrong again
+	// the first time the processor grew an answer nobody here had thought of —
+	// which is the reasoning #206 settled the same shape on one role along.
+	//
+	// settled is read as well as the receipt, so that a processor answering that
+	// the money moved is never turned into a failure by this branch. Money having
+	// moved with no receipt beside it is a different complaint from #232's, and
+	// refusing to acknowledge a settlement is not the way to make it.
+	if !out.Settled && out.Receipt == "" {
+		if out.Code == generated.ErrorCodeIdempotencyInFlight {
+			// Named apart from the rest because the caller's move differs: this
+			// says the identical settlement is already running under the identical
+			// key, so presenting it again is what obtains the processor's answer
+			// rather than a second settlement. Every other answer here is
+			// something that has to change first.
+			return "", false, fmt.Errorf("%w: %s answered %s: %s",
+				ErrSettlementInFlight, url, resp.Status, out.Detail)
+		}
+		return "", false, fmt.Errorf(
+			"the processor answered %s with no verdict in it (%s): %s", resp.Status, out.Code, out.Detail)
 	}
 	return out.Receipt, out.Settled, nil
 }

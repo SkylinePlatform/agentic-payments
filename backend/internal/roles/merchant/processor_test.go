@@ -5,12 +5,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/problem"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant"
 )
 
@@ -215,4 +218,262 @@ func TestARetriedSettlementIsPresentedUnderTheKeyItWasPresentedUnder(t *testing.
 	assert.NotEqual(t, keys[0], keys[2],
 		"and a key that cannot tell two settlements apart would replay the first purchase's "+
 			"answer to the second, which is the same defect facing the other way")
+}
+
+// TestOnlyAnAnswerCarryingTheProcessorsVerdictIsARefusal is issue #232 at the
+// hop it happens on.
+//
+// # What was wrong
+//
+// present read every answer under 500 as the processor's verdict: the receipt
+// out of the body, `settled` out of the body, and a nil error. For the one
+// answer that shape was written for — 422 with the processor's signed receipt in
+// it — that is right. For every other answer under 500 it is a fabrication. A
+// Problem Details document carries no `receipt` and no `settled`, so it decodes
+// to the zero value of both, and an empty receipt with settled false is exactly
+// what this merchant hands its buyer when the processor has genuinely declined.
+//
+// So a processor answering *"another attempt under this key is still running"*
+// was reported to the buyer as *"your payment was declined"*.
+//
+// # Which way the default goes, which is the load-bearing part
+//
+// #206 split a consent screen's `failed` state on the same question and settled
+// it the same way: exactly one answer proves the strong claim, so everything
+// else defaults to the weak one. Here the strong claim is *the processor decided
+// not to move the money*, and what proves it is the processor's signed receipt —
+// internal/roles/mpp answers every verdict with one, and answers everything that
+// is not a verdict with Problem Details and no receipt at all. Defaulting the
+// other way is asserting a decline on the strength of a body that did not
+// contain the word.
+//
+// Which is why this table is not a list of statuses to special-case. The rule is
+// about what came back, not about which number it came back under: a processor
+// that grew a new refusal-shaped answer tomorrow would be read correctly by a
+// merchant that asks whether a verdict arrived, and misread by one that keeps a
+// list.
+//
+// # The documents are built by their own producer
+//
+// Each refusal below is written with problem.New, which is what
+// internal/platform/transport/idempotent.go and roles.Fail both call. Spelling
+// the JSON by hand here would pin this merchant against a wire format nothing
+// else in the tree reads from — and the status and the code moving together is
+// precisely what a hand-written literal would stop noticing.
+func TestOnlyAnAnswerCarryingTheProcessorsVerdictIsARefusal(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		// answer is what the processor sends back.
+		answer func(w http.ResponseWriter)
+		// verdict is whether present may report this as the processor's own
+		// answer rather than as a failure to obtain one.
+		verdict bool
+		// settled and receipt are what a verdict has to carry through unaltered.
+		settled bool
+		receipt string
+		// is, when set, is the sentinel the error has to satisfy.
+		is      error
+		because string
+	}{
+		{
+			name: "the key is held by an attempt that has not finished",
+			answer: func(w http.ResponseWriter) {
+				_ = problem.New(generated.ErrorCodeIdempotencyInFlight,
+					"Idempotency-Key \"k\" is held by an attempt that has not finished; retry").Write(w)
+			},
+			is: merchant.ErrSettlementInFlight,
+			because: "this is the whole of #232: the processor said the money may yet move and " +
+				"the merchant told its buyer it would not",
+		},
+		{
+			name: "the key was reused for a different settlement",
+			answer: func(w http.ResponseWriter) {
+				_ = problem.New(generated.ErrorCodeIdempotencyConflict,
+					"Idempotency-Key \"k\" was used for a different request").Write(w)
+			},
+			because: "the other 409 the same middleware sends, and it is no more a decline than " +
+				"the first — it says this merchant presented two different settlements under " +
+				"one key, which is a fault of this merchant's own",
+		},
+		{
+			name: "the processor could not read what it was sent",
+			answer: func(w http.ResponseWriter) {
+				_ = problem.New(generated.ErrorCodeRequestMalformed,
+					"there is nothing here to settle against").Write(w)
+			},
+			because: "a merchant whose request the processor cannot parse has not been refused " +
+				"either; nobody looked at the mandate, so nobody declined it",
+		},
+		{
+			name: "the processor declined, and answered with its receipt",
+			answer: func(w http.ResponseWriter) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = w.Write([]byte(`{"receipt":"the-processors-receipt","settled":false}`))
+			},
+			verdict: true,
+			receipt: "the-processors-receipt",
+			because: "the control without which every arm above is satisfied by a merchant that " +
+				"reported everything as a failure — and the answer that must keep reaching the " +
+				"buyer unaltered, because it is the processor's signed account of why the money " +
+				"did not move",
+		},
+		{
+			name: "the processor settled",
+			answer: func(w http.ResponseWriter) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"receipt":"the-processors-receipt","settled":true}`))
+			},
+			verdict: true,
+			settled: true,
+			receipt: "the-processors-receipt",
+			because: "the second control, facing the other way: a purchase that went through",
+		},
+		{
+			name: "the processor settled and sent no receipt",
+			answer: func(w http.ResponseWriter) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"settled":true}`))
+			},
+			verdict: true,
+			settled: true,
+			because: "nothing internal/roles/mpp can answer looks like this, and the rule above " +
+				"reads settled as well as the receipt so that it never does become a failure " +
+				"here: a settlement with no evidence beside it is a real complaint and it is not " +
+				"#232's, and refusing to acknowledge that the money moved is not the way to " +
+				"raise it",
+		},
+		{
+			name: "the processor failed for reasons of its own",
+			answer: func(w http.ResponseWriter) {
+				_ = problem.New(generated.ErrorCodeVerifierUnavailable, "the card network is down").Write(w)
+			},
+			because: "unchanged, and stated so that the 5xx rule cannot be lost while the rule " +
+				"beneath it is being written",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				tc.answer(w)
+			}))
+			t.Cleanup(srv.Close)
+
+			receipt, settled, err := (&merchant.HTTPProcessor{Base: srv.URL}).
+				InitiatePayment(t.Context(), "the-mandate",
+					generated.PaymentCredential{Token: "tok_1", CheckoutHash: "hash_1"})
+
+			if !tc.verdict {
+				require.Error(t, err, tc.because)
+				assert.Empty(t, receipt, "there is no signed answer in a document nobody signed")
+				assert.False(t, settled, "and nothing here says the money moved")
+				if tc.is != nil {
+					assert.ErrorIs(t, err, tc.is,
+						"the merchant has to be able to tell this one from the rest: it is the "+
+							"answer that says the same request, presented again, will be answered "+
+							"rather than settled twice")
+				} else {
+					// The other half of the same claim, and the arm above proves
+					// nothing without it: a sentinel every refusal satisfies
+					// distinguishes nothing, and an implementation that wrapped
+					// ErrSettlementInFlight around all of them passes every other
+					// assertion in this file.
+					assert.NotErrorIs(t, err, merchant.ErrSettlementInFlight,
+						"presenting this again unchanged would be answered the same way, so a "+
+							"caller told to retry it would retry it until the mandate expires")
+				}
+				return
+			}
+
+			require.NoError(t, err, tc.because)
+			assert.Equal(t, tc.receipt, receipt,
+				"the processor's signed answer is passed back unaltered; this merchant has no "+
+					"business editing somebody else's statement")
+			assert.Equal(t, tc.settled, settled, tc.because)
+		})
+	}
+}
+
+// TestAProcessorSayingInFlightIsNotAnsweredToTheBuyerAsARefusal is the same
+// defect from the end that matters, driven through POST /checkout.
+//
+// The hop test above pins what present makes of the answer. This one is about
+// what the buyer is told, which is the thing #232 was opened about, and it is
+// not derivable from the other: a merchant could read the answer perfectly and
+// still hand the buyer a 422 with a receipt in it.
+//
+// Three things are asserted and each is a separate claim:
+//
+//   - **The status is not a refusal.** 422 is this merchant's word for "the
+//     mandate was good and the money did not move", and it is a claim about a
+//     decision nobody has reached. 503 is the answer that says try again — and
+//     it is also the answer transport.Idempotency declines to remember, so the
+//     buyer's key is handed back and the retry runs rather than replaying a
+//     refusal for the life of the window. A 409 forwarded verbatim would be
+//     remembered, and the buyer would then be answered "in flight" for ever.
+//   - **The buyer can act on it.** internal/agent's Client.call turns a 4xx into
+//     ErrRefused and leaves everything else alone, and verdictOf reads the first
+//     as a verifier having answered and the second as a delivery nobody
+//     answered — which holds the attempt open and re-delivers it under the same
+//     key. So the status class is not a detail of presentation here; it is what
+//     decides whether the run ends as refused or waits.
+//   - **No receipt is announced.** The processor's answer never arrived, so
+//     there is no payment receipt, and the merchant's own receipt goes nowhere.
+//     Issue #224's property, one failure further along: the log must not name an
+//     artefact nobody holds.
+func TestAProcessorSayingInFlightIsNotAnsweredToTheBuyerAsARefusal(t *testing.T) {
+	t.Parallel()
+
+	var presented atomic.Int64
+	processor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		presented.Add(1)
+		// Written by the producer rather than spelled here — this is the
+		// document transport.Idempotency sends when store.ErrInFlight comes
+		// back from Claim, and a merchant standing behind two replicas of
+		// itself, or one whose buyer's retry overtook the first attempt, is
+		// what makes two attempts overlap under one key.
+		_ = problem.New(generated.ErrorCodeIdempotencyInFlight,
+			"Idempotency-Key \"k\" is held by an attempt that has not finished; retry").Write(w)
+	}))
+	t.Cleanup(processor.Close)
+
+	events, log := recordingEmitter(t)
+	s := newShopServedBy(t, events, &merchant.HTTPProcessor{Base: processor.URL})
+
+	offer, price := s.quote(t)
+	checkout, payment := s.mandates(t, s.user, offer, price)
+
+	status, body := s.settle(t, map[string]any{
+		"mandate": checkout.String(), "payment": payment.String(), "checkout": offer,
+	})
+
+	require.Equal(t, int64(1), presented.Load(),
+		"the test is worthless unless the merchant got as far as asking for the money: every "+
+			"assertion below is about what it made of the answer")
+	assert.Equal(t, http.StatusServiceUnavailable, status,
+		"the processor said the money may yet move, and 422 is this merchant's word for a "+
+			"purchase that was refused — a buyer reading it stops, and its agent records a "+
+			"refusal for a decision nobody reached")
+	assert.Equal(t, string(generated.ErrorCodeVerifierUnavailable), body["code"],
+		"the merchant could not reach a conclusion for reasons of its own, which is what that "+
+			"code means; idempotency_in_flight forwarded verbatim would be a statement about "+
+			"the buyer's key, and the buyer's key is not the one that is held")
+	assert.Empty(t, body["receipt"],
+		"and no receipt travels with it: a Problem Details answer is not evidence, and a "+
+			"receipt here would be this merchant's signature over a settlement that has not "+
+			"happened")
+
+	require.NoError(t, events.Close(t.Context()), "draining the event log")
+	require.Equal(t,
+		[]obs.Kind{obs.KindMandateVerified, obs.KindMandatePresented}, log.kinds(),
+		"the control the count below is worthless without, and it is #224's own: it says the "+
+			"log was live and said everything this purchase did reach. Without it the zero is "+
+			"satisfied by a merchant emitting nothing at all — this test passes with no Emitter "+
+			"attached - so it would measure the wiring rather than what was announced")
+	assert.Zero(t, log.issued(),
+		"the receipt was signed and then dropped, so nobody holds it — and the retry a "+
+			"released 5xx invites would announce a second one for the same purchase")
 }
