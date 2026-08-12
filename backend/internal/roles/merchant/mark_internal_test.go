@@ -166,8 +166,17 @@ func TestTwoOffersGetTwoMarks(t *testing.T) {
 	assert.NotEqual(t, first, second,
 		"two offers drew the same grid, so a fetched shelf would be one picture repeated with "+
 			"nothing but its comment to tell the rows apart")
-	assert.Equal(t, markDataURI("dummyjson:154", "Black Sun Glasses"),
-		markDataURI("dummyjson:154", "Black Sun Glasses"),
+
+	// And the same offer twice. Held as a value from the line above rather than
+	// spelled as two calls inside one assert.Equal, because this commit's
+	// neighbour deleted a test for comparing an expression with itself and this
+	// should not read like the thing that was deleted. What it catches is a
+	// drawing that depends on how many marks came before it — a package-level
+	// counter mixed into the hash reddens exactly this line and nothing else in
+	// the suite, which is the mutation issue #292 ran to find out whether it was
+	// worth keeping.
+	drawnOnce := markDataURI("dummyjson:154", "Black Sun Glasses")
+	assert.Equal(t, drawnOnce, markDataURI("dummyjson:154", "Black Sun Glasses"),
 		"a mark that varied between calls would give one offer two pictures across two searches in one run")
 }
 
