@@ -59,9 +59,21 @@ modified, and none is served from here. This file carries their URLs as text, an
 under `make demo-live` a browser fetches them from `cdn.dummyjson.com` and shows
 them in a table that sells nothing.
 
+`cdn.dummyjson.com` is where all 194 rows below point, so it is where a browser
+goes today — but it is **not** a host the merchant checks for. What it checks is
+`https://`, a host after it, and no whitespace or quote; a shop answering with a
+different host would be believed. That is deliberate and argued in
+`internal/roles/merchant/mark.go`, and it is the reason `NOTICE`'s
+Content-Security-Policy line is a description of one run rather than a rule.
+
+Two costs are worth naming beside the licence one. Every page view under
+`make demo-live` pulls up to 194 images from a service that charges nothing and
+promises nothing — a heavier imposition than the column selection above, which
+is the courtesy this file already argued for. And a fetched row renders broken,
+silently, whenever those images do not arrive.
+
 This paragraph said the opposite until issue #300 — *only the eight columns above
 are taken, no image is fetched* — and the reversal was deliberate rather than a
 drift. `internal/roles/merchant/mark.go` is where the argument is, including the
-two objections it overrode and the Content-Security-Policy line the frontend
-would now need. Where the shop supplies no usable thumbnail, a live offer still
-shows a mark this project draws from the offer's identifier.
+two objections it overrode. Where the shop supplies no usable thumbnail, a live
+offer still shows a mark this project draws from the offer's identifier.

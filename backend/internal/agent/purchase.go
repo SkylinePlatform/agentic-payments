@@ -559,10 +559,21 @@ func (c *Client) call(ctx context.Context, method, url string, body, into any) e
 // a cap that silently shortens a document is the wrong thing to be approaching
 // whatever the number is.
 //
-// TestTheWidestAnswerAMerchantCanGiveFitsThisLimit re-derives every figure above
+// TestTheWidestAnswerAMerchantCanGiveFitsThisLimit assembles that same answer
 // under `make check`, over the response recorded at shop/data/ — which was
 // retaken from the live shop on 12 August 2026 and is byte for byte what it
 // answered, so this is the live measurement rather than a stand-in for one.
+//
+// **It bounds those figures rather than pinning them**, and the difference is
+// worth being exact about, because "the test re-derives every number above" is
+// what this paragraph claimed until the architect review of #300 went and
+// looked. What the test holds is a floor and a ceiling on the size, a ceiling
+// on the pictures' share and a floor on the photographs' bytes — four bounds,
+// each of which a mutation can redden. A byte count asserted exactly would fail
+// on every price tick and every catalogue edit, which is a test people update
+// without reading. So the rows above can drift within those bounds while the
+// suite stays green: they are a reading taken on a date, and the bounds are what
+// stops the reading becoming fiction rather than what keeps it current.
 const maxResponse = 1 << 20
 
 // idempotencyKey is a stable name for one step of one purchase.

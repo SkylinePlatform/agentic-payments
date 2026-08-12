@@ -2,6 +2,7 @@ package merchant
 
 import (
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -253,6 +254,12 @@ func TestTheShopsPhotographIsShownAndAnythingElseBecomesAMark(t *testing.T) {
 			why: "the same, in the character that would break a header or a log line rather than " +
 				"an attribute",
 		},
+		{
+			name: "a photograph behind another scheme", thumbnail: "javascript:https://cdn.dummyjson.com/1.webp",
+			why: "the rule is a prefix and not a substring, and this is the one value that tells " +
+				"the two apart — an implementation asking whether the thumbnail *contains* " +
+				"`https://` hands a browser whatever scheme came first",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -265,6 +272,84 @@ func TestTheShopsPhotographIsShownAndAnythingElseBecomesAMark(t *testing.T) {
 				return
 			}
 			assert.Equal(t, markDataURI(p.ID, p.Title), got, tc.why)
+		})
+	}
+}
+
+// TestEveryCharacterAFetchedPictureMayNotCarryIsRefusedOnItsOwn is the class in
+// liveImageForbidden, one character at a time and in both places that keep it.
+//
+// # Why the table above was not enough
+//
+// It has a row carrying a quote and a row carrying a newline, and the quote row
+// reads `…/a" onerror="x` — a space *and* a quote. So the two characters stood
+// in for each other: deleting `"` from liveImageForbidden left the row failing
+// on the space, deleting the space left it failing on the quote, and both
+// deletions individually left the whole suite green. That is an assertion that
+// reddens only under some other mutation, which AGENTS.md names as one of the
+// two shapes a green run cannot show you. `\t` and `\r` were in the class and
+// in no row at all.
+//
+// # Why the class is written out as well as looped over
+//
+// The loop is derived from liveImageForbidden, which makes a character *added*
+// to the class arrive with its own case rather than being covered by whatever
+// else happens to be in the same string. It cannot do the opposite: a character
+// *removed* takes its own case away with it, so the loop alone goes green on
+// exactly the change that matters. Deleting the space, the tab, the quote or
+// the carriage return from the constant was measured to leave the whole suite
+// passing before the block below existed.
+//
+// So the class is stated once more here, one row per character with the reason
+// it is in it, and its length is asserted — which is also the non-vacuity check
+// AGENTS.md asks of a rule over a derived list, in a stronger form than "not
+// empty". A character added without a row is a character nobody wrote a reason
+// for; one removed is a rule quietly dropped.
+//
+// # Why both callers, in one test
+//
+// pictureFor and validateImage keep the same rule from opposite ends — one
+// decides what to put in an offer, the other what a catalogue may hold — and
+// the failure that matters is them disagreeing. Asking both of the same
+// character is what makes a disagreement impossible to introduce quietly.
+func TestEveryCharacterAFetchedPictureMayNotCarryIsRefusedOnItsOwn(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range []struct {
+		char rune
+		why  string
+	}{
+		{' ', "a space is what separates one attribute from the next, so a URL carrying one is a picture and then something else the shop chose to put in the tag"},
+		{'\t', "the same, in the whitespace a person reading the row would not see"},
+		{'\r', "it ends a line in a header and in a log, and a URL that can end either is a URL that can start whatever comes after it"},
+		{'\n', "the same, and it is the one an attacker reaches for first"},
+		{'"', "it closes the attribute the picture is in, which is the whole of the difference between a src and a src plus an onerror"},
+	} {
+		assert.Contains(t, liveImageForbidden, string(c.char),
+			"%q is not refused any more, and this row is the reason it was: %s", c.char, c.why)
+	}
+	assert.Len(t, liveImageForbidden, 5,
+		"the class and the reasons written above it have to be the same set; a character in one and not the other is either a rule nobody stated a reason for or a reason for a rule that is gone")
+
+	for _, c := range liveImageForbidden {
+		t.Run(fmt.Sprintf("a photograph carrying %q and nothing else odd", c), func(t *testing.T) {
+			t.Parallel()
+
+			// One forbidden character and nothing else wrong: the prefix is
+			// right, there is a host, and the rest is an ordinary CDN path. So
+			// the only thing that can refuse it is this character.
+			url := "https://cdn.dummyjson.com/a" + string(c) + "b.webp"
+
+			p := shop.Product{ID: "dummyjson:154", Title: "Black Sun Glasses", Thumbnail: url}
+			assert.Equal(t, markDataURI(p.ID, p.Title), pictureFor(p),
+				"the merchant would put this in an img tag; every character in liveImageForbidden is there because one of them breaks the attribute, the header or the log line it lands in")
+
+			entry := CatalogueEntry{ID: p.ID, Source: SourceLive, ImageURL: url}
+			err := entry.validateImage()
+			require.Error(t, err,
+				"pictureFor and validateImage keep one rule from two ends, and a character only one of them refuses is a disagreement that shows up as `make demo-live` refusing to start, or as nothing at all")
+			assert.ErrorIs(t, err, ErrInvalidCatalogue,
+				"a catalogue this merchant will not sell from has to fail as an invalid catalogue, or the refusal reaches a caller as something else")
 		})
 	}
 }

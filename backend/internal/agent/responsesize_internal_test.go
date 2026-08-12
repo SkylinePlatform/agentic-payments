@@ -241,16 +241,22 @@ func TestTheWidestAnswerAMerchantCanGiveFitsThisLimit(t *testing.T) {
 	// with every other number here unchanged.
 	pictures, photographs := 0, 0
 	for _, o := range results.Offers {
-		bytes := len(o.ImageURL) + 2 // as JSON encodes it, quotes included
+		// Quotes included, and within twenty bytes of what the encoder writes:
+		// four of the shop's paths carry an ampersand, which Go's JSON encoder
+		// escapes to six bytes. That is the whole of the difference between 17,089
+		// counted here and the 17,109 the row beside maxResponse records, and
+		// it is written down because a reader re-deriving the figure by hand
+		// otherwise finds two numbers and no reason.
+		bytes := len(o.ImageURL) + 2
 		pictures += bytes
 		if strings.HasPrefix(o.ImageURL, "https://") {
 			photographs += bytes
 		}
 	}
 	assert.Less(t, pictures, size/4,
-		"the pictures are %d of %d bytes; the rows beside maxResponse price them at 15.6%% of the "+
-			"answer, and the whole reason that constant has headroom again is that they stopped "+
-			"being most of it",
+		"every offer's image_url together is %d of %d bytes; the rows beside maxResponse price the "+
+			"fetched half's photographs alone at 13.4%% of the answer, and the whole reason that "+
+			"constant has headroom again is that pictures stopped being most of it",
 		pictures, size)
 	assert.Greater(t, photographs, 10<<10,
 		"only %d bytes of this answer are photograph URLs, so most of the fetched half is not "+

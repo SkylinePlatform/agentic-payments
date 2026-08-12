@@ -201,7 +201,7 @@ var markAccents = []string{markSignal, markSeal, markBroken, markGraphite}
 // only from entryFor, which only Extend calls.
 func pictureFor(p shop.Product) string {
 	host, over := strings.CutPrefix(p.Thumbnail, liveImagePrefix)
-	if over && host != "" && !strings.ContainsAny(p.Thumbnail, " \t\r\n\"") {
+	if over && host != "" && !strings.ContainsAny(p.Thumbnail, liveImageForbidden) {
 		return p.Thumbnail
 	}
 	return markDataURI(p.ID, p.Title)
@@ -217,6 +217,26 @@ func pictureFor(p shop.Product) string {
 // keep from it, and the second shop would arrive as a change here rather than as
 // a second file in shop/.
 const liveImagePrefix = "https://"
+
+// liveImageForbidden is what a fetched offer's photograph may not carry
+// anywhere in it: whitespace, and the character that ends an HTML attribute.
+//
+// One constant for the reason liveImagePrefix is one, and it was two literals
+// until the architect review of #300 pointed out that the reason applies to
+// both halves of the rule. pictureFor decides what to put in an offer and
+// validateImage decides what a catalogue may hold; if those two disagree about
+// a character, the disagreement is silent in one direction — a photograph
+// pictureFor allows and validateImage refuses fails the merged catalogue and
+// stops `make demo-live` — and invisible in the other.
+//
+// **It is checked one character at a time**, in
+// TestEveryCharacterAFetchedPictureMayNotCarryIsRefusedOnItsOwn, derived from
+// this constant rather than written out beside it. That test exists because
+// the tables that came before it covered the class with two rows carrying a
+// quote *and* a space, so each of those two characters could be deleted from
+// here with nothing going red — an assertion reddening only under some other
+// mutation, which is the shape AGENTS.md names.
+const liveImageForbidden = " \t\r\n\""
 
 // markDataURI is a mark for one offer, as the `data:` URI its image_url carries.
 //

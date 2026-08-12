@@ -709,6 +709,17 @@ func TestTheCatalogueFileRefusesNonsense(t *testing.T) {
 				"that would sail through a check written as \"not http\"",
 		},
 		{
+			name: "a fetched offer whose picture hides https behind another scheme",
+			mutate: func(f *merchant.CatalogueFile) {
+				live := fetched()
+				live.ImageURL = "javascript:https://cdn.dummyjson.com/product-images/sunglasses/1.webp"
+				f.Offers = append(f.Offers, live)
+			}, wantErr: true, mentions: "which is neither",
+			why: "the rule is a prefix and not a substring, and every other row here passes a " +
+				"check written either way — this is the one that tells them apart, and what is on " +
+				"the wrong side of it is a scheme somebody else's shop chose reaching an img tag",
+		},
+		{
 			name: "a fetched offer whose picture is a scheme and no host",
 			mutate: func(f *merchant.CatalogueFile) {
 				live := fetched()

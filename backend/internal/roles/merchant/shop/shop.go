@@ -109,7 +109,7 @@ type Product struct {
 	// Thumbnail is where the shop keeps a photograph of this product, verbatim
 	// and optional.
 	//
-	// It is not validated here, and that is the one field of the eight above it
+	// It is not validated here, and it is the one field of the seven above it
 	// where absence costs nothing: every other one is a fact something in this
 	// project reads, so a row missing one is a row nothing can sell, while a row
 	// missing this one is a row that gets the mark the merchant would otherwise

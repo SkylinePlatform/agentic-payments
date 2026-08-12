@@ -102,7 +102,7 @@ DummyJSON
   Where the shop supplies no usable thumbnail, the drawn mark is still what an
   offer shows.
 
-  Two things follow that the licence line above does not settle, and a reader
+  Three things follow that the licence line above does not settle, and a reader
   who thinks this was the wrong call should be able to say so from them:
 
   1. **The MIT licence covers DummyJSON's software** — the server published in
@@ -129,6 +129,32 @@ DummyJSON
      There is no CSP in this repository today; that line is what one would have
      to say. backend/internal/roles/merchant/mark.go carries the argument for
      making this trade, and what was given up to make it.
+
+     **The host in that line is an observation, not a rule the code keeps.**
+     What the merchant checks is `https://`, a host after it, and no whitespace
+     or quote — never which host. cdn.dummyjson.com is where all 194 thumbnails
+     in the recorded response point, and it is therefore where a run today sends
+     a browser; a shop that answered with a different host would be believed,
+     and the line above would be the wrong policy rather than an unenforced one.
+     That is deliberate — a merchant reads its stock through an interface and
+     does not know which shop answered, so naming one host would put the shop's
+     identity in the wrong package — and it is written here rather than only in
+     mark.go, because "which third-party hosts does this page talk to" is a
+     question a reader comes to this file for, and the honest answer is
+     "whichever ones `-catalogue-live` fetched from, one shop's word for it".
+
+     What bounds it in practice is one directory along: `cmd/merchant`'s
+     `-catalogue-live` refuses every value but `dummyjson`, so the shop whose
+     word is taken is not itself configurable at run time.
+
+  3. **A free service now carries this repository's demonstration traffic.**
+     Not a licence question and not a copyright one, which is why it is its own
+     point: every page view under `make demo-live` fetches up to 194 images from
+     a shop that charges nothing and promises nothing. The columns asked for in
+     the request are kept to the nine actually used, for the same reason — see
+     shop/data/PROVENANCE.md — but that courtesy was cheap and this one is not.
+     Anybody running this at any scale, or building on it, should be hosting
+     those images themselves.
 
 IBM Plex Mono and IBM Plex Sans
   Copyright (c) 2017 IBM Corp. with Reserved Font Name "Plex"

@@ -420,7 +420,7 @@ func (o CatalogueEntry) validateImage() error {
 					"placeholder, which is what an empty picture ships as",
 					ErrInvalidCatalogue, o.ID, o.ImageURL)
 			}
-			if strings.ContainsAny(o.ImageURL, " \t\r\n\"") {
+			if strings.ContainsAny(o.ImageURL, liveImageForbidden) {
 				return fmt.Errorf("%w: fetched offer %q has image_url %q, which carries whitespace or "+
 					"a quote; it is somebody else's string and it goes straight into an img tag",
 					ErrInvalidCatalogue, o.ID, elide(o.ImageURL))
