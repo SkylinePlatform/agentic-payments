@@ -59,6 +59,29 @@ export default defineConfig(({ mode }) => {
       // URL wrong.
       strictPort: true,
 
+      // And bind the address that URL names, for the same reason one line up.
+      //
+      // Vite's default is `localhost`, which is a *name* — and Node ≥ 17
+      // resolves with `verbatim: true`, so it no longer reorders results to put
+      // IPv4 first. `server.listen(5173, "localhost")` binds whichever address
+      // the resolver returns first and only that one, so on a machine where
+      // `localhost` resolves to ::1 first the dev server is IPv6-only.
+      // `deploy/demo.json` probes `http://127.0.0.1:5173/`, nothing is
+      // listening there, and `make demo` reports the frontend failed for 30
+      // seconds while the page it is serving works in a browser: issue #267.
+      // The proxy targets below have always been explicit `127.0.0.1`; this is
+      // the same address stated for what this server *listens on* rather than
+      // only for what it connects to.
+      //
+      // `host: true` would satisfy the probe too, and must not be what closes
+      // this: it binds 0.0.0.0 — every interface — so the dev server, its proxy
+      // to the Trusted Surface and its proxy to a console that spends open
+      // mandates would all become reachable from the network. Vite's default is
+      // loopback-only and that stays true. `127.0.0.1` is the one value that is
+      // deterministic and loopback-only both, and src/topology.test.ts refuses
+      // anything that is not.
+      host: "127.0.0.1",
+
       // `server.fs.allow` is deliberately left at its default, which confines
       // the dev server to this package. The SD-JWT conformance vectors live in
       // `backend/pkg/sdjwt/testdata` and `src/sdjwt/golden.test.ts` compares
