@@ -328,6 +328,15 @@ func (s *Service) Handler() (http.Handler, error) {
 // there is no open mandate and no constraint for anybody to evaluate. Human Not
 // Present is #15, where the agent signs and the open mandate is what a verifier
 // checks it against.
+//
+// It does not go through vetted, and that is not an omission: there is no
+// constraint set here to parse, no sentence to render and no agent key to
+// endorse, so two of vetted's three refusals have nothing to be about. The third
+// one does apply, in the only form this route can state it — more of this
+// request than the answer can carry is refused before any signature, so the
+// answer is always one the idempotency middleware will remember and a retry is
+// therefore always replayed rather than signed again. weighed is where that
+// happens and maxApprovedSize is the bound.
 func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 	var req approval
 	if !roles.DecodeJSON(w, r, &req) {
@@ -344,6 +353,13 @@ func (s *Service) approve(w http.ResponseWriter, r *http.Request) {
 
 	payment := req.Payment
 	stamp(s.Clock, &payment.IssuedAt, &payment.ExpiresAt)
+
+	// After both mandates are assembled and before either is signed, because
+	// what is measured is the pair as it will be signed and the only moment at
+	// which refusing costs nothing is before the first signature.
+	if !weighed(w, checkout, payment) {
+		return
+	}
 
 	signedCheckout, signedPayment, doing, err := issueClosedPair(
 		r.Context(), s.Signer, s.Blinder, checkout, payment, req.Checkout)
@@ -653,6 +669,16 @@ func issueOpenPair(
 // recomputed over. Passed rather than read back out of checkout.Checkout so
 // that the binding has one source in this signature, the way IssuePayment
 // already takes it.
+//
+// The second way one decision reached two pairs arrived here too, and later:
+// issueOpenPair's last section describes an answer the idempotency middleware
+// forgets rather than refuses, and this route amplifies the offer it wraps by a
+// third, so one near the megabyte the body cap allows answered just past the
+// megabyte the middleware keeps. Issue #230 closed it on the same terms #223
+// closed the other — the size of the answer is decided by what the route agrees
+// to sign, so the bound is on the input and weighed applies it before either
+// signature. maxApprovedSize carries the argument for the quantity and for the
+// number, and nothing in transport moved for this one either.
 func issueClosedPair(
 	ctx context.Context,
 	signer authz.Signer,
@@ -893,6 +919,86 @@ func vetted(w http.ResponseWriter, req authorisation) (
 	return sentences, checked, digestOf(canonical), true
 }
 
+// weighed measures what one purchase would put under the user's key, answering
+// the caller directly when it is more than this surface will sign.
+//
+// It reports whether the handler may go on, so approve reads as
+//
+//	if !weighed(w, checkout, payment) {
+//		return
+//	}
+//
+// vetted's counterpart on the Human Present route, and it is a second function
+// rather than a third refusal inside the first because the two routes have
+// almost nothing in common to share. vetted takes an authorisation and works on
+// a constraint set; there is no constraint set here, no sentence and no agent
+// key. What survives the crossing is the one refusal that is about the *answer*
+// rather than about the person, and this is it.
+//
+// # What is measured, and why it is the mandates rather than the offer
+//
+// The two mandates as they will be signed, encoded. That is the quantity the
+// answer is a function of: approve hands both straight to issueClosedPair, and
+// everything that varies in them ends up base64url-encoded in the SD-JWTs this
+// route answers with.
+//
+// The tempting bound is on req.Checkout alone — it is the thing the issue
+// measured, it is the only field with an obvious size, and it would have closed
+// the case that was reported. It is also one short, which is the lesson #229's
+// review left behind: the Payment Mandate is the agent's own artefact and every
+// field of it is signed here unread. payee.name is a string this surface never
+// looks at; risk_data is a map contracts/authz/payment_mandate.json leaves
+// deliberately unstructured, because "the set of useful signals is a
+// fraud-detection concern that changes faster than a protocol schema". Each
+// would have gone straight past a bound that had only heard of the offer, and
+// an enumeration that grew to three would still be an enumeration. Measuring
+// what is signed has no list in it.
+//
+// # Two places it counts bytes the mandates will not carry, both in the safe direction
+//
+// checkout_hash arrives from the caller and is thrown away — ap2.IssuePayment
+// recomputes it, and what gets signed is a digest of fixed length — so a caller
+// that sent an enormous one is refused for bytes no mandate was going to hold.
+// And the timestamps are counted as this surface's own RFC 3339 strings while
+// the claims carry epoch seconds. Both make the bound very slightly
+// conservative, which is the direction to be wrong in, and neither is worth an
+// exception: a normalisation here is a line somebody has to keep in step with
+// the adapter, and the whole point of measuring the object is that there is
+// nothing to keep in step.
+//
+// The encoding is json.Marshal, which is never narrower than what the mandate
+// carries. pkg/sdjwt encodes a disclosure with SetEscapeHTML(false), so its
+// escaping is a strict subset of this one's: a value full of `<` costs six bytes
+// here and one there. The measure can therefore over-count and never under-count
+// it, which is what makes the ratio in maxApprovedSize a ceiling rather than an
+// observation.
+func weighed(w http.ResponseWriter, checkout generated.CheckoutMandate, payment generated.PaymentMandate) bool {
+	offered, err := json.Marshal(checkout)
+	if err != nil {
+		reject(w, "encoding the Checkout Mandate", err)
+		return false
+	}
+	paying, err := json.Marshal(payment)
+	if err != nil {
+		reject(w, "encoding the Payment Mandate", err)
+		return false
+	}
+	if size := len(offered) + len(paying); size > maxApprovedSize {
+		// request_malformed, the code the missing offer above is refused under,
+		// rather than request_too_large. The latter is the transport layer's
+		// word for a body larger than a handler will read, and this body was
+		// read: what is being refused is the pair of mandates this purchase
+		// would make, which is this role's own verdict about what it may put the
+		// user's key over.
+		roles.Fail(w, generated.ErrorCodeRequestMalformed, fmt.Sprintf(
+			"this purchase would put %d bytes under the user's key and this surface signs at most "+
+				"%d: a purchase larger than any offer a merchant makes is not one the user can approve",
+			size, maxApprovedSize))
+		return false
+	}
+	return true
+}
+
 // digestOf names a constraint set, so that a caller shown one set of sentences
 // can say which set they were about.
 //
@@ -1114,6 +1220,80 @@ const maxRenderedSize = 4096
 // answer — so a change that made the route amplify more, or that raised either
 // bound, fails there rather than in production.
 const maxSignedSize = 8 * maxRenderedSize
+
+// maxApprovedSize is how many bytes of one request this surface will put the
+// user's key over on the Human Present route: the two closed mandates as they
+// will be signed.
+//
+// # What it is for
+//
+// The same mechanism maxSignedSize is for, one route along and one issue later.
+// transport.Idempotency gives up the *record* — never the answer — above a
+// megabyte, so a route that can answer 200 with a larger body hands the key back
+// and lets a retry sign a second complete pair. Under Human Present that pair is
+// two *closed* mandates carrying the user's signature, bound to a purchase they
+// made once. Issue #230.
+//
+// # Why neither of the bounds above transfers
+//
+// Not because /approve renders nothing, though it does not. Because /approve
+// does not go through vetted at all: it wraps an offer this surface never reads
+// and deliberately never verifies, and the Payment Mandate beside it is the
+// agent's own artefact. There is no sentence to measure and no constraint set to
+// encode, so both quantities that closed #223 are simply absent here. What the
+// review of #229 left behind is not either number but the shape — bound the
+// quantity the answer is a function of — and on this route that is the pair of
+// mandates. weighed says what that costs and where it over-counts.
+//
+// # Why thirty-two kilobytes
+//
+// The awkward half of the question is that an offer is *somebody else's*
+// artefact. contracts/authz/checkout_mandate.json keeps it opaque on purpose —
+// "the contents of a checkout are the merchant's model, not ours" — so this
+// surface has no vocabulary for what is inside one and cannot say what an honest
+// merchant would put there. What it can state is a limit on itself, and the
+// number is defended from both ends.
+//
+// From below, by measurement. The largest offer this repository's merchant
+// signs is **399 bytes** — GET /checkout?item=event:vlado-georgijev-2026-11-14,
+// the longest identifier in deploy/catalogue.json, quoted through the real
+// handler — and the whole approval it belongs to, both mandates encoded, is
+// **760 bytes**, answering with 1,461. Thirty-two kilobytes is forty-three times
+// that complete purchase. In claim terms it is a Checkout JWT of some 24 KB of
+// JSON, and this merchant states a line of a purchase in about 45 bytes of
+// claim: a cart of several hundred lines, or a hundred lines carrying titles,
+// unit prices, tax and two addresses. No offer a person approves on one screen
+// is larger, and a merchant that does sign one is refused loudly in front of
+// somebody who is watching — which is the cheapest place for this flow to say
+// no.
+//
+// From above, by measurement too. The route amplifies: the offer travels as a
+// disclosure and everything else as a payload, both base64url, so the answer is
+// four thirds of what is signed plus a few hundred bytes of fixed claim. Spent
+// to the last byte on every shape that can hold it — the offer, one long
+// risk_data value, risk_data as thousands of keys, risk_data nested until the
+// budget ran out, an array of empty arrays, payee.name, payee.id, the
+// instrument, and every byte value and several multibyte runes tried as each,
+// looking for one the disclosure encoder writes wider — the worst answer is
+// **44,272 bytes, 4.2% of the megabyte the middleware keeps.** Twenty-three
+// times over rather than sitting on the line, and four times further inside than
+// maxSignedSize's own margin, because this route amplifies 1.35× where that one
+// amplifies 5.9×.
+//
+// # It is the same number as maxSignedSize and it is not written as one
+//
+// The equality is a statement rather than a coincidence: one surface, one user's
+// key, one decision, so the two routes agreeing on how much of it they will sign
+// is the answer somebody would want. Tying them in code would be the mistake.
+// maxSignedSize is eight times a budget about how much text a person reads, and
+// an argument about sentence length has no business moving what a merchant may
+// offer — a change to maxRenderedSize would silently move this bound, in a
+// direction nobody had measured.
+//
+// TestOneApprovalSignsOnePairAtAnySize grows a purchase against this surface
+// until it refuses the next byte and measures the answer, so a change that made
+// the route amplify more, or that raised this bound, fails there.
+const maxApprovedSize = 32 * 1024
 
 // openMandateLifetime is how long a signed open mandate stays usable.
 //
