@@ -68,10 +68,14 @@ import (
 // TestThePreviewStatesTheBoundsBeforeAnythingIsSigned is the caller being told
 // about them in time to do something else.
 //
-// TestTheClosedPairThisDoesNotStop is the same door on /approve, which #223 does
-// not close and which is tracked as #230. It passes, on the terms the test it is
-// named after passed on, so that the limitation is something the next reader
-// inverts rather than discovers.
+// TestOneApprovalSignsOnePairAtAnySize is that same door on /approve, closed by
+// issue #230. It was TestTheClosedPairThisDoesNotStop, a passing test asserting
+// the leak on the terms TestTheSecondPairThisDoesNotStop had set, and its
+// comment records what was turned around.
+// TestAPurchaseTooLargeToBeSignedIsRefusedBeforeTheKeyIsTouched is that bound
+// from the other side. There is no preview here to state it on: Human Present
+// has no route that renders without signing, which is also why the largest
+// purchase below is found by asking the signing route itself.
 //
 // The handler runs on the test goroutine here — these tests call ServeHTTP
 // directly rather than through a server — so a request's context is the test's
@@ -447,88 +451,302 @@ func TestThePreviewStatesTheBoundsBeforeAnythingIsSigned(t *testing.T) {
 	assert.Zero(t, signatures.Load(), "a preview signs nothing")
 }
 
-// TestTheClosedPairThisDoesNotStop is the door #223 leaves open one route along,
-// asserted as a passing test rather than described in a comment.
+// TestOneApprovalSignsOnePairAtAnySize is TestTheClosedPairThisDoesNotStop
+// turned around, and issue #230 is the turn.
 //
-// The bounds above are applied in vetted, and /approve does not go through it:
-// it wraps a merchant-signed offer the surface does not read, does not verify
-// and has no sentence for, so there is neither a rendering to measure nor a
-// constraint set to encode. So the shape #223 closed on /authorise is still
-// reachable here, and it is the shape rather than the route — PR #221 said so
-// when it fixed both, and this is the third time that sentence has been right.
+// # What the old test asserted, and why it passed
 //
-// It is narrower, because the amplification is. Where /authorise turned 59 KB of
-// limits into 557 KB of answer, this is base64 over one string: an offer near the
-// megabyte the body caps allow answers just over the megabyte the middleware
-// keeps, so it takes a request between roughly 790 KB and 1 MiB to reach at all.
-// Reachable is reachable — nothing verifies the offer here, which this package's
-// own doc calls a deliberate division, so nothing stops one being that size —
-// and what is left behind is a *complete* pair of closed mandates signed by the
-// user that nobody holds.
+// The door #223 closed on /authorise stood open one route along, because
+// /approve does not go through vetted at all: it wraps a merchant-signed offer
+// the surface does not read, does not verify and has no sentence for, so there
+// was neither a rendering to measure nor a constraint set to encode. Nothing
+// failed. A 900 KB offer answered 200 with 1,200,929 bytes, the middleware gave
+// up the record rather than the answer, the key came back and the retry signed a
+// second *complete* pair of closed mandates carrying the user's signature that
+// nobody holds. It asserted a body over the cap, an answer that was not
+// replayed, and four signatures for one purchase.
 //
-// Issue #230 is where it is tracked, and this test is how it stays visible: the
-// limitation is a fact in the suite on the terms crypto.Challenger's
-// TestTheReplayThisDoesNotStop set, so the day it is closed this test fails and
-// is turned around, exactly as TestOneDecisionSignsOnePairAtAnySize was. Closing
-// it is a different decision from #223's: an offer is an opaque artefact of the
-// merchant's rather than limits a person reads, so the bound that fits it is not
-// the bound that fits them.
-func TestTheClosedPairThisDoesNotStop(t *testing.T) {
+// # What this asserts instead
+//
+// The three inverted, on the largest purchase this surface will now sign: a body
+// the middleware keeps, a retry that is replayed, and two signatures. The bound
+// is maxApprovedSize and its comment carries the number.
+//
+// # Three shapes, because one of them is the whole argument
+//
+// The offer is what the issue measured and it is the obvious axis. risk_data is
+// the row that says why the bound is on what is signed rather than on the offer:
+// it is unstructured by design — contracts/authz/payment_mandate.json says the
+// useful signals change faster than a protocol schema — it is written by whoever
+// called this route, it travels into the Payment Mandate as a disclosure, and a
+// bound that had only looked at the offer would not have seen a byte of it.
+//
+// The third is that same axis on the purchase weighed measures least accurately,
+// and it is here for the number rather than for the argument: it is the input
+// that produces the largest answer this route can give, so the headroom the log
+// line below reports is the smallest there is rather than nearly it — which is
+// what maxApprovedSize's worst case is quoted from. Its own doc says why no
+// other shape can beat it.
+//
+// All three are grown to the boundary and all three have to end at one pair.
+//
+// The purchase is built by asking, and the risk in that is the one
+// TestOneDecisionSignsOnePairAtAnySize already answers for: a test that derives
+// its input from the subject can move with a regression. The two things it
+// asserts against are fixed — maxRemembered is a constant this file holds rather
+// than something the surface states, and one byte more has to be refused, which
+// is what says the purchase was grown to the boundary rather than to somewhere
+// comfortable inside it.
+func TestOneApprovalSignsOnePairAtAnySize(t *testing.T) {
 	t.Parallel()
 
-	handler, signatures := surfaceThatSigns(t, nil, func(int64) error { return nil })
+	for _, shape := range []struct {
+		name string
+		grow func(padding int) string
+	}{
+		{"the offer, which is the shape the issue measured", approvalPaddedInTheOffer},
+		{"risk_data, which a bound on the offer would not have seen", approvalPaddedInTheRiskData},
+		{
+			"risk_data on a purchase naming no checkout_hash, where the measure counts least",
+			approvalPaddedInTheRiskDataOfAPurchaseNamingNoHash,
+		},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
 
-	body := anOfferTooLargeToBeRemembered()
-	const key = "a purchase whose answer is too large to be remembered"
+			padding := asMuchAsThisSurfaceWillApprove(t, shape.grow)
+			body := shape.grow(padding)
+			const key = "a purchase that says as much as it is allowed to"
 
-	first := answered(handler, asking(t.Context(), "/approve", key, body))
-	require.Equal(t, http.StatusOK, first.Code, "the pair this surface exists to make")
-	require.Greater(t, first.Body.Len(), maxRemembered,
-		"the whole case is an answer the middleware will not keep, and one under the cap would "+
-			"be the ordinary replay this file already covers")
+			handler, signatures := surfaceThatSigns(t, nil, func(int64) error { return nil })
 
-	retry := answered(handler, asking(t.Context(), "/approve", key, body))
-	require.Equal(t, http.StatusOK, retry.Code, "nothing here fails, which is what makes it the awkward case")
-	assert.Empty(t, retry.Header().Get(transport.ReplayedHeader),
-		"an answer that was never recorded cannot be replayed, and this is the step where the "+
-			"guarantee is lost rather than the one where it shows")
-	assert.Equal(t, int64(4), signatures.Load(),
-		"two complete pairs for one purchase: the first is a pair nobody holds, and it carries "+
-			"the user's key exactly as the one they were given does")
+			first := answered(handler, asking(t.Context(), "/approve", key, body))
+			require.Equal(t, http.StatusOK, first.Code,
+				"this is the largest purchase the route accepts, so it has to be one it answers")
+			assert.Less(t, first.Body.Len(), maxRemembered,
+				"a 200 the middleware will not keep hands the key back and lets a retry sign a second "+
+					"complete pair, so the bound has to be low enough that the largest answer still fits")
+			t.Logf("the largest answer this route can give: %d bytes, %.1f%% of what the middleware keeps",
+				first.Body.Len(), 100*float64(first.Body.Len())/float64(maxRemembered))
+
+			// One byte more, refused. Without this the purchase above could have
+			// been grown to anywhere inside the budget and every assertion would
+			// still pass, which is the failure mode of a test that sizes its own
+			// input.
+			oneMore := answered(handler, asking(t.Context(), "/approve",
+				"one byte more than this surface signs", shape.grow(padding+1)))
+			assert.Equal(t, http.StatusBadRequest, oneMore.Code,
+				"the purchase above has to be at the boundary for the answer it produces to be the "+
+					"largest one; a purchase with room left in it would make the headroom this test "+
+					"reports meaningless")
+
+			retry := answered(handler, asking(t.Context(), "/approve", key, body))
+			require.Equal(t, http.StatusOK, retry.Code, "the retry has to end with the pair, as any retry does")
+			assert.Equal(t, "true", retry.Header().Get(transport.ReplayedHeader),
+				"the middleware saying it kept the answer is the property this test is about; a retry "+
+					"that runs the handler again is one that reaches the user's key again")
+			assert.Equal(t, int64(2), signatures.Load(),
+				"one purchase is one pair at any size the route accepts: a third and fourth signature "+
+					"are a complete pair of closed mandates carrying the user's key that nobody holds "+
+					"and nothing can revoke")
+		})
+	}
 }
 
-// anOfferTooLargeToBeRemembered builds a Human Present approval whose answer is
-// over the cap while the request itself is inside the 1 MiB both the middleware
-// and roles.DecodeJSON read.
+// TestAPurchaseTooLargeToBeSignedIsRefusedBeforeTheKeyIsTouched is the other
+// half of the bound, and the half that says where the refusal lands.
 //
-// The offer is not a real JWT and does not need to be: this surface wraps what it
-// is given without reading it, which is the property being measured. Nine hundred
-// kilobytes rather than the smallest number that works, for the reason the
-// constraint set next door used three thousand — a test sitting on the boundary
-// goes quiet the first time a claim is added to either mandate.
-func anOfferTooLargeToBeRemembered() string {
-	return fmt.Sprintf(`{
-		"checkout": %q,
-		"payment": {
-			"checkout_hash": "not-the-hash",
-			"payee": {"id":"air-serbia","name":"Air Serbia"},
-			"payment_amount": {"amount":18900,"currency":"USD"},
-			"payment_instrument": {"id":"card-4242","type":"CARD"}
+// Before the signature, for the reason its counterpart on /authorise gives: a
+// signature discarded is still one the user's key made, and this surface can say
+// no from the decoded request alone.
+//
+// # The three shapes, and why the first one alone would not have done
+//
+// The offer is the one the issue measured, and a bound on the offer would have
+// closed it. The other two are why there is no such bound. Both are ordinary
+// fields of the Payment Mandate the agent assembled, both are carried into the
+// signature unread, and neither is inside the offer — so an enumeration that
+// started with "the offer" would have had to grow a second entry, and then a
+// third, which is the failure #229's review named: an enumeration of what to
+// measure can always be one short. What is bounded instead is the two mandates
+// as they will be signed, which has no enumeration in it.
+func TestAPurchaseTooLargeToBeSignedIsRefusedBeforeTheKeyIsTouched(t *testing.T) {
+	t.Parallel()
+
+	// Nine hundred kilobytes rather than the smallest number that works, for the
+	// reason the constraint set next door used three thousand limits: a test
+	// sitting on the boundary goes quiet the first time a claim is added to
+	// either mandate.
+	const enormous = 900_000
+
+	for _, shape := range []struct {
+		name string
+		body string
+	}{
+		{
+			"an offer no merchant makes: the shape the issue measured, 1.2 MB of answer",
+			approvalPaddedInTheOffer(enormous),
+		},
+		{
+			// contracts/authz/payment_mandate.json leaves risk_data
+			// unstructured on purpose, so there is no schema anywhere that
+			// would refuse this before the signature.
+			"risk signals nobody bounded: not in the offer, and signed all the same",
+			approvalPaddedInTheRiskData(enormous),
+		},
+		{
+			// An ordinary named claim rather than the open one, so that the row
+			// above cannot be read as being about risk_data in particular.
+			"a payee whose name is most of a megabyte",
+			approvalOf(theOffer, `"checkout_hash":"not-the-hash",`+
+				`"payee":{"id":"air-serbia","name":"`+strings.Repeat("A", enormous)+`"},`+
+				`"payment_amount":{"amount":18900,"currency":"USD"},`+
+				`"payment_instrument":{"id":"card-4242","type":"CARD"}`),
+		},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler, signatures := surfaceThatSigns(t, nil, func(int64) error { return nil })
+
+			answer := answered(handler,
+				asking(t.Context(), "/approve", "a purchase nobody could have offered", shape.body))
+			require.Equal(t, http.StatusBadRequest, answer.Code,
+				"the caller sent a purchase this surface will not sign, which is the caller's "+
+					"mistake and not this surface failing — a 5xx would invite the retry the "+
+					"bound exists to stop")
+			assert.Contains(t, answer.Body.String(), string(generated.ErrorCodeRequestMalformed),
+				"the same code the missing offer is refused under, because it is the same refusal "+
+					"from the other end: a purchase that cannot be put in front of a person")
+			assert.Zero(t, signatures.Load(),
+				"refused before the signature, so there is no discarded mandate carrying the "+
+					"user's key for anybody to wonder about")
+		})
+	}
+}
+
+// asMuchAsThisSurfaceWillApprove says how much padding the largest purchase this
+// route accepts can carry, by growing one until the surface refuses the next.
+//
+// Exactly on the boundary rather than comfortably under, for the reason
+// asMuchAsThisSurfaceWillSign gives one test along: the boundary is where the
+// question "does the answer still fit" is actually decided, and the caller
+// proves the purchase is there by asking for one byte more and being refused.
+//
+// # There is no preview to ask, so the oracle is the route itself
+//
+// /authorise has /authorise/preview, which renders and measures without signing,
+// so the set there is grown against a door that costs nothing. Human Present has
+// no such door: an approval is a purchase, and the only way to learn that this
+// surface would have signed one is to have it sign one. So every accepted probe
+// below makes a pair.
+//
+// That is why the search runs against a surface of its own. The count the caller
+// asserts has to be about the one decision under test, and a search sharing its
+// surface would have added a pair per probe to it — which would not be a flaky
+// test but a silently meaningless one, since the number it landed on would move
+// with how many steps the bisection happened to take.
+func asMuchAsThisSurfaceWillApprove(t *testing.T, grow func(padding int) string) int {
+	t.Helper()
+
+	handler, _ := surfaceThatSigns(t, nil, func(int64) error { return nil })
+
+	accepts := func(n int) bool {
+		answer := answered(handler, asking(t.Context(), "/approve",
+			fmt.Sprintf("may I sign %d bytes of padding", n), grow(n)))
+		// Only these two answers mean anything to a search. Anything else — a
+		// 5xx, a body past the transport's own cap — would be read as "too big"
+		// and would converge on a purchase that is not at the boundary, leaving
+		// every assertion in the caller passing on an input nobody chose.
+		require.Contains(t, []int{http.StatusOK, http.StatusBadRequest}, answer.Code,
+			"the oracle this purchase is grown against has to be answering the question it was asked")
+		return answer.Code == http.StatusOK
+	}
+
+	// The upper end is grown by doubling first, so nothing here assumes what the
+	// bound is.
+	lo, hi := 0, 1
+	require.True(t, accepts(lo), "an unpadded purchase is the ordinary one and has to be accepted")
+	for accepts(hi) {
+		lo, hi = hi, hi*2
+		// Half of what roles.DecodeJSON reads, so this fires while the body is
+		// still one the transport would accept: past that the 413 would reach
+		// the guard above and say something less useful than this does.
+		require.Less(t, hi, 1<<19,
+			"a surface that approves a purchase of any size has no bound on what it signs at all")
+	}
+	for lo+1 < hi {
+		mid := (lo + hi) / 2
+		if accepts(mid) {
+			lo = mid
+		} else {
+			hi = mid
 		}
-	}`, strings.Repeat("e", 900_000))
+	}
+	t.Logf("the largest purchase this route accepts carries %d bytes of padding", lo)
+	return lo
+}
+
+// approvalPaddedInTheOffer grows the merchant's offer, which is the artefact
+// this surface wraps without reading.
+//
+// The offer is not a real JWT and does not need to be: this surface wraps what
+// it is given, which is the property being measured. The padding is base64url
+// characters so that it costs the same in the request, in the measurement and in
+// the disclosure the answer carries.
+func approvalPaddedInTheOffer(padding int) string {
+	return approvalOf(theOffer+strings.Repeat("e", padding), thePaymentSide)
+}
+
+// approvalPaddedInTheRiskData grows the one claim of the Payment Mandate that
+// has no shape at all.
+//
+// It is the same purchase in every other respect — the same offer, the same
+// payee, the same amount, the same instrument — so what the caller measures is
+// this claim and nothing beside it.
+func approvalPaddedInTheRiskData(padding int) string {
+	return approvalOf(theOffer,
+		thePaymentSide+`,"risk_data":{"device":"`+strings.Repeat("d", padding)+`"}`)
+}
+
+// approvalPaddedInTheRiskDataOfAPurchaseNamingNoHash is the same shape on the
+// purchase weighed measures least accurately.
+//
+// It exists so that the headroom the caller reports is the smallest there is
+// rather than nearly it. weighed counts the checkout_hash the caller sent and
+// the mandates carry a recomputed digest instead, so a caller sending none is
+// counted two digests short of what gets signed — the largest gap between the
+// measure and the mandates that any input can open, and therefore the input that
+// produces the largest answer this route can give. Every other axis is counted
+// byte for byte, so no other shape can beat it.
+func approvalPaddedInTheRiskDataOfAPurchaseNamingNoHash(padding int) string {
+	return approvalOf(theOffer,
+		thePaymentSideNamingNoHash+`,"risk_data":{"device":"`+strings.Repeat("d", padding)+`"}`)
+}
+
+// approvalOf wraps a merchant's offer and the payment half of the same purchase
+// in a request body the route accepts in every other respect.
+func approvalOf(offer, payment string) string {
+	return fmt.Sprintf(`{"checkout": %q, "payment": {%s}}`, offer, payment)
 }
 
 // maxRemembered is transport.Idempotency's cap on a response it will keep for
 // replay. Unexported over there, so it is restated here rather than reached for.
 //
-// It is a floor in one test and a ceiling in the other, which is what makes a
-// stale copy of it catchable from both sides. TestTheClosedPairThisDoesNotStop
-// needs an answer above it and fails if the real cap rose without this one
-// following; TestOneDecisionSignsOnePairAtAnySize needs one below it, where a
-// *fall* in the real cap would leave the size assertion passing while the
-// middleware quietly forgot the answer — which is why the replay assertion is
-// beside it. The replay is the property, this is the margin, and they fail on
-// different changes on purpose.
+// It is a ceiling in both tests that read it: the largest answer each signing
+// route can give has to sit under it. Until issue #230 it was also a floor,
+// because the test asserting the leak on /approve needed an answer *above* it,
+// and closing that leak took away the assertion that would have failed if the
+// real cap rose without this copy following.
+//
+// That is a loss worth naming and not one worth fixing here, because the two
+// directions are not equally bad. A copy left below a cap that rose is merely
+// stricter than reality. A copy left above a cap that *fell* would leave both
+// size assertions passing while the middleware quietly forgot the answer — and
+// that is caught, by the replay assertion beside each of them, which is the
+// middleware itself saying it kept what it was given. The replay is the
+// property, this is the margin the tests report, and they fail on different
+// changes on purpose.
 const maxRemembered = 1 << 20
 
 // shortestLimit is the least a top-level constraint can cost in sentence: the
@@ -868,15 +1086,32 @@ const (
 		"agent_key": {"kty":"EC","crv":"P-256","kid":"the-agents-key","x":"MA","y":"MA"}
 	}`
 
+	// theOffer stands for the merchant's signed offer. It is not a real JWT and
+	// does not need to be: this surface wraps what it is given without reading
+	// it, verifying it or having a sentence for it, which is the deliberate
+	// division this package's own doc records.
+	theOffer = "eyJhbGciOiJFUzI1NiJ9.eyJyb3V0ZSI6IkJFRy1QTUkiLCJhbW91bnQiOjE4OTAwfQ.c2ln"
+
+	// thePaymentSide is the payment half of the same purchase, as an agent
+	// assembles it, without the braces so a test can add a claim to it.
+	//
 	// checkout_hash is deliberately wrong, as it is in every other test that
 	// approves something: the surface recomputes it from the offer.
-	approvalBody = `{
-		"checkout": "eyJhbGciOiJFUzI1NiJ9.eyJyb3V0ZSI6IkJFRy1QTUkiLCJhbW91bnQiOjE4OTAwfQ.c2ln",
-		"payment": {
-			"checkout_hash": "not-the-hash",
-			"payee": {"id":"air-serbia","name":"Air Serbia"},
-			"payment_amount": {"amount":18900,"currency":"USD"},
-			"payment_instrument": {"id":"card-4242","type":"CARD"}
-		}
-	}`
+	thePaymentSide = `"checkout_hash":"not-the-hash",` + theRestOfThePaymentSide
+
+	// thePaymentSideNamingNoHash is the same purchase with that claim left
+	// empty, which is a legal thing for an agent to send — the schema requires
+	// the field and not a value — and is the input weighed's measure falls
+	// furthest short on, since the mandate carries a recomputed digest of fixed
+	// length whatever arrived. See weighed's own doc for the direction and the
+	// size of the miss.
+	thePaymentSideNamingNoHash = `"checkout_hash":"",` + theRestOfThePaymentSide
+
+	theRestOfThePaymentSide = `"payee":{"id":"air-serbia","name":"Air Serbia"},` +
+		`"payment_amount":{"amount":18900,"currency":"USD"},` +
+		`"payment_instrument":{"id":"card-4242","type":"CARD"}`
 )
+
+// approvalBody is the two halves above as one request: an ordinary Human Present
+// purchase, at the size deploy/catalogue.json makes one.
+var approvalBody = approvalOf(theOffer, thePaymentSide)
