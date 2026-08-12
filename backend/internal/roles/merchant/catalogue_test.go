@@ -223,9 +223,11 @@ func TestTheCatalogueRefusesNonsense(t *testing.T) {
 // # Why one assertion rather than two tests
 //
 // The two keys are one contract because settle (internal/agent/authorise.go)
-// takes found[0] and ranks nothing — its own comment says the merchant's
-// catalogue order is what makes that "stable rather than considered" — and a
-// catalogue that is *half* ordered is not stable. Source alone decides which
+// takes found[0] out of this order — for a sentence that states no preference it
+// is the whole of what decides which, and for one that does it is the tie-break
+// inside a stable sort, so a fetched offer level on price with a committed one
+// still loses; see internal/agent.ranked and issue #262 — and a catalogue that
+// is *half* ordered is not stable under either. Source alone decides which
 // half wins a query both halves answer; the identifier alone decides which
 // offer wins inside that half, and slices.SortFunc is not a stable sort, so
 // without the second key the order within each half is a pdqsort artefact of

@@ -33,17 +33,22 @@ type implementation struct {
 	rig func(t *testing.T, a answer) (interpret.IntentInterpreter, error)
 }
 
-// answer is one thing an implementation can be made to say: the constraints,
-// and the trigger beside them.
+// answer is one thing an implementation can be made to say: the constraints, the
+// trigger beside them, and the preference between offers beside that.
 //
-// Two fields rather than one raw string, because the property below is now
-// about both dimensions of an Interpretation and the two implementations spell
-// them differently — the scripted one in Go fields, the model-backed one in an
-// envelope off a network. A suite row says what was answered; each rig says how
-// its implementation would have come to answer it.
+// Separate fields rather than one raw string, because the property below is about
+// every dimension of an Interpretation and the two implementations spell them
+// differently — the scripted one in Go fields, the model-backed one in an envelope
+// off a network. A suite row says what was answered; each rig says how its
+// implementation would have come to answer it.
 type answer struct {
 	constraints string
 	trigger     interpret.Trigger
+
+	// rank is the preference, and the zero value is a row about a sentence that
+	// stated none — which is the ordinary case and has to come back as the zero
+	// rather than as anything an implementation invented.
+	rank interpret.Rank
 }
 
 // conformancePrompt is what every arm below is asked. Its text does not matter
@@ -73,6 +78,7 @@ var implementations = []implementation{
 				Prompt:      conformancePrompt,
 				Constraints: a.constraints,
 				Trigger:     a.trigger,
+				Rank:        a.rank,
 			})
 		},
 	},
@@ -97,11 +103,24 @@ var implementations = []implementation{
 		rig: func(t *testing.T, a answer) (interpret.IntentInterpreter, error) {
 			t.Helper()
 
-			envelope, err := json.Marshal(map[string]any{
+			body := map[string]any{
 				"constraints": json.RawMessage(a.constraints),
 				"quantity":    1,
 				"trigger":     string(a.trigger),
-			})
+			}
+			// The key is **omitted** rather than sent empty for a row that ranks
+			// nothing, because that is what a model answering this schema does: rank
+			// is the one optional property, and ModelInterpreter refuses a "rank"
+			// that is present with nothing in it. Sending {} for the ordinary case
+			// would make every unranked row below fail for the wrong reason and
+			// would stop this rig standing in for a real answer.
+			if a.rank.Stated() {
+				body["rank"] = map[string]any{
+					"by": string(a.rank.By), "direction": string(a.rank.Direction),
+				}
+			}
+
+			envelope, err := json.Marshal(body)
 			require.NoError(t, err, "the rig has to be able to say what the model said")
 
 			model := interpret.NewMockModel(t)
@@ -143,14 +162,21 @@ var implementations = []implementation{
 // The built scenario has to come back deep-equal, which is what makes the
 // refusals mean "refuses this" rather than "refuses".
 //
-// # Both dimensions of an Interpretation are under it
+// # Every dimension of an Interpretation is under it
 //
-// The rows were constraints alone until issue #198 added the trigger, and it
-// belongs here for exactly the reason the constraints do: it is a thing a model
-// answers, nothing downstream can refuse a value it does not recognise, and
-// every implementation of the interface has to handle it or the agent is left
-// inventing one. The good arm asserts it comes back, so an implementation that
-// validated a trigger and then dropped it on the way out fails here as well.
+// The rows were constraints alone until issue #198 added the trigger, and issue
+// #262 added the rank. Both belong here for exactly the reason the constraints do:
+// each is a thing a model answers, nothing downstream can refuse a value it does
+// not recognise, and every implementation of the interface has to handle it or the
+// agent is left inventing one. The good arms assert both come back, so an
+// implementation that validated a dimension and then dropped it on the way out
+// fails here as well.
+//
+// **The rank needed a second good row**, and that is worth naming because the first
+// one would have hidden the gap. Most sentences rank nothing, so the built-scenario
+// row asserts the *zero* comes back — which an implementation that discarded every
+// rank satisfies perfectly. "A preference the sentence did state" is what makes the
+// assertion mean carried rather than absent.
 //
 // # What this cannot do
 //
@@ -170,6 +196,11 @@ func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 		// constraints. Every constraint row states a good one, for the reason
 		// the trigger rows state good constraints.
 		trigger interpret.Trigger
+		// rank is the preference the implementation is rigged to answer, and the
+		// zero value is most rows: a sentence that ranked nothing. Unlike the
+		// trigger there is no "good" value a row has to state to avoid failing on
+		// this dimension, because silence is the good value.
+		rank interpret.Rank
 		// want is the sentinel the refusal has to reach through errors.Is, or
 		// nil for the row that must be returned unchanged.
 		want error
@@ -227,6 +258,26 @@ func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 				" missing quantity there is no caller downstream holding an answer of its own",
 		},
 		{
+			name:    "a preference over something no merchant publishes",
+			raw:     readable,
+			trigger: interpret.TriggerImmediate,
+			rank:    interpret.Rank{By: "rating", Direction: interpret.RankDescending},
+			want:    interpret.ErrUnknownRank,
+			why: "the agent can order offers on the price a shop published and on nothing else," +
+				" so a preference it cannot apply has to fail here — applying it by price instead" +
+				" would answer a sentence about ratings with a decision about money, and ignoring" +
+				" it would leave the ranking word in the sentence acted on by nothing",
+		},
+		{
+			name:    "half a preference",
+			raw:     readable,
+			trigger: interpret.TriggerImmediate,
+			rank:    interpret.Rank{By: interpret.RankByPrice},
+			want:    interpret.ErrUnknownRank,
+			why: "cheapest and dearest are one enum apart, and defaulting the missing half would" +
+				" settle which of the two a person gets after the last screen and before the purchase",
+		},
+		{
 			name:    "the built scenario",
 			raw:     interpret.Scenarios()[0].Constraints,
 			trigger: interpret.TriggerConditional,
@@ -234,12 +285,23 @@ func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 			why: "an implementation that refused everything would pass every row above," +
 				" so one row has to come back unchanged",
 		},
+		{
+			name:    "a preference the sentence did state",
+			raw:     readable,
+			trigger: interpret.TriggerImmediate,
+			rank:    interpret.Rank{By: interpret.RankByPrice, Direction: interpret.RankAscending},
+			want:    nil,
+			why: "the second good row, and it is here because the first one ranks nothing: an" +
+				" implementation that dropped every rank on the way out would satisfy that one" +
+				" and every refusal above it, having never carried a preference at all",
+		},
 	} {
 		for _, impl := range implementations {
 			t.Run(impl.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
 
-				interpreter, err := impl.rig(t, answer{constraints: tc.raw, trigger: tc.trigger})
+				interpreter, err := impl.rig(t,
+					answer{constraints: tc.raw, trigger: tc.trigger, rank: tc.rank})
 				if err != nil {
 					// Refused at construction. Legitimate for a bad row, and a
 					// defect for the good one — an implementation that cannot be
@@ -268,6 +330,12 @@ func TestNoInterpreterReturnsSomethingAVerifierCouldNotRead(t *testing.T) {
 				assert.Equal(t, tc.trigger, got.Trigger,
 					"the trigger is not the verifier's to check and nobody downstream can ask again,"+
 						" so an implementation that dropped it would leave the agent inventing one")
+				assert.Equal(t, tc.rank, got.Rank,
+					"the preference is not the verifier's to check either, and it is spent before"+
+						" anything is signed — an implementation that dropped it would buy whichever"+
+						" offer the merchant listed first while the ranking word sat in the sentence."+
+						" The unranked rows assert the zero for the other direction: an"+
+						" implementation cannot pass by inventing a preference nobody stated")
 			})
 		}
 	}

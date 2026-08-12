@@ -221,6 +221,173 @@ func TestTheModelsQuantityReachesTheInterpretation(t *testing.T) {
 		"the model named a count and this is the one field it has to reach the caller through")
 }
 
+// TestTheModelsPreferenceReachesTheInterpretation is issue #262 at this
+// implementation: the preference is the fourth thing in the envelope, decoded beside
+// the constraints rather than folded into one of them.
+//
+// Three rows, and the middle one is the reason this is a table. `rank` is the one
+// optional property in the answer, so *absent* has to reach the caller as the zero
+// Rank — which is what makes a sentence that ranked nothing resolve in the
+// merchant's own catalogue order — while *present* has to arrive intact. An
+// implementation that read the key when it was there and defaulted it to something
+// when it was not would pass either row alone.
+func TestTheModelsPreferenceReachesTheInterpretation(t *testing.T) {
+	t.Parallel()
+
+	const constraints = `"constraints":[{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}]`
+
+	for _, tc := range []struct {
+		name   string
+		answer string
+		want   interpret.Rank
+		why    string
+	}{
+		{
+			name:   "cheapest",
+			answer: `{` + constraints + `,"quantity":1,"trigger":"immediate","rank":{"by":"price","direction":"ascending"}}`,
+			want:   interpret.Rank{By: interpret.RankByPrice, Direction: interpret.RankAscending},
+			why: "the model read a ranking word and this is the one field it has to reach the " +
+				"agent through — without it the word becomes an amount bound and nothing else",
+		},
+		{
+			name:   "dearest",
+			answer: `{` + constraints + `,"quantity":1,"trigger":"immediate","rank":{"by":"price","direction":"descending"}}`,
+			want:   interpret.Rank{By: interpret.RankByPrice, Direction: interpret.RankDescending},
+			why: "both directions travel; an implementation that hard-coded ascending would " +
+				"answer a sentence asking for the best with the cheapest",
+		},
+		{
+			name:   "no preference at all",
+			answer: `{` + constraints + `,"quantity":1,"trigger":"immediate"}`,
+			want:   interpret.Rank{},
+			why: "the key is optional and its absence is a legitimate answer, so the zero has to " +
+				"arrive as the zero — a default invented here would rank every sentence",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			model := interpret.NewMockModel(t)
+			model.EXPECT().
+				Complete(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+				Return([]byte(tc.answer), nil)
+
+			interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))
+			require.NoError(t, err)
+
+			interpretation, err := interpreter.Interpret(t.Context(), builtScenarioPrompt)
+			require.NoError(t, err, "this answer is one a verifier could read")
+			assert.Equal(t, tc.want, interpretation.Rank, tc.why)
+		})
+	}
+}
+
+// TestAPreferenceWithNothingInItIsRefused is the one refusal Validate cannot make,
+// and it exists because of what the two answers look like after decoding.
+//
+// `"rank": {}` and no `rank` key at all both decode to the zero Rank, so
+// Interpretation cannot tell them apart and Validate — which sees only the value —
+// reads both as "the sentence ranked nothing". They are not the same answer. Absent
+// is a model that had no preference to state; present-and-empty is a model that said
+// it had one and did not say what, and reading *that* as silence is the defect issue
+// #262 exists to close. ModelInterpreter holds a pointer in its envelope for exactly
+// this, and refuses the second before Validate is reached.
+func TestAPreferenceWithNothingInItIsRefused(t *testing.T) {
+	t.Parallel()
+
+	model := interpret.NewMockModel(t)
+	model.EXPECT().
+		Complete(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]byte(`{"constraints":[{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}],`+
+			`"quantity":1,"trigger":"immediate","rank":{}}`), nil)
+
+	interpreter, err := interpret.NewModel(model, clock.NewFake(insideWindow))
+	require.NoError(t, err)
+
+	got, err := interpreter.Interpret(t.Context(), builtScenarioPrompt)
+	require.Error(t, err,
+		"an empty rank object read as silence is a ranking word in the sentence that nothing acts on")
+	assert.ErrorIs(t, err, interpret.ErrUnknownRank,
+		"the same refusal half a preference gets, because it is the same failure — the model "+
+			"answered the question and the answer has nothing in it")
+	assert.Empty(t, got,
+		"returning an interpretation alongside an error is how a caller that checked only one "+
+			"of the two ends up signing it")
+}
+
+// TestTheSchemaClosesBothHalvesOfAPreference is the narrowing the brief for issue
+// #262 asked for, at the boundary rather than in prose.
+//
+// A structured-output schema constrains the *field names* in an answer while leaving
+// most values open — `field` is a plain string, because item.attr.<name> is the open
+// half of the constraint vocabulary and closing it would make a flight's route
+// unexpressible. A rank is the one place where both halves can be closed and both
+// are: `by` is an enum of the facts the agent can order on and `direction` is an
+// enum of the two orders, so a provider honouring the schema cannot answer a
+// preference the agent would have to refuse a moment later.
+//
+// # And the property is required *inside* while optional *outside*
+//
+// That pairing is the whole design. `rank` is absent from the top-level required
+// list, because a sentence that ranked nothing has no value to state and requiring
+// the key would force a model to invent one; `by` and `direction` are both in the
+// object's own required list, because half a preference cannot be acted on. Both
+// halves are asserted, since a schema that required the key would break almost every
+// sentence and one that required neither field would let half a rank through.
+func TestTheSchemaClosesBothHalvesOfAPreference(t *testing.T) {
+	t.Parallel()
+
+	var schema struct {
+		Properties struct {
+			Rank struct {
+				Type       string `json:"type"`
+				Properties struct {
+					By struct {
+						Enum []string `json:"enum"`
+					} `json:"by"`
+					Direction struct {
+						Enum []string `json:"enum"`
+					} `json:"direction"`
+				} `json:"properties"`
+				Required             []string `json:"required"`
+				AdditionalProperties bool     `json:"additionalProperties"`
+			} `json:"rank"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	require.NoError(t, json.Unmarshal(schemaHandedToTheModel(t), &schema),
+		"the schema this package builds is not JSON")
+
+	rank := schema.Properties.Rank
+	require.Equal(t, "object", rank.Type,
+		"a rank is a field and a direction together; a bare string would put the two back in one "+
+			"word and leave this package parsing it")
+
+	assert.Equal(t, []string{string(interpret.RankByPrice)}, rank.Properties.By.Enum,
+		"the price a shop published is the only orderable fact a search response carries, and a "+
+			"model told it may name others would answer preferences the agent has to refuse")
+	assert.Equal(t,
+		[]string{string(interpret.RankAscending), string(interpret.RankDescending)},
+		rank.Properties.Direction.Enum,
+		"two orders and no third, so cheapest and dearest are the only answers and neither has "+
+			"to be inferred from a word")
+	assert.ElementsMatch(t, []string{"by", "direction"}, rank.Required,
+		"half a preference is refused by this package, so a provider honouring the schema must "+
+			"not be able to send one")
+	assert.False(t, rank.AdditionalProperties,
+		"a key nobody reads in an answer that decides a purchase is a key somebody will start "+
+			"putting meaning in")
+
+	assert.NotContains(t, schema.Required, "rank",
+		"optional is the whole reason the honest zero survives: most sentences rank nothing, and "+
+			"a required key would make every one of them state a preference nobody expressed")
+	for _, required := range []string{"constraints", "quantity", "trigger"} {
+		assert.Contains(t, schema.Required, required,
+			"the other three have no honest absence, and making rank optional must not have "+
+				"loosened them")
+	}
+}
+
 // TestTheProvidersFailureReachesTheCaller covers the other direction: the model
 // was never asked, or answered nothing.
 //

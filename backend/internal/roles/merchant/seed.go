@@ -151,10 +151,18 @@ const (
 	// was added to restore.
 	//
 	// Since issue #198 this prompt is an instruction and buys at $139.00, the
-	// dearer of the two — which is honest rather than awkward. "Cheapest" is
-	// an objective no verifier can check, so it became a bound and the agent
-	// ranks nothing; a watch that waited for the second price would have bought
-	// at $135.00 by accident, not by searching.
+	// dearer of the two — which is honest rather than awkward. "Cheapest" is an
+	// objective no verifier can check, so it became a bound; a watch that waited
+	// for the second price would have bought at $135.00 by accident, not by
+	// searching.
+	//
+	// **Issue #262 gave the agent a rank and this figure is unchanged**, which is
+	// the sharpest illustration of what a rank is and is not. A rank orders the
+	// *offers* one search returned against each other. It has no opinion about an
+	// offer's own schedule, so it cannot prefer a price this offer has not moved to
+	// yet — internal/agent.ranked reads candidate.Price, which is the price today
+	// and the only one the merchant has quoted. Buying at $139.00 rather than
+	// waiting for $135.00 is still the trigger's answer and not the rank's.
 	DemoLadderPrice         = 13900
 	DemoLadderPriceRepriced = 13500
 	DemoLadderCap           = 15000

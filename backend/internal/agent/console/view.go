@@ -96,6 +96,27 @@ type proposed struct {
 	// that names no trigger.
 	Trigger interpret.Trigger `json:"trigger"`
 
+	// Rank is the preference the agent applied among the offers it found, and it
+	// is **absent** rather than empty when the sentence stated none — see
+	// preference below, and agent.Proposal.Rank.
+	//
+	// **It is on this response for a sharper version of Trigger's reason.** The
+	// trigger is here because a screen has to say which of two authorisations a
+	// person is signing. This is here because a screen has to say why *this*
+	// offer: the agent picked one row out of Offers, and without the preference
+	// beside them a reader has a chosen item, a list it came from, and no account
+	// of how the one came out of the other. Nothing signs a rank and no verifier
+	// will ever check one, so the screen is the only place it can be held to
+	// anything — interpret.Rank's "Why a rank need not be signed" leans on this
+	// field existing, which makes leaving it off a weakening of that argument
+	// rather than a smaller response.
+	//
+	// Absent is the ordinary case and needs no resolving here, unlike Quantity: a
+	// sentence that ranked nothing was answered in the merchant's own catalogue
+	// order, and there is no number or word a console could supply on its behalf.
+	// A browser reads the absence as "no preference was read", which is the truth.
+	Rank *preference `json:"rank,omitempty"`
+
 	// WatchSlotsFree is how many more watches this console will hold.
 	//
 	// **Not a reservation.** Nothing is held and nothing expires; it is a fact
@@ -108,6 +129,43 @@ type proposed struct {
 	// zero refuses to send anybody to a consent screen. Two tabs racing still
 	// end in a 429.
 	WatchSlotsFree int `json:"watch_slots_free"`
+}
+
+// preference is the wire shape of interpret.Rank: what the agent ordered the
+// offers on, and which way.
+//
+// **A type of its own rather than interpret.Rank marshalled directly**, on this
+// file's own terms. These are wire shapes and interpret.Rank is a domain value
+// that carries no serialisation opinion; two `json:` tags on its fields would be
+// tidier to look at and would make the field names a browser reads into something
+// the interpreter has to think about. That is the line AGENTS.md draws when it
+// says a mapping belongs in the layer that wants it — internal/adapters/ap2 is
+// where issued_at becomes iat for exactly this reason, one protocol along.
+//
+// The strings are widened from interpret's own RankField and RankDirection
+// deliberately. A response is not a place to promise a closed set: a browser
+// cannot narrow a value that arrived as JSON either way, and
+// frontend/src/consent/model.ts already handles a word it does not recognise by
+// showing it rather than guessing, which is how the trigger is handled two fields
+// up.
+type preference struct {
+	By        string `json:"by"`
+	Direction string `json:"direction"`
+}
+
+// rankOf is the wire shape of a preference the agent applied, or nil when the
+// sentence stated none.
+//
+// nil rather than a zero-valued object, with `omitempty` on the field, so that "no
+// preference" is a key that is not there. An object carrying two empty strings
+// would be a browser's problem to interpret and would read as a preference whose
+// words got lost — see interpret.Rank on why half of one is refused rather than
+// defaulted.
+func rankOf(r interpret.Rank) *preference {
+	if !r.Stated() {
+		return nil
+	}
+	return &preference{By: string(r.By), Direction: string(r.Direction)}
 }
 
 // examples is what GET /examples answers with.

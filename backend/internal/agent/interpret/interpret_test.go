@@ -172,6 +172,89 @@ func TestValidateRefusesAnInterpretationThatDoesNotSayWhenItWantedToBuy(t *testi
 	}
 }
 
+// TestValidateRefusesAPreferenceItCannotApply is issue #262's half, and the one
+// where the failure direction runs the *other* way from the trigger's.
+//
+// The trigger has no honest zero, so silence is refused. A rank does: a sentence
+// that ranked nothing is most sentences, and settle then resolves in the merchant's
+// own catalogue order exactly as it did before this field existed. So Validate must
+// not refuse an empty rank, and TestValidateAcceptsAnInterpretationThatRanksNothing
+// is that half.
+//
+// What it does refuse is a preference that was *stated* and cannot be applied, in
+// all three of its shapes. Every one of them would otherwise read as silence — the
+// word is in the sentence, on the approval screen, and acted on by nothing — which
+// is the defect this issue exists to close arriving through the interpreter instead
+// of through the agent.
+func TestValidateRefusesAPreferenceItCannotApply(t *testing.T) {
+	t.Parallel()
+
+	constraints := decodeConstraints(t, interpret.Scenarios()[0].Constraints)
+
+	for _, tc := range []struct {
+		name string
+		rank interpret.Rank
+		why  string
+	}{
+		{
+			name: "a fact no merchant publishes",
+			rank: interpret.Rank{By: "rating", Direction: interpret.RankAscending},
+			why: "the agent knows an offer's price and nothing else orderable, so a preference " +
+				"over a rating cannot be honoured — and honouring it by price instead would " +
+				"answer a sentence about one thing with a decision about another",
+		},
+		{
+			name: "an order this package does not define",
+			rank: interpret.Rank{By: interpret.RankByPrice, Direction: "best"},
+			why: "picking between cheapest and dearest on the model's behalf is a coin toss " +
+				"resolved after the last screen and before the purchase",
+		},
+		{
+			name: "a field with no direction",
+			rank: interpret.Rank{By: interpret.RankByPrice},
+			why: "half a preference is an interpreter that did not finish answering, and " +
+				"defaulting the missing half to ascending is a guess nobody downstream can catch",
+		},
+		{
+			name: "a direction with no field",
+			rank: interpret.Rank{Direction: interpret.RankDescending},
+			why:  "greatest first, of what — and the only fact available to guess at is money",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Good constraints and a good trigger, so that every row fails on the
+			// preference and on nothing next door to it.
+			err := interpret.Validate(interpret.Interpretation{
+				Constraints: constraints,
+				Trigger:     interpret.TriggerImmediate,
+				Rank:        tc.rank,
+			})
+			require.Error(t, err, "a preference nothing could apply was accepted")
+			assert.ErrorIs(t, err, interpret.ErrUnknownRank, tc.why)
+		})
+	}
+}
+
+// TestValidateAcceptsAnInterpretationThatRanksNothing is the honest zero, and it is
+// the assertion that keeps the test above from being written one clause too wide.
+//
+// A check spelled "the rank has to be complete and stated" would pass every row up
+// there and refuse almost every sentence a person types. It would also refuse both
+// of the demonstration's conditional prompts, which rank nothing and must not start
+// failing — so this is not a theoretical direction to be wrong in.
+func TestValidateAcceptsAnInterpretationThatRanksNothing(t *testing.T) {
+	t.Parallel()
+
+	assert.NoError(t, interpret.Validate(interpret.Interpretation{
+		Constraints: decodeConstraints(t, interpret.Scenarios()[0].Constraints),
+		Trigger:     interpret.TriggerConditional,
+	}),
+		"a sentence with no ranking word in it is not a failed reading — it resolves in the "+
+			"merchant's own catalogue order, which is what every screenshot of `make demo` shows")
+}
+
 // TestValidateAcceptsTheBuiltScenario is the other half: the check refuses what
 // cannot be read and lets through what the rest of this repository already
 // evaluates.

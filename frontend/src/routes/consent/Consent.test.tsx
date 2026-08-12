@@ -230,6 +230,70 @@ describe("the consent screen", () => {
     }
   });
 
+  it("says why this offer and not another, and never inside the signed box — issue #262", async () => {
+    // The word *cheapest* in the prompt is not a limit — no merchant can be shown
+    // one offer and asked whether it was the one the buyer would have preferred —
+    // so the signed box has nothing in it about how this offer was picked out of
+    // the several the search found. This zone is the only place that is said.
+    //
+    // The second assertion is the one with teeth, for the basket size's reason:
+    // nothing signs a preference, and a box headed "What you are signing" has to
+    // be true of every line in it.
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent({ ...aProposal(), rank: { by: "price", direction: "ascending" } });
+
+    const preferred = await screen.findByTestId("preferred");
+    expect(within(preferred).getByText(/cheapest of the offers that matched/i)).toBeTruthy();
+    expect(screen.getByTestId("signed-box").contains(preferred)).toBe(false);
+  });
+
+  it("draws no such zone when the sentence named no preference", async () => {
+    // Most sentences. The flight and the bicycle rank nothing, and the agent then
+    // settles on whichever offer the merchant listed first — so there is no
+    // preference to account for, and a heading reading "Why this offer" over a
+    // line saying "none" would be a row that exists to say nothing. `aProposal`
+    // carries no rank, which is what makes this the default rather than a case.
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent(aProposal());
+
+    // Awaited on a zone that is always there, so this is a real absence at a
+    // painted screen rather than an assertion that ran before the render.
+    await screen.findByTestId("offer-card");
+    expect(
+      screen.queryByTestId("preferred"),
+      "an absent preference is a fact about the sentence, and inventing a row for it would " +
+        "put a decision on the screen that nobody made",
+    ).toBeNull();
+  });
+
+  it("still allows signing a preference it cannot read, unlike a trigger", async () => {
+    // The asymmetry, on screen. An unreadable trigger disables *Sign* two tests
+    // down, because nothing else on the screen says what will happen to a
+    // person's money. An unreadable *preference* must not, and the reason is in
+    // the signed box beside it: the agent narrows the interpretation to `the item
+    // is gtin:…` before the surface renders anything, so the offer a rank settled
+    // on is one of the sentences the signature covers. The person can read
+    // exactly what they are authorising; what they lose is the account of how it
+    // was chosen, and refusing a signature over a missing explanation would be
+    // the wrong trade.
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent({ ...aProposal(), rank: { by: "rating", direction: "sideways" } });
+
+    const preferred = await screen.findByTestId("preferred");
+    expect(within(preferred).getByText(/does not recognise/i)).toBeTruthy();
+    expect(
+      within(preferred).getByText("rating sideways"),
+      "the wire values travel, so somebody debugging an unmatched build can see them",
+    ).toBeTruthy();
+
+    const sign = await screen.findByRole("button", { name: /sign/i });
+    expect(
+      (sign as HTMLButtonElement).disabled,
+      "the purchase is fully described by the signed box, so a missing explanation of how " +
+        "the offer was picked is not grounds to refuse the signature",
+    ).toBe(false);
+  });
+
   it("refuses to sign a trigger it cannot read, and shows what the agent said", async () => {
     // Reachable only from a console that grew a third trigger after this
     // bundle was built — `interpret.Validate` refuses an interpretation

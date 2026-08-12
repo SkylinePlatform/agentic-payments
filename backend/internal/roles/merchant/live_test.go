@@ -146,9 +146,19 @@ func TestASentenceNobodyWroteFindsAnOfferNobodyPutInTheRepository(t *testing.T) 
 // keeps `make demo`'s beats safe under `make demo-live`.
 //
 // Every scripted sentence has to find on a mixed shelf exactly what it finds on
-// the committed one — no more, because a fetched offer shadowing a hero would
-// change what the agent buys (discover takes the first candidate and ranks
-// nothing), and no fewer, because the whole demonstration is those four offers.
+// the committed one — no more, because any fetched offer in the candidate set is
+// one the agent might settle on, and no fewer, because the whole demonstration is
+// those four offers.
+//
+// **The "no more" half is the one that survived issue #262 unchanged**, and it is
+// worth saying why, since that issue moved how the agent chooses. It used to be
+// enough to say that discover takes the first candidate and ranks nothing: keep a
+// fetched offer out of the set and the sort could not reach it. The agent does rank
+// now, on the preference the sentence stated — so the sort is not the only thing
+// that could pick a fetched offer, the price is too. Which makes this test's
+// subject *stronger* rather than weaker: the property asserted here has never been
+// about how the agent chooses, only about what it is given to choose from, and an
+// empty intersection is safe under every rule for choosing.
 //
 // Two of these find nothing at the opening prices, and that is correct rather
 // than a gap: the flight and the bicycle are above their own cap until the
@@ -163,19 +173,21 @@ func TestASentenceNobodyWroteFindsAnOfferNobodyPutInTheRepository(t *testing.T) 
 // the *selective* fields and drops the rest — so "find and buy telescopic
 // ladders, cheapest" reaches GET /search as `item.category eq "ladders"` and
 // nothing else. Its cap is a term, evaluated at checkout and absent from the
-// query. settle then takes found[0] and ranks nothing, so whichever offer the
-// merchant returns first is the one a Human Not Present run buys. That used to
-// be decided by the identifier alone, which put every `dummyjson:` offer ahead
-// of every `gtin:`, `event:` and `route:` one; since issue #250 NewCatalogue
-// sorts committed offers ahead of fetched ones first. Either way it is this
-// query, not the whole set, that decides which.
+// query — and since issue #262 the word *cheapest* travels beside the constraints
+// as a rank rather than travelling nowhere, so what settle takes as found[0] out of
+// this result set is the cheapest of it. That used to be whatever the merchant
+// listed first: decided by the identifier alone, which put every `dummyjson:` offer
+// ahead of every `gtin:`, `event:` and `route:` one, and since issue #250 by source
+// first. Every one of those rules reads *this* result set, not the whole set, which
+// is what this test is about.
 //
 // Asserting only over the full set is therefore strictly weaker than the claim
 // this test's failure message makes. A fetched ladder priced *above* the cap is
 // filtered out of both sides of a full-set comparison, so that comparison stays
 // green while the offer is sitting in the result set the agent actually
 // receives — where the only thing standing between it and found[0] is the
-// catalogue's ordering. That is the gap settle's own doc comment names about
+// order the sort and the sentence's own preference put it in. That is the gap
+// settle's own doc comment names about
 // TestTheCatalogueAnswersTheScriptedPrompts, one package along; running the
 // narrowing query as well is what keeps this test from inheriting it. What the
 // ordering then does with it is pinned separately, by
@@ -223,7 +235,7 @@ func TestTheLiveHalfChangesNoScriptedAnswer(t *testing.T) {
 					require.NoError(t, err)
 
 					assert.Equal(t, slices.Sorted(maps.Keys(found(before))), slices.Sorted(maps.Keys(found(after))),
-						"a fetched offer answered a scripted sentence — %s — and the agent takes the first candidate without ranking, so the demonstration would buy something nobody scripted", q.why)
+						"a fetched offer answered a scripted sentence — %s — and every offer in that set is one settle could choose, so the demonstration would buy something nobody scripted", q.why)
 				})
 			}
 		})
@@ -553,8 +565,7 @@ func TestAFetchedOfferMakesNoClaimAboutAScriptedSentence(t *testing.T) {
 //
 // "find and buy telescopic ladders, cheapest" reaches the merchant as
 // `item.category eq "ladders"` and nothing else — see
-// TestTheLiveHalfChangesNoScriptedAnswer for where that query comes from —
-// and settle (internal/agent/authorise.go) takes found[0] without ranking.
+// TestTheLiveHalfChangesNoScriptedAnswer for where that query comes from.
 // Before this fix, NewCatalogue sorted purely by identifier, and
 // "dummyjson:1" sorts ahead of "gtin:05014477390221" — so a colliding fetched
 // offer would not have joined the results, it would have taken first place
@@ -566,6 +577,34 @@ func TestAFetchedOfferMakesNoClaimAboutAScriptedSentence(t *testing.T) {
 // NewCatalogue now sorts committed offers ahead of fetched ones, so the
 // colliding offer still joins the search — it is not refused, not dropped —
 // but it can no longer win one the real ladder also matches.
+//
+// # This order is still what decides a purchase, and issue #262 narrowed how
+//
+// The sentence above no longer reaches the agent's own choosing with nothing in
+// it: interpret.Demo() now carries `cheapest` as a rank, and internal/agent.ranked
+// sorts the candidates by price before settle takes found[0]. So the claim this
+// test's subject supports is smaller than it was, and it is worth being exact
+// about what is left rather than leaving the comment above to be read as the whole
+// of it.
+//
+// **What this order still decides, in two ways.** It is found[0] outright for
+// every sentence that ranks nothing — two of the three scripted prompts, and any
+// sentence a model reads with no ranking word in it. And it is the tie-break
+// *inside* a ranked sort, because ranked uses a stable sort: two offers at the same
+// price keep the order the merchant put them in, so a colliding fetched ladder
+// priced level with the committed one still loses.
+//
+// **What it no longer decides** is a collision where the fetched offer is
+// *cheaper*. That one now wins the ladders query, and it is the right answer rather
+// than #250 reopening: the sentence asked for the cheapest, the offer is inside the
+// cap the user signed, and a verifier will hold it to that cap either way. #250's
+// defect was that the winner was arbitrary with respect to what the sentence said.
+// It is not arbitrary now.
+//
+// The collision below is priced at the fetched prototype's own figure rather than
+// tuned against the ladder, so that this test keeps measuring the sort it is named
+// for. The price interaction belongs to the buyer and is pinned there, by
+// TestProposeBuysThePreferredOfferAndTheFirstOtherwise in internal/agent.
 func TestTheCommittedLadderOutranksAColludingFetchedOne(t *testing.T) {
 	t.Parallel()
 

@@ -202,6 +202,19 @@ func (m *ModelInterpreter) Interpret(ctx context.Context, prompt string, shelves
 		Constraints json.RawMessage `json:"constraints"`
 		Quantity    int             `json:"quantity"`
 		Trigger     Trigger         `json:"trigger"`
+		// A pointer, and it is the only field here that needs to be one.
+		//
+		// Interpretation.Rank cannot tell an omitted "rank" from one answered as
+		// {} — both decode to the zero value — and the two are different answers.
+		// Absent is a sentence that ranked nothing, which is most sentences and
+		// is exactly Rank's honest zero. Present and empty is a model that said
+		// it had a preference and did not say what it was, and reading *that* as
+		// silence puts issue #262 straight back. The pointer is what keeps the
+		// distinction long enough to refuse the second one.
+		Rank *struct {
+			By        RankField     `json:"by"`
+			Direction RankDirection `json:"direction"`
+		} `json:"rank"`
 	}
 	if err := json.Unmarshal(answer, &envelope); err != nil {
 		return Interpretation{}, fmt.Errorf("interpret: the model's answer to %q %w; it said: %s",
@@ -225,10 +238,29 @@ func (m *ModelInterpreter) Interpret(ctx context.Context, prompt string, shelves
 	// agent with no honest reading of when the sentence asked to buy, and
 	// Trigger records why both available guesses are wrong. So it fails here,
 	// loudly, rather than downstream as a purchase at a moment nobody chose.
+	//
+	// **The rank is checked by the same call and on narrower terms**, and the
+	// asymmetry is worth reading rather than assuming from the line above. An
+	// omitted rank is a legitimate answer — the sentence preferred nothing, which
+	// is most sentences — where an omitted trigger is not. So what Validate
+	// refuses is only a preference that was stated and cannot be applied. The one
+	// case Validate cannot see is refused immediately below it.
 	out := Interpretation{
 		Constraints: constraints,
 		Quantity:    envelope.Quantity,
 		Trigger:     envelope.Trigger,
+	}
+	if envelope.Rank != nil {
+		out.Rank = Rank{By: envelope.Rank.By, Direction: envelope.Rank.Direction}
+		if !out.Rank.Stated() {
+			// Refused here rather than by Validate, which sees only the value and
+			// would read this as the sentence having ranked nothing. See the
+			// envelope's own comment for why the two are not the same answer, and
+			// ErrUnknownRank for why silence is the one that is legitimate.
+			return Interpretation{}, fmt.Errorf(
+				"interpret: the model's reading of %q states a preference with nothing in it: %w; it said: %s",
+				prompt, ErrUnknownRank, excerpt(answer))
+		}
 	}
 	if err := Validate(out); err != nil {
 		return Interpretation{}, fmt.Errorf("interpret: the model's reading of %q is not something a verifier could read: %w; it said: %s",
@@ -432,12 +464,13 @@ func vocabulary() string {
 
 	b.WriteString(`You read one sentence a person typed into a shopping agent and turn it into the
 limits a payment verifier will enforce, the basket size the sentence asked for,
-and whether it asked to buy now or to wait. You are proposing limits, never
-deciding a purchase: what you answer is shown to the person, signed by them, and
-then enforced by software that never sees this sentence.
+whether it asked to buy now or to wait, and which of several offers it would
+rather have. You are proposing limits, never deciding a purchase: what you answer
+is shown to the person, signed by them, and then enforced by software that never
+sees this sentence.
 
-Answer with one JSON object and nothing else, with exactly three keys —
-"constraints", "quantity" and "trigger".
+Answer with one JSON object and nothing else, with three required keys —
+"constraints", "quantity" and "trigger" — and an optional fourth, "rank".
 
 "constraints" is a flat JSON array of leaf constraints. Every element is an
 object with exactly three keys — "op", "field" and "value".
@@ -509,12 +542,34 @@ prices, and whether today's price is acceptable is checked later by software
 whose whole job that is. The only question here is what kind of sentence you
 were given.
 
+"rank" is where a word like "cheapest" goes, and it is the one key you may leave
+out. Include it only when the sentence prefers one offer over another; omit it
+entirely when the sentence does not, which is most sentences. When you include it,
+it is an object with exactly two keys:
+
+  by         "price" — the price the shop is asking today. It is the only thing
+             you may rank on, because it is the only orderable fact a shop
+             publishes about an offer that a person actually means.
+  direction  "ascending" for the lowest first, which is what "cheapest" asks
+             for, or "descending" for the highest first.
+
+Say both keys or omit the whole object. Half of a preference cannot be acted on
+and the whole answer is refused for it, exactly as it is for a constraint nobody
+can read. Do not answer "rank": {} — leave the key out.
+
+A rank is not a limit and does not replace one. It decides which of several offers
+already inside the limits gets bought, and it is shown to the person beside the
+limits rather than signed with them, because no verifier can check a preference.
+
 Two things decide whether a constraint is a good reading.
 
 Say only what can be checked at the moment of purchase. "Cheapest", "best" and
 "fastest" are not refutable — no merchant can establish what the whole market was
-offering at an instant — so turn such a sentence into a bound on the amount and
-leave the searching alone.
+offering at an instant — so turn such a sentence into a bound on the amount, and
+say the preference itself in "rank" rather than in a constraint. Both belong in
+the same answer: the bound is what protects the person if the purchase turns out
+to cost more than they thought, and the rank is what makes the word they typed
+change which offer is bought.
 
 Say everything the sentence implies, including what it leaves out. A destination
 with no origin, a season with no dates, "this one" with no identifier: the person
@@ -586,17 +641,18 @@ func textOperators() []string {
 }
 
 // answerSchema describes the answer as JSON Schema: an object carrying the
-// leaf constraints, the basket size and the trigger, side by side.
+// leaf constraints, the basket size, the trigger and the rank, side by side.
 //
 // # Why an object and not the bare array this used to be
 //
-// Interpretation carries three facts a model has no other way to answer in one
-// call: the limits, how many of the item the sentence asked for, and whether it
-// asked to buy now. quantity is required in the schema for the same reason the
-// vocabulary tells the model to say 1 rather than say nothing — an omitted
-// field reads as "the model had no opinion", and the honest default for almost
-// every sentence is a stated 1, not a silent absence Interpretation.Quantity's
-// zero value would have to stand in for either way.
+// Interpretation carries four facts a model has no other way to answer in one
+// call: the limits, how many of the item the sentence asked for, whether it
+// asked to buy now, and which of several offers it would rather have. quantity is
+// required in the schema for the same reason the vocabulary tells the model to say
+// 1 rather than say nothing — an omitted field reads as "the model had no
+// opinion", and the honest default for almost every sentence is a stated 1, not a
+// silent absence Interpretation.Quantity's zero value would have to stand in for
+// either way. rank is the exception and the required list below says why.
 //
 // # Why "constraints" is not contracts/authz/constraint.json
 //
@@ -711,7 +767,52 @@ func answerSchema() ([]byte, error) {
 				"enum":        []any{string(TriggerImmediate), string(TriggerConditional)},
 				"description": "immediate when the sentence asked to buy on the terms it stated; conditional when it asked to wait for something to change",
 			},
+			// Two closed enums, which is the whole of what a structured-output
+			// mode buys here: the *field names* in this answer are constrained
+			// while the values generally are not, so a rank is the one place
+			// where both halves can be closed and both are. A provider honouring
+			// the schema cannot answer a preference over a fact the agent has no
+			// way to order on, and one ignoring it is caught by Validate a moment
+			// later — the same arrangement every other field here relies on.
+			"rank": map[string]any{
+				"type":        "object",
+				"description": "which of several matching offers the sentence would rather have; omit the whole object when it names no preference",
+				"properties": map[string]any{
+					"by": map[string]any{
+						"type":        "string",
+						"enum":        []any{string(RankByPrice)},
+						"description": "the fact to order on — the price the shop is asking today",
+					},
+					"direction": map[string]any{
+						"type":        "string",
+						"enum":        []any{string(RankAscending), string(RankDescending)},
+						"description": "ascending is lowest first, which is what \"cheapest\" asks for",
+					},
+				},
+				"required":             []any{"by", "direction"},
+				"additionalProperties": false,
+			},
 		},
+		// rank is deliberately not in this list, and it is the only optional
+		// property in the answer.
+		//
+		// quantity and trigger are required because an omitted field reads as "the
+		// model had no opinion" and neither has an honest absence — see the
+		// paragraphs above and Trigger. rank does have one: absent means the
+		// sentence ranked nothing, which is the ordinary case and resolves to the
+		// catalogue order agent.settle used before issue #262. There is no value
+		// that could stand in for it either, since "no preference" is not a
+		// direction and not a field, so requiring the key would force a model to
+		// invent one of those for almost every sentence it reads.
+		//
+		// **Untested against a live endpoint, unlike the value union above**, whose
+		// comment records two probes. Hard rule 4 forbids a test that would do it
+		// and this shape has been reasoned about rather than measured: Gemini's
+		// responseSchema takes `required` as a list and permits properties outside
+		// it, and a provider whose structured-output mode instead demands that
+		// every property be required would answer 400 from its own endpoint. That
+		// is a loud failure at the boundary and the shape to keep, on exactly the
+		// terms the anyOf comment argues for.
 		"required":             []any{"constraints", "quantity", "trigger"},
 		"additionalProperties": false,
 	})

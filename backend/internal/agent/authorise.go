@@ -353,9 +353,19 @@ type Proposal struct {
 	Item  string
 	Offer Offer
 	// Offers is every candidate the search behind Offer actually found, in the
-	// same catalogue order settle chose Offer from — "the agent serves the
-	// offers it already found" rather than a second search the console would
-	// otherwise have to run itself.
+	// same order settle chose Offer from — "the agent serves the offers it
+	// already found" rather than a second search the console would otherwise
+	// have to run itself.
+	//
+	// **That order is the merchant's catalogue order until a sentence states a
+	// preference**, and then it is the order the preference asked for; see
+	// ranked and Rank below. The list is sorted rather than left alone with the
+	// choice made out of band on purpose, and it is the property that makes an
+	// unsigned rank auditable: a person reading the consent screen sees the
+	// preference, sees every candidate the agent had, and sees the chosen one at
+	// the head of them. A screen showing the merchant's order beside a choice
+	// taken from somewhere in the middle of it would be asking to be trusted
+	// instead.
 	//
 	// #109's product table is why this exists: a browser that ran its own
 	// search would have to decide which of the interpretation's constraints
@@ -405,6 +415,28 @@ type Proposal struct {
 	// $160" are different authorisations that render identically from the
 	// constraints alone. Issue #198's first trap.
 	Trigger interpret.Trigger
+
+	// Rank is the preference the sentence stated between offers that all satisfy
+	// the limits — see interpret.Rank — and the zero value means it stated none,
+	// which is most sentences.
+	//
+	// **It has already been spent by the time this exists**, and that is the one
+	// way it differs from Quantity and Trigger. Both of those are carried forward
+	// because the watch loop spends them *after* the user signs: Watch.Run reads
+	// the trigger to decide whether to buy at once, and a quantity goes into every
+	// closed mandate. A rank is applied inside the same call that produced this
+	// Proposal — settle used it to choose Item out of Offers — so nothing
+	// downstream of here reads it, and it is deliberately **not** on
+	// Authorisation. A field on the thing the watch loop carries would suggest
+	// some later step still gets to reorder something, and none does.
+	//
+	// So it is here for exactly one reason: a proposal is what a person is shown,
+	// and this is the difference between a screen that says *bought this one* and a
+	// screen that says *bought this one, because you asked for the cheapest, and
+	// here are the other three*. That is what makes an unsigned preference
+	// checkable rather than merely harmless — see interpret.Rank's "Why a rank need
+	// not be signed", which leans on it.
+	Rank interpret.Rank
 }
 
 // Propose runs the discovery half: interpret, search, narrow — everything
@@ -493,7 +525,7 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 			in.Prompt, err)
 	}
 
-	item, offer, offers, err := c.settle(ctx, interpretation.Constraints, in.Item)
+	item, offer, offers, err := c.settle(ctx, interpretation.Constraints, in.Item, interpretation.Rank)
 	if err != nil {
 		return out, declined(err, interpretation.DeclinedCategories)
 	}
@@ -512,6 +544,11 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 		// Validate above has already refused an interpretation that states no
 		// trigger, so this is one of the two and never an absence. Issue #198.
 		Trigger: interpretation.Trigger,
+		// The preference settle just spent, carried so a screen can say why this
+		// offer and not one of the others — see Proposal.Rank. Zero when the
+		// sentence ranked nothing, and unlike the trigger there is nothing here
+		// for Validate to have refused: silence is a legitimate answer.
+		Rank: interpretation.Rank,
 	}, nil
 }
 
@@ -523,8 +560,23 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 // either way, because a screen needs it whether the picking happened here or
 // upstream — and asking is also what lets a caller-named item be refused
 // rather than trusted blindly, below.
+//
+// # A caller-named item outranks any preference
+//
+// The rank chooses among candidates. A caller who named one has already chosen, so
+// when chosen is set nothing here reorders what the merchant answered with — see
+// Intent.Item, and interpret.Rank for what a rank is allowed to decide.
+//
+// **That is a guarantee and not a tidiness.** A search on item.id has exactly one
+// honest answer, and the refusal below compares the merchant's own first answer
+// against the identifier that was asked for. Ranking first would let a merchant
+// that answered `[something cheaper, the offer asked for]` sort its way past that
+// check, so the preference would have laundered a refusal into a purchase of an
+// offer the caller never picked. TestARankCannotLaunderAMerchantsWrongAnswer is
+// the test that fails when the two are reordered.
 func (c *Client) settle(
 	ctx context.Context, constraints []generated.Constraint, chosen string,
+	preference interpret.Rank,
 ) (string, Offer, []Offer, error) {
 	found, err := c.candidates(ctx, constraints, chosen)
 	if err != nil {
@@ -534,15 +586,31 @@ func (c *Client) settle(
 		return "", Offer{}, nil, fmt.Errorf("%w: the search matched no offer", ErrNothingToBuy)
 	}
 
-	// The first result wins, and the merchant returns them in catalogue order,
-	// so the choice is stable rather than considered. A real agent ranks, or
-	// asks. Choosing among candidates is a product decision this demo does not
-	// make.
+	if chosen == "" {
+		if found, err = ranked(found, preference); err != nil {
+			return "", Offer{}, nil, err
+		}
+	}
+
+	// The first result wins, and what decides which one that is now comes from the
+	// sentence: ranked has put the candidates in the order the preference asked
+	// for, or handed back the merchant's own catalogue order when the sentence
+	// stated no preference.
+	//
+	// **This used to be found[0] over the merchant's order unconditionally**, under
+	// a comment saying that a real agent ranks or asks and that choosing among
+	// candidates was a product decision this demo did not make. Issue #262 is what
+	// that cost once the shelf grew: *"find and buy telescopic ladders, cheapest"*
+	// put its ranking word into an amount bound, which is a term evaluated at
+	// checkout and absent from the query, so the word reached the merchant as
+	// nothing at all and the demonstration bought whichever offer sorted first in a
+	// shelf it did not choose — a fetched one in 23 of 30 categories.
 	//
 	// TestTheCatalogueAnswersTheScriptedPrompts, in internal/roles/merchant,
 	// does *not* pin this: it searches with the whole constraint set, which is
 	// the query this path deliberately does not send. What does is
-	// TestProposeTakesTheFirstCandidateRegardlessOfPriceOrTitle.
+	// TestProposeBuysThePreferredOfferAndTheFirstOtherwise, which is the test
+	// TestProposeTakesTheFirstCandidateRegardlessOfPriceOrTitle became.
 	c0 := found[0]
 
 	// When a caller named an item, candidates asked the merchant about that one
@@ -559,8 +627,9 @@ func (c *Client) settle(
 
 	// candidate and Offer carry the same fields for the same reason, so the
 	// conversions below are not a shortcut past a copy — they are that copy.
-	// The Propose caller decides what to do with more than one; settle itself
-	// still chooses nothing beyond found[0].
+	// The Propose caller decides what to do with more than one; the only choosing
+	// settle does is found[0], over an order ranked either sorted or left exactly
+	// as the merchant sent it.
 	offers := make([]Offer, len(found))
 	for i, f := range found {
 		offers[i] = Offer(f)
@@ -628,10 +697,10 @@ func (c *Client) sign(ctx context.Context, prompt string, proposal Proposal) (Au
 //
 // # What discovery reads, and what this type now carries
 //
-// Discovery reads the identifier and nothing else. That has not changed and
-// TestDiscoverStillChoosesOnTheIdentifierAlone is what keeps it true: the agent
-// compares no money anywhere, ranks nothing, and a field it selected on here
-// would be the first place that stopped being so.
+// Discovery reads the identifier and nothing else, and
+// TestDiscoverStillChoosesOnTheIdentifierAlone is what keeps it true. Discover
+// returns every identifier a search found, in the order the merchant sent them,
+// and no field of this type decides which of them a caller gets.
 //
 // What changed is that Propose serves a caller that **is** a person. The rest of
 // what the merchant publishes — title, image, description, retailer, and the
@@ -639,6 +708,16 @@ func (c *Client) sign(ctx context.Context, prompt string, proposal Proposal) (Au
 // rather than discarding it. Carrying is not reading. The consent screen needs
 // it because `the item is gtin:05014477390221` is the identifier a constraint
 // carries and is nothing anybody can act on.
+//
+// # Price is the one field settle may order on, and only when a sentence asked
+//
+// This comment used to say that the agent compares no money anywhere. That stopped
+// being true with issue #262: Price is read by ranked when — and only when — the
+// interpretation carried a preference, which is the one thing that can put the
+// candidates in an order the merchant did not choose. What has not changed is the
+// half that matters. No money here is ever compared to a *limit*: the comparison is
+// between two offers the merchant already said match, and rank.go's own comment is
+// where the difference between ordering and evaluating is argued out.
 type candidate struct {
 	ID          string           `json:"id"`
 	Title       string           `json:"title"`

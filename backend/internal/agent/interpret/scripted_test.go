@@ -1,6 +1,7 @@
 package interpret_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -210,6 +211,51 @@ func TestEachScenarioSaysWhenItsSentenceWantedToBuy(t *testing.T) {
 	}
 }
 
+// TestEachScenarioSaysWhichOfferItWouldRatherHave is issue #262 at the
+// interpreter, and it walks the table for TestEachScenarioSaysWhenItsSentence-
+// WantedToBuy's reason: a fourth prompt has to arrive with a row here.
+//
+// **Two of the three rank nothing and that is the assertion, not the omission.** A
+// zero Rank is a sentence with no ranking word in it, and agent.settle then resolves
+// in the merchant's own catalogue order — so the flight and the bicycle rows are
+// what keep `make demo` byte-for-byte the demonstration it was. The ladders row is
+// the one this issue is about: *cheapest* used to become an amount bound and nothing
+// else, which is a term the search never carries, so the word reached the merchant
+// as nothing at all.
+func TestEachScenarioSaysWhichOfferItWouldRatherHave(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]interpret.Rank{
+		builtScenarioPrompt:                            {},
+		"buy me this bicycle when it drops below $400": {},
+		ladderPrompt: {
+			By: interpret.RankByPrice, Direction: interpret.RankAscending,
+		},
+	}
+
+	for _, script := range interpret.Scenarios() {
+		t.Run(script.Prompt, func(t *testing.T) {
+			t.Parallel()
+
+			expected, known := want[script.Prompt]
+			require.True(t, known,
+				"a prompt this package publishes with nothing here saying whether it prefers one "+
+					"offer to another; the agent chooses among candidates either way, so an "+
+					"unrecorded preference is one nobody notices was dropped")
+
+			interpretation, err := interpret.Demo().Interpret(t.Context(), script.Prompt)
+			require.NoError(t, err, "a scenario this package publishes is not in its own script")
+			assert.Equal(t, expected, interpretation.Rank,
+				"a ranking word this sentence contains and this interpretation does not is bought "+
+					"as whichever offer the merchant happened to list first")
+			assert.Equal(t, expected.Stated(), strings.Contains(script.Prompt, "cheapest"),
+				"the one sentence in this table with a ranking word in it is the one that has to "+
+					"carry a rank — asserted against the sentence rather than against the map, so "+
+					"that editing both to agree with each other still fails")
+		})
+	}
+}
+
 func elsewhere() constraint.Subject {
 	s := flight(18900)
 	s.Item.Attributes = map[string]string{"route.origin": "LHR", "route.destination": "PMI"}
@@ -390,6 +436,29 @@ func TestNewScriptedRefusesAScriptThatCouldNotDoItsJob(t *testing.T) {
 			Prompt:      "buy a flight to Palma",
 			Constraints: `[{"op":"eq","field":"item.category","value":"flights"}]`,
 			Trigger:     "eventually",
+		}},
+		// Three rows for the rank, and the absence of a fourth is the point: a
+		// Script with no Rank at all is legitimate and is two of the three entries
+		// in Scenarios, so it belongs in the accepting test rather than here. What
+		// is refused is half of one, or a word nobody defines — see
+		// interpret.ErrUnknownRank.
+		{"a preference over something no merchant publishes", interpret.Script{
+			Prompt:      "buy the best-rated flight to Palma",
+			Constraints: `[{"op":"eq","field":"item.category","value":"flights"}]`,
+			Trigger:     interpret.TriggerImmediate,
+			Rank:        interpret.Rank{By: "rating", Direction: interpret.RankDescending},
+		}},
+		{"a preference with no direction", interpret.Script{
+			Prompt:      "buy a flight to Palma",
+			Constraints: `[{"op":"eq","field":"item.category","value":"flights"}]`,
+			Trigger:     interpret.TriggerImmediate,
+			Rank:        interpret.Rank{By: interpret.RankByPrice},
+		}},
+		{"a preference with no field", interpret.Script{
+			Prompt:      "buy a flight to Palma",
+			Constraints: `[{"op":"eq","field":"item.category","value":"flights"}]`,
+			Trigger:     interpret.TriggerImmediate,
+			Rank:        interpret.Rank{Direction: interpret.RankAscending},
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { preview, refuse } from "../../consent/client";
-import { canSign, whenItBuys } from "../../consent/model";
+import { canSign, whenItBuys, whyThisOffer } from "../../consent/model";
 import type { Previewed, Proposal } from "../../consent/model";
 import type { Amount, PaymentInstrument } from "../../protocol";
 import { lifetime } from "./format";
@@ -21,7 +21,7 @@ import { Signing } from "./Signing";
  * naming the Trusted Surface as a separate party, and the console is not on
  * screen beside it.
  *
- * Five zones, and only one of them is what the signature covers:
+ * Six zones, and only one of them is what the signature covers:
  *
  * 1. **What you asked for** — the user's own words. This is the one screen
  *    where that is literally true, because they were typed into the console's
@@ -49,7 +49,15 @@ import { Signing } from "./Signing";
  *    belong. For a sentence that names a count both are on this screen at
  *    once; they are different kinds of fact and so they are in different
  *    boxes.
- * 5. **What the identifier refers to** — the merchant's own words, outside the
+ * 5. **Why this offer** — `proposal.rank`, issue #262. A sentence containing
+ *    *cheapest* asks for one of several matching offers in preference to the
+ *    others, and that is not a limit: no merchant can be shown one offer and
+ *    asked whether it was the one the buyer would have preferred, because the
+ *    question is about the offers it was not asked about. So it cannot be a
+ *    constraint, and zone 2 has nothing in it about how this offer was picked
+ *    out of the list the console's product table is showing. Drawn only when
+ *    the sentence named a preference, which is not most sentences.
+ * 6. **What the identifier refers to** — the merchant's own words, outside the
  *    signed box. `Render()` produces `the item is gtin:05014477390221`, which
  *    is the identifier the constraint carries and the merchant evaluates, so
  *    the sentence is right — and it is nothing a person can act on. That
@@ -57,13 +65,23 @@ import { Signing } from "./Signing";
  *    what the identifier names beside it, labelled as not part of what was
  *    signed.
  *
- * **Zones 3 and 4 are the same kind of fact and still have a heading each.**
- * Both are the agent's reading of the sentence and neither is signed, so one
- * box holding both would have been shorter. They are separate because the
+ * **Zones 3, 4 and 5 are the same kind of fact and still have a heading each.**
+ * All three are the agent's reading of the sentence and none is signed, so one
+ * box holding them would have been shorter. They are separate because the
  * consent design records the basket size as belonging *"under a label of its
- * own"*, and because they answer different questions: how many, and when. A
- * shared heading would have to be vague enough to cover both, and vagueness
- * is what this screen has least room for.
+ * own"*, and because they answer different questions: how many, when, and which
+ * one. A shared heading would have to be vague enough to cover all three, and
+ * vagueness is what this screen has least room for.
+ *
+ * **Zone 5 is the one whose absence from zone 2 needed arguing rather than
+ * asserting**, because a preference nobody signed steering which offer gets
+ * bought is close to the thing this screen exists to prevent. The answer is that
+ * the offer it settled on *is* in zone 2: the agent narrows the interpretation to
+ * `the item is gtin:…` before `/authorise/preview` is called, so the identifier a
+ * rank chose is one of the sentences the signature covers, rendered by the party
+ * that signs. A preference can reorder the candidates and cannot put an offer in
+ * front of a person without the signed set naming it. See
+ * `docs/specs/2026-08-12-ranking-among-authorised-offers.md`.
  *
  * **Zone 2 is the only one the signature covers, and keeping it that way is
  * this screen's whole standard.** `POST /authorise/preview` exists so that its
@@ -155,6 +173,9 @@ export function Consent({
   // the enablement from another is two carriers that can disagree, which is
   // the defect `Signing.tsx`'s `isSigned` exists to have already fixed once.
   const buying = whenItBuys(proposal.trigger);
+  // undefined when the sentence named no preference, which is what the zone below
+  // renders nothing for. See whyThisOffer.
+  const preference = whyThisOffer(proposal.rank);
 
   if (previewError !== null) {
     return (
@@ -262,6 +283,44 @@ export function Consent({
           puts in the basket is still held to the limits above.
         </p>
       </section>
+
+      {/*
+        Issue #262, and the zone that makes an unsigned preference checkable rather
+        than merely harmless. `cheapest` is not a limit — no merchant can be shown
+        one offer and asked whether it was the one the buyer would have preferred,
+        because the question is about the others — so it cannot be a constraint and
+        is not in the box above. What the agent did with it is choose one of
+        `offers`, and this is the only place a person can read that it did.
+
+        Drawn only when the sentence named one. Absence here is not a build that
+        could not read a word: it is a sentence with no ranking word in it, which is
+        most sentences, and a heading reading "Why this offer" over "no preference"
+        would be a row that exists to say nothing.
+
+        It sits immediately above the offer card on purpose. The card is the offer
+        this chose, so the two read as one claim — *the cheapest of the offers that
+        matched*, then the offer, with its price. A reader who wants to check it has
+        `offers` in the product table on the same screen.
+      */}
+      {preference !== undefined && (
+        <section className="flex flex-col gap-1" data-testid="preferred" aria-labelledby="preferred">
+          <h3 id="preferred" className="font-sans text-sm text-graphite">
+            Why this offer
+          </h3>
+          <p className="font-sans text-ink">{preference.sentence}</p>
+          {preference.raw !== "" && preference.raw !== undefined && (
+            // The wire values, in mono, on #159's rule that monospace is for code.
+            // Unlike the trigger's equivalent, `Sign` is **not** disabled while this
+            // shows — see canSign, and whyThisOffer for why the offer being named in
+            // the signed box above is what makes that safe.
+            <p className="font-mono text-sm text-broken">{preference.raw}</p>
+          )}
+          <p className="font-sans text-sm text-graphite">
+            The agent&rsquo;s reading of your sentence, and not part of what you sign. Whichever
+            offer it preferred, the one it settled on is named in the limits above.
+          </p>
+        </section>
+      )}
 
       <section className="flex flex-col gap-1" data-testid="offer-card" aria-labelledby="what-it-is">
         <h3 id="what-it-is" className="font-sans text-sm text-graphite">
