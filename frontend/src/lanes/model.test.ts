@@ -6,12 +6,14 @@ import { MANDATE_STATES, MANDATE_TYPES } from "../sse";
 
 import {
   amountOf,
+  authorisationOf,
   group,
   laneOf,
   LANES,
   mandateLabel,
   shortDigest,
   stepsIn,
+  timeOf,
   titleOf,
   verdictOf,
 } from "./model";
@@ -457,5 +459,122 @@ describe("how much of a digest is shown", () => {
 
   it("leaves a digest shorter than that alone", () => {
     expect(shortDigest("abc")).toBe("abc");
+  });
+});
+
+describe("the authorisation an attempt was made under", () => {
+  const APPROVED = {
+    typed: "kupi merdevine, najjeftinije",
+    signed: ["the amount is at most 200.00 USD"],
+    expires_at: "2026-08-10T20:04:31Z",
+  } as const;
+
+  const LATER = {
+    typed: "something else entirely",
+    signed: ["the amount is at most 5.00 USD"],
+    expires_at: "2026-08-10T21:00:00Z",
+  } as const;
+
+  it("finds one on any step of the attempt, not only the first to arrive", () => {
+    fresh();
+    // The agent's first step is the one that carries it in practice, so a
+    // fixture where it does would pass on an implementation that only ever
+    // looked at `steps[0]`. Here the first step is a verifier's, which carries
+    // none — the shape a reconnect produces when it replays from partway
+    // through an attempt.
+    const [transaction] = group([
+      record({ kind: "mandate_verified", role: "credprovider", digest: DIGEST }),
+      record({ kind: "mandate_presented", role: "agent", digest: DIGEST, authorisation: APPROVED }),
+    ]);
+
+    expect(
+      authorisationOf(transaction.attempts[0]),
+      "the card has to be drawable from whatever of the attempt the stream " +
+        "actually delivered; a lane that needed one specific step would lose it " +
+        "to a reconnect",
+    ).toEqual(APPROVED);
+  });
+
+  it("takes the one the attempt was begun under, where amountOf takes the last", () => {
+    fresh();
+    const [transaction] = group([
+      record({
+        kind: "mandate_constructed",
+        role: "agent",
+        digest: DIGEST,
+        authorisation: APPROVED,
+      }),
+      record({ kind: "mandate_presented", role: "agent", digest: DIGEST, authorisation: LATER }),
+    ]);
+
+    expect(
+      authorisationOf(transaction.attempts[0]),
+      "an amount is a presentation choice among copies of one number, so the most " +
+        "recent is the most decisive word available. Nothing about an authorisation " +
+        "is decided as an attempt proceeds — it was signed before any of these steps " +
+        "happened — so the earliest evidence is the honest one, and a card that " +
+        "changed halfway through would be reporting a second approval nobody gave",
+    ).toEqual(APPROVED);
+  });
+
+  it("says nothing for an attempt taken under none", () => {
+    fresh();
+    const [transaction] = group([
+      // Human Present: the user signs the closed mandates at the surface, in
+      // this correlation, and there is no open pair at all.
+      record({ kind: "mandate_constructed", role: "surface" }),
+      record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
+    ]);
+
+    expect(
+      authorisationOf(transaction.attempts[0]),
+      "an authorisation invented for a flow that has none would put a card beside " +
+        "the user's own two signing steps, which is the duplicate #213 refuses",
+    ).toBeUndefined();
+  });
+
+  it("keeps two attempts' authorisations to themselves", () => {
+    fresh();
+    // One correlation, two checkouts — the demonstration's own shape. `split`
+    // cuts on the digest and this reads inside the cut, so a watch re-signed
+    // under a second authorisation could not leak one into the other's lane.
+    const [transaction] = group([
+      record({
+        kind: "mandate_constructed",
+        role: "agent",
+        digest: DIGEST,
+        authorisation: APPROVED,
+      }),
+      record({ kind: "mandate_rejected", role: "credprovider", digest: DIGEST, code: "constraint_violated" }),
+      record({ kind: "mandate_constructed", role: "agent", digest: OTHER, authorisation: LATER }),
+    ]);
+
+    expect(transaction.attempts, "two digests under one correlation are two attempts").toHaveLength(
+      2,
+    );
+    expect(authorisationOf(transaction.attempts[0])).toEqual(APPROVED);
+    expect(
+      authorisationOf(transaction.attempts[1]),
+      "each attempt names what it was made under, and grouping is untouched",
+    ).toEqual(LATER);
+  });
+});
+
+describe("the time a step or an authorisation is spelled with", () => {
+  it("is one function, so the log and the lane cannot disagree", () => {
+    // Both screens render it, and #184's finding about `renderPrice` is why it
+    // is exported from here rather than living in the component that had it
+    // first: two byte-identical renderers of one string, with nothing comparing
+    // them, is the drift `contracts/testdata/render_vectors.json` exists one
+    // module across to prevent.
+    expect(timeOf("2026-08-10T20:04:31Z")).toMatch(/^\d\d:\d\d:31$/);
+  });
+
+  it("hands back a value it cannot read rather than a blank", () => {
+    expect(
+      timeOf("not a timestamp"),
+      "a blank cell reads as a fact about the step; the raw value reads as a " +
+        "value this build could not parse, which is what happened",
+    ).toBe("not a timestamp");
   });
 });

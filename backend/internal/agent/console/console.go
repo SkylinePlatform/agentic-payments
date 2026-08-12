@@ -294,6 +294,22 @@ func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 		}
 		auth = &signed
 	}
+	// The browser posts the two halves separately — POST /watches carries a
+	// prompt *and* an authorisation — because the surface never returns the
+	// prompt and has no business doing so: the user signs the interpretation and
+	// not their own words. So joining them is this handler's job, and it is
+	// joining two fields of one request rather than believing anything.
+	//
+	// A copy, so nothing writes into the value a caller still holds. Setting it
+	// only when the authorisation states none is what keeps agent.Client's own
+	// path — where sign already carried the prompt forward — the authority on
+	// its own runs, and this the fallback for the one caller that has the
+	// sentence and cannot have got it from the signature.
+	if auth.Prompt == "" && in.Prompt != "" {
+		joined := *auth
+		joined.Prompt = in.Prompt
+		auth = &joined
+	}
 
 	// auth.Quantity first, and only then in.Quantity — see Watching.Quantity
 	// for why the order matters: the authorisation's own number is one the

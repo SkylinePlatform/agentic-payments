@@ -202,6 +202,72 @@ type Mandate struct {
 	State MandateState `json:"state"`
 }
 
+// Authorisation is the open mandate pair a step was taken under: what the user
+// typed, what the Trusted Surface said each limit means, and when the pair stops
+// authorising anything.
+//
+// # Why an event carries it at all
+//
+// Under Human Not Present the user's approval and the agent's purchase are two
+// HTTP requests separated by however long the price takes to move, so they carry
+// two different correlation IDs — which is correct, and ADR 0003 says no hop
+// regenerates one. The consequence issue #213 was filed for is that the User
+// lane of the three-lane view is *structurally* empty on every browser-signed
+// purchase: the signing happened in a correlation the purchase is not part of.
+// This is the fact that lets that lane show the authorisation itself rather than
+// a step in this transaction.
+//
+// # The three members, and the one that is not here
+//
+// Typed and Signed are deliberately different kinds of thing and the screen has
+// to keep them apart. Typed is the caller's account of what the user wrote —
+// unsigned, unbound, and surface.authorisation's own comment is blunt that
+// nothing reaching that endpoint has been near the user. Signed is the Trusted
+// Surface's own Render output, returned by POST /authorise, which is the whole
+// reason /authorise/preview exists: the sentences a user reads are produced by
+// the party that signs. A screen may show both; only the second is what the
+// signature covers. internal/agent/console/view.go names the same two fields
+// `typed` and `signed` for the same reason, and this is that pair one wire
+// across.
+//
+// **There is no signed-at member, and the reason is that nothing carries the
+// instant *forward* — not that no such instant exists.** It does, and the
+// distinction matters enough to write down, because the obvious reading of the
+// shorter sentence sends the next reader looking for something that is not
+// missing. The Trusted Surface reads one clock at the moment it signs and stamps
+// it into both open mandates as `iat` — roles/surface's authorise handler, and
+// contracts/authz/checkout_mandate_open.json declares it as `issued_at`. It is a
+// plain claim rather than a disclosable one, so a holder can read it out of a
+// mandate it is already carrying, which is what internal/adapters/ap2/digest.go
+// does for the digest on the field above and argues at length is sound precisely
+// because the value only ever lands in an obs.Event.
+//
+// What is absent is every hop after that. POST /authorise answers with an expiry
+// and no issuance instant; agent.Authorisation has no field for one, so
+// Client.sign could not carry one even if the surface sent it; the browser
+// assembles POST /watches out of that same answer; and the console's own runView
+// is likewise typed / signed / expires_at. Carrying it would mean a member on
+// each of those and a fourth here — a change worth making and worth its own
+// issue, and one this type should not pre-empt with a field nothing can fill.
+//
+// The one thing that would be wrong is the agent stamping *its own* clock: on
+// the browser path it demonstrably was not present when the user signed, and a
+// buyer claiming to have witnessed a moment it was not at is exactly what this
+// screen exists to make impossible. Reading the user's own signed `iat` is not
+// that, and is what any future member should be filled from. Until one exists,
+// ExpiresAt is the instant the wire has — the `exp` both open mandates carry —
+// and it answers what a reader of the card actually asks, which is whether the
+// authorisation the purchase was made under is still live.
+type Authorisation struct {
+	// Typed is the caller's account of the sentence the user wrote. Unsigned.
+	Typed string `json:"typed"`
+	// Signed is what the Trusted Surface said each limit means, one sentence
+	// per constraint, in the order they were signed.
+	Signed []string `json:"signed"`
+	// ExpiresAt is when the open mandate pair stops authorising anything.
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 // Event is one thing that happened, as the event log records it.
 //
 // It is a plain Go type and not generated from contracts/. ADR 0003 is explicit
@@ -336,6 +402,44 @@ type Event struct {
 	// it is bounded by the same rule as everything else here — the receipt is
 	// what names the artefact as evidence, and this is a screen.
 	Mandate *Mandate `json:"mandate,omitempty"`
+
+	// Authorisation is the open mandate pair this step was taken under — see
+	// Authorisation above for what the three members are and why there is no
+	// fourth.
+	//
+	// Issue #213's field, on the precedent #201 and #174 set: a fact the screen
+	// needs in order to make a true claim, carried as a typed nested object
+	// rather than left in Detail for a reader to parse.
+	//
+	// # The gate, and how it differs from the two above it
+	//
+	// nil says this step was taken under no open mandate, and two conditions
+	// have to hold before it may say anything else — see authorisationKinds, and
+	// the closed-mandate rule Validate enforces beside it.
+	//
+	// The kinds are two rather than the four the amount and the mandate share,
+	// and the two that drop out are the ones a *verifier* emits. A verifier does
+	// read the open mandate — that is what it evaluates the constraints from —
+	// but what reaches it is a minimised presentation, and it never sees the
+	// prompt or the sentences the surface rendered at all. An event of its
+	// carrying this field would be a verifier restating the buyer's account of a
+	// decision it was not present for. Mandate one field up is a fact about the
+	// hop, which is why the same argument leaves that one permitted on all four.
+	//
+	// The second condition is that the step is about a **closed** mandate. An
+	// open mandate is not made under an authorisation; it *is* one — the Trusted
+	// Surface's two mandate_constructed events are the moment the pair comes into
+	// being, and a field there would point an artefact at itself. Requiring the
+	// closed state makes that unrepresentable rather than left to a call site.
+	//
+	// Within what the gate permits, an emitter attaches this whenever it holds an
+	// open mandate pair, which for the Human Not Present watch is always and for
+	// Human Present is never: under Human Present the user signs the closed
+	// mandates directly and there is no open pair for anything to have been taken
+	// under. So the User lane of a Human Present purchase is exactly what it was
+	// — the user's own two signing steps, in this correlation — with no card
+	// beside them, which is how the fix avoids putting a duplicate there.
+	Authorisation *Authorisation `json:"authorisation,omitempty"`
 }
 
 // amountKinds is the closed set of moments a structured price is meaningful
@@ -382,6 +486,30 @@ var mandateKinds = []Kind{
 	KindMandatePresented,
 	KindMandateVerified,
 	KindMandateRejected,
+}
+
+// authorisationKinds is the closed set of moments a step is taken *under* an
+// open mandate pair, enforced by Validate below.
+//
+// Two, where amountKinds and mandateKinds are the same four. The two that are
+// missing — KindMandateVerified and KindMandateRejected — are the verifier's,
+// and the whole of the reason is that a verifier cannot state this fact
+// honestly: internal/adapters/ap2 minimises every presentation, so what reaches
+// one is the constraints it is entitled to evaluate and never the user's own
+// sentence or the surface's rendering of the set. A verifier emitting this field
+// would be repeating the buyer's account of a decision it was not present for,
+// which is the same overreach internal/agent/console's package doc refuses in
+// the other direction.
+//
+// KindMandateConstructed and KindMandatePresented are what the holder emits, and
+// the holder is the party that has the pair in its hands. The two exclusions
+// KindReceiptIssued and KindAuthorisationRefused carry over from mandateKinds
+// unchanged, and the second is worth naming: a person declining an
+// interpretation is refusing to *create* an authorisation, so there is none for
+// the step to have been taken under.
+var authorisationKinds = []Kind{
+	KindMandateConstructed,
+	KindMandatePresented,
 }
 
 // wellFormed reports whether an amount says something a reader can act on.
@@ -452,6 +580,25 @@ func (e Event) Validate() error {
 	case e.Mandate != nil && !e.Mandate.State.Valid():
 		return fmt.Errorf("%w: mandate state %q is neither open nor closed",
 			ErrInvalidEvent, e.Mandate.State)
+	case e.Authorisation != nil && !slices.Contains(authorisationKinds, e.Kind):
+		return fmt.Errorf("%w: authorisation is set on %s, which is not one of the kinds a step is taken under an open mandate",
+			ErrInvalidEvent, e.Kind)
+	case e.Authorisation != nil && (e.Mandate == nil || e.Mandate.State != MandateClosed):
+		// An open mandate is not made under an authorisation; it is one. This is
+		// what keeps the Trusted Surface's own two mandate_constructed events —
+		// the moment the pair comes into being — from pointing at themselves.
+		return fmt.Errorf("%w: authorisation is set on a step that is not about a closed mandate, and an open mandate is the authorisation rather than something taken under one",
+			ErrInvalidEvent)
+	case e.Authorisation != nil && len(e.Authorisation.Signed) == 0:
+		// Refused rather than shrugged off, on wellFormed's reasoning: the card
+		// this field draws says the user approved something, and one with no
+		// sentence on it says they approved something unstated. An emitter with
+		// nothing to state attaches nothing at all.
+		return fmt.Errorf("%w: an authorisation with no rendered sentence says the user approved something without saying what",
+			ErrInvalidEvent)
+	case e.Authorisation != nil && e.Authorisation.ExpiresAt.IsZero():
+		return fmt.Errorf("%w: an authorisation with no expiry cannot be placed in time, and the Trusted Surface always computes one",
+			ErrInvalidEvent)
 	}
 	return nil
 }

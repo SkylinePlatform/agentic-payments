@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { EventRecord, ProtocolEvent } from "../sse";
 
@@ -801,5 +801,337 @@ describe("opening what each reader saw", () => {
       screen.queryByRole("button", { name: /what each reader saw/i }),
       "the prop is optional, and a caller with nothing to open gets the screen as it was",
     ).toBeNull();
+  });
+});
+
+/**
+ * What the Trusted Surface signed, as an attempt of a browser-signed purchase
+ * carries it — `obs.Authorisation`, one wire across.
+ *
+ * The expiry is written in UTC and the suite's zone is pinned to UTC at the top
+ * of the block below, so the string the card renders is the one written here on
+ * a machine of any zone.
+ */
+const APPROVED = {
+  typed: "kupi merdevine, najjeftinije",
+  signed: ["the amount is at most 200.00 USD", "the item is gtin:05014477390221"],
+  expires_at: "2026-08-10T20:04:31Z",
+} as const;
+
+const CLOSED_CHECKOUT = { type: "checkout", state: "closed" } as const;
+const CLOSED_PAYMENT = { type: "payment", state: "closed" } as const;
+
+/**
+ * A purchase the user signed for in their browser — issue #213's own case.
+ *
+ * **There is no `surface` step in it, and that absence is the defect.** The
+ * browser collects the signature at the Trusted Surface over a connection the
+ * agent is never on, in a request with a correlation ID of its own; the purchase
+ * the watch makes when the price moves carries a different one. `group` keys on
+ * the correlation, correctly — ADR 0003 says no hop regenerates one — so the
+ * user's own steps are genuinely not in this transaction, and the User lane read
+ * *Nothing yet.* on every purchase somebody had personally approved.
+ *
+ * The boot watch that `make demo` starts does not reproduce it: `cmd/agent`
+ * signs through the agent's own client, so the surface's steps land inside the
+ * same correlation and the lane fills up by accident. That is the gap this
+ * fixture exists to close.
+ */
+function browserSigned(): readonly EventRecord[] {
+  return [
+    record({
+      kind: "mandate_constructed",
+      role: "agent",
+      digest: DIGEST,
+      mandate: CLOSED_CHECKOUT,
+      authorisation: APPROVED,
+    }),
+    record({
+      kind: "mandate_constructed",
+      role: "agent",
+      digest: DIGEST,
+      mandate: CLOSED_PAYMENT,
+      authorisation: APPROVED,
+    }),
+    record({
+      kind: "mandate_presented",
+      role: "agent",
+      digest: DIGEST,
+      mandate: CLOSED_PAYMENT,
+      authorisation: APPROVED,
+    }),
+    // The verifier states no authorisation: it is shown a minimised
+    // presentation and never the prompt or the surface's sentences.
+    record({
+      kind: "mandate_verified",
+      role: "credprovider",
+      digest: DIGEST,
+      mandate: CLOSED_PAYMENT,
+    }),
+  ];
+}
+
+describe("the user's lane on a purchase they signed for earlier", () => {
+  // Pinned for `EventLog.test.tsx`'s reason, in the same words: the card renders
+  // the expiry through `timeOf`, which reads the *reader's* clock, and a suite
+  // green in one timezone and red in another states its reason nowhere.
+  vi.stubEnv("TZ", "UTC");
+
+  it("shows what was approved rather than nothing at all", () => {
+    seq = 0;
+    showing(browserSigned());
+
+    const user = screen.getByRole("region", { name: "User" });
+    expect(
+      within(user).queryByText("Nothing yet."),
+      "the user personally signed for this purchase; a screen titled Three parties, " +
+        "one purchase drawing two is the whole of #213",
+    ).toBeNull();
+
+    const card = within(user).getByTestId("authorisation");
+    expect(
+      within(card).queryByText("approved"),
+      "the state is the user's decision, which is over — not a verifier's verdict, " +
+        "which is three cards to the right and has not happened yet",
+    ).not.toBeNull();
+  });
+
+  it("draws the sentences the surface rendered, all of them", () => {
+    seq = 0;
+    showing(browserSigned());
+
+    const card = within(screen.getByRole("region", { name: "User" })).getByTestId(
+      "authorisation",
+    );
+    // Both, rather than the first: a lane that showed one limit of a set the
+    // user signed would misstate what was approved, and a fixture with one
+    // sentence in it could not tell the difference.
+    for (const sentence of APPROVED.signed) {
+      expect(
+        within(card).queryByText(sentence),
+        "these are the Trusted Surface's own Render output as POST /authorise " +
+          "returned it, and the lane shows every one of them",
+      ).not.toBeNull();
+    }
+  });
+
+  it("keeps the user's own words apart from the sentences their key covered", () => {
+    seq = 0;
+    showing(browserSigned());
+
+    const card = within(screen.getByRole("region", { name: "User" })).getByTestId(
+      "authorisation",
+    );
+    expect(
+      within(card).queryByText(`“${APPROVED.typed}”`),
+      "the prompt is quoted and the sentences are not: what somebody typed is " +
+        "unsigned and unbound — roles/surface calls it the caller's account rather " +
+        "than the user's words — and what follows is what their key went over. On a " +
+        "card with no room for a caption the quotation marks are what says so",
+    ).not.toBeNull();
+  });
+
+  it("says how long the authorisation lasts, and never when it was signed", () => {
+    seq = 0;
+    showing(browserSigned());
+
+    const card = within(screen.getByRole("region", { name: "User" })).getByTestId(
+      "authorisation",
+    );
+    expect(
+      within(card).queryByText(/authorises until 20:04:31/),
+      "no hop between the signature and this card carries a signing instant — " +
+        "POST /authorise answers an expiry and no issuance moment, and neither " +
+        "agent.Authorisation nor GET /watches/{id} has a field for one — so a card " +
+        "drawing one would be inventing it. The surface does stamp an iat into both " +
+        "open mandates; carrying it this far is a change of its own. The expiry is " +
+        "the instant the wire has, and it is the one that says whether these limits " +
+        "are still live",
+    ).not.toBeNull();
+    expect(
+      card.textContent,
+      "the card is not a step in this correlation, so it takes no sequence number — " +
+        "one would claim it happened between two of the steps beside it",
+    ).not.toMatch(/#\d/);
+  });
+
+  it("leaves a Human Present purchase exactly as it was", () => {
+    seq = 0;
+    // The other mode: the user signs the *closed* mandates at the Trusted
+    // Surface, inside this transaction, so their steps are here and there is no
+    // open pair for anything to have been taken under. No emitter on that path
+    // attaches the field, which is why a card cannot appear beside them.
+    showing([
+      record({ kind: "mandate_constructed", role: "surface", mandate: CLOSED_CHECKOUT }),
+      record({ kind: "mandate_constructed", role: "surface", mandate: CLOSED_PAYMENT }),
+      record({
+        kind: "mandate_verified",
+        role: "merchant",
+        digest: DIGEST,
+        mandate: CLOSED_CHECKOUT,
+      }),
+    ]);
+
+    const user = screen.getByRole("region", { name: "User" });
+    expect(
+      within(user).queryByTestId("authorisation"),
+      "the user's own two signing steps are already in this lane; a card restating " +
+        "them would be the duplicate #213 says the fix must not create",
+    ).toBeNull();
+    expect(
+      within(user).queryAllByText("Trusted Surface"),
+      "and the steps themselves are untouched — one per closed mandate the user signed",
+    ).toHaveLength(2);
+  });
+
+  it("still says nothing yet when there is nothing", () => {
+    seq = 0;
+    // The state that has to survive: an attempt whose only step so far belongs
+    // to the agent, under no authorisation this stream has seen. Without this
+    // the assertions above would be satisfied by a lane that never says it.
+    showing([record({ kind: "mandate_presented", role: "agent", digest: DIGEST })]);
+
+    const user = screen.getByRole("region", { name: "User" });
+    expect(
+      within(user).queryByTestId("authorisation"),
+      "a card drawn from nothing would be an authorisation this screen invented",
+    ).toBeNull();
+    expect(within(user).queryByText("Nothing yet.")).not.toBeNull();
+  });
+});
+
+/**
+ * The lanes may show a sentence the Trusted Surface rendered; they may not
+ * render one.
+ *
+ * `/authorise/preview` exists so that the sentences a user reads come from the
+ * party that signs, and `frontend/src/constraint/architecture.test.ts` holds
+ * that line for the screens on which a signature is collected. **It does not
+ * govern this one, and it is right not to**: its classifier looks for
+ * `previewed.rendered.map(` — the app's spelling of *"the sentences the Trusted
+ * Surface will sign are on this page"* — and nothing is signed on the protocol
+ * screen. What arrives here is the same surface's rendering after the fact,
+ * carried on the event stream.
+ *
+ * That leaves the lanes ungoverned by it, so the rule they do have to keep lives
+ * here. It is the transitive closure rather than a grep, on
+ * `roles/surface/nonagentic_test.go`'s reasoning: a module that reached the
+ * renderer through a helper would satisfy a search of these two files and
+ * violate the rule.
+ *
+ * The consequence worth knowing is on the other side of the same coin. Had this
+ * card's field been named `rendered` rather than `signed`, the expression
+ * drawing it would have matched that classifier, the protocol screen would have
+ * been declared a consent screen, and the suite one directory across would have
+ * failed naming `inspector/model.ts` — which legitimately renders constraints,
+ * on a screen where nothing is signed. The name is the console's own
+ * (`GET /watches/{id}` answers `typed` and `signed`), and it also keeps the
+ * detector pointed at the thing it was built for.
+ */
+describe("the lanes show sentences and render none", () => {
+  const SOURCES = import.meta.glob(["./*.ts", "./*.tsx", "../**/*.{ts,tsx}"], {
+    query: "?raw",
+    eager: true,
+    import: "default",
+  }) as Record<string, string>;
+
+  /** Glob keys rooted at `src/`, the vocabulary the rule is written in. */
+  function srcRooted(key: string): string {
+    if (key.startsWith("../")) return key.slice("../".length);
+    if (key.startsWith("./")) return `lanes/${key.slice("./".length)}`;
+    return key;
+  }
+
+  const GRAPH = new Map(
+    Object.entries(SOURCES).map(([path, source]) => [srcRooted(path), source]),
+  );
+
+  const SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["']([^"']+)["']/g;
+
+  function specifiers(source: string): string[] {
+    return [...source.matchAll(SPECIFIER)].map((match) => match[1]);
+  }
+
+  function resolve(importer: string, specifier: string): string | null {
+    if (!specifier.startsWith(".")) return null;
+    const segments = importer
+      .split("/")
+      .slice(0, -1)
+      .concat(specifier.split("?")[0].split("/"));
+    const path: string[] = [];
+    for (const segment of segments) {
+      if (segment === "." || segment === "") continue;
+      if (segment === "..") path.pop();
+      else path.push(segment);
+    }
+    const joined = path.join("/");
+    for (const candidate of [joined, `${joined}.ts`, `${joined}.tsx`, `${joined}/index.ts`]) {
+      if (GRAPH.has(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  function reachedFrom(start: string): string[] {
+    const seen = new Set<string>();
+    const queue = [start];
+    while (queue.length > 0) {
+      const current = queue.pop();
+      if (current === undefined) continue;
+      for (const specifier of specifiers(GRAPH.get(current) ?? "")) {
+        const target = resolve(current, specifier);
+        if (target === null || seen.has(target)) continue;
+        seen.add(target);
+        queue.push(target);
+      }
+    }
+    return [...seen];
+  }
+
+  it("is reading the sources it claims to be reading", () => {
+    // Every assertion below is a negative one over this graph. A glob that
+    // resolved to nothing would make all of them pass having looked at
+    // nothing at all.
+    expect([...GRAPH.keys()]).toEqual(
+      expect.arrayContaining(["lanes/Lanes.tsx", "lanes/model.ts", "constraint/render.ts"]),
+    );
+    expect(
+      reachedFrom("lanes/Lanes.tsx"),
+      "and the walk has to find real edges, or a broken resolver reports an empty closure",
+    ).toEqual(expect.arrayContaining(["lanes/model.ts"]));
+  });
+
+  it.each(["lanes/Lanes.tsx", "lanes/model.ts", "lanes/EventLog.tsx"])(
+    "%s reaches no constraint renderer",
+    (entry) => {
+      expect(
+        reachedFrom(entry).filter((path) => path.startsWith("constraint/")),
+        "the sentences on the User lane are the Trusted Surface's own Render output, " +
+          "carried on the event stream. A renderer reachable from here would be a " +
+          "second opinion about what a signature covers, drawn beside a claim that " +
+          "the user approved it",
+      ).toEqual([]);
+    },
+  );
+
+  it("would notice one", () => {
+    // Without this the rule above is green whether the walk works or not.
+    const planted = new Map(GRAPH);
+    planted.set("lanes/Sentence.tsx", `import { render } from "../constraint/render";`);
+    planted.set(
+      "lanes/Lanes.tsx",
+      `${GRAPH.get("lanes/Lanes.tsx") ?? ""}\nimport { S } from "./Sentence";`,
+    );
+    const saved = new Map(GRAPH);
+    GRAPH.clear();
+    for (const [path, source] of planted) GRAPH.set(path, source);
+    const reached = reachedFrom("lanes/Lanes.tsx").filter((path) =>
+      path.startsWith("constraint/"),
+    );
+    GRAPH.clear();
+    for (const [path, source] of saved) GRAPH.set(path, source);
+
+    expect(reached, "a renderer two hops away is still a renderer on this screen").toEqual([
+      "constraint/render.ts",
+    ]);
   });
 });

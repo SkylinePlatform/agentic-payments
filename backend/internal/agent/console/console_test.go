@@ -1418,3 +1418,121 @@ func (o object) nested(t *testing.T, key string) object {
 	}
 	return out
 }
+
+// TestTheBrowsersPromptReachesTheWatchItStarts is issue #213's browser leg, and
+// it is the hop with nothing else standing behind it.
+//
+// # Why the two halves arrive separately
+//
+// POST /watches carries a prompt *and*, on this path, an authorisation the
+// browser already collected at a Trusted Surface the agent was never on the
+// connection for. The surface does not return the prompt and must not: the user
+// signs the interpretation and not their own words, which is the security
+// property POST /authorise exists for — surface.authorisation's own field says
+// so in as many words. So the sentence and the signature reach this agent by two
+// different routes and joining them is this handler's job.
+//
+// # Why that matters beyond a label
+//
+// The three-lane view's User lane is drawn from the authorisation the purchase
+// was made under, because on this path the signing is a different correlation
+// from the purchase and there is no step of the user's in the transaction at
+// all. `agent.Client.sign` carries the prompt forward on the command line's
+// path; on this one there is no such call, so an assembly that dropped the field
+// leaves the card with no sentence of the user's own on it — and every other
+// test in this repository stays green, because nothing else reads it.
+//
+// Asserted over the **wire**, as a map rather than as `agent.Authorisation`, for
+// `anAuthorisationBody`'s own reason: a Go value that happens to marshal
+// correctly is not the thing a browser sends.
+func TestTheBrowsersPromptReachesTheWatchItStarts(t *testing.T) {
+	t.Parallel()
+
+	watcher := console.NewMockWatcher(t)
+	// Buffered and read on the test goroutine, on the standing hazard: Watch is
+	// called from a goroutine this test does not own, and testify fails from
+	// whichever goroutine touches it.
+	seen := make(chan agent.Authorisation, 1)
+	watcher.EXPECT().Watch(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(
+			_ context.Context, auth agent.Authorisation, _ int, _ agent.Progress,
+		) (agent.Watched, error) {
+			seen <- auth
+			return agent.Watched{}, nil
+		}).Maybe()
+	// Never called on this path, and a failure here would otherwise read as the
+	// prompt having gone missing rather than as the route having asked for a
+	// second signature.
+	watcher.EXPECT().Authorise(mock.Anything, mock.Anything, mock.Anything).
+		Return(authorised(), nil).Maybe()
+
+	service := &console.Service{Watcher: watcher, Clock: clock.New()}
+	handler, err := service.Handler()
+	require.NoError(t, err)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	const typed = "kupi merdevine, najjeftinije"
+
+	var started startedBody
+	require.Equal(t, http.StatusCreated, post(t, server.URL+"/watches", map[string]any{
+		"prompt":        typed,
+		"quantity":      1,
+		"authorisation": anAuthorisationBody(),
+	}, &started))
+
+	got := <-seen
+	assert.Equal(t, typed, got.Prompt,
+		"the sentence the person wrote is the one thing on the User lane's card that is theirs "+
+			"rather than the surface's, and this route is the only place it can arrive from")
+	assert.Equal(t, []string{"the item is gtin:05014477390221"}, got.Rendered,
+		"and the surface's own sentences travel beside it untouched — the two are different "+
+			"claims and a card showing one where the other belongs would say a signature covers "+
+			"words nobody signed")
+	// On the test goroutine, after the response.
+	watcher.AssertNumberOfCalls(t, "Authorise", 0)
+}
+
+// TestAnAuthorisationThatNamesItsOwnPromptKeepsIt is the other side of that
+// join, and it is what stops the console overwriting a caller that knows better.
+//
+// `agent.Client.sign` already carries the prompt forward, so an authorisation
+// that came from this agent's own discovery half arrives naming one. The
+// request's own field is the fallback for the caller that has the sentence and
+// could not have got it from the signature — a browser — and a handler that
+// preferred the request would let a caller relabel an authorisation it did not
+// obtain.
+func TestAnAuthorisationThatNamesItsOwnPromptKeepsIt(t *testing.T) {
+	t.Parallel()
+
+	watcher := console.NewMockWatcher(t)
+	seen := make(chan agent.Authorisation, 1)
+	watcher.EXPECT().Watch(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(
+			_ context.Context, auth agent.Authorisation, _ int, _ agent.Progress,
+		) (agent.Watched, error) {
+			seen <- auth
+			return agent.Watched{}, nil
+		}).Maybe()
+
+	service := &console.Service{Watcher: watcher, Clock: clock.New()}
+	handler, err := service.Handler()
+	require.NoError(t, err)
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	body := anAuthorisationBody()
+	body["prompt"] = "the sentence this authorisation was actually obtained for"
+
+	var started startedBody
+	require.Equal(t, http.StatusCreated, post(t, server.URL+"/watches", map[string]any{
+		"prompt":        "a different sentence entirely",
+		"quantity":      1,
+		"authorisation": body,
+	}, &started))
+
+	got := <-seen
+	assert.Equal(t, "the sentence this authorisation was actually obtained for", got.Prompt,
+		"the authorisation's own account wins; the request's field fills a gap and never "+
+			"replaces one")
+}

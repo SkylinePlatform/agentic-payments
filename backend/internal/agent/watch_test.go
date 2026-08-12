@@ -1819,3 +1819,136 @@ func TestAVerdictNamesItself(t *testing.T) {
 	assert.Equal(t, "verdict(9)", agent.Verdict(9).String(),
 		"a value outside the set has to say so rather than index past the table")
 }
+
+// TestEveryStepAWatchEmitsNamesTheAuthorisationItWasTakenUnder is issue #213's
+// backend half.
+//
+// # The defect it closes
+//
+// The three-lane view groups by correlation ID, which is right and is what ADR
+// 0003 protects. Under Human Not Present the user's approval and the agent's
+// purchase are two HTTP requests separated by however long the price takes to
+// move, so they carry two different correlations — and on the browser's path
+// the signing happens at the Trusted Surface with the agent not on the
+// connection at all. The User lane of a browser-signed purchase was therefore
+// structurally empty, on a screen titled "Three parties, one purchase".
+//
+// So the fact has to travel with the attempt, and this is what asserts that
+// every step of one carries it. Seven events, not the three or four a narrower
+// test would reach: a card the lane could only draw when the *first* step of an
+// attempt happened to arrive would be one a reconnect could lose.
+//
+// # What it asserts about the two sentences, and why both
+//
+// `typed` and `signed` are different kinds of claim and the screen has to keep
+// them apart — surface.authorisation's own comment is blunt that the prompt is
+// unsigned, unbound and chosen by whoever made the request, while the rendering
+// is the surface's own Render over the set the user's key went over. A test that
+// checked one of them would pass on an implementation that put the prompt where
+// the sentences belong, which is the one confusion /authorise/preview exists to
+// prevent.
+func TestEveryStepAWatchEmitsNamesTheAuthorisationItWasTakenUnder(t *testing.T) {
+	t.Parallel()
+
+	recorded := newRecorder()
+	emitting := allEmitting(t, recorded)
+	w := newWorldEmitting(t, emitting)
+	a := authorise(t, w)
+
+	wait, _ := a.running(t, a.watch(t))
+
+	a.quoted() // the baseline, $240, watched rather than attempted
+	a.step()   // $210 — refused by a verifier
+	a.quoted()
+	a.attempted()
+	a.step() // $189 — bought
+	a.quoted()
+	a.attempted()
+
+	watched, err := wait()
+	require.NoError(t, err, "the watch had a price it could buy at and did not")
+	require.NotNil(t, watched.Bought, "the assertions below are about a run that reached every emit site")
+
+	// Closed first: the emitter delivers from its own goroutine and Close
+	// drains, so reading the recorder before that races the flush.
+	require.NoError(t, emitting.agent.Close(context.Background()), "draining the agent's events")
+
+	events := recorded.eventsOf("agent")
+	require.Len(t, events, 7,
+		"two mandates signed and one verifier reached on the refused attempt, two signed and "+
+			"two reached on the one that bought — the sequence "+
+			"TestTheWatchBuysWhenTheMerchantsPriceComesIntoRange pins")
+
+	for i, e := range events {
+		if !assert.NotNil(t, e.Authorisation,
+			"event %d (%s) names no authorisation, and a lane that only had it on some steps "+
+				"would draw a card that came and went as the stream replayed", i, e.Kind) {
+			continue
+		}
+		assert.Equal(t, palmaPrompt, e.Authorisation.Typed,
+			"the sentence the person actually wrote is the whole of what makes the card mean "+
+				"anything to the reader of a screenshot")
+		assert.Equal(t, a.auth.Rendered, e.Authorisation.Signed,
+			"the sentences the Trusted Surface rendered, unchanged — the agent carries what it "+
+				"was answered with and never renders a constraint itself")
+		assert.Equal(t, a.auth.ExpiresAt, e.Authorisation.ExpiresAt,
+			"and the one instant an authorisation carries, which is what tells a reader "+
+				"whether the limits on screen are still live")
+	}
+
+	// Nothing anybody else emitted may claim it. A verifier is shown a minimised
+	// presentation — the constraints it is entitled to evaluate — and never the
+	// prompt or the surface's rendering, so an event of its own carrying this
+	// field would be one party restating another's account.
+	for _, role := range []string{"surface", "merchant", "credprovider", "mpp"} {
+		for _, e := range recorded.eventsOf(role) {
+			assert.Nil(t, e.Authorisation,
+				"%s emitted a %s naming an authorisation it was never shown", role, e.Kind)
+		}
+	}
+}
+
+// TestAWatchWithNothingRenderedStatesNoAuthorisationAndStillEmits is the gate's
+// other side, and it is the case that would otherwise take the whole screen
+// down rather than one card.
+//
+// obs.Validate refuses an authorisation carrying no sentence — a card saying the
+// user approved something without saying what — and it refuses the *event* to do
+// it. So an Authorisation assembled field by field somewhere that has not been
+// taught the rendering, which a watch is still perfectly able to spend, would
+// cost every step of every attempt off the three-lane view and surface as a hole
+// in the sequence several roles away from the cause. Watch.under is what makes
+// that impossible: it states the fact when it has one, and says nothing when it
+// does not.
+func TestAWatchWithNothingRenderedStatesNoAuthorisationAndStillEmits(t *testing.T) {
+	t.Parallel()
+
+	recorded := newRecorder()
+	emitting := allEmitting(t, recorded)
+	w := newWorldEmitting(t, emitting)
+	a := authorise(t, w)
+	// Exactly what a caller that assembled one by hand would arrive with: the
+	// two open mandates, and nothing for a screen.
+	a.auth.Rendered = nil
+	a.auth.Trigger = interpret.TriggerImmediate
+
+	wait, _ := a.running(t, a.watch(t))
+	a.quoted()
+	a.attempted()
+
+	_, err := wait()
+	require.ErrorIs(t, err, agent.ErrPurchaseRefused,
+		"the built scenario's opening price is above the cap, so one attempt is made and refused")
+
+	require.NoError(t, emitting.agent.Close(context.Background()), "draining the agent's events")
+
+	events := recorded.eventsOf("agent")
+	require.NotEmpty(t, events,
+		"the steps still have to be there — losing them is the failure this gate exists to prevent")
+	assert.Zero(t, emitting.agent.Stats().Rejected,
+		"an authorisation with nothing to state must not make Validate refuse the events it rode on")
+	for i, e := range events {
+		assert.Nil(t, e.Authorisation,
+			"event %d (%s) states an authorisation it has no sentences for", i, e.Kind)
+	}
+}

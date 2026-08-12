@@ -185,6 +185,31 @@ func WithMandate(mandate MandateType, state MandateState) EventOpt {
 	return func(e *Event) { e.Mandate = &Mandate{Type: mandate, State: state} }
 }
 
+// WithAuthorisation names the open mandate pair a step was taken under. Only
+// the two kinds authorisationKinds names accept one, and only on a step that is
+// also about a closed mandate, so passing this anywhere else makes Validate
+// refuse the whole event.
+//
+// **One argument rather than three, which is the opposite of WithMandate's
+// signature and for the opposite reason.** That one spells two facts out at the
+// call site precisely because they are independent and a reader has to see them
+// decided separately. These three are not independent at all: they are one
+// authorisation, read off one value the caller is already holding, and three
+// positional arguments would only invite a call site to assemble one out of
+// parts. generated.Amount is the precedent — WithAmount takes the nested type
+// whole, for the same reason.
+//
+// A copy is taken, so nothing downstream holds a pointer into the caller's own
+// authorisation. Signed is copied too: it is the caller's slice, the emitter
+// hands the event to a sender on another goroutine, and an alias would let the
+// two race.
+func WithAuthorisation(auth Authorisation) EventOpt {
+	return func(e *Event) {
+		auth.Signed = append([]string(nil), auth.Signed...)
+		e.Authorisation = &auth
+	}
+}
+
 // Emit records that something happened. It never blocks and never fails.
 //
 // # A nil *Emitter is a working no-op

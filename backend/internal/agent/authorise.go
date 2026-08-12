@@ -195,6 +195,30 @@ type Authorisation struct {
 	// constraints were narrowed to.
 	Item string `json:"item"`
 
+	// Prompt is the sentence the user typed, as this agent received it.
+	//
+	// **It sits here for Quantity's reason and carries a sharper version of
+	// Quantity's caveat.** Nothing signs it, and unlike a basket size there is
+	// nothing about it a verifier could ever check: the user signs the
+	// *interpretation*, which is the whole security property POST /authorise
+	// exists for — see surface.authorisation's own field, which says in as many
+	// words that this string is unsigned, unbound and chosen by whoever made the
+	// request. The Trusted Surface never returns it, so this is the agent's own
+	// copy travelling forward rather than anything coming back.
+	//
+	// It is here because the event log is where "typed" sits beside "signed",
+	// and issue #213's User lane is the screen that shows the pair. A screen
+	// drawing it has to say which of the two it is;
+	// internal/agent/console/view.go's runView already names the same two fields
+	// `typed` and `signed` on exactly those terms.
+	//
+	// Empty is legitimate and not defaulted. An Authorisation assembled field by
+	// field somewhere else — a browser that posts one to POST /watches, a test
+	// fixture — may carry none, and console.Service.Start is where the browser's
+	// own prompt is joined to it. What must never happen is a prompt being
+	// invented here to fill the gap.
+	Prompt string `json:"prompt"`
+
 	// Constraints are the limits as signed: the interpretation, plus the one
 	// constraint that narrows it to Item.
 	Constraints []generated.Constraint `json:"constraints"`
@@ -545,7 +569,12 @@ func (c *Client) sign(ctx context.Context, prompt string, proposal Proposal) (Au
 	}
 
 	return Authorisation{
-		Item:                proposal.Item,
+		Item: proposal.Item,
+		// The same string that went to the surface a line above, carried forward
+		// rather than read back out of the answer: /authorise never returns it,
+		// and it must not — the user signs the interpretation and not their own
+		// words. See Authorisation.Prompt.
+		Prompt:              prompt,
 		Constraints:         proposal.Constraints,
 		OpenCheckoutMandate: answer.OpenCheckoutMandate,
 		OpenPaymentMandate:  answer.OpenPaymentMandate,

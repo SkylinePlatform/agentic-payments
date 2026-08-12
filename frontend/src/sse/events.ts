@@ -116,6 +116,52 @@ export interface MandateRef {
   readonly state: MandateState;
 }
 
+/**
+ * The open mandate pair a step was taken under — what the user typed, what the
+ * Trusted Surface said each limit means, and when the pair stops authorising
+ * anything.
+ *
+ * Issue #213's field. The three-lane view groups by correlation ID, which is
+ * correct; the consequence is that a purchase made an hour after the user
+ * approved it shares no correlation with the approval, and on the browser's path
+ * the signing happened at the Trusted Surface with the agent not on the
+ * connection. So the User lane had nothing of its own to draw and read *Nothing
+ * yet.* on a purchase somebody had personally signed for.
+ *
+ * **`typed` and `signed` are different kinds of claim and a screen must not
+ * merge them.** `typed` is the caller's account of what the user wrote —
+ * unsigned, unbound, and `roles/surface`'s own comment on that field says
+ * nothing reaching it has been near the user. `signed` is what `POST /authorise`
+ * answered, produced by the surface's own `Render()` over the set the user's key
+ * went over, which is the whole reason `/authorise/preview` exists. Only the
+ * second is covered by a signature, and only the second may be drawn as if it
+ * were.
+ *
+ * **There is no signed-at member, because nothing carries that instant forward
+ * — not because no such instant exists.** The Trusted Surface stamps one into
+ * both open mandates as `iat` when it signs them, and
+ * `contracts/authz/checkout_mandate_open.json` declares it as `issued_at`; it is
+ * a plain claim rather than a disclosable one, so the holder of a mandate can
+ * read it out. What has no field for it is every hop after that: `POST
+ * /authorise` answers an expiry and no issuance moment, `agent.Authorisation`
+ * carries none, and `GET /watches/{id}` is likewise `typed` / `signed` /
+ * `expires_at`. A member here would need one at each of those, which is its own
+ * change and its own issue. What would be wrong is an *agent* stamping its own
+ * clock — on this path it demonstrably was not present when the user signed —
+ * and the user's own signed `iat` is not that. Until the hops carry it, the
+ * expiry is the instant this type has, it is the `exp` both open mandates carry,
+ * and it answers what a reader needs: whether these limits are still live.
+ *
+ * Named for `MandateRef`'s symmetry — both are one nested object the wire
+ * carries and this module reads straight through — rather than because either
+ * is a reference to something else.
+ */
+export interface AuthorisationRef {
+  readonly typed: string;
+  readonly signed: readonly string[];
+  readonly expires_at: string;
+}
+
 /** Whether a value is one of the two mandate types. */
 export function isMandateType(value: unknown): value is MandateType {
   return typeof value === "string" && (MANDATE_TYPES as readonly string[]).includes(value);
@@ -160,6 +206,7 @@ export const PROTOCOL_EVENT_FIELDS = [
   "code",
   "amount",
   "mandate",
+  "authorisation",
 ] as const;
 
 /** One of the field names an event may carry. */
@@ -308,6 +355,28 @@ export interface ProtocolEvent {
    * artefact as evidence; this is a label on a screen.
    */
   readonly mandate?: MandateRef;
+
+  /**
+   * The open mandate pair this step was taken under — see {@link
+   * AuthorisationRef}.
+   *
+   * Issue #213's field. Set only on the two kinds a party *holding* an open
+   * mandate emits — `mandate_constructed` and `mandate_presented` — and only
+   * when the step is about a **closed** mandate, both of which `obs.Event`'s own
+   * `authorisationKinds` and `Validate` enforce on the way in rather than this
+   * type.
+   *
+   * Absent in three honest cases, and it is worth being able to tell them apart.
+   * A verifier's step never carries one: `internal/adapters/ap2` minimises every
+   * presentation, so what reaches a verifier is the constraints it may evaluate
+   * and never the prompt or the surface's rendering. The Trusted Surface's own
+   * signing of the *open* pair never carries one either — that step **is** the
+   * authorisation, not something taken under it. And a Human Present purchase
+   * has none at all, because there the user signs the closed mandates directly
+   * and there is no open pair; that flow's User lane is its own two steps, in
+   * this correlation, which is why drawing this card cannot duplicate anything.
+   */
+  readonly authorisation?: AuthorisationRef;
 }
 
 /**
@@ -397,6 +466,39 @@ function optionalMandate(value: unknown): value is MandateRef | undefined {
 }
 
 /**
+ * Whether an optional wire field is absent or a fully-stated authorisation.
+ *
+ * `signed` has to be a non-empty array of strings and `expires_at` a non-empty
+ * string, which is `obs.Event`'s `Validate` read from this side: a card saying
+ * the user approved *something*, with no sentence under it and no way to tell a
+ * live authorisation from a spent one, is worse than no card. `typed` may be
+ * empty — a run assembled without a prompt is a real case, and the sentence the
+ * surface rendered is the half that matters — but it has to be a string, because
+ * a screen drawing `undefined` in quotes would be putting words in the user's
+ * mouth.
+ *
+ * Refusing the record rather than the field is `optionalAmount`'s and
+ * `optionalMandate`'s trade, made here for the same reason and with the same
+ * cost: this field rides on every step of every attempt, so a half-stated one
+ * loses the steps rather than the card. What keeps that from happening in
+ * practice is that the emitter gates on the same invariant — `Watch.under`
+ * attaches nothing when it has nothing to state — so the two sides agree about
+ * what a well-formed one is and the absence is expressed as absence.
+ */
+function optionalAuthorisation(value: unknown): value is AuthorisationRef | undefined {
+  if (value === undefined) return true;
+  if (!isObject(value)) return false;
+  return (
+    typeof value.typed === "string" &&
+    Array.isArray(value.signed) &&
+    value.signed.length > 0 &&
+    value.signed.every((sentence: unknown) => typeof sentence === "string") &&
+    typeof value.expires_at === "string" &&
+    value.expires_at !== ""
+  );
+}
+
+/**
  * Reads one `data:` line into a record.
  *
  * Every field is checked rather than asserted with a cast. A cast would make
@@ -456,6 +558,13 @@ export function parseRecord(data: string): ParsedRecord {
       reason: "mandate is present and does not name one of the two mandates as open or closed",
     };
   }
+  if (!optionalAuthorisation(event.authorisation)) {
+    return {
+      ok: false,
+      reason:
+        "authorisation is present and does not state a sentence the surface rendered and an expiry",
+    };
+  }
 
   return {
     ok: true,
@@ -471,6 +580,7 @@ export function parseRecord(data: string): ParsedRecord {
         code: event.code,
         amount: event.amount,
         mandate: event.mandate,
+        authorisation: event.authorisation,
       },
     },
   };

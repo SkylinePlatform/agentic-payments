@@ -129,7 +129,7 @@ describe("the columns", () => {
     ).toBeGreaterThan(0);
 
     expect(
-      [...COLUMNS.map((c) => c.source).filter((source) => source !== "seq"), BENEATH].sort(),
+      [...COLUMNS.map((c) => c.source).filter((source) => source !== "seq"), ...BENEATH].sort(),
       "every column is a typed field on ProtocolEvent, and every field is drawn " +
         "— the same exactness `ProtocolEventFieldsAreExact` asserts one module " +
         "across. A column with no field behind it would be one read out of " +
@@ -139,7 +139,7 @@ describe("the columns", () => {
   });
 
   it("draws each field exactly once", () => {
-    const sources = [...COLUMNS.map((c) => c.source), BENEATH];
+    const sources = [...COLUMNS.map((c) => c.source), ...BENEATH];
     expect(
       sources.length,
       "two columns over one field would make `column()` above ambiguous and " +
@@ -591,5 +591,80 @@ describe("what the log is", () => {
         "controls that change what is on it — which is exactly when the " +
         "distinction stops being obvious",
     ).not.toBeNull();
+  });
+});
+
+describe("the terms a step was taken under", () => {
+  const APPROVED = {
+    typed: "kupi merdevine, najjeftinije",
+    signed: ["the amount is at most 200.00 USD", "the item is gtin:05014477390221"],
+    expires_at: "2026-08-10T20:04:31Z",
+  } as const;
+
+  it("hangs beneath the step, with the emitter's own sentence above it", () => {
+    showing([
+      record(1, {
+        kind: "mandate_constructed",
+        role: "agent",
+        detail: "closed Checkout Mandate signed by the agent",
+        authorisation: APPROVED,
+      }),
+    ]);
+
+    const beneath = within(table()).getByTestId("authorisation");
+    expect(
+      beneath.textContent,
+      "the prompt is quoted and the sentences are not, because they are different " +
+        "kinds of claim and there is no room on one line for a caption saying so",
+    ).toBe(
+      "under “kupi merdevine, najjeftinije”, the amount is at most 200.00 USD; " +
+        "the item is gtin:05014477390221, until 20:04:31",
+    );
+
+    expect(
+      details(),
+      "one full-width row, carrying both — a second row per step would double the " +
+        "length of a log a reader follows as it happens",
+    ).toHaveLength(1);
+    expect(details()[0]).toContain("closed Checkout Mandate signed by the agent");
+  });
+
+  it("is drawn on a step that said nothing of its own", () => {
+    // The row that used to have no room beneath it at all. Without this the
+    // assertion above passes on an implementation that only ever draws the
+    // authorisation when `detail` opened the row for it.
+    showing([
+      record(1, { kind: "mandate_presented", role: "agent", authorisation: APPROVED }),
+    ]);
+
+    expect(within(table()).queryByTestId("authorisation")).not.toBeNull();
+  });
+
+  it("says nothing at all for a step taken under no authorisation", () => {
+    showing([record(1, { kind: "receipt_issued", role: "mpp", detail: "receipt issued" })]);
+
+    expect(
+      within(table()).queryByTestId("authorisation"),
+      "a receipt names its own mandate as signed evidence and was issued under " +
+        "nobody's open mandate; an em dash here would read as a value",
+    ).toBeNull();
+  });
+
+  it("reads the expiry rather than the step's own clock", () => {
+    // The two are different instants and the same formatter renders both, so a
+    // component that formatted `at` by mistake would still produce a plausible
+    // time. Pinning them apart is what catches it.
+    showing([
+      record(1, {
+        kind: "mandate_presented",
+        role: "agent",
+        at: "2026-08-10T09:15:00Z",
+        authorisation: APPROVED,
+      }),
+    ]);
+
+    const beneath = within(table()).getByTestId("authorisation");
+    expect(beneath.textContent).toContain("until 20:04:31");
+    expect(beneath.textContent).not.toContain("09:15:00");
   });
 });

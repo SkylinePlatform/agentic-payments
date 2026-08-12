@@ -110,11 +110,20 @@ import type { ReactNode } from "react";
 
 import type { Amount } from "../protocol";
 import { EVENT_KINDS } from "../sse";
-import type { EventRecord, MandateRef, ProtocolEventField } from "../sse";
+import type { AuthorisationRef, EventRecord, MandateRef, ProtocolEventField } from "../sse";
 import { Status } from "../status/Status";
 import { totalStatus } from "../status/model";
 
-import { LANES, STEP_META, laneOf, mandateLabel, renderPrice, shortDigest, titleOf } from "./model";
+import {
+  LANES,
+  STEP_META,
+  laneOf,
+  mandateLabel,
+  renderPrice,
+  shortDigest,
+  timeOf,
+  titleOf,
+} from "./model";
 import type { LaneId } from "./model";
 
 type Filter = LaneId | "all";
@@ -131,42 +140,6 @@ const ORDERS: readonly { readonly id: Order; readonly title: string }[] = [
   { id: "newest", title: "Newest first" },
   { id: "oldest", title: "Oldest first" },
 ];
-
-/**
- * The time, to the second, in the zone the reader's own machine keeps.
- *
- * This used to read the wall-clock digits straight out of the RFC 3339
- * string, on `src/constraint/render.ts`'s own reasoning against `Date`: that
- * module renders a sentence the user signed, so every reader has to see the
- * same words, and `Date` would show each of them their own zone instead of
- * the one on the signature. That argument does not carry over here — issue
- * #214, reported off a live run: this column carries no signature, the
- * module doc above already says so in as many words — "a courtesy, not
- * evidence" — and a courtesy that reads two hours from the reader's own
- * clock, with nothing on screen saying whose zone it is, is worse than none.
- * It invites the reader to reconcile it against when they clicked, and fails
- * at that silently.
- *
- * `Date` is exactly the right tool once the goal flips. It reads the offset
- * `at` carries correctly whatever that offset is, and what it renders back is
- * always the *reader's* zone — which is what a log meant to be followed as it
- * happens needs to agree with, and is also why no zone abbreviation needs to
- * appear on screen: it is whichever one the reader's own clock already reads.
- *
- * The instant this reads is not the only place it survives. {@link Time}
- * carries the original whole, offset included, as the cell's `title` — for
- * whoever is checking a row against a server's own log, which keeps the zone
- * it was written in and not the reader's.
- */
-function timeOf(at: string): string {
-  const date = new Date(at);
-  // `parseRecord` only ever hands this an `at` the wire produced, so this
-  // should not be reachable — but the raw string is a safer fallback than a
-  // blank cell or a thrown render, on a malformed value neither should trust.
-  if (Number.isNaN(date.getTime())) return at;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
 
 /**
  * Wide enough that the demonstration's sequence numbers all render the same
@@ -304,14 +277,55 @@ function Code({ code }: { readonly code: string | undefined }) {
 }
 
 /**
- * `detail`, the tenth field, which is drawn beneath a step and not in a column.
+ * The terms a step was taken under, beneath the row it belongs to.
+ *
+ * One line, and every part of it is a value off the wire. The sentences are the
+ * Trusted Surface's own `Render()` output as `POST /authorise` returned it —
+ * **nothing here renders a constraint**, which is the rule
+ * `/authorise/preview` exists to keep and is why this file, like `Lanes.tsx`,
+ * reaches nothing under `src/constraint/`.
+ *
+ * The prompt is quoted and the sentences are not, because they are different
+ * kinds of claim and the quotation marks are what says so on a line with no room
+ * for a caption: what somebody typed is theirs and unsigned, and what follows is
+ * what their key went over. A step with no prompt draws none rather than an
+ * empty pair of quotes.
+ */
+function Authorisation({ authorisation }: { readonly authorisation: AuthorisationRef }) {
+  return (
+    <span className="font-sans text-xs text-graphite" data-testid="authorisation">
+      under{" "}
+      {authorisation.typed !== "" && <>&ldquo;{authorisation.typed}&rdquo;, </>}
+      {authorisation.signed.join("; ")}, until{" "}
+      <span className="tabular-nums" title={authorisation.expires_at}>
+        {timeOf(authorisation.expires_at)}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The fields drawn beneath a step rather than in a column of their own.
  *
  * Declared as a constant because the test beside this file closes the set of
- * drawn fields over `PROTOCOL_EVENT_FIELDS` and this one has no {@link Column}
- * entry to be found in. Without it the guard would report `detail` as a field
+ * drawn fields over `PROTOCOL_EVENT_FIELDS`, and neither of these has a {@link
+ * Column} entry to be found in. Without it the guard would report them as fields
  * the table never draws, which is the one thing it must not conclude.
+ *
+ * **It was one field until #213 and the second one arrived measured rather than
+ * chosen.** The module doc above records why `detail` is beneath and not a tenth
+ * column: nine `whitespace-nowrap` columns need about 880px inside `Shell.tsx`'s
+ * 976, so a tenth took what was left, the table overflowed, and the cell sat off
+ * the right-hand edge behind a scrollbar. `authorisation` is longer than
+ * `detail` — a prompt, a sentence per constraint, and an expiry — so a column
+ * for it would have hit that wall harder and sooner. Beneath, it gets the
+ * table's whole width.
+ *
+ * The order is the order they are drawn in, which is the order they read in: the
+ * emitter's own sentence about this step, then the terms the step was taken
+ * under.
  */
-export const BENEATH: ProtocolEventField = "detail";
+export const BENEATH: readonly ProtocolEventField[] = ["detail", "authorisation"];
 
 /** One column: a heading, the typed field under it, and how a cell reads. */
 export interface Column {
@@ -625,7 +639,13 @@ export function EventLog({ records }: { readonly records: readonly EventRecord[]
             ) : (
               shown.map((record) => {
                 const detail = record.event.detail;
+                const authorisation = record.event.authorisation;
                 const said = detail !== undefined && detail !== "";
+                // Whether anything at all hangs beneath this step. Both halves,
+                // rather than `said` alone: a step can carry the terms it was
+                // taken under with nothing of its own to add, and the rule below
+                // has to close under whichever of them is last.
+                const beneath = said || authorisation !== undefined;
                 return (
                   <Fragment key={record.seq}>
                     {/*
@@ -633,7 +653,7 @@ export function EventLog({ records }: { readonly records: readonly EventRecord[]
                       that said something and its sentence are one unit, so the
                       hairline goes under whichever of the two is last.
                     */}
-                    <tr className={said ? "" : "border-b border-graphite/20 last:border-b-0"}>
+                    <tr className={beneath ? "" : "border-b border-graphite/20 last:border-b-0"}>
                       {COLUMNS.map((column) =>
                         column.source === "seq" ? (
                           <th
@@ -650,7 +670,7 @@ export function EventLog({ records }: { readonly records: readonly EventRecord[]
                         ),
                       )}
                     </tr>
-                    {said && (
+                    {beneath && (
                       <tr className="border-b border-graphite/20 last:border-b-0">
                         <td
                           colSpan={COLUMNS.length}
@@ -658,6 +678,10 @@ export function EventLog({ records }: { readonly records: readonly EventRecord[]
                           className="pr-2 pb-2 pl-10 font-sans text-xs text-graphite"
                         >
                           {detail}
+                          {said && authorisation !== undefined && <br />}
+                          {authorisation !== undefined && (
+                            <Authorisation authorisation={authorisation} />
+                          )}
                         </td>
                       </tr>
                     )}

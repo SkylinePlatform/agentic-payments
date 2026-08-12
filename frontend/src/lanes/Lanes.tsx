@@ -43,15 +43,19 @@ import type { ReactNode } from "react";
 
 import { Status } from "../status/Status";
 
+import type { AuthorisationRef } from "../sse";
+
 import {
   ATTEMPT_META,
   LANES,
   STEP_META,
   amountOf,
+  authorisationOf,
   mandateLabel,
   renderPrice,
   shortDigest,
   stepsIn,
+  timeOf,
   titleOf,
   verdictOf,
 } from "./model";
@@ -120,8 +124,112 @@ function StepCard({ step }: { readonly step: Step }) {
   );
 }
 
+/**
+ * What the user approved, at the head of their own lane — issue #213.
+ *
+ * # Why this is not a step
+ *
+ * Every other card on this screen is a moment inside one correlation. This one
+ * is not, and it cannot be: under Human Not Present the approval and the
+ * purchase are two requests, and on the browser's path they are two
+ * *connections* — the browser signs at the Trusted Surface with the agent
+ * nowhere on the wire, and comes back to it later with a signature already
+ * collected. `group` keying on the correlation ID is right and ADR 0003 protects
+ * it, so the user's signing genuinely is not in this transaction, and the lane
+ * read *Nothing yet.* on a purchase somebody had personally signed for.
+ *
+ * So the lane shows the authorisation the purchase was made **under**: the
+ * sentences the user signed, and how long they last. No sequence number and no
+ * `#` — those belong to steps in this correlation, and putting one here would
+ * claim this happened between two of them.
+ *
+ * # The mark, the prompt, and the sentences
+ *
+ * `full` and no ending. The pip says how far along something is and the user's
+ * decision is over; an ending says how something *closed*, and the vocabulary
+ * reserves `check` and `cross` for a verifier's verdict — an approval wearing
+ * one would read as somebody having accepted or refused this purchase, which is
+ * three cards to the right and has not happened yet.
+ *
+ * **The prompt is quoted and the sentences are not.** They are different kinds
+ * of claim and this is the one card where both appear: `typed` is what somebody
+ * wrote, which nothing signed and which `roles/surface`'s own comment calls the
+ * caller's account rather than the user's words; `signed` came back from `POST
+ * /authorise`, rendered by the surface's own `Render()` over the set the user's
+ * key went over. The quotation marks are what carries that difference on a card
+ * with no room for a caption. A run that carries no prompt draws none.
+ *
+ * **Nothing here renders a constraint**, and that is a rule rather than an
+ * observation. `/authorise/preview` exists so the sentences a user reads come
+ * from the party that signs; a lane that re-rendered the set would be a second
+ * opinion about what a signature covers. These strings are the surface's own,
+ * carried on the wire, and `Lanes.test.tsx` holds the import rule against the
+ * module graph.
+ *
+ * # The expiry, and the instant that has not been carried this far
+ *
+ * *"Authorises until"* rather than *"signed at"* — and the reason is that no hop
+ * between the signature and this card carries a signing instant, not that none
+ * was ever taken. #213's approved sketch asked for *signed 19:04*, and it can
+ * have it: the Trusted Surface stamps one clock into both open mandates as `iat`
+ * when it signs them, which `contracts/authz/checkout_mandate_open.json` declares
+ * as `issued_at`. What has no room for it today is the path between — `POST
+ * /authorise` answers an expiry and no issuance moment, `agent.Authorisation`
+ * has no field, and `GET /watches/{id}` is likewise `typed` / `signed` /
+ * `expires_at` — so a card drawing one would have to invent it. See
+ * `AuthorisationRef` for what carrying it properly would cost, and note the one
+ * thing that stays wrong regardless: an *agent* stamping its own clock, which on
+ * this path was not present when the user signed. Until then the expiry is the
+ * instant the wire has, it is the `exp` both open mandates carry, and it answers
+ * the question a reader of this card actually has — whether these limits are
+ * still live.
+ */
+function Approval({ authorisation }: { readonly authorisation: AuthorisationRef }) {
+  return (
+    <div
+      className="flex flex-col gap-1 border border-graphite/40 bg-paper px-3 py-2"
+      data-testid="authorisation"
+    >
+      <span className="text-xs font-semibold tracking-tight">
+        <Status word="approved" pip="full" ending={null} />
+      </span>
+
+      {authorisation.typed !== "" && (
+        <p className="font-sans text-xs text-graphite">
+          &ldquo;{authorisation.typed}&rdquo;
+        </p>
+      )}
+
+      <ul className="flex flex-col gap-0.5">
+        {authorisation.signed.map((sentence, index) => (
+          // Keyed by position: two constraints can render the same sentence —
+          // nothing forbids a set that says the same thing twice — and a key
+          // taken from the text would collapse them into one row.
+          <li key={index} className="font-sans text-xs text-ink">
+            {sentence}
+          </li>
+        ))}
+      </ul>
+
+      <span
+        className="font-sans text-xs tabular-nums text-graphite"
+        title={authorisation.expires_at}
+      >
+        authorises until {timeOf(authorisation.expires_at)}
+      </span>
+    </div>
+  );
+}
+
 function LaneColumn({ lane, attempt }: { readonly lane: Lane; readonly attempt: Attempt }) {
   const steps = stepsIn(attempt, lane.id);
+  // The user's lane and no other, because the authorisation is the user's own
+  // decision — the agent's column is what it did inside those limits and the
+  // merchant's is what the verifiers made of it. The lane is named rather than
+  // given a flag on `LANES`: one screen, one card, and a column of the table
+  // saying "this is where the approval goes" would be a second place to decide
+  // something the design fixed once.
+  const authorisation = lane.id === "user" ? authorisationOf(attempt) : undefined;
 
   return (
     <section className="flex min-w-0 flex-col gap-3" aria-label={lane.title}>
@@ -129,14 +237,26 @@ function LaneColumn({ lane, attempt }: { readonly lane: Lane; readonly attempt: 
         {lane.title}
       </h3>
 
-      {steps.length === 0 ? (
-        <p className="font-sans text-xs text-graphite">Nothing yet.</p>
-      ) : (
+      {authorisation !== undefined && <Approval authorisation={authorisation} />}
+
+      {/*
+        "Nothing yet." only when there is genuinely nothing — the approval counts.
+        Under Human Present the user signs the closed mandates at the surface, in
+        this correlation, so that flow has steps here and no authorisation; under
+        Human Not Present it has an authorisation and, on the browser's path, no
+        steps. Neither can produce both halves of a duplicate, because the field
+        is only ever attached by a party holding an open mandate pair.
+      */}
+      {steps.length > 0 && (
         <ol className="flex flex-col gap-2">
           {steps.map((step) => (
             <StepCard key={step.seq} step={step} />
           ))}
         </ol>
+      )}
+
+      {steps.length === 0 && authorisation === undefined && (
+        <p className="font-sans text-xs text-graphite">Nothing yet.</p>
       )}
     </section>
   );
