@@ -27,6 +27,15 @@ import (
 // to the first second of year one, which marshals as "0001-01-01T00:00:00Z" and
 // renders on the card as a time. So the collapse cannot live in the adapter
 // without that adapter judging plausibility instead of form, and it lives here.
+//
+// **The third row is what makes the error branch load-bearing**, and it is the
+// reason this test drives the function directly rather than through a watch. Every
+// error ap2.IssuedAtOfMandate returns comes with the zero time beside it, so a
+// version of this function that had lost its error branch entirely would still be
+// caught by the zero check and behave identically — the branch would read as a
+// guard while depending on nothing. A reader that answered with an instant *and* an
+// error is the input that tells the two apart, and refusing on the error alone is
+// what stops a leftover value from an unreadable mandate reaching a card.
 func TestTheOnlyTwoSpellingsOfNoInstantBothBecomeNil(t *testing.T) {
 	t.Parallel()
 
@@ -38,6 +47,10 @@ func TestTheOnlyTwoSpellingsOfNoInstantBothBecomeNil(t *testing.T) {
 			err: errors.New("no iat claim, so this mandate does not say when it was signed"),
 		},
 		"a mandate dated to the zero instant": {at: time.Time{}},
+		"a reader that answered with both an instant and an error": {
+			at:  time.Unix(1_777_326_189, 0).UTC(),
+			err: errors.New("the delegating hop's first disclosure is not the closed mandate's claims"),
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

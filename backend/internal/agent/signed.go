@@ -113,6 +113,7 @@ func (a Authorisation) SignedAt() (time.Time, error) {
 // three-lane view exists to make impossible, and a card drawing it would look
 // exactly like one drawn from the signature. So an unreadable instant is an
 // absence that travels as an absence, and the card says what it can.
+//
 // # Why a zero instant is an absence too
 //
 // obs.Authorisation.SignedAt's contract is that nil means nobody said, and the
@@ -126,17 +127,34 @@ func (a Authorisation) SignedAt() (time.Time, error) {
 // carry, and it is about the representation rather than about the value: two
 // spellings of "no instant" cannot both travel, because a consumer would have to
 // know that one of them is not a time.
+//
+// # A switch with one return of each kind, and why the shape matters
+//
+// Written as two `if`s with a `return nil` in each, the first of them was dead
+// under mutation: ap2.IssuedAtOfMandate returns the zero time alongside every
+// error it produces, so deleting the error branch's return left the zero check to
+// catch the same input and the behaviour did not change. A guard that cannot be
+// broken is a guard nothing depends on, and one that only looks load-bearing is
+// worse than one that is absent.
+//
+// The switch has exactly one `return nil` and one `return &at`, so each branch
+// decides nothing but which diagnostic to print. What makes the error case
+// genuinely load-bearing is that it does **not** rely on that convention — a
+// reader answering with an instant *and* an error is refused on the error alone,
+// which is the case TestTheOnlyTwoSpellingsOfNoInstantBothBecomeNil's third row
+// drives and the one that would otherwise put an unreadable mandate's leftover
+// value on a card.
 func reportSignedAt(at time.Time, err error) *time.Time {
-	if err != nil {
+	switch {
+	case err != nil:
 		fmt.Fprintf(os.Stderr,
 			"agent: reading the moment the user signed, for the event log: %v\n", err)
-		return nil
-	}
-	if at.IsZero() {
+	case at.IsZero():
 		fmt.Fprintln(os.Stderr,
 			"agent: the open Checkout Mandate dates itself to the zero instant, which is not a "+
 				"moment anybody signed at; the card will say nothing about signing")
-		return nil
+	default:
+		return &at
 	}
-	return &at
+	return nil
 }
