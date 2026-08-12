@@ -657,6 +657,9 @@ func (f *CatalogueFile) catalogue(
 			ImageURL:    e.ImageURL,
 			Retailer:    e.Retailer,
 			Schedule:    schedule,
+			// Carried through so NewCatalogue's ordering can tell a fetched
+			// offer from a committed one — see that function's doc.
+			Source: e.Source,
 		})
 	}
 	return NewCatalogue(clk, constraint.Party{ID: merchantID, Category: f.Merchant.Category}, offers...)

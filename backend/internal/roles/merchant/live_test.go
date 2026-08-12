@@ -41,6 +41,13 @@ const sunglassesUnderThirty = `[
 // network, and the recording runs through the same decoder the live path uses —
 // see that type, which is deliberately not in a _test.go file so this package
 // can name it.
+//
+// The recorded snapshot is the real DummyJSON response, unfiltered — it really
+// does sell "smartphones", which is also one of tools/catalogue's derived
+// shelves, and Extend merges it without complaint (issue #250: a category
+// collision joins the shelf rather than being refused). See
+// TestASmartphoneFromTheShopJoinsRatherThanCollides for that collision
+// measured on its own.
 func extended(t *testing.T) (*merchant.CatalogueFile, int) {
 	t.Helper()
 
@@ -156,17 +163,25 @@ func TestASentenceNobodyWroteFindsAnOfferNobodyPutInTheRepository(t *testing.T) 
 // the *selective* fields and drops the rest — so "find and buy telescopic
 // ladders, cheapest" reaches GET /search as `item.category eq "ladders"` and
 // nothing else. Its cap is a term, evaluated at checkout and absent from the
-// query. settle then takes found[0] and ranks nothing, and NewCatalogue sorts by
-// identifier, which puts every `dummyjson:` offer ahead of every `gtin:`,
-// `event:` and `route:` one.
+// query. settle then takes found[0] and ranks nothing, so whichever offer the
+// merchant returns first is the one a Human Not Present run buys. That used to
+// be decided by the identifier alone, which put every `dummyjson:` offer ahead
+// of every `gtin:`, `event:` and `route:` one; since issue #250 NewCatalogue
+// sorts committed offers ahead of fetched ones first. Either way it is this
+// query, not the whole set, that decides which.
 //
 // Asserting only over the full set is therefore strictly weaker than the claim
-// this test's failure message makes. A fetched ladder priced *above* the cap
-// would be filtered out of both sides here and the test would stay green, while
-// in a real run it would sort first, become found[0], and be what the
-// demonstration bought. That is the gap settle's own doc comment names about
+// this test's failure message makes. A fetched ladder priced *above* the cap is
+// filtered out of both sides of a full-set comparison, so that comparison stays
+// green while the offer is sitting in the result set the agent actually
+// receives — where the only thing standing between it and found[0] is the
+// catalogue's ordering. That is the gap settle's own doc comment names about
 // TestTheCatalogueAnswersTheScriptedPrompts, one package along; running the
-// narrowing query as well is what keeps this test from inheriting it.
+// narrowing query as well is what keeps this test from inheriting it. What the
+// ordering then does with it is pinned separately, by
+// TestTheCommittedLadderOutranksAColludingFetchedOne below and by
+// TestTheCatalogueOrdersCommittedBeforeFetchedAndThenByIdentifier in
+// catalogue_test.go — this test's subject is the query, not the sort.
 func TestTheLiveHalfChangesNoScriptedAnswer(t *testing.T) {
 	t.Parallel()
 
@@ -405,6 +420,12 @@ func TestAFetchedOfferMayNotBeSomethingTheFileAlreadySells(t *testing.T) {
 			wantErr: true, mentions: "one price that never moves",
 			why: "GET /checkout?from=&to= quotes a route on that offer's own prices, so a shop's placeholder row would be sold as a seat",
 		},
+		// A product claiming a category the committed shelf already sells is
+		// deliberately not a row here — issue #250. It is not refused: it joins
+		// the shelf, and NewCatalogue's ordering is what stops it from winning a
+		// search a committed offer also matches. See that function's doc, and
+		// TestTheCommittedLadderOutranksAColludingFetchedOne below for the
+		// mechanism measured directly.
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -522,4 +543,101 @@ func TestAFetchedOfferMakesNoClaimAboutAScriptedSentence(t *testing.T) {
 	assert.Equal(t, added, checked, "no fetched offer was examined, so this test proves nothing")
 	assert.Zero(t, claimed,
 		"a fetched offer states a scenario, which is a claim about a scripted sentence that was never written")
+}
+
+// TestTheCommittedLadderOutranksAColludingFetchedOne is the defect issue #250
+// names, measured directly against NewCatalogue's ordering rather than
+// inferred from a refusal.
+//
+// # The history this test still proves
+//
+// "find and buy telescopic ladders, cheapest" reaches the merchant as
+// `item.category eq "ladders"` and nothing else — see
+// TestTheLiveHalfChangesNoScriptedAnswer for where that query comes from —
+// and settle (internal/agent/authorise.go) takes found[0] without ranking.
+// Before this fix, NewCatalogue sorted purely by identifier, and
+// "dummyjson:1" sorts ahead of "gtin:05014477390221" — so a colliding fetched
+// offer would not have joined the results, it would have taken first place
+// and become what a Human Not Present run bought. The identifier below is
+// chosen for exactly that reason: it is not "whichever happens to be first",
+// it is the one a naive sort would have picked wrongly, which is what makes
+// the assertion below non-trivial rather than incidental.
+//
+// NewCatalogue now sorts committed offers ahead of fetched ones, so the
+// colliding offer still joins the search — it is not refused, not dropped —
+// but it can no longer win one the real ladder also matches.
+func TestTheCommittedLadderOutranksAColludingFetchedOne(t *testing.T) {
+	t.Parallel()
+
+	real := entryFor(t, shippedCatalogue(t), merchant.DemoLadderID)
+
+	// fetchedPrototype rather than a literal, for its own reason restated here:
+	// Extend is what decides the shape of a fetched entry — the data-URI image
+	// among it — and a literal beside this row would keep passing while that
+	// shape moved. Only the two facts this test is about are overwritten.
+	colliding := fetchedPrototype(t)()
+	colliding.ID = "dummyjson:1"
+	colliding.Category = real.Category
+
+	f := shippedCatalogue(t)
+	f.Offers = append(f.Offers, colliding)
+	require.NoError(t, f.Validate(),
+		"the merged file has to build, or the search below says nothing about the collision")
+
+	cat, err := f.Catalogue(clock.NewFake(base), demoMerchantID, base, merchant.DefaultStep)
+	require.NoError(t, err)
+
+	results, err := cat.Search(constraintsFrom(t, `[{"op":"eq","field":"item.category","value":"ladders"}]`))
+	require.NoError(t, err)
+
+	require.Len(t, results.Offers, 2,
+		"the colliding offer has to actually join the results, or this is not testing a tie-break at all")
+	assert.Equal(t, real.ID, results.Offers[0].ID,
+		"the committed ladder has to win found[0] over %q despite sorting after it alphabetically, "+
+			"or settle would buy the offer nobody scripted", colliding.ID)
+}
+
+// TestASmartphoneFromTheShopJoinsRatherThanCollides is issue #250's finding,
+// kept as a test rather than left as a comment: the recorded DummyJSON
+// snapshot really does sell "smartphones", and tools/catalogue really did
+// derive ten offers under that same category into the committed file. An
+// earlier version of this fix refused that collision outright, which would
+// have failed `-catalogue-live dummyjson` against the real shop over a
+// category no scripted sentence narrows by. This is the replacement claim:
+// the fetch succeeds, both halves are sellable, and a category-only search
+// still resolves deterministically in the committed shelf's favour.
+func TestASmartphoneFromTheShopJoinsRatherThanCollides(t *testing.T) {
+	t.Parallel()
+
+	snapshot, err := stock.NewSnapshot()
+	require.NoError(t, err, "the recorded shop has to decode, or this test is not exercising a real collision")
+
+	f := shippedCatalogue(t)
+	added, err := f.Extend(t.Context(), snapshot)
+	require.NoError(t, err,
+		"a category the committed shelf also sells must not stop a live fetch from merging — "+
+			"refusing it would break -catalogue-live against the real shop over a category "+
+			"nothing narrows by")
+	require.Positive(t, added)
+
+	fetchedSmartphones := 0
+	for _, o := range f.Offers {
+		if o.Source == merchant.SourceLive && o.Category == "smartphones" {
+			fetchedSmartphones++
+		}
+	}
+	require.Positive(t, fetchedSmartphones,
+		"the recorded shop has to actually carry smartphones, or this test is not exercising the real overlap")
+
+	cat, err := f.Catalogue(clock.NewFake(base), demoMerchantID, base, merchant.DefaultStep)
+	require.NoError(t, err)
+
+	results, err := cat.Search(constraintsFrom(t, `[{"op":"eq","field":"item.category","value":"smartphones"}]`))
+	require.NoError(t, err)
+
+	require.Greater(t, len(results.Offers), 10,
+		"both halves have to be present, or the ordering assertion below is not about a real tie")
+	assert.True(t, strings.HasPrefix(results.Offers[0].ID, "wd:"),
+		"the committed shelf's smartphones are wd:-prefixed, and one of them has to win found[0] over "+
+			"every dummyjson: offer despite sorting after some of them alphabetically")
 }

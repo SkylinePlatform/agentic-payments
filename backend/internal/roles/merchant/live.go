@@ -94,6 +94,22 @@ var ErrNoLiveCatalogue = errors.New("merchant: no live catalogue")
 //     route.destination is a flight the Human Present checkout would then quote,
 //     on the single held-still price a fetched offer has. GET /checkout would
 //     start selling somebody else's placeholder data as a seat.
+//
+// # What is deliberately not on this list: a category the committed shelf sells
+//
+// Issue #250 found that "find and buy telescopic ladders, cheapest" narrows by
+// `item.category eq "ladders"` alone, and that settle takes the first search
+// result without ranking — so a fetched offer sharing that category would not
+// join the results, it would take first place. The first fix refused any
+// fetched offer whose category the committed shelf already sold, and that
+// refusal is what got removed: the recorded DummyJSON snapshot really does
+// sell "smartphones", which is also one of tools/catalogue's derived shelves,
+// and nothing narrows on smartphones alone — refusing it would have failed
+// `-catalogue-live dummyjson` against the real shop over a category that costs
+// the demonstration nothing. NewCatalogue now sorts committed offers ahead of
+// fetched ones instead, which fixes the mechanism settle actually depends on
+// — see that function's doc — rather than guessing in advance which
+// categories a sentence nobody has written yet might narrow by.
 func (f *CatalogueFile) Extend(ctx context.Context, fetcher shop.Fetcher) (int, error) {
 	if fetcher == nil {
 		return 0, fmt.Errorf("%w: no shop to fetch one from", ErrNoLiveCatalogue)
