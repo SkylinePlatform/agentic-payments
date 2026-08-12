@@ -47,6 +47,18 @@ func Banner(out io.Writer, statuses []Status) {
 			if s.Process.Note != "" {
 				w("              %-13s %s", "", s.Process.Note)
 			}
+			// What this run is, as opposed to what the manifest says it is.
+			//
+			// `make demo` appends nothing, so this line never appears there and
+			// the banner is byte-for-byte what it was. `make demo-live` appends
+			// to two processes, and the demonstration they produce is not the
+			// one every committed screenshot shows — a viewer who cannot see
+			// which flags were applied has no way to attribute what is on the
+			// screen. Printed above the trailer because a process in this state
+			// is running: the trailer is for one that is not.
+			if len(s.Process.Appended) > 0 {
+				w("              %-13s run with %s", "", strings.Join(s.Process.Appended, " "))
+			}
 			if line := trailer(s); line != "" {
 				w("              %-13s %s", "", line)
 			}

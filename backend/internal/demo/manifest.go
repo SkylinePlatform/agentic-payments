@@ -88,6 +88,24 @@ type Process struct {
 	// Args are passed through unchanged.
 	Args []string `json:"args,omitempty"`
 
+	// Appended is what Append added on top of what the manifest states, and it
+	// is not a manifest field — `json:"-"` because a value read out of
+	// deploy/demo.json would be a claim about a run that had not happened yet.
+	//
+	// It exists so the banner can say what this run actually is. `make
+	// demo-live` now appends to two processes rather than one — agent-watch
+	// gets an interpreter that reads free text, the merchant gets a shop
+	// fetched at start-up — and the demonstration those two produce is not the
+	// one every committed screenshot shows. A viewer who cannot see which flags
+	// were applied has no way to attribute what is on the screen, which is the
+	// same problem `make demo-live` exists to solve rather than to create.
+	//
+	// Reported rather than interpreted: this records the strings, and nothing
+	// here knows what a process does with them. A table mapping flags to
+	// sentences would be a third place that has to agree with two binaries'
+	// flag sets, and it would go stale the first time one of them was renamed.
+	Appended []string `json:"-"`
+
 	// Health is a URL that answers 2xx once this process is ready. Startup
 	// waits on it before moving to the next process. Empty means "do not
 	// wait", which is the only sensible setting for something that exits.
@@ -170,11 +188,18 @@ func (p Process) Path(root string) string { return filepath.Join(root, p.Dir) }
 //
 // # Why this exists instead of a second manifest
 //
-// `make demo-live` runs the exact stack `make demo` runs, with one process —
-// agent-watch — handed `-interpreter auto`. The two shapes considered for that
-// were a second manifest file and an override applied here; a second file
-// enumerating the same eight processes is the one that can drift from this
-// one the moment either changes and the other does not, so it lost. Append is
+// `make demo-live` runs the exact stack `make demo` runs, with two processes
+// handed a flag the manifest does not carry: agent-watch gets `-interpreter
+// auto`, and — since issue #243 — the merchant gets `-catalogue-live dummyjson`.
+// It was one process when this was written, and that it is now two is the
+// argument rather than a footnote: a second manifest would have had to enumerate
+// the eight processes again for each combination somebody wanted, while this
+// composes by being applied twice.
+//
+// The two shapes considered were a second manifest file and an override applied
+// here; a second file enumerating the same eight processes is the one that can
+// drift from this one the moment either changes and the other does not, so it
+// lost. Append is
 // the whole of the other shape: it does not know what a process does with the
 // args it hands over, only that a name in this manifest gets some appended to
 // what it already has. deploy/demo.json's own $comment carries the argument
@@ -204,6 +229,15 @@ func (m *Manifest) Append(name string, args ...string) error {
 		combined = append(combined, p.Args...)
 		combined = append(combined, args...)
 		m.Processes[i].Args = combined
+
+		// And kept separately, so the banner can say what this run is rather
+		// than what the manifest says. Same construction, same reason: two
+		// -append flags naming one process accumulate here in the order they
+		// were given. See the field.
+		recorded := make([]string, 0, len(p.Appended)+len(args))
+		recorded = append(recorded, p.Appended...)
+		recorded = append(recorded, args...)
+		m.Processes[i].Appended = recorded
 		return nil
 	}
 	return fmt.Errorf("%w: -append names %q, which this manifest has no process called",

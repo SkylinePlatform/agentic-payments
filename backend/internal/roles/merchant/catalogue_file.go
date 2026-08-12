@@ -139,6 +139,13 @@ type CatalogueEntry struct {
 	// existed that argument was a comment beside a literal a reviewer had read.
 	// **The guard exists only because the data moved**: an editor is now enough
 	// to change it, and nobody reviews an editor.
+	//
+	// Since issue #243 the rule has two shapes and Source decides which. A
+	// fetched offer has no file in this repository to name, so it carries its
+	// picture instead, as a `data:` URI — which depends on no host at all and so
+	// keeps what the original rule protects rather than conceding it. mark.go
+	// argues that at length, including the two ways of doing it that were
+	// rejected.
 	ImageURL string `json:"image_url"`
 
 	// Prices is what this costs over time, in the file's currency and its minor
@@ -160,7 +167,18 @@ type CatalogueEntry struct {
 	Prices []int `json:"prices"`
 
 	// Scenario is what this offer is for. See the type.
+	//
+	// Required for an offer the file lists and refused for a fetched one: a
+	// Scenario is a claim about the scripted sentence that goes looking for this
+	// offer, and nobody wrote a sentence for a product that arrived at start-up.
+	// See Source.
 	Scenario Scenario `json:"scenario"`
+
+	// Source is where this offer came from, and it is not in deploy/catalogue.json
+	// — the zero value is the file. Only CatalogueFile.Extend sets the other one.
+	// See the type for why a fetched offer and a committed one share a shelf at
+	// all.
+	Source Source `json:"source,omitempty"`
 }
 
 // CatalogueMerchant is what the file says about the shop rather than the stock.
@@ -283,6 +301,15 @@ func (o CatalogueEntry) validate(index int) error {
 	case strings.TrimSpace(o.ID) == "":
 		return fmt.Errorf("%w: offer %d has no id; item.id is what a mandate names, so an "+
 			"offer without one cannot be approved specifically", ErrInvalidCatalogue, index)
+	case !o.Source.Valid():
+		// Refused rather than read as the file's, on Found's own reasoning one
+		// field along: a source nobody understands is not a weaker claim, it is
+		// an unchecked one — and this particular field decides which image rule
+		// and which scenario rule the offer is held to, so guessing at it would
+		// pick a rule on the offer's behalf.
+		return fmt.Errorf("%w: offer %q says its source is %q; it is either %q, meaning this file, "+
+			"or %q, meaning fetched at start-up, and which one decides the rules below",
+			ErrInvalidCatalogue, o.ID, o.Source, SourceFile, SourceLive)
 	case strings.TrimSpace(o.Category) == "":
 		return fmt.Errorf("%w: offer %q has no category; a constraint on item.category would "+
 			"silently never match it", ErrInvalidCatalogue, o.ID)
@@ -297,34 +324,16 @@ func (o CatalogueEntry) validate(index int) error {
 	case len(o.Attributes) == 0:
 		return fmt.Errorf("%w: offer %q states no facts about itself, so no constraint on "+
 			"this kind of purchase can be checked against it", ErrInvalidCatalogue, o.ID)
-	case strings.HasPrefix(o.ImageURL, "http://"), strings.HasPrefix(o.ImageURL, "https://"):
-		return fmt.Errorf("%w: offer %q points its image at %q; an absolute URL makes a "+
-			"screenshot depend on a host this project does not control",
-			ErrInvalidCatalogue, o.ID, o.ImageURL)
-	case strings.HasPrefix(o.ImageURL, "//"):
-		// A protocol-relative URL begins with a slash and is still somebody
-		// else's host, so the check above and a bare "starts with /" between
-		// them would let this through.
-		return fmt.Errorf("%w: offer %q points its image at %q, which is another host with "+
-			"the scheme left off", ErrInvalidCatalogue, o.ID, o.ImageURL)
-	case !strings.HasPrefix(o.ImageURL, "/"):
-		return fmt.Errorf("%w: offer %q has image_url %q; it has to be root-relative, so that "+
-			"the frontend serves it and no test is one careless line from a network call",
-			ErrInvalidCatalogue, o.ID, o.ImageURL)
 	case len(o.Prices) == 0:
 		return fmt.Errorf("%w: offer %q has no prices, and a schedule with nothing in it has "+
 			"no answer to give", ErrInvalidCatalogue, o.ID)
-	case !o.Scenario.Found.Valid():
-		// Refused rather than skipped, on constraint_type_unknown's reasoning: a
-		// claim nobody understands is not a weaker claim, it is an unchecked
-		// one. Accepting it would leave an offer in the catalogue that no test
-		// asserts anything about, which is exactly the state this field exists
-		// to make impossible.
-		return fmt.Errorf("%w: offer %q says it is found %q, want one of %v",
-			ErrInvalidCatalogue, o.ID, o.Scenario.Found, found)
-	case o.Scenario.Cap <= 0:
-		return fmt.Errorf("%w: offer %q names a cap of %d; a bound of nothing is one no price "+
-			"can sit inside", ErrInvalidCatalogue, o.ID, o.Scenario.Cap)
+	}
+
+	if err := o.validateImage(); err != nil {
+		return err
+	}
+	if err := o.validateScenario(); err != nil {
+		return err
 	}
 
 	for name := range o.Attributes {
@@ -339,12 +348,140 @@ func (o CatalogueEntry) validate(index int) error {
 		}
 	}
 
-	if r, describes := o.route(); describes && !r.Valid() {
-		return fmt.Errorf("%w: offer %q describes the route %q, which is not a pair of IATA "+
-			"codes; %s and %s are both required", ErrInvalidCatalogue, o.ID, r,
-			routeOriginAttribute, routeDestinationAttribute)
+	if r, describes := o.route(); describes {
+		if o.Source == SourceLive {
+			// The Human Present checkout quotes a route on the schedule of the
+			// offer describing it, and a fetched offer's schedule is one price
+			// that never moves. GET /checkout?from=&to= would start selling a
+			// public test shop's placeholder row as a seat, at a price nothing
+			// in this demonstration set.
+			return fmt.Errorf("%w: fetched offer %q describes the route %s; a route is quoted by "+
+				"the Human Present checkout on that offer's own prices, and a fetched offer has "+
+				"one price that never moves", ErrInvalidCatalogue, o.ID, r)
+		}
+		if !r.Valid() {
+			return fmt.Errorf("%w: offer %q describes the route %q, which is not a pair of IATA "+
+				"codes; %s and %s are both required", ErrInvalidCatalogue, o.ID, r,
+				routeOriginAttribute, routeDestinationAttribute)
+		}
 	}
 	return nil
+}
+
+// validateImage reports why an entry's picture cannot be shown, or nil.
+//
+// # One rule, two shapes, and the shapes are not the same strictness
+//
+// What the rule protects has never changed: **no offer may point its image at a
+// host this project does not control.** An image that does makes a screenshot
+// depend on somebody else's uptime, and puts a network call one careless line
+// away from a test.
+//
+// An offer the file lists keeps that by naming a file this repository ships,
+// which is a promise with a hole in it — the path can be perfectly shaped and
+// resolve to nothing, which is what shipped four broken images before issue
+// #215 and why TestEveryShippedImageURLNamesAFileThatExists exists beside this.
+//
+// A fetched offer has no such file to name and keeps the rule the stronger way
+// instead: it carries the picture itself, as a data URI, which depends on no
+// host, cannot 404 and cannot be fetched even by accident. mark.go argues why
+// that rather than the shop's own CDN, and why not simply leaving the picture
+// out.
+func (o CatalogueEntry) validateImage() error {
+	if o.Source == SourceLive {
+		if strings.HasPrefix(o.ImageURL, markDataURIPrefix) {
+			return nil
+		}
+		return fmt.Errorf("%w: fetched offer %q has image_url %q; a fetched offer names no file "+
+			"in this repository, so it has to carry its picture as %s… — anything else is a host "+
+			"nobody here operates", ErrInvalidCatalogue, o.ID, elide(o.ImageURL), markDataURIPrefix)
+	}
+
+	switch {
+	case strings.HasPrefix(o.ImageURL, "http://"), strings.HasPrefix(o.ImageURL, "https://"):
+		return fmt.Errorf("%w: offer %q points its image at %q; an absolute URL makes a "+
+			"screenshot depend on a host this project does not control",
+			ErrInvalidCatalogue, o.ID, o.ImageURL)
+	case strings.HasPrefix(o.ImageURL, "//"):
+		// A protocol-relative URL begins with a slash and is still somebody
+		// else's host, so the check above and a bare "starts with /" between
+		// them would let this through.
+		return fmt.Errorf("%w: offer %q points its image at %q, which is another host with "+
+			"the scheme left off", ErrInvalidCatalogue, o.ID, o.ImageURL)
+	case strings.HasPrefix(o.ImageURL, "data:"):
+		// Caught by the root-relative check below too, and named separately
+		// because the message is the whole point: an inline picture is not
+		// wrong, it is what the *other* kind of offer does, and a row in this
+		// file carrying one is a row that has been marked with the wrong source
+		// or written by hand from something fetched.
+		return fmt.Errorf("%w: offer %q carries its image inline (%q); an offer this file lists "+
+			"names a file the repository ships, and carrying the picture is what a fetched offer "+
+			"does — see the source field", ErrInvalidCatalogue, o.ID, elide(o.ImageURL))
+	case !strings.HasPrefix(o.ImageURL, "/"):
+		return fmt.Errorf("%w: offer %q has image_url %q; it has to be root-relative, so that "+
+			"the frontend serves it and no test is one careless line from a network call",
+			ErrInvalidCatalogue, o.ID, o.ImageURL)
+	}
+	return nil
+}
+
+// validateScenario reports why an entry's claim about itself cannot stand, or
+// nil.
+//
+// A Scenario says which prompt goes looking for this offer and what that prompt
+// will find. The file has to state one, on the reasoning Found gives at length.
+// A fetched offer has to state none, and that is the same reasoning read the
+// other way: no scripted sentence was written for a product that arrived at
+// start-up, so a cap here would be a bound nobody set and a Found would be a
+// claim about a prompt that does not exist. Both would then be asserted by the
+// tests that walk this file offer by offer.
+func (o CatalogueEntry) validateScenario() error {
+	if o.Source == SourceLive {
+		if o.Scenario != (Scenario{}) {
+			return fmt.Errorf("%w: fetched offer %q states a scenario — cap %d, found %q — and a "+
+				"scenario is a claim about the scripted sentence that goes looking for an offer. "+
+				"Nobody wrote one for something fetched at start-up",
+				ErrInvalidCatalogue, o.ID, o.Scenario.Cap, o.Scenario.Found)
+		}
+		if len(o.Prices) > 1 {
+			// The type makes this unreachable from Extend — shop.Product carries
+			// one Price — so what it guards is a hand-written file that marked a
+			// row `"source": "live"`. It is here because LiveCatalogueNotice
+			// tells a viewer that a fetched offer holds one price and therefore
+			// answers no conditional sentence, and a row with a schedule would
+			// make that sentence false on the screen it was printed above.
+			return fmt.Errorf("%w: fetched offer %q lists %d prices; a fetched offer holds the one "+
+				"price the shop quotes, which is what the merchant states at start-up about which "+
+				"sentences it can answer", ErrInvalidCatalogue, o.ID, len(o.Prices))
+		}
+		return nil
+	}
+
+	switch {
+	case !o.Scenario.Found.Valid():
+		// Refused rather than skipped, on constraint_type_unknown's reasoning: a
+		// claim nobody understands is not a weaker claim, it is an unchecked
+		// one. Accepting it would leave an offer in the catalogue that no test
+		// asserts anything about, which is exactly the state this field exists
+		// to make impossible.
+		return fmt.Errorf("%w: offer %q says it is found %q, want one of %v",
+			ErrInvalidCatalogue, o.ID, o.Scenario.Found, found)
+	case o.Scenario.Cap <= 0:
+		return fmt.Errorf("%w: offer %q names a cap of %d; a bound of nothing is one no price "+
+			"can sit inside", ErrInvalidCatalogue, o.ID, o.Scenario.Cap)
+	}
+	return nil
+}
+
+// elide shortens a value that is a picture rather than a path, so that a
+// refusal stays readable. A mark is around a thousand base64 characters and an
+// error message carrying all of them is one nobody reads to the end.
+func elide(s string) string {
+	const keep = 48
+	if len(s) <= keep {
+		return s
+	}
+	return s[:keep] + "…"
 }
 
 // route reads the Route an entry describes, and reports whether it describes one

@@ -253,6 +253,19 @@ These are enforced, not advisory.
    implementation that forgot the call; it does not cover one that made it and
    got a different answer, which is what the conformance test is for.
 
+   **The network half of this rule has a second instance now**, and it follows
+   the same shape rather than a new one. `internal/roles/merchant/shop` fetches
+   a catalogue from a public test shop under `make demo-live`, behind a
+   `Fetcher` interface, and `shop.Snapshot` is the implementation that computes
+   its answer instead — it runs the real decoder over a response recorded at
+   `shop/data/`, and it is not in a `_test.go` file for `ScriptedInterpreter`'s
+   exact reason: the package that needs it is `merchant`, one directory up.
+   `shop.DummyJSON` is the only type in the module that opens a socket to
+   somewhere this project does not control, it is exercised against an
+   `httptest.Server`, and `cmd/merchant`'s `-catalogue-live` refuses every value
+   but `dummyjson` — the recording included, because a run that said live and
+   served committed bytes is the screenshot nobody can attribute.
+
 5. **Time goes through the injected clock.** Never call `time.Now()` directly, or
    signature expiry becomes untestable. Enforced by `forbidigo`;
    `internal/platform/clock/` is the single excluded package.
@@ -295,6 +308,9 @@ backend/                ⬅ the Go module root. go.mod lives here, not at the to
     adapters/tap/
     agent/interpret/    IntentInterpreter — the ONLY place an LLM may live
     roles/              mock role implementations
+      merchant/shop/    fetches a catalogue from a public test shop. The only
+                        thing here that opens a socket to somewhere this project
+                        does not control, and only under `make demo-live`
     platform/           crypto, store, clock, obs — implements core ports
   pkg/
     httpsig/            RFC 9421 — public standard, externally importable
@@ -660,7 +676,7 @@ make generate-verify  # prove generation is reproducible and touches nothing tra
 make catalogue        # re-derive deploy/catalogue.json and its images; run by a person
 make diagrams         # export inline mermaid from docs/ to SVG     ⟵ needs Node
 make demo             # bring the whole stack up, one Ctrl-C stops it ⟵ needs Node
-make demo-live        # the same stack, with -interpreter auto on the watch ⟵ needs Node
+make demo-live        # the same stack, reading free text against a shop fetched at start-up ⟵ needs Node AND a network
 make frontend         # the frontend dev server on its own           ⟵ needs Node
 make frontend-test    # the frontend suite: Vitest in jsdom          ⟵ needs Node
 make frontend-check   # type-check, build and test the frontend      ⟵ needs Node
@@ -675,6 +691,26 @@ older schema checks the wrong thing, and the mocks are what the tests are
 written against — but it stops there, so work that touches neither the frontend
 nor a diagram never needs npm. mockery is a Go program like the schema
 generator, so neither half of that generation costs a Node toolchain.
+
+**`make demo-live` is the one target that needs a network, and it is the only
+one.** It appends two flags to the topology `make demo` runs: `-interpreter
+auto` on the watching agent, and `-catalogue-live dummyjson` on the merchant,
+which fetches a public test shop's stock at start-up and sells it beside
+`deploy/catalogue.json`. The two are one argument — free text against a
+catalogue written down in this repository proves nothing a lookup table could
+not, and a wider shop nobody can address in their own words is a longer table.
+The shop is MIT-licensed placeholder data; `backend/internal/roles/merchant/shop`
+is the fetcher, and `NOTICE` records the terms.
+
+Three things about it are worth knowing before running it. **A fetched offer
+holds one price**, so a sentence with a condition in it can never resolve
+against one — only an instruction can, and the merchant says so in its own
+start-up output rather than leaving a viewer to wait. **A shop that will not
+answer stops the merchant**, on `-interpreter auto`'s own reasoning read one
+step along: an unset key is an answer and falls back, and a live catalogue asked
+for and not delivered is not. And **`make demo` is untouched by all of it** — it
+reaches no network, and the flag is refused in `deploy/demo.json` for exactly
+that reason.
 
 **The frontend suite is where that trade-off shows.** `frontend-test` is Vitest
 in jsdom, and it is deliberately not a prerequisite of `check` — a gate that

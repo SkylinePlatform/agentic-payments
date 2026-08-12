@@ -2,6 +2,7 @@ package demo_test
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -72,4 +73,30 @@ func TestBannerExplainsEveryStateThatIsNotUp(t *testing.T) {
 				"a state that is not up has to say why, or the reader is left guessing")
 		})
 	}
+}
+
+// TestTheBannerSaysWhatThisRunWasGiven is what keeps a screenshot attributable
+// once `make demo-live` appends to more than one process.
+//
+// `make demo` and `make demo-live` start the same eight processes from the same
+// manifest, and the second produces a demonstration none of the committed
+// screenshots show: the agent reads free text, and the merchant sells stock
+// fetched from a shop at start-up. Nothing on the screen said which run this
+// was. Printed from what Append recorded rather than from a table of known
+// flags, so it cannot go stale against two binaries' flag sets.
+func TestTheBannerSaysWhatThisRunWasGiven(t *testing.T) {
+	t.Parallel()
+
+	appended := status("merchant", demo.StateRunning, "")
+	appended.Process.Appended = []string{"-catalogue-live", "dummyjson"}
+
+	var out bytes.Buffer
+	demo.Banner(&out, []demo.Status{appended, status("agent-buy", demo.StateRunning, "")})
+
+	assert.Contains(t, out.String(), "run with -catalogue-live dummyjson",
+		"a viewer looking at stock that is in no file in this repository has nothing else on the "+
+			"screen telling them this run asked for it")
+	assert.Equal(t, 1, strings.Count(out.String(), "run with "),
+		"a process nobody appended to has nothing to say about this run, and `make demo` appends "+
+			"to none of them — a line under every process would say nothing at all")
 }

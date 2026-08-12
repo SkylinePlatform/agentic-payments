@@ -45,8 +45,8 @@ THIRD-PARTY WORKS COMMITTED IN THIS REPOSITORY
 
 Almost every dependency of this project is resolved at build time and is not
 redistributed here. Three kinds are, and are therefore listed: fonts, committed
-as binaries; component source copied into the tree rather than installed; and a
-dataset snapshot committed so that nothing in the build has to fetch it.
+as binaries; component source copied into the tree rather than installed; and
+dataset snapshots committed so that nothing in the build has to fetch them.
 
 Wikidata
   Structured data, dedicated to the public domain under CC0 1.0 Universal
@@ -63,6 +63,27 @@ Wikidata
   none is used: every image this repository ships is drawn by it, by hand under
   frontend/public/images/catalogue or by tools/catalogue/mark.go under the
   derived/ directory beside them.
+
+DummyJSON
+  Copyright (c) Muhammad Ovi (Owais)
+  MIT License
+  https://github.com/Ovi/DummyJSON
+  backend/internal/roles/merchant/shop/data/dummyjson-products.json is one
+  recorded response from https://dummyjson.com, retrieved 2026-08-12 — see
+  PROVENANCE.md beside it for the exact request. It is committed so that no test
+  has to make that request, which AGENTS.md's hard rule 4 forbids outright.
+
+  It is the *only* place this shop appears in a build that is not asked for one:
+  `cmd/merchant -catalogue-live dummyjson`, which only `make demo-live` passes,
+  fetches from the live host at start-up. `make demo`, `make check`, `make
+  vectors` and CI reach it never.
+
+  What DummyJSON serves is placeholder data published as placeholder data.
+  Nothing in the recording is anybody's real product listing and nothing was
+  scraped. **No image is taken**, from the recording or from the live shop: a
+  fetched offer's picture is a mark this project draws from the offer's
+  identifier, on the same terms as the derived marks listed under Wikidata
+  above.
 
 IBM Plex Mono and IBM Plex Sans
   Copyright (c) 2017 IBM Corp. with Reserved Font Name "Plex"
@@ -118,3 +139,11 @@ applies to them: they are used nominatively, to name what an offer refers to, in
 a demonstration catalogue whose prices, retailers, pictures and shop are all
 invented. No affiliation or endorsement is implied and nothing is offered for
 sale.
+
+The same applies, one step further removed, to the brand names in the DummyJSON
+recording and in whatever that shop serves under `make demo-live` — sixty-odd of
+them in the committed snapshot, some invented and some real. They are somebody
+else's placeholder data about invented products, reproduced only to demonstrate
+that a constraint can be evaluated against a catalogue this project did not
+write. Nothing is offered for sale, no money moves, and no card is ever
+enrolled.
