@@ -230,16 +230,34 @@ type Mandate struct {
 // `typed` and `signed` for the same reason, and this is that pair one wire
 // across.
 //
-// **There is no signed-at instant, and its absence is a fact about this
-// repository rather than an omission here.** Nothing carries one: POST
-// /authorise answers with ExpiresAt and no issuance instant, and the console's
-// own runView is likewise typed / signed / expires_at. The agent could stamp
-// its own clock, and on the browser path that clock was demonstrably not present
-// when the user signed — it would be the buyer claiming to have witnessed a
-// moment it was not at. ExpiresAt is the instant that does exist, it is the one
-// both open mandates carry as a signed `exp` claim, and it is the one a reader
-// actually needs: whether the authorisation the purchase was made under is still
-// live.
+// **There is no signed-at member, and the reason is that nothing carries the
+// instant *forward* — not that no such instant exists.** It does, and the
+// distinction matters enough to write down, because the obvious reading of the
+// shorter sentence sends the next reader looking for something that is not
+// missing. The Trusted Surface reads one clock at the moment it signs and stamps
+// it into both open mandates as `iat` — roles/surface's authorise handler, and
+// contracts/authz/checkout_mandate_open.json declares it as `issued_at`. It is a
+// plain claim rather than a disclosable one, so a holder can read it out of a
+// mandate it is already carrying, which is what internal/adapters/ap2/digest.go
+// does for the digest on the field above and argues at length is sound precisely
+// because the value only ever lands in an obs.Event.
+//
+// What is absent is every hop after that. POST /authorise answers with an expiry
+// and no issuance instant; agent.Authorisation has no field for one, so
+// Client.sign could not carry one even if the surface sent it; the browser
+// assembles POST /watches out of that same answer; and the console's own runView
+// is likewise typed / signed / expires_at. Carrying it would mean a member on
+// each of those and a fourth here — a change worth making and worth its own
+// issue, and one this type should not pre-empt with a field nothing can fill.
+//
+// The one thing that would be wrong is the agent stamping *its own* clock: on
+// the browser path it demonstrably was not present when the user signed, and a
+// buyer claiming to have witnessed a moment it was not at is exactly what this
+// screen exists to make impossible. Reading the user's own signed `iat` is not
+// that, and is what any future member should be filled from. Until one exists,
+// ExpiresAt is the instant the wire has — the `exp` both open mandates carry —
+// and it answers what a reader of the card actually asks, which is whether the
+// authorisation the purchase was made under is still live.
 type Authorisation struct {
 	// Typed is the caller's account of the sentence the user wrote. Unsigned.
 	Typed string `json:"typed"`

@@ -10,7 +10,8 @@ Human Present is the half that will not be built — see *What this is not*.
 #183, #184 and #186 are what build it.
 **Issues:** #20, narrow slice of #45. Waited on #12, #16 and #15. Tokens
 revised by #159. *Indicators* added by #185 and consumed by #183, #184 and
-#186.
+#186. *Where the data comes from* gained the User lane's authorisation card
+with #213.
 
 ## The standard this screen is held to
 
@@ -849,6 +850,57 @@ four roles is work this screen does not need yet.
 The cost is honest and should be recorded — the lanes show what the *agent*
 observed, not independent testimony from each party. When #45 lands in full the
 same screen gets truer data without changing shape.
+
+**The User lane draws an authorisation rather than a step, and #213 is where
+that was decided.** Under Human Not Present the approval and the purchase are
+two requests — on the browser's path, two connections, since the browser signs
+at the Trusted Surface with the agent nowhere on the wire — so they carry two
+correlation IDs. Grouping keys on the correlation and must keep doing so; ADR
+0003 says no hop regenerates one, and two purchases under one correlation are
+already told apart by digest. What follows is that the user's signing is
+genuinely not in the transaction this screen is drawing, and the lane read
+*Nothing yet.* on every purchase somebody had personally signed for — a screen
+titled *Three parties, one purchase* showing two. So the lane draws the open
+mandate pair the attempt was made **under**: the sentence the user typed, the
+sentences the surface rendered, and how long the pair authorises anything. Three
+things about it are design rather than implementation, and belong here:
+
+- **It takes no sequence number and no `#`.** Every other card on this screen is
+  a moment inside one correlation; this one is not, and an ordinal would claim it
+  happened between two of the steps beside it. It takes a `full` pip and **no
+  ending mark**, because the *Two families, six marks* vocabulary reserves `check`
+  and `cross` for a verifier's verdict — an approval wearing one would read as
+  somebody having accepted or refused this purchase, which is three cards to the
+  right and has not happened yet.
+- **It is drawn once per attempt**, so a run that was refused twice before it
+  bought shows it three times. Each attempt is a self-contained row of the spine,
+  and a User column empty on the second attempt would be this same defect one row
+  down. The repetition is the structure asserting itself, not a duplicate.
+- **The lane shows sentences and renders none.** `signed` is the Trusted
+  Surface's own `Render()` output carried on the event stream, and nothing under
+  `src/lanes/` may reach `src/constraint/`. That rule is *not* the one
+  `constraint/architecture.test.ts` holds — its classifier looks for the app's
+  spelling of *"the sentences the surface will sign are on this page"*, and
+  nothing is signed here — so `Lanes.test.tsx` holds it directly, over the
+  transitive import graph.
+
+**The card says *authorises until* rather than *signed at*, and that is a gap
+rather than a preference.** #213's approved sketch asked for *signed 19:04*. The
+instant exists — the Trusted Surface stamps one clock into both open mandates as
+`iat` when it signs them, which `contracts/authz/checkout_mandate_open.json`
+declares as `issued_at` — but no hop between that signature and this card has a
+field to carry it: `POST /authorise` answers an expiry and no issuance moment,
+`agent.Authorisation` has none, and `GET /watches/{id}` is likewise `typed` /
+`signed` / `expires_at`. So the card would have to invent it, and inventing it
+means the *agent's* clock, which on the browser path was not present when the
+user signed. The expiry is the instant the wire has and it answers what the
+reader asks — whether these limits are still live. Carrying the issuance instant
+forward is a change to four hops and a member in two languages, and wants its own
+issue rather than a field nothing can fill.
+
+Under Human Present nothing on this screen changes. There the user signs the
+*closed* mandates at the surface, inside this correlation, so the lane already
+holds their two steps and no emitter on that path has an open pair to name.
 
 ## What this is not
 

@@ -940,11 +940,13 @@ describe("the user's lane on a purchase they signed for earlier", () => {
     );
     expect(
       within(card).queryByText(/authorises until 20:04:31/),
-      "nothing on the wire carries a signing instant — POST /authorise answers " +
-        "with an expiry and no issuance moment — and an agent stamping its own " +
-        "clock would be claiming to have witnessed a moment it was not present for. " +
-        "The expiry is the instant both open mandates carry as a signed exp, and it " +
-        "is the one that says whether these limits are still live",
+      "no hop between the signature and this card carries a signing instant — " +
+        "POST /authorise answers an expiry and no issuance moment, and neither " +
+        "agent.Authorisation nor GET /watches/{id} has a field for one — so a card " +
+        "drawing one would be inventing it. The surface does stamp an iat into both " +
+        "open mandates; carrying it this far is a change of its own. The expiry is " +
+        "the instant the wire has, and it is the one that says whether these limits " +
+        "are still live",
     ).not.toBeNull();
     expect(
       card.textContent,

@@ -137,13 +137,20 @@ export interface MandateRef {
  * second is covered by a signature, and only the second may be drawn as if it
  * were.
  *
- * **There is no signed-at instant and that is deliberate.** Nothing on the wire
- * carries one: `POST /authorise` answers with an expiry and no issuance moment,
- * and `GET /watches/{id}` is likewise `typed` / `signed` / `expires_at`. An
- * agent stamping its own clock would be claiming to have witnessed a moment it
- * was not present for — on this path it demonstrably was not. The expiry is the
- * instant that exists, it is a claim both open mandates carry as a signed `exp`,
- * and it is the one a reader needs: whether these limits are still live.
+ * **There is no signed-at member, because nothing carries that instant forward
+ * — not because no such instant exists.** The Trusted Surface stamps one into
+ * both open mandates as `iat` when it signs them, and
+ * `contracts/authz/checkout_mandate_open.json` declares it as `issued_at`; it is
+ * a plain claim rather than a disclosable one, so the holder of a mandate can
+ * read it out. What has no field for it is every hop after that: `POST
+ * /authorise` answers an expiry and no issuance moment, `agent.Authorisation`
+ * carries none, and `GET /watches/{id}` is likewise `typed` / `signed` /
+ * `expires_at`. A member here would need one at each of those, which is its own
+ * change and its own issue. What would be wrong is an *agent* stamping its own
+ * clock — on this path it demonstrably was not present when the user signed —
+ * and the user's own signed `iat` is not that. Until the hops carry it, the
+ * expiry is the instant this type has, it is the `exp` both open mandates carry,
+ * and it answers what a reader needs: whether these limits are still live.
  *
  * Named for `MandateRef`'s symmetry — both are one nested object the wire
  * carries and this module reads straight through — rather than because either

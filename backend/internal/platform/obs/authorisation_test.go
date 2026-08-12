@@ -82,14 +82,20 @@ func TestAVerifierMayNotStateTheAuthorisationAStepWasTakenUnder(t *testing.T) {
 // mandate_constructed events — the moment the open pair comes into being — from
 // pointing an artefact at itself.
 //
-// It is also what makes the Human Present answer structural rather than
-// conventional. Under Human Present the user signs the *closed* mandates at the
-// surface, in this correlation, and there is no open pair at all; a version of
-// this rule that only forbade the open state would still let a surface attach
-// one there and draw a card beside the user's own two steps, which is the
-// duplicate #213 says the fix must not create. What forbids it is that only the
-// party holding an open pair has one to name, and the surface's closed-mandate
-// events on that path hold none.
+// **What it does not do is close the Human Present path, and that is worth being
+// exact about because the reverse is easy to assume.** Under Human Present the
+// surface signs the *closed* pair at POST /approve and emits two
+// mandate_constructed events about it — which satisfies both halves of this
+// gate, the kind and the closed state. So Validate accepts an authorisation
+// there, and the test above already pins it doing so:
+// underAnOpenMandate(KindMandateConstructed) is a closed Checkout Mandate on a
+// mandate_constructed step, which is byte for byte the shape POST /approve
+// emits, and TestAnAuthorisationIsPermittedOnTheTwoKindsAHolderEmits asserts it
+// passes. What keeps a card from appearing beside the user's own two steps is not the
+// gate but that there is nothing to attach: only a party holding an open pair
+// has one to name, and on that path no open pair is ever issued. The gate makes
+// the *open* mandate's own events unrepresentable, which is a different and
+// narrower claim, and it is the one this test pins.
 func TestAnOpenMandateIsTheAuthorisationRatherThanSomethingTakenUnderOne(t *testing.T) {
 	t.Parallel()
 

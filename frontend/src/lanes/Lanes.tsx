@@ -166,15 +166,23 @@ function StepCard({ step }: { readonly step: Step }) {
  * carried on the wire, and `Lanes.test.tsx` holds the import rule against the
  * module graph.
  *
- * # The expiry, and the instant that is not here
+ * # The expiry, and the instant that has not been carried this far
  *
- * *"Authorises until"* rather than *"signed at"*, because nothing carries a
- * signing instant: `POST /authorise` answers with an expiry and no issuance
- * moment, and `GET /watches/{id}` is likewise `typed` / `signed` / `expires_at`.
- * An agent stamping its own clock would be claiming to have witnessed a moment
- * it was not present for. The expiry is the instant that exists, it is a claim
- * both open mandates carry as a signed `exp`, and it answers the question a
- * reader of this card actually has — whether these limits are still live.
+ * *"Authorises until"* rather than *"signed at"* — and the reason is that no hop
+ * between the signature and this card carries a signing instant, not that none
+ * was ever taken. #213's approved sketch asked for *signed 19:04*, and it can
+ * have it: the Trusted Surface stamps one clock into both open mandates as `iat`
+ * when it signs them, which `contracts/authz/checkout_mandate_open.json` declares
+ * as `issued_at`. What has no room for it today is the path between — `POST
+ * /authorise` answers an expiry and no issuance moment, `agent.Authorisation`
+ * has no field, and `GET /watches/{id}` is likewise `typed` / `signed` /
+ * `expires_at` — so a card drawing one would have to invent it. See
+ * `AuthorisationRef` for what carrying it properly would cost, and note the one
+ * thing that stays wrong regardless: an *agent* stamping its own clock, which on
+ * this path was not present when the user signed. Until then the expiry is the
+ * instant the wire has, it is the `exp` both open mandates carry, and it answers
+ * the question a reader of this card actually has — whether these limits are
+ * still live.
  */
 function Approval({ authorisation }: { readonly authorisation: AuthorisationRef }) {
   return (
