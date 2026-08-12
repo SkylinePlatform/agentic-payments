@@ -1,0 +1,23 @@
+#!/bin/sh
+#
+# Regenerate after a rebase has finished replaying.
+#
+# post-checkout does fire during a rebase, but it fires on the way to the base
+# commit — before a single commit has been replayed. The tree it saw is not the
+# tree the rebase leaves behind, so a rebase covered only by post-checkout
+# regenerates against the wrong one and produces exactly the staleness this is
+# for. TestRebaseRegeneratesAgainstTheTreeItLeaves is that sentence as a test.
+
+set -eu
+
+# git streams the rewritten commit pairs on stdin. Drain them before deciding
+# anything so it never writes into a pipe nobody is reading. No test here can
+# break this line — git tolerates the unread pipe in practice — and it is kept
+# because it costs nothing, not because anything is proving it.
+cat >/dev/null
+
+# The other caller is `git commit --amend`, which rewrites a commit without
+# moving the working tree at all.
+[ "${1:-}" = rebase ] || exit 0
+
+exec "${0%/*}/regenerate"

@@ -122,6 +122,19 @@ jobs:
         working-directory: tools/catalogue
         run: go test ./...
 
+      # The suite over .githooks/ and over the tracked sentinel in the generated
+      # package. CI never runs the hooks themselves — actions/checkout clones,
+      # config is not cloned, so core.hooksPath is unset and no hook in this
+      # repository can fire on a runner. That is exactly why the suite has to be
+      # here: nothing else on the way to a merge exercises them.
+      #
+      # -count=1 because the subject is four shell scripts and one Go file
+      # outside the module, and `go test` reported (cached) after one of the
+      # hooks had been deleted from the tree.
+      - name: Test bootstrap machinery
+        working-directory: tools/bootstrap
+        run: go test -count=1 ./...
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -149,3 +162,34 @@ jobs:
         with:
           version: v2.11.3
           working-directory: backend
+
+  setup:
+    name: Fresh clone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      # No `make generate` before this, deliberately: the other three jobs
+      # generate first and therefore can never see what a new contributor sees.
+      # NPM points at a command that does not exist, because every runner ships
+      # npm and absence can never be the check — `make setup` is Go-only, and
+      # this is what holds it there.
+      - name: Setup
+        run: make setup NPM=npm-must-not-run
+
+      # vet rather than build: the mocks are _test.go, so `go build ./...` is
+      # clean with every one of them missing and would pass the mutation this
+      # job exists to catch. GOWORK=off because `make setup` wrote a go.work and
+      # this step is not running through make.
+      - name: The toolchain loads every package, tests included
+        working-directory: backend
+        run: GOWORK=off go vet ./...
+
+      # The same property held locally, and the target a contributor can run.
+      - name: Setup is complete from nothing, and needs no npm
+        run: make setup-verify

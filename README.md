@@ -141,11 +141,17 @@ Human Present flow, in full, with nothing about it faked.
 ### Working on it
 
 ```bash
+make setup            # generated code, git hooks and go.work — run this first
 make check            # the gate before any change is done — needs only Go
 make demo             # the whole stack                    ⟵ needs Node
 make frontend         # just the frontend dev server       ⟵ needs Node
-make workspace        # write the go.work an editor opened at the root needs
 ```
+
+Run `make setup` before opening an editor. Nothing generated is committed — the
+canonical model's Go types and every `mocks_test.go` are both gitignored — so a
+clone has neither and `gopls` reports undefined symbols in every package that
+uses one. It needs only Go, takes about a second, and it also points git at
+`.githooks/`, after which a checkout, a pull or a rebase regenerates on its own.
 
 `make check` regenerates the Go half of the canonical model, then lints and
 tests. It deliberately needs no Node, so work that never touches the frontend

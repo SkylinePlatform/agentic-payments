@@ -294,6 +294,10 @@ tools/
   catalogue/            deploy/catalogue.json and its images, derived from a CC0
                         snapshot. A third tool-only module; `make catalogue`,
                         run by a person and by nothing in CI or `make demo`
+  bootstrap/            the suite over .githooks/ and over the tracked sentinel
+                        in backend/internal/core/generated/. A fourth tool-only
+                        module and the one that generates nothing. No Go source
+                        that is not a test
 backend/                ⬅ the Go module root. go.mod lives here, not at the top
   cmd/                  agent, merchant, credprovider, mpp, surface, registry, proxy
                         collector — an eighth binary, and NOT an AP2 role
@@ -368,6 +372,9 @@ Run `make workspace`. It writes an untracked `go.work` at the root listing both
 modules — `.gitignore` already covers the file — and declines to overwrite one
 that is already there, so a local `replace` directive survives.
 
+Or run `make setup`, which is that plus the generated code the file does not
+contain — the next section is why the file on its own is half the job.
+
 **The file must not be committed.** A workspace unifies the build lists of the
 modules it names, and `contracts/tools` pins the code generator outside
 `backend/go.mod` on purpose. With a workspace active, `backend/` compiles
@@ -388,6 +395,85 @@ binary must itself be 1.26.0 or newer, otherwise the workspace fails to load
 with `go.work requires go >= 1.26.0`. `make workspace` takes the `go` directive
 from the toolchain actually installed, so a generated workspace can never
 demand a newer Go than its owner has — which a committed one could.
+
+### A checkout can leave the generated half behind, and the error names the wrong file
+
+`make workspace` fixes where the modules are. It does not fix what is inside
+them. `backend/internal/core/generated/` and the seven `mocks_test.go` are
+gitignored — the section below is why — so a clone has neither, and a checkout
+that changes a schema or a mocked interface updates the input and leaves the
+output alone with `git status` staying clean throughout.
+
+**Issue #265 is what that looks like.** `gopls` reported
+`backend/internal/agent/console/console_test.go` broken eleven times, "Describe
+undefined on MockWatcher", against a `console.go` with nothing wrong in it: the
+mock on disk had been generated the day before `Describe` joined `Watcher`.
+Every diagnostic named a hand-written test; none named the file nobody had
+regenerated. On a fresh clone the same cause reads worse still — `go list`
+aborts on an unresolvable import before type-checking anything, so the standard
+library appears unimportable, which is the cascade this file attributes one
+section up to a *missing* `go.work`, now arriving from a tree that has one.
+
+**`make setup` is the first command on a clone**, and `make generated` is the
+name the rest hangs on.
+
+- `make generated` is the three generators a Go toolchain alone can run —
+  `generate-go`, `generate-disclosure`, `generate-mocks`. `check`, `build`,
+  `test`, `lint` and `vectors` all declare it, so no entry point make owns can
+  be reached with generated output older than the tree it sits in. Three of
+  those five declared no generation at all before #265. `generate-ts` stays
+  out: the gate needs only Go, and a git hook that reached for npm would put a
+  Node toolchain in front of a checkout.
+- `make setup` is `generated`, `hooks` and `workspace`, in that order, and it
+  is the only place those three are written down together.
+- `make setup-verify` is what keeps `setup`'s claim true rather than tidy. It
+  copies the tracked files as they are on disk into `.setup-verify/`, runs
+  `make setup` there with `NPM` pointed at a command that does not exist, and
+  then runs `go vet ./...`. Vet rather than build, because the mocks are
+  `_test.go` and a build is clean without them. It copies the working tree
+  rather than adding a detached worktree on purpose: a worktree verifies the
+  *committed* Makefile, which is green exactly while you are editing the target.
+
+**The hooks cover the entry points make does not own.** `.githooks/` gains
+`post-checkout`, `post-merge` and `post-rewrite`, each a few lines over a shared
+`regenerate`, and between them they fire on `git checkout`, `git switch`,
+`git worktree add`, every step of a `git bisect`, `git merge`, `git pull` and
+the end of a rebase. `post-rewrite` is not redundant with `post-checkout`: a
+rebase fires post-checkout on the way to the commit it is about to replay onto,
+so the only tree post-checkout ever sees during one is the tree the rebase does
+not leave behind. They never fail an operation — a hook that could fail a
+checkout is one people uninstall — they never reach the network, and
+`git config hooks.regenerate false` turns them off. Where a git client's PATH
+has no Go on it they print one line naming this issue rather than exiting
+silently, because stale output with no message is the failure being removed.
+
+**What no hook can cover is the clone itself**, and one hand-written file covers
+what it can of that. git does not clone config, so `core.hooksPath` is unset in
+a fresh checkout and nothing in `.githooks/` runs until a person has typed
+`make hooks` once. `backend/internal/core/generated/doc.go` is therefore tracked
+— the one hand-written file in a generated directory, excepted in `.gitignore`
+and skipped by `make clean` — and it references one symbol from each generator
+so that an ungenerated package fails *in that file*, whose comment is the
+command to run, instead of failing at module resolution in a hand-written file
+that is not at fault.
+
+**Two cases stay unfixed and are named rather than hidden.** Editing a mocked
+interface yourself involves no git operation, so no hook fires and the mock is
+stale until something runs `make check` — the developer working *on* the
+interface gets nothing from any of this. And the frontend's `index.ts` needs
+npm, so a clone still fails `npm run typecheck` until `make generate` is run;
+`generate-disclosure` is a `go run` and does write its half.
+
+`tools/bootstrap` is the suite that holds all of it, and it was built by
+breaking it: deleting `post-merge` turns `TestMergeRegenerates` red, deleting
+`post-rewrite` turns `TestRebaseRegeneratesAgainstTheTreeItLeaves` red, deleting
+`doc.go`'s declaration turns `TestAnUngeneratedModelFailsInTheFileThatSaysWhy`
+red. It runs with `-count=1`, because `go test` reported `(cached)` after a hook
+had been deleted from the tree, and a suite that cannot see its own subject
+change is the thing it exists to prevent. It stubs `make`: what it proves is
+when the hooks fire, in which worktree and what they ask for, and that
+`make generated` produces a correct mock is what `make check` proves on every
+run.
 
 ### Generated code is not hand-edited
 
@@ -455,6 +541,20 @@ committed file to the program instead is a test,
 anything. `make workspace` *does* list this one: it holds Go source an editor
 has to resolve, and it requires nothing but testify, which `backend/` already
 builds against.
+
+**`tools/bootstrap` is the fourth, and it is the one that generates nothing.**
+The other three are kept out of `backend/go.mod` because a generator is not a
+dependency of the thing it generates; this one is kept out because its *subject*
+is the repository rather than the module — the hooks in `.githooks/` and the
+tracked sentinel in `backend/internal/core/generated/` — and a suite that drives
+`git checkout` in a temporary repository has no business in the build list of
+the thing that gets imported. It holds no non-test Go source, exactly as
+`internal/suite` holds none, and it is not `internal/suite`: that package's own
+comment says what it contains is one rule about every other `_test.go` file in
+the module, and neither of these is. `make workspace` lists it, on the criterion
+that separates `tools/catalogue` from `tools/mockery` — an editor needs a module
+in the workspace to resolve the Go source in it — and it requires nothing but
+testify.
 
 ---
 
@@ -720,6 +820,10 @@ reconcile against the code for no benefit.
 Run everything from the repository root:
 
 ```bash
+make setup            # generated code, git hooks and go.work — the first command on a clone
+make setup-verify     # prove `make setup` is complete, from nothing and with no npm
+make generated        # regenerate everything a Go toolchain alone can produce
+make hooks            # point git at the tracked hooks in .githooks
 make check            # generate Go types, then lint + test — the gate before any task is done
 make build            # build every binary under backend/cmd
 make test             # unit tests, with -race

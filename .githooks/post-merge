@@ -1,0 +1,11 @@
+#!/bin/sh
+#
+# Regenerate after `git pull` and `git merge`.
+#
+# post-checkout does not fire for a merge, fast-forward included, so without
+# this the commonest way a mocked interface changes under you — pulling main —
+# is the one case the hooks would miss. It is the case issue #265 reported.
+
+set -eu
+
+exec "${0%/*}/regenerate"
