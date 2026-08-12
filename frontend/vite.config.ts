@@ -29,6 +29,18 @@ import tailwindcss from "@tailwindcss/vite";
  * place that can say why, rather than at the first thing downstream that happens
  * to notice.
  *
+ * # The floor is a minor version, and comparing majors alone would miss the case
+ *
+ * `--experimental-webstorage` arrived in Node **22.4.0**, so the option this file
+ * passes is a bad option on 22.0 through 22.3 exactly as it is on Node 20 —
+ * measured on v22.3.0, which produces the same `Worker exited unexpectedly` with
+ * no version and no option named. A check on the major alone reads as covering
+ * "Node 22" and covers the four releases of it that cannot run this suite, which
+ * `.nvmrc` makes reachable rather than theoretical: it names the **line**, so
+ * `nvm use` takes the newest 22.x already installed, not the newest that exists.
+ * The floor here is therefore `engines`' own — 22.13, jsdom's — and the two are
+ * compared as a pair.
+ *
  * # Why the version is read off `globalThis` rather than from `process` directly
  *
  * Because `src/topology.test.ts` imports this file, and that puts it in
@@ -42,22 +54,37 @@ import tailwindcss from "@tailwindcss/vite";
  *
  * So the global is asked for structurally, which needs no Node types in either
  * program and reads as what it is — a host that may or may not have a `process`.
- * Somewhere without one yields `NaN`, and `NaN < 22` is false, so a
- * non-Node host is let through rather than refused on a version it does not
- * have. This file is never bundled into a browser; that is the reason the cast
- * says `?` rather than a reason it can be dropped.
+ * A host without one is let through rather than refused on a version it does not
+ * have, and so is a version string that does not parse: every comparison against
+ * `NaN` is false, which points the one direction a guard can fail safely. This
+ * file is never bundled into a browser; that is the reason the cast says `?`
+ * rather than a reason it can be dropped.
+ *
+ * Exported because a claimed prevention has to be provable by breaking it, and
+ * the thing to break here is a comparison rather than the module: re-importing
+ * this file under a stubbed `process` would re-evaluate Vite and esbuild with it.
+ * `src/test/node-floor.test.ts` drives the function over the versions that
+ * matter, 22.3.0 among them. Vite reads the default export and ignores this one.
  */
-const OLDEST_NODE = 22;
-const nodeVersion = (globalThis as { process?: { versions?: { node?: string } } }).process?.versions
-  ?.node;
-if (nodeVersion !== undefined && Number(nodeVersion.split(".")[0]) < OLDEST_NODE) {
+const OLDEST_NODE = [22, 13] as const;
+
+export function refuseUnsupportedNode(version: string | undefined): void {
+  if (version === undefined) return;
+  const [major, minor] = version.split(".").map(Number);
+  const tooOld = major < OLDEST_NODE[0] || (major === OLDEST_NODE[0] && minor < OLDEST_NODE[1]);
+  if (!tooOld) return;
   throw new Error(
-    `This package needs Node ${OLDEST_NODE}.13 or newer and is running on v${nodeVersion}. ` +
-      "See .nvmrc and `engines` in frontend/package.json. Node 20 reached end of life on 2026-04-30 " +
-      "and was dropped in #269: the test worker is started with --no-experimental-webstorage, which " +
-      "an older Node refuses as a bad option before running a single test.",
+    `This package needs Node ${OLDEST_NODE[0]}.${OLDEST_NODE[1]} or newer and is running on ` +
+      `v${version}. See .nvmrc and \`engines\` in frontend/package.json. Node 20 reached end of ` +
+      "life on 2026-04-30 and was dropped in #269: the test worker is started with " +
+      "--no-experimental-webstorage, which a Node before 22.4 refuses as a bad option before " +
+      "running a single test.",
   );
 }
+
+const runningOn = (globalThis as { process?: { versions?: { node?: string } } }).process?.versions
+  ?.node;
+refuseUnsupportedNode(runningOn);
 
 /**
  * The collector's default listen address, matching `-addr` in
