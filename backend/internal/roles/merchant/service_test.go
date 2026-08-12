@@ -65,6 +65,25 @@ func newShop(t *testing.T) shop {
 func newShopWatched(t *testing.T, events *obs.Emitter) shop {
 	t.Helper()
 
+	processor := merchant.NewMockProcessor(t)
+	s := newShopServedBy(t, events, processor)
+	s.processor = processor
+	return s
+}
+
+// newShopServedBy is the same merchant with its payment leg pointed at
+// whichever Processor the caller brought.
+//
+// The double is the ordinary case and the two tests that do not use it are the
+// reason this parameter exists: what HTTPProcessor makes of the answers a real
+// Merchant Payment Processor can give is unreachable through a double, which
+// records the Go call and never touches the wire. A caller passing anything
+// other than the double leaves shop.processor nil, so presented() is not
+// available to it — count the presentations at the handler instead, which is
+// where a caller running the real hop already is.
+func newShopServedBy(t *testing.T, events *obs.Emitter, processor merchant.Processor) shop {
+	t.Helper()
+
 	clk := clock.NewFake(base)
 	signer := func(name string) (authz.Signer, authz.Verifier) {
 		store, err := crypto.NewStore(clk)
@@ -97,8 +116,6 @@ func newShopWatched(t *testing.T, events *obs.Emitter) shop {
 	blinder, err := sdjwt.NewBlinder()
 	require.NoError(t, err, "building the blinder")
 
-	processor := merchant.NewMockProcessor(t)
-
 	svc := &merchant.Service{
 		ID:        "air-serbia",
 		Inventory: inventory,
@@ -119,7 +136,7 @@ func newShopWatched(t *testing.T, events *obs.Emitter) shop {
 
 	return shop{
 		url: srv.URL, merchant: shopVerifier, user: userSigner,
-		stranger: strangerSigner, blinder: blinder, processor: processor,
+		stranger: strangerSigner, blinder: blinder,
 	}
 }
 
