@@ -50,6 +50,13 @@ func mustScript(scripts ...Script) *ScriptedInterpreter {
 // as a demonstration, and this is what is left once each remaining sentence
 // shows something the others do not.
 //
+// **The alias mechanism is still here**, and still the argument for matching
+// exactly rather than fuzzily — two wordings of one intent are two entries, and
+// a reader of this table can see that they are two. What #244 removed is this
+// table's illustration of it, not the capability, so the witness moved to a
+// synthetic pair in scripted_test.go's TestTwoWordingsOfOneIntentReachOneInterpretation
+// rather than leaving with the menu entry.
+//
 // **Nothing here proposes a Quantity greater than one any more.** The concert
 // entry this table carried was the one scripted demonstration of
 // Interpretation.Quantity's reason to exist — issue #133, two tickets against

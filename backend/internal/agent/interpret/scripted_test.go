@@ -401,20 +401,76 @@ func TestNewScriptedRefusesAScriptThatCouldNotDoItsJob(t *testing.T) {
 	}
 }
 
+// TestTwoWordingsOfOneIntentReachOneInterpretation is the declared alias, kept
+// as a witness after the demo table stopped illustrating it.
+//
+// The demo table used to carry its own: "buy a flight to Palma **under** $200"
+// beside "**when it drops below** $200", two entries agreeing character for
+// character on one constraint set. Issue #244 removed it, because on a menu of
+// five a reader saw the same purchase twice and learnt nothing from the second.
+// **What that removed is the illustration, not the capability**, and the
+// capability is the whole argument for exact matching: a fuzzy matcher would
+// have to guess that two sentences mean one thing, and a table is where somebody
+// writes it down instead. A mechanism nothing exercises is a mechanism nobody
+// finds out has broken, so the pair moved here rather than leaving with the menu
+// entry — synthetic, on this test's own script, so that restoring it costs the
+// demo nothing.
+//
+// The third entry is the control. Two aliases agreeing proves nothing on its own
+// — an interpreter that answered the same thing to everything would pass that —
+// so a differently worded sentence with a different constraint set has to come
+// back different in the same breath.
+func TestTwoWordingsOfOneIntentReachOneInterpretation(t *testing.T) {
+	t.Parallel()
+
+	const (
+		wordedOneWay     = "book me a flight to Palma when it drops below $200"
+		wordedTheOther   = "book me a flight to Palma under $200"
+		aDifferentIntent = "book me a hotel in Palma under $200"
+	)
+
+	const (
+		flights = `[
+			{"op":"eq","field":"item.category","value":"flights"},
+			{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}
+		]`
+		hotels = `[
+			{"op":"eq","field":"item.category","value":"hotels"},
+			{"op":"lte","field":"amount","value":{"amount":20000,"currency":"USD"}}
+		]`
+	)
+
+	interpreter, err := interpret.NewScripted(
+		interpret.Script{Prompt: wordedOneWay, Constraints: flights, Trigger: interpret.TriggerConditional},
+		interpret.Script{Prompt: wordedTheOther, Constraints: flights, Trigger: interpret.TriggerConditional},
+		interpret.Script{Prompt: aDifferentIntent, Constraints: hotels, Trigger: interpret.TriggerConditional},
+	)
+	require.NoError(t, err, "two wordings of one intent are two entries, and a script has to accept them")
+
+	first, err := interpreter.Interpret(t.Context(), wordedOneWay)
+	require.NoError(t, err, "the first wording")
+	second, err := interpreter.Interpret(t.Context(), wordedTheOther)
+	require.NoError(t, err, "the second wording")
+	other, err := interpreter.Interpret(t.Context(), aDifferentIntent)
+	require.NoError(t, err, "the control")
+
+	assert.Equal(t, first, second,
+		"two wordings declared to be one intent produced two different authorities, which is the "+
+			"whole of what declaring them buys over a matcher guessing")
+	assert.NotEqual(t, first, other,
+		"a different sentence came back as the alias's own interpretation, so the agreement above "+
+			"says nothing about aliasing and everything about an interpreter answering one thing")
+}
+
 // TestNewScriptedRefusesTwoPromptsThatMatchTheSameWay refuses a duplicate rather
 // than resolving it.
 //
 // Which entry answered would depend on which was written last, a reader would
 // have no way of telling that the other is dead, and this is the one component
 // whose entire purpose is to be deterministic. Aliases are still available —
-// they are two entries with two prompts.
-//
-// **This is now the only witness of that mechanism.** The demo table carried
-// its own declared alias — "under $200" beside "when it drops below $200" —
-// until issue #244 dropped it as a demonstration of the same intent that read
-// as padding on a menu of three. What that removed is the illustration, not
-// the capability: two scripts that normalise to one prompt are still refused,
-// and this synthetic pair is what proves it.
+// they are two entries with two prompts, which is what the test above holds.
+// A duplicate is the case where the two prompts are the *same* one once case and
+// spacing are normalised, and there the second entry can never answer anything.
 func TestNewScriptedRefusesTwoPromptsThatMatchTheSameWay(t *testing.T) {
 	t.Parallel()
 
