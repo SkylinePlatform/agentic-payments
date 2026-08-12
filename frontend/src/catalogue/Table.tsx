@@ -8,11 +8,13 @@ import { formatAmount } from "../protocol";
  *
  * One row per offer the agent's search found, `proposal.offers`
  * (`agent.Proposal.Offers`, carried through `POST /proposals` unaltered — see
- * `internal/agent/console/view.go`). Against today's demo catalogue that is
- * always exactly one row: every scripted sentence narrows to a single
- * candidate, which is `docs/specs/2026-08-10-trusted-surface-consent-design.md`'s
- * own account of the same catalogue from the consent screen's side. Built over
- * the array regardless, so nothing here has to change when #160 widens it.
+ * `internal/agent/console/view.go`). **More than one row is the ordinary case
+ * now**, which it was not when this comment was written: it said "always exactly
+ * one row" because every scripted sentence narrowed
+ * `docs/specs/2026-08-10-trusted-surface-consent-design.md`'s catalogue to a
+ * single candidate, and #160 widened that catalogue. Issue #298's own report is
+ * three bicycles. The paragraph that recorded the change lived in the branch this
+ * one deleted, so it is restated here rather than lost with it.
  *
  * **Every row the search returned can be bought**, and issue #298 is why that is a
  * change rather than how it always was. The rows were drawn from the start and all
@@ -132,6 +134,22 @@ function Row({
   const quantity = parsedQuantity(raw);
   const inert = busy || blocked;
 
+  // The number this row claims the purchase comes to. `Number` is a double, so
+  // past 2^53 it stops being able to hold a whole number of minor units and the
+  // product silently rounds — a total that reads as exact and is not.
+  //
+  // `merchant.Catalogue.Quote` performs this same multiplication and refuses
+  // rather than trusting it: "generated.Amount holds minor units in an int, so a
+  // large enough quantity wraps — and a wrapped total is a negative or tiny price
+  // that a cap constraint waves through". Nothing is waved through here, because
+  // this row decides nothing — but a row whose whole job is to state the
+  // arithmetic before anything is signed must not state a number the arithmetic
+  // did not produce. So past that point it says nothing, on the reasoning
+  // `Console.tsx` applies to an unanswered `GET /examples`: a screen with no
+  // honest answer promises none.
+  const total = offer.price.amount * quantity;
+  const totalIsExact = Number.isSafeInteger(total);
+
   return (
     <tr className="border-b border-graphite/40 align-top">
       <td className="w-16 py-3 pr-3">
@@ -156,10 +174,10 @@ function Row({
           total and the price are the same number and printing it twice would
           teach a reader that they are different things.
         */}
-        {quantity > 1 && (
+        {quantity > 1 && totalIsExact && (
           <span className="mt-1 block font-sans text-xs text-graphite">
             {quantity} × {formatAmount(offer.price)} ={" "}
-            {formatAmount({ ...offer.price, amount: offer.price.amount * quantity })}
+            {formatAmount({ ...offer.price, amount: total })}
           </span>
         )}
       </td>

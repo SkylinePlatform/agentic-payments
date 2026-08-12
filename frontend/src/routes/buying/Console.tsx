@@ -265,10 +265,27 @@ export function Console({
       )}
 
       <div>
+        {/*
+          Disabled while a row's proposal is in flight, and that is the same rule
+          the table's own `choosing` prop cites rather than a second one.
+          `client.ts` states it about this very button: a fresh idempotency key
+          per click "is what makes a *retry* safe, not what makes a double-click
+          safe", and "what actually prevents it is `Console.tsx` disabling the
+          button". Gating the rows and leaving this one live applied half of it.
+
+          What the other half was worth: `choose` awaits, then calls `onBuy`
+          unconditionally. An Interpret landing in that window runs
+          `setProposal(null)` and fetches a proposal for whatever the box now
+          holds, and the resolving `choose` then hands the surface a proposal
+          built from the earlier sentence — over a table that had already been
+          replaced. Nothing mis-signs, because the consent screen renders the
+          proposal it was given, but the screen a person read and the mandate
+          they are asked for would have come from two different prompts.
+        */}
         <button
           type="button"
           onClick={() => void interpret()}
-          disabled={pending || prompt.trim() === ""}
+          disabled={pending || choosing !== null || prompt.trim() === ""}
           className="border border-ink px-4 py-2 font-sans text-sm text-ink hover:bg-ink hover:text-paper disabled:cursor-not-allowed disabled:opacity-40"
         >
           Interpret

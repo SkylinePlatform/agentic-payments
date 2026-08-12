@@ -326,6 +326,117 @@ describe("the shopping console", () => {
     ).toBe("gtin:0002");
   });
 
+  it("carries the quantity typed on an unsettled row into what gets signed — issue #298", async () => {
+    // The two halves of #298 meet on exactly one line: `onBuy(withQuantity(picked,
+    // quantity))`, on the re-proposing arm. The test above drives the identifier
+    // through it and the table's own tests drive the count as far as `onChoose`,
+    // so replacing that `quantity` with a literal 1 leaves the whole suite green —
+    // and a person who asked for three of the row they picked would sign a mandate
+    // saying one. `amount` bounds the total, so that is not a smaller purchase
+    // than the one they read: it is a different one.
+    const settled = {
+      id: "gtin:05014477390221",
+      title: "Telescopic ladder",
+      description: "",
+      image_url: "",
+      retailer: "",
+      price: { amount: 5000, currency: "USD" },
+    };
+    const other = { ...settled, id: "gtin:0002", title: "A dearer ladder" };
+    const first: Proposal = { ...aProposal(), offers: [settled, other] };
+
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      if (url === "/watches") return Promise.resolve(new Response(JSON.stringify({ watches: [] })));
+      if (url === "/examples") return Promise.resolve(new Response(JSON.stringify({ examples: [] })));
+      if (url !== "/proposals")
+        return Promise.resolve(new Response("not stubbed: " + url, { status: 404 }));
+      const body = JSON.parse(String(init?.body ?? "{}")) as { item?: string };
+      return Promise.resolve(
+        new Response(
+          JSON.stringify(body.item === undefined ? first : { ...first, item: other.id, offer: other }),
+        ),
+      );
+    });
+
+    renderConsole();
+    await userEvent.type(await screen.findByRole("textbox"), "two ladders");
+    await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
+
+    const boxes = await screen.findAllByLabelText(/quantity/i);
+    await userEvent.clear(boxes[1]);
+    await userEvent.type(boxes[1], "3");
+    await userEvent.click((await screen.findAllByRole("button", { name: /buy/i }))[1]);
+
+    await waitFor(() => expect(bought).toHaveLength(1));
+    expect(
+      bought[0].quantity,
+      "the count a person typed on the row they picked, not the one the first proposal came back with",
+    ).toBe(3);
+    expect(
+      bought[0].constraints,
+      "and it is inside the set the surface is about to render and sign, not remembered only in the browser",
+    ).toContainEqual({ op: "lte", field: "quantity", value: 3 });
+  });
+
+  it("will not interpret a new sentence while a row's proposal is in flight", async () => {
+    // `choose` awaits and then calls `onBuy` unconditionally. An Interpret landing
+    // in that window clears the proposal and fetches one for whatever the box now
+    // holds, and the resolving `choose` hands the surface a proposal built from the
+    // earlier sentence, over a table that has already been replaced.
+    //
+    // `client.ts` states the remedy about this exact button — a fresh idempotency
+    // key "is what makes a *retry* safe, not what makes a double-click safe", and
+    // "what actually prevents it is `Console.tsx` disabling the button". The rows
+    // already went inert while a proposal was in flight; this is the same rule
+    // applied to the one control that could still start a second one.
+    const settled = {
+      id: "gtin:05014477390221",
+      title: "Telescopic ladder",
+      description: "",
+      image_url: "",
+      retailer: "",
+      price: { amount: 5000, currency: "USD" },
+    };
+    const other = { ...settled, id: "gtin:0002", title: "A dearer ladder" };
+    const first: Proposal = { ...aProposal(), offers: [settled, other] };
+
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      if (url === "/watches") return Promise.resolve(new Response(JSON.stringify({ watches: [] })));
+      if (url === "/examples") return Promise.resolve(new Response(JSON.stringify({ examples: [] })));
+      if (url !== "/proposals")
+        return Promise.resolve(new Response("not stubbed: " + url, { status: 404 }));
+      const body = JSON.parse(String(init?.body ?? "{}")) as { item?: string };
+      if (body.item === undefined) return Promise.resolve(new Response(JSON.stringify(first)));
+      return held.then(
+        () => new Response(JSON.stringify({ ...first, item: other.id, offer: other })),
+      );
+    });
+
+    renderConsole();
+    await userEvent.type(await screen.findByRole("textbox"), "two ladders");
+    await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
+    await userEvent.click((await screen.findAllByRole("button", { name: /buy/i }))[1]);
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /interpret/i }).hasAttribute("disabled"),
+        "a second sentence started here would replace the table the in-flight choose is about to answer for",
+      ).toBe(true),
+    );
+
+    release();
+    await waitFor(() => expect(bought).toHaveLength(1));
+    expect(
+      screen.getByRole("button", { name: /interpret/i }).hasAttribute("disabled"),
+      "and it comes back once nothing is in flight, so the gate is the state and not a latch",
+    ).toBe(false);
+  });
+
   it("signs the proposal already in hand when the row bought is the one it settled on", async () => {
     // The other side of the same rule: that row is already pinned to itself, so
     // asking again would be a round trip that can only return what is here.

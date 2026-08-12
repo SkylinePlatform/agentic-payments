@@ -93,6 +93,57 @@ describe("the product table", () => {
     expect(onChoose.mock.calls[0]?.[1]).toBe(1);
   });
 
+  it("reads an emptied quantity box as one, rather than as none", async () => {
+    // The test above it drives the box's *initial* "1", so it never reaches
+    // `parsedQuantity`'s fallback at all — changing that fallback to 0 leaves the
+    // whole suite green. This is the case the fallback exists for: `Row` keeps the
+    // box's own text so somebody clearing it before typing is not fought on every
+    // keystroke, which means an empty box is a state a person can click Buy in.
+    //
+    // Zero is the answer that costs something. `withQuantity` would append
+    // `quantity lte 0`, and `merchant.Catalogue.Quote` refuses that outright —
+    // "a purchase of none of something is not a smaller purchase" — so the
+    // mandate would be signed and then refused, which is the defect #298 was
+    // filed about wearing a different hat.
+    const onChoose = vi.fn();
+    render(<Table proposal={aProposal()} onChoose={onChoose} choosing={null} />);
+
+    await userEvent.clear(screen.getByLabelText(/quantity/i));
+    await userEvent.click(screen.getByRole("button", { name: /buy/i }));
+
+    expect(onChoose.mock.calls[0]?.[1], "an empty box buys one, never none").toBe(1);
+  });
+
+  it("states no total it cannot state exactly, and still lets the row be bought", async () => {
+    // `Number` is a double, so `price × quantity` stops holding a whole number of
+    // minor units past 2^53 and rounds — silently, into a line that reads as exact.
+    // `merchant.Catalogue.Quote` checks the same multiplication rather than
+    // trusting it, and this row's entire job is to state that arithmetic before
+    // anything is signed, so it says nothing rather than something wrong.
+    //
+    // The second half is the half that keeps this a display rule: the row still
+    // reports the click. Declining to *state* a total is not declining to sell,
+    // and turning this into a validation gate would put a decision in the browser
+    // that belongs to the verifier.
+    const onChoose = vi.fn();
+    render(<Table proposal={aProposal()} onChoose={onChoose} choosing={null} />);
+
+    const quantityBox = screen.getByLabelText(/quantity/i);
+    await userEvent.clear(quantityBox);
+    await userEvent.type(quantityBox, "999999999999");
+
+    expect(
+      screen.queryByText(/×/),
+      "45000 × 999999999999 exceeds Number.MAX_SAFE_INTEGER, so there is no exact total to print",
+    ).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: /buy/i }));
+    expect(
+      onChoose.mock.calls[0]?.[1],
+      "the row still reports what was asked for — the verifier refuses it, not this component",
+    ).toBe(999999999999);
+  });
+
   it("lets a row the proposal did not settle on be bought, and says which one it was — issue #298", async () => {
     // The reported symptom: a $369 offer under a stated $500 cap, drawn and
     // refused, because `agent.narrow` had pinned the mandate to the row the
