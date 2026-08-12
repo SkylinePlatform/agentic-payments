@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/transport"
 )
 
 // DefaultGeminiModel is the model a Gemini calls when none is named.
@@ -49,6 +51,13 @@ const geminiTimeout = 60 * time.Second
 
 // maxGeminiResponse bounds what is read back. The answer is a short JSON array,
 // and the body's size is chosen by somebody else.
+//
+// Refused rather than truncated, per issue #251. This site is the one where the
+// truncating form was worst: io.ReadAll over an io.LimitReader returns the first
+// megabyte with **no error at all**, so the cut document went to geminiAnswer,
+// which reported it as "answered something that is not the shape this API
+// documents" — a sentence blaming the model for a cut made here, on the one path
+// in this repository where the answer really is somebody else's to get wrong.
 const maxGeminiResponse = 1 << 20
 
 // Gemini is a Model backed by Google's Generative Language API.
@@ -158,7 +167,7 @@ func (g *Gemini) Complete(ctx context.Context, instruction, prompt string, schem
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxGeminiResponse))
+	raw, err := io.ReadAll(transport.RefusingOver(resp.Body, maxGeminiResponse))
 	if err != nil {
 		return nil, fmt.Errorf("reading what %s answered: %w", g.model, err)
 	}

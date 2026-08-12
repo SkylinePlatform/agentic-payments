@@ -12,6 +12,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/console"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/transport"
 )
 
 // GET /watches/{id}/attempts/{n}/presented: the four chains one attempt put in
@@ -304,7 +305,7 @@ func (s *scripted) raw(t *testing.T, path string) string {
 	require.NoError(t, err, "reaching the console")
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(transport.RefusingOver(resp.Body, 1<<20))
 	require.NoError(t, err, "reading the answer")
 	return strings.TrimSpace(string(body))
 }

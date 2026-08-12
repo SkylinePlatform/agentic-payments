@@ -11,6 +11,7 @@ import (
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/crypto"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/transport"
 )
 
 // Peer resolves the keys of one counterparty from its published JWKS.
@@ -82,6 +83,24 @@ func (p *Peer) keySet(ctx context.Context) (*crypto.KeySet, error) {
 	return keys, nil
 }
 
+// maxJWKS is the largest key set this will read from a counterparty, and it is
+// refused rather than truncated — see transport.RefusingOver, and issue #251.
+//
+// A number of its own rather than serve.go's maxBody, which it used to share.
+// That constant is the largest *request* a role will accept, enforced by
+// http.MaxBytesReader, which already fails rather than shortening; this one is
+// the largest *answer* a role will read from somebody else. Two limits with two
+// owners and two enforcement mechanisms happened to want the same number, and one
+// constant meant widening either widened both — which is the specific way a limit
+// stops meaning anything.
+//
+// The number: a role here publishes one ES256 key, and the JWKS `cmd/merchant`
+// served on 12 August 2026 was **215 bytes**. 64 KiB is around three hundred
+// times that — room for a real deployment publishing a set with rotation in it,
+// and still far too small to be worth filling memory with. #26's registry is what
+// makes that set more than one key.
+const maxJWKS = 64 << 10
+
 func (p *Peer) fetch(ctx context.Context) (*crypto.KeySet, error) {
 	url := strings.TrimSuffix(p.Base, "/") + JWKSPath
 
@@ -103,7 +122,7 @@ func (p *Peer) fetch(ctx context.Context) (*crypto.KeySet, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fetching %s: %s", url, resp.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	body, err := io.ReadAll(transport.RefusingOver(resp.Body, maxJWKS))
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", url, err)
 	}

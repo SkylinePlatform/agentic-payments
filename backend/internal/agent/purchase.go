@@ -432,8 +432,15 @@ func (c *Client) call(ctx context.Context, method, url string, body, into any) e
 
 	// Decoded before the status is judged: a refusal carries the receipt, and
 	// reading the body only on success would throw it away.
+	//
+	// transport.RefusingOver rather than io.LimitReader, and the difference is
+	// the whole of issue #251: a limit that reports EOF at the cap hands a
+	// counterparty's document on one byte shorter than it was sent, and the error
+	// that eventually arrives — if one arrives at all — names the document rather
+	// than the cap. See that function, and maxResponse below for how close the
+	// widest answer this client actually receives has got.
 	if into != nil {
-		if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponse)).Decode(into); err != nil {
+		if err := json.NewDecoder(transport.RefusingOver(resp.Body, maxResponse)).Decode(into); err != nil {
 			return fmt.Errorf("decoding the answer from %s: %w", url, err)
 		}
 	}
@@ -448,6 +455,50 @@ func (c *Client) call(ctx context.Context, method, url string, body, into any) e
 	}
 }
 
+// maxResponse is the largest answer this client will read from a counterparty.
+//
+// It is a refusal and not a truncation — see call above, and
+// transport.RefusingOver for why the distinction is the point.
+//
+// # The measured worst case, so the next widening has something to compare against
+//
+// GET /search is the answer that fills this, and the widest one a merchant can
+// give is a query every offer satisfies against the catalogue `make demo-live`
+// assembles. Measured by hand on 12 August 2026, running
+// `cmd/merchant -catalogue-live dummyjson` against the live shop and asking for
+// `[{"op":"eq","field":"merchant.id","value":"air-serbia"}]`:
+//
+//	257 offers        63 from deploy/catalogue.json, 194 fetched from the shop
+//	440,759 bytes     430.4 KiB on the wire
+//	330,032 bytes     322.3 KiB of it inline data:image/svg+xml;base64 marks — 74.9%
+//	110,727 bytes     108.1 KiB is everything else, pictures removed
+//	2.38×             headroom against this constant
+//
+// The trend is why the number is written down rather than the verdict: #234 took
+// the shop from 4 offers to 64, #243 added 194 more, and each step made the
+// pictures a larger share of the answer than the answer itself.
+//
+// The architect review of PR #248 measured 399 KiB and 81.5% a few weeks
+// earlier, for the same 194 fetched offers. The base64 half of that figure is
+// within 0.3 KiB of the one above, so the pictures have not moved; the 31 KiB of
+// difference is in this project's own fields, which the row above prices at
+// 108.1 KiB in total. Where the two disagree, the larger number is the one to
+// plan against.
+//
+// **Widening this constant is not the answer to the next measurement that gets
+// close.** Issue #251 records the two that are — leaving the pictures out of a
+// search answer, and paginating — and deferred both rather than rejecting them:
+// pagination reaches this file's callers, `settle`'s first candidate and the
+// console's proposal shape, and it collides with an agent that ranks a candidate
+// set, which needs all of it. What #251 did was make the failure honest, because
+// a cap that silently shortens a document is the wrong thing to be approaching
+// whatever the number is.
+//
+// TestTheWidestAnswerAMerchantCanGiveFitsThisLimit is the same measurement over
+// the committed recording, so it runs under `make check` and goes red on the
+// growth rather than waiting for somebody to take a reading by hand. It came to
+// **440,753 bytes** — six bytes off the live figure above, which is what a
+// recording taken from the same shop looks like when the shop has not moved.
 const maxResponse = 1 << 20
 
 // idempotencyKey is a stable name for one step of one purchase.

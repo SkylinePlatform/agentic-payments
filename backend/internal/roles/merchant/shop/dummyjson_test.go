@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/transport"
 )
 
 // TestTheRecordingTurnsIntoSomethingThisProjectCanSell is the decoder, driven
@@ -219,6 +221,52 @@ func TestTheFetcherRefusesEverythingButAnAnswer(t *testing.T) {
 				"asking for the eight columns this project can address is the one courtesy a free shop is owed")
 		})
 	}
+}
+
+// TestAShopThatAnswersMoreThanTheLimitIsRefused is what makes
+// dummyJSONMaxBody's own comment true, and issue #251 is why it had to be
+// written rather than assumed.
+//
+// That comment says a misconfigured -catalogue-live pointed at something enormous
+// "fails rather than filling memory". Until #251 only the second half held:
+// io.ReadAll over an io.LimitReader hands back the first 2 MiB of an enormous
+// body with no error at all, and what failed afterwards was decodeDummyJSON,
+// meeting a document cut mid-object and reporting it as the shop's malformed
+// JSON.
+//
+// # Why the body is valid rather than junk
+//
+// The bytes served below decode into a real product — asserted first, before the
+// server is even started. That is the whole design of this test: if the fetch
+// fails, size is the only thing it can be failing on, and
+// transport.ErrTooLarge is the difference between a limit that says so and one
+// that blames the shop. Swap transport.RefusingOver back for io.LimitReader and
+// this still errors, but on decoding, and the require below is what notices.
+func TestAShopThatAnswersMoreThanTheLimitIsRefused(t *testing.T) {
+	t.Parallel()
+
+	oversized := []byte(`{"total":1,"products":[{"id":1,"title":"t","description":"` +
+		strings.Repeat("d", dummyJSONMaxBody) +
+		`","category":"c","price":1.5,"brand":"b","sku":"S1","tags":["t"]}]}`)
+
+	decoded, err := decodeDummyJSON(oversized)
+	require.NoError(t, err, "the oversized body has to be a catalogue this package would otherwise accept, or the refusal below could be about anything")
+	require.Len(t, decoded, 1, "one product, so what is wrong with the answer is its size and nothing else")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(oversized)
+	}))
+	defer server.Close()
+
+	fetcher := &DummyJSON{Base: server.URL, Client: server.Client()}
+	products, err := fetcher.Fetch(t.Context())
+
+	require.ErrorIs(t, err, transport.ErrTooLarge,
+		"a body past the limit has to be refused as a body past the limit; reporting it as a shop that sent broken JSON sends whoever is holding the error to the wrong place entirely")
+	assert.ErrorIs(t, err, ErrFetch,
+		"cmd/merchant has one sentinel to name, and a failure that does not wrap it is one it cannot tell from a bad catalogue file")
+	assert.Empty(t, products,
+		"a merchant handed half a shop would sell it — an error and a catalogue is a caller being invited to use half of one")
 }
 
 // TestTheFetcherNamesTheShopItAsked is what puts an attributable line in the

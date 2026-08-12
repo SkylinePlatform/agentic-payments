@@ -654,6 +654,26 @@ reconcile against the code for no benefit.
 ## Code standards
 
 - Every state-changing operation takes an idempotency key.
+- **A limit on reading somebody else's body refuses rather than truncates**, and
+  `io.LimitReader` does the opposite. It reports EOF at the cap, so a body that
+  does not fit becomes a shorter one that does: `io.ReadAll` over one returns the
+  cut document with **no error at all**, and `json.Decoder` over one reports
+  `unexpected EOF`, which blames the sender for a cut this side made. Neither
+  failure sends anybody to the limit. `transport.RefusingOver` is the reader to
+  use — it fails with `transport.ErrTooLarge` naming the number — and after issue
+  #251 there is no `io.LimitReader` call site left in the module, so a new one is
+  a regression rather than a style choice. Inbound request bodies already refuse,
+  through `http.MaxBytesReader`.
+
+  Each cap is a **named constant carrying its measured worst case**, because the
+  next widening needs something to compare against: `maxResponse`, `maxJWKS`,
+  `maxProcessorAnswer`, `maxGeminiResponse`, `dummyJSONMaxBody`. #251 is what
+  happens without one — a search answer reached 430 KiB against a 1 MiB cap, over
+  three issues that each widened the shelf, with the headroom recorded nowhere.
+  Where the worst case can be assembled without a network,
+  `TestTheWidestAnswerAMerchantCanGiveFitsThisLimit` is the shape to copy: the
+  measurement re-derived under `make check`, with a floor as well as a ceiling so
+  it cannot pass by measuring a smaller document.
 - Keys sit behind the `Signer` interface. No raw key material at call sites.
 - State machines are explicit, not implicit through `if` chains.
 - Constraints are typed and evaluated by the **verifier**, never the agent.
