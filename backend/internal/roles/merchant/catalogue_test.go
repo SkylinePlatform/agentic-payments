@@ -217,6 +217,85 @@ func TestTheCatalogueRefusesNonsense(t *testing.T) {
 	}
 }
 
+// TestTheCatalogueOrdersCommittedBeforeFetchedAndThenByIdentifier pins the
+// whole of NewCatalogue's ordering contract, both keys, in one sequence.
+//
+// # Why one assertion rather than two tests
+//
+// The two keys are one contract because settle (internal/agent/authorise.go)
+// takes found[0] and ranks nothing — its own comment says the merchant's
+// catalogue order is what makes that "stable rather than considered" — and a
+// catalogue that is *half* ordered is not stable. Source alone decides which
+// half wins a query both halves answer; the identifier alone decides which
+// offer wins inside that half, and slices.SortFunc is not a stable sort, so
+// without the second key the order within each half is a pdqsort artefact of
+// whatever order the file happened to decode in. Both are "which offer does the
+// demonstration buy", one query apart.
+//
+// # What this catches that the shelf-level tests cannot
+//
+// TestTheCommittedLadderOutranksAColludingFetchedOne and
+// TestASmartphoneFromTheShopJoinsRatherThanCollides, in live_test.go, drive the
+// real merged shelf and are the right tests for the *Source* key. Neither can
+// see the identifier key: each has one relevant offer per half, so a tie-break
+// inside a half never arises. Measured rather than assumed — replacing this
+// comparator's body with `return 0` left every test in the module green before
+// this test existed, which is the same shape as a comment claiming a check the
+// code does not perform.
+//
+// TestResultsAreOrderedTheSameWayEveryTime cannot see it either, for a
+// different reason: it compares five searches against the same catalogue's own
+// Offers(), so both sides of that comparison move together. It is the right
+// test for "the order does not vary" and says nothing about what the order is.
+// Between the two, Offers() is where the sequence is pinned and that test
+// carries it through to Search.
+//
+// The offers below are supplied out of order on *both* axes — the fetched one
+// first, the committed ones with their identifiers descending — because an
+// input that already happened to be in the answer's order would let a
+// comparator that sorted on nothing at all pass.
+func TestTheCatalogueOrdersCommittedBeforeFetchedAndThenByIdentifier(t *testing.T) {
+	t.Parallel()
+
+	offer := func(id string, source merchant.Source) merchant.Offer {
+		return merchant.Offer{
+			ID:       id,
+			Category: "ladders",
+			Schedule: flatSchedule(t, merchant.DemoLadderPrice),
+			Source:   source,
+		}
+	}
+
+	// "dummyjson:" is the scheme the live shop really stamps on what it sells,
+	// and it sorts ahead of every committed scheme this catalogue uses —
+	// "gtin:", "wd:", "event:", "route:". That is not incidental: it is the
+	// defect issue #250 names, which is why the fetched offers here are the ones
+	// a sort on the identifier alone would put first.
+	cat, err := merchant.NewCatalogue(clock.NewFake(base), seller,
+		offer("dummyjson:1", merchant.SourceLive),
+		offer("gtin:03", merchant.SourceFile),
+		offer("wd:Q2", merchant.SourceFile),
+		offer("dummyjson:0", merchant.SourceLive),
+		offer("gtin:01", merchant.SourceFile),
+		offer("gtin:02", merchant.SourceFile),
+	)
+	require.NoError(t, err)
+
+	got := make([]string, 0, 6)
+	for _, o := range cat.Offers() {
+		got = append(got, o.ID)
+	}
+
+	assert.Equal(t, []string{
+		"gtin:01", "gtin:02", "gtin:03", "wd:Q2",
+		"dummyjson:0", "dummyjson:1",
+	}, got,
+		"the committed shelf has to come first, or a fetched offer wins a query a hero also "+
+			"answers and the demonstration buys something nobody scripted; and each half has "+
+			"to be in identifier order, or the sort is unstable and which offer settle takes "+
+			"as found[0] is decided by the order the file happened to decode in")
+}
+
 // TestAnEarlySearchSeesTheOpeningPrices is the catalogue's half of
 // TestAnEarlyReadSeesTheOpeningPrice: a runner that seeds the catalogue and then
 // takes a moment to wire the rest up should show the first screen of the story

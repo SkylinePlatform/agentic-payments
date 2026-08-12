@@ -163,17 +163,25 @@ func TestASentenceNobodyWroteFindsAnOfferNobodyPutInTheRepository(t *testing.T) 
 // the *selective* fields and drops the rest — so "find and buy telescopic
 // ladders, cheapest" reaches GET /search as `item.category eq "ladders"` and
 // nothing else. Its cap is a term, evaluated at checkout and absent from the
-// query. settle then takes found[0] and ranks nothing, and NewCatalogue sorts by
-// identifier, which puts every `dummyjson:` offer ahead of every `gtin:`,
-// `event:` and `route:` one.
+// query. settle then takes found[0] and ranks nothing, so whichever offer the
+// merchant returns first is the one a Human Not Present run buys. That used to
+// be decided by the identifier alone, which put every `dummyjson:` offer ahead
+// of every `gtin:`, `event:` and `route:` one; since issue #250 NewCatalogue
+// sorts committed offers ahead of fetched ones first. Either way it is this
+// query, not the whole set, that decides which.
 //
 // Asserting only over the full set is therefore strictly weaker than the claim
-// this test's failure message makes. A fetched ladder priced *above* the cap
-// would be filtered out of both sides here and the test would stay green, while
-// in a real run it would sort first, become found[0], and be what the
-// demonstration bought. That is the gap settle's own doc comment names about
+// this test's failure message makes. A fetched ladder priced *above* the cap is
+// filtered out of both sides of a full-set comparison, so that comparison stays
+// green while the offer is sitting in the result set the agent actually
+// receives — where the only thing standing between it and found[0] is the
+// catalogue's ordering. That is the gap settle's own doc comment names about
 // TestTheCatalogueAnswersTheScriptedPrompts, one package along; running the
-// narrowing query as well is what keeps this test from inheriting it.
+// narrowing query as well is what keeps this test from inheriting it. What the
+// ordering then does with it is pinned separately, by
+// TestTheCommittedLadderOutranksAColludingFetchedOne below and by
+// TestTheCatalogueOrdersCommittedBeforeFetchedAndThenByIdentifier in
+// catalogue_test.go — this test's subject is the query, not the sort.
 func TestTheLiveHalfChangesNoScriptedAnswer(t *testing.T) {
 	t.Parallel()
 

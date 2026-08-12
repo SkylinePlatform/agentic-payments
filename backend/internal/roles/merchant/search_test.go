@@ -454,8 +454,17 @@ func everything(t *testing.T) []generated.Constraint {
 // What is actually at stake is that the order does not *vary* — Go's map
 // iteration is deliberately unordered, and a product list that shuffles between
 // two runs is one no screenshot can be taken of — so the assertion is that five
-// searches agree with each other and with Catalogue.Offers, which is the
-// sequence NewCatalogue sorted by identifier.
+// searches agree with each other and with Catalogue.Offers.
+//
+// That is the whole of what this test claims, and the limit is worth stating:
+// both sides of the comparison are read off the same catalogue, so this cannot
+// see what the sequence *is*. It would stay green against any ordering
+// NewCatalogue applied consistently, including none at all. What the sequence
+// has to be — committed offers ahead of fetched ones, then by identifier — is
+// pinned by TestTheCatalogueOrdersCommittedBeforeFetchedAndThenByIdentifier in
+// catalogue_test.go, which drives the constructor with offers supplied out of
+// order. The two are a pair: that one says what the order is, this one says a
+// search reproduces it.
 func TestResultsAreOrderedTheSameWayEveryTime(t *testing.T) {
 	t.Parallel()
 
