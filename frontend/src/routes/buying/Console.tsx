@@ -277,6 +277,15 @@ export function Console({
    * twice, and a 502 means a counterparty is not answering, which a second model
    * call does not fix. Anything the second attempt throws goes to the caller
    * unchanged, so a screen never loops.
+   *
+   * **The sentence it reads again is `held.prompt`, not what is in the box.** They
+   * are the same string in the ordinary case and they are not one edit apart: the
+   * box stays live while a row is in flight — only *Interpret* is gated — so
+   * somebody who clicks *Buy* and then starts typing their next sentence would
+   * otherwise have this recovery propose against **that** one, and hand the
+   * surface a mandate for a row they clicked in a table built from a different
+   * prompt. `Reading.prompt` is the agent's own copy of the sentence the reading
+   * was made from, which is exactly the string this needs.
    */
   async function pinned(held: Reading, offerID: string): Promise<Proposal> {
     try {
@@ -285,7 +294,7 @@ export function Console({
       if (!(err instanceof RequestFailed) || err.status !== READING_GONE) throw err;
 
       setPhase("reading");
-      const fresh = await interpret(prompt);
+      const fresh = await interpret(held.prompt);
       setReading(fresh);
       setPhase("searching");
       return await candidates(fresh.interpretation_id, offerID);

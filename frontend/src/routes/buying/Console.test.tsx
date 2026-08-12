@@ -626,8 +626,17 @@ describe("the shopping console", () => {
     const first: Proposal = { ...aProposal(), offers: [aProposal().offer, other] };
     const pinned: Proposal = { ...first, item: other.id, offer: other };
 
+    // The agent's own copy of the sentence, deliberately not the string typed
+    // below. In production the two are equal — `POST /interpret` echoes what it
+    // was sent — and they are one keystroke apart: the box stays live while a row
+    // is in flight, because only *Interpret* is gated. So this is what says the
+    // recovery reads the sentence **the table in front of the person was built
+    // from**, rather than whatever they have started typing since.
+    const AS_RECORDED = "two ladders, as the agent wrote it down";
+
     const { readings, searches } = stubDiscovery({
-      interpret: (n) => json({ ...aReading(), interpretation_id: `reading-${n + 1}` }),
+      interpret: (n) =>
+        json({ ...aReading(), prompt: AS_RECORDED, interpretation_id: `reading-${n + 1}` }),
       candidates: (body, n) => {
         if (n === 0) return json(first);
         if (body.interpretation_id === "reading-1") {
@@ -647,7 +656,11 @@ describe("the shopping console", () => {
     await userEvent.click(buyButtons[1]);
 
     await waitFor(() => expect(bought).toHaveLength(1));
-    expect(readings, "the sentence was read a second time, because the first reading was gone").toHaveLength(2);
+    expect(
+      readings,
+      "the sentence was read a second time because the first reading was gone — and it is the " +
+        "reading's own copy of it, not the box's",
+    ).toEqual(["two ladders", AS_RECORDED]);
     expect(
       searches.map((s) => s.interpretation_id),
       "the retry names the fresh reading rather than repeating the one the agent refused",
