@@ -12,6 +12,6 @@
   <circle cx="116" cy="84" r="12" fill="#10243a"/>
   <rect x="72" y="104" width="24" height="24" rx="6" fill="#10243a"/>
   <rect x="104" y="104" width="24" height="24" rx="6" fill="#10243a"/>
-  <path d="M52,135 L65,148 L52,161 L39,148 Z" fill="#1f5fbf"/>
-  <path d="M148,135 L161,148 L148,161 L135,148 Z" fill="#1f5fbf"/>
+  <path d="M52,135 L65,148 L52,161 L39,148 Z" fill="#546375"/>
+  <path d="M148,135 L161,148 L148,161 L135,148 Z" fill="#546375"/>
 </svg>

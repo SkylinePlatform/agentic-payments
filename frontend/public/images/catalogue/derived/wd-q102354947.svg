@@ -14,6 +14,6 @@
   <circle cx="84" cy="116" r="12" fill="#10243a"/>
   <circle cx="116" cy="116" r="12" fill="#10243a"/>
   <circle cx="148" cy="116" r="12" fill="#10243a"/>
-  <rect x="72" y="136" width="24" height="24" rx="6" fill="#1f6b4a"/>
-  <rect x="104" y="136" width="24" height="24" rx="6" fill="#1f6b4a"/>
+  <rect x="72" y="136" width="24" height="24" rx="6" fill="#546375"/>
+  <rect x="104" y="136" width="24" height="24" rx="6" fill="#546375"/>
 </svg>

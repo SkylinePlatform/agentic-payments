@@ -10,6 +10,6 @@
   <path d="M84,39 L97,52 L84,65 L71,52 Z" fill="#10243a"/>
   <path d="M116,39 L129,52 L116,65 L103,52 Z" fill="#10243a"/>
   <circle cx="148" cy="52" r="12" fill="#10243a"/>
-  <circle cx="84" cy="148" r="12" fill="#546375"/>
-  <circle cx="116" cy="148" r="12" fill="#546375"/>
+  <circle cx="84" cy="148" r="12" fill="#1f6b4a"/>
+  <circle cx="116" cy="148" r="12" fill="#1f6b4a"/>
 </svg>

@@ -101,6 +101,16 @@ const (
 
 // markAccents are the four a mark may pick its second colour from. paper is left
 // out because it is the page behind the card, and wash is the card itself.
+//
+// Which of the four an offer draws in is seeded on its identifier, and issue
+// #236 is where that was decided: it was seeded on the category, six shelves
+// collided over four accents, and graphite — the lowest-contrast of them — drew
+// a third of the shop. The argument for scattering rather than for giving each
+// shelf a colour of its own is written out once, beside the seeding in
+// tools/catalogue/mark.go's accentOf, and deliberately not restated here. Two
+// copies of a decision drift; two copies of a *drawing* are held to the byte by
+// TestALiveMarkIsTheMarkThisShopAlreadyDraws, which is why the duplication below
+// is safe and this paragraph is a pointer.
 var markAccents = []string{markSignal, markSeal, markBroken, markGraphite}
 
 // markDataURI is a mark for one offer, as the `data:` URI its image_url carries.
@@ -109,9 +119,9 @@ var markAccents = []string{markSignal, markSeal, markBroken, markGraphite}
 // every one of which has to be escaped in a URI, and one missed escape is an
 // image that fails to render on some browsers and not others. Base64 costs a
 // third more bytes and has no such edge.
-func markDataURI(id, category, title string) string {
+func markDataURI(id, title string) string {
 	return markDataURIPrefix +
-		base64.StdEncoding.EncodeToString(markSVG(id, category, title, liveMarkNote(id)))
+		base64.StdEncoding.EncodeToString(markSVG(id, title, liveMarkNote(id)))
 }
 
 // liveMarkNote is the comment inside a live offer's mark, and it is the one
@@ -144,13 +154,21 @@ const markDataURIPrefix = "data:image/svg+xml;base64,"
 // and colour taken from the hash of the identifier. The frame is the hand-drawn
 // four's, to the pixel.
 //
+// **It cannot see the offer's category, and that is the point.** It took one
+// until issue #236, for the accent, and the parameter is gone rather than merely
+// unread: a mark claims nothing about what its offer is, and the way to keep a
+// rule like that is to leave the caller nothing to hand over. Restoring the
+// category-seeded accent here is now a signature change rather than a
+// one-word one — the same reasoning AGENTS.md gives for joseVerifier having no
+// KeyID method.
+//
 // Byte-identical to tools/catalogue/mark.go's `mark` for the same offer, given
 // that program's own comment block as note — which is the one thing the two
 // implementations legitimately disagree about, and the reason note is an
 // argument. See liveMarkNote, and the test that holds the rest to the byte.
-func markSVG(id, category, title, note string) []byte {
+func markSVG(id, title, note string) []byte {
 	sum := sha256.Sum256([]byte("mark\x00" + id))
-	accent := markAccents[markDraw(category, "accent", len(markAccents))]
+	accent := markAccents[markDraw(id, "accent", len(markAccents))]
 
 	// Two columns decided and two mirrored. Eight cells, each taking two bits
 	// of shape and one of colour out of its own byte, so a cell's appearance

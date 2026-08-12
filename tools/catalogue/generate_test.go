@@ -84,6 +84,121 @@ func TestEveryDerivedMarkIsTheOneCommittedBesideIt(t *testing.T) {
 	}
 }
 
+// TestAMarkSaysNothingAboutTheShelfItsOfferSitsOn is "nothing may imply a
+// category" turned from a sentence in issue #160 into something that fails.
+//
+// It is the mutation the comment on accentOf points at: put the seeding back on
+// o.Category and this goes red, because a mark drawn for a camera would then
+// change colour if the same offer were sold as a bicycle. Every other shelf is
+// tried rather than one, so the test cannot pass by landing on a shelf that
+// happened to share the accent — with six shelves over four accents at least one
+// of the five alternatives has to differ.
+//
+// The claim is worth more than it looks. A picture carries the authority of a
+// picture: a reader who noticed that every flight drew in the same colour would
+// be right to conclude the colour meant something, and would then be wrong about
+// what, since four colours cannot name six shelves. The marks are cheap
+// precisely because they promise nothing, and this is where that stays true.
+func TestAMarkSaysNothingAboutTheShelfItsOfferSitsOn(t *testing.T) {
+	t.Parallel()
+
+	derived, err := derive()
+	require.NoError(t, err)
+
+	categories := make([]string, 0, len(shelves)+1)
+	for _, o := range derived {
+		if !slices.Contains(categories, o.Category) {
+			categories = append(categories, o.Category)
+		}
+	}
+	require.Greater(t, len(categories), 1,
+		"one shelf cannot answer whether a drawing depends on which shelf it is on")
+
+	for _, o := range derived {
+		drawn := string(mark(o))
+		moved := make([]string, 0, len(categories))
+		for _, elsewhere := range categories {
+			if elsewhere == o.Category {
+				continue
+			}
+			restocked := o
+			restocked.Category = elsewhere
+			if string(mark(restocked)) != drawn {
+				moved = append(moved, elsewhere)
+			}
+		}
+		assert.Empty(t, moved, "%s draws differently when it is put on another shelf, so its "+
+			"picture is telling a reader what kind of thing it is — which is the one claim a "+
+			"mark is not allowed to make", o.ID)
+	}
+}
+
+// TestNoAccentDrawsAShelfOfItsOwn is the distribution issue #236 was opened
+// over, held rather than measured once.
+//
+// Two claims, and they catch different things. **Every shelf draws in more than
+// one accent** is the structural one: it is false for any seeding keyed on
+// something a whole shelf shares, so it is what a reversion trips. **No accent
+// carries more than half again an even share** is the monopoly guard, and its
+// bound is deliberately loose — a quarter of sixty is fifteen, so the bound is
+// twenty-two. Tight enough that a shop drawn mostly in one colour cannot pass,
+// loose enough that a refetch moving every hash cannot fail it, because a
+// threshold fitted to the sixty offers this snapshot happens to yield would be a
+// claim about the snapshot rather than about the seeding.
+//
+// The share the four actually hold is the reason the loose bound is not the
+// whole test: 14, 15, 14 and 17. The seeding keyed on the shelf held 20 at its
+// worst, which the bound alone would have let through.
+//
+// The bound is also floored at what the pigeonhole forces, which is not
+// decoration at sixty offers but is what keeps the sentence above true of a
+// smaller shop. Half again a quarter is integer arithmetic: for a shelf list
+// yielding five offers it comes out at one, while five offers over four accents
+// put two somewhere no matter how they fall — so an unfloored bound would be
+// unsatisfiable against the four assertions beside it, and this test would be
+// making a claim about `take` quotas rather than about the seeding.
+func TestNoAccentDrawsAShelfOfItsOwn(t *testing.T) {
+	t.Parallel()
+
+	derived, err := derive()
+	require.NoError(t, err)
+	require.NotEmpty(t, derived, "an empty shop would make every claim below hold over nothing")
+
+	perAccent := make(map[string]int, len(accents))
+	perShelf := make(map[string]map[string]struct{}, len(shelves)+1)
+	order := make([]string, 0, len(shelves)+1)
+	for _, o := range derived {
+		accent := accentOf(o.ID)
+		perAccent[accent]++
+		if perShelf[o.Category] == nil {
+			perShelf[o.Category] = make(map[string]struct{}, len(accents))
+			order = append(order, o.Category)
+		}
+		perShelf[o.Category][accent] = struct{}{}
+	}
+
+	// An even quarter rounded up is the smallest share the largest accent can
+	// possibly hold; half again an even quarter is the share this test is willing
+	// to call outsized. The bound is whichever is larger.
+	forced := (len(derived) + len(accents) - 1) / len(accents)
+	bound := max(3*len(derived)/(2*len(accents)), forced)
+	for _, accent := range accents {
+		assert.Positive(t, perAccent[accent],
+			"nothing in the shop draws in %s, so one of the four accents is declared and never "+
+				"used", accent)
+		assert.LessOrEqual(t, perAccent[accent], bound,
+			"%s draws an outsized share of the shop, and the one of the four it would be worst "+
+				"to hand that to is graphite — the lowest-contrast, which is how issue #236 "+
+				"started", accent)
+	}
+
+	for _, shelf := range order {
+		assert.Greater(t, len(perShelf[shelf]), 1,
+			"the %s shelf draws in one colour, so the accent is keyed on something the whole "+
+				"shelf shares and the picture has started implying a category", shelf)
+	}
+}
+
 // TestTheDerivationIsAFunctionOfTheSnapshotAlone is determinism stated directly
 // rather than inferred from the two tests above agreeing today.
 //

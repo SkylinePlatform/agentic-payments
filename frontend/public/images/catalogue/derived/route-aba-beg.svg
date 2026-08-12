@@ -6,18 +6,18 @@
   -->
   <title>Abakan → Belgrade Nikola Tesla</title>
   <rect x="6" y="6" width="188" height="188" rx="20" fill="#e8dfcc" stroke="#10243a" stroke-width="3"/>
-  <path d="M84,39 L97,52 L84,65 L71,52 Z" fill="#546375"/>
-  <path d="M116,39 L129,52 L116,65 L103,52 Z" fill="#546375"/>
+  <path d="M84,39 L97,52 L84,65 L71,52 Z" fill="#1f5fbf"/>
+  <path d="M116,39 L129,52 L116,65 L103,52 Z" fill="#1f5fbf"/>
   <path d="M52,71 L65,84 L52,97 L39,84 Z" fill="#10243a"/>
   <path d="M84,71 L97,84 L84,97 L71,84 Z" fill="#10243a"/>
   <path d="M116,71 L129,84 L116,97 L103,84 Z" fill="#10243a"/>
   <path d="M148,71 L161,84 L148,97 L135,84 Z" fill="#10243a"/>
   <path d="M52,103 L65,116 L52,129 L39,116 Z" fill="#10243a"/>
-  <circle cx="84" cy="116" r="12" fill="#546375"/>
-  <circle cx="116" cy="116" r="12" fill="#546375"/>
+  <circle cx="84" cy="116" r="12" fill="#1f5fbf"/>
+  <circle cx="116" cy="116" r="12" fill="#1f5fbf"/>
   <path d="M148,103 L161,116 L148,129 L135,116 Z" fill="#10243a"/>
-  <path d="M52,135 L65,148 L52,161 L39,148 Z" fill="#546375"/>
+  <path d="M52,135 L65,148 L52,161 L39,148 Z" fill="#1f5fbf"/>
   <path d="M84,135 L97,148 L84,161 L71,148 Z" fill="#10243a"/>
   <path d="M116,135 L129,148 L116,161 L103,148 Z" fill="#10243a"/>
-  <path d="M148,135 L161,148 L148,161 L135,148 Z" fill="#546375"/>
+  <path d="M148,135 L161,148 L148,161 L135,148 Z" fill="#1f5fbf"/>
 </svg>

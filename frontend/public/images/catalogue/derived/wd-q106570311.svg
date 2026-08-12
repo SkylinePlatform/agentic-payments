@@ -6,10 +6,10 @@
   -->
   <title>Sony FE 35mm F1.4 GM</title>
   <rect x="6" y="6" width="188" height="188" rx="20" fill="#e8dfcc" stroke="#10243a" stroke-width="3"/>
-  <circle cx="52" cy="52" r="12" fill="#1f6b4a"/>
+  <circle cx="52" cy="52" r="12" fill="#a14917"/>
   <rect x="72" y="40" width="24" height="24" rx="6" fill="#10243a"/>
   <rect x="104" y="40" width="24" height="24" rx="6" fill="#10243a"/>
-  <circle cx="148" cy="52" r="12" fill="#1f6b4a"/>
+  <circle cx="148" cy="52" r="12" fill="#a14917"/>
   <circle cx="52" cy="84" r="12" fill="#10243a"/>
   <rect x="72" y="72" width="24" height="24" rx="6" fill="#10243a"/>
   <rect x="104" y="72" width="24" height="24" rx="6" fill="#10243a"/>
@@ -17,7 +17,7 @@
   <circle cx="52" cy="116" r="12" fill="#10243a"/>
   <circle cx="148" cy="116" r="12" fill="#10243a"/>
   <circle cx="52" cy="148" r="12" fill="#10243a"/>
-  <path d="M84,135 L97,148 L84,161 L71,148 Z" fill="#1f6b4a"/>
-  <path d="M116,135 L129,148 L116,161 L103,148 Z" fill="#1f6b4a"/>
+  <path d="M84,135 L97,148 L84,161 L71,148 Z" fill="#a14917"/>
+  <path d="M116,135 L129,148 L116,161 L103,148 Z" fill="#a14917"/>
   <circle cx="148" cy="148" r="12" fill="#10243a"/>
 </svg>
