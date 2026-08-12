@@ -146,7 +146,7 @@ type Service struct {
 	// DefaultLimit.
 	Limit int
 
-	// mu guards the three fields below and nothing inside a Run — a Run carries
+	// mu guards the five fields below and nothing inside a Run — a Run carries
 	// its own lock, because the watch goroutine writes to one while a request is
 	// reading another.
 	mu sync.Mutex
@@ -156,6 +156,17 @@ type Service struct {
 	pending int
 	order   []*Run
 	byID    map[string]*Run
+
+	// bootPrompt and bootErr are the watch this process was started with, when
+	// there was one and it did not start. See BootWatchFailed.
+	//
+	// **Two fields rather than a Run in order.** A boot watch that failed has no
+	// authorisation, no identifier, no expiry and no attempts, so a row for it
+	// would be a row every reader of GET /watches has to special-case — and the
+	// one thing it would carry that a row means is a state, on an axis
+	// (`watching`, `bought`, `failed`) that is about a loop which never began.
+	bootPrompt string
+	bootErr    error
 }
 
 // Watching is what one watch is started with.
@@ -390,6 +401,59 @@ func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 	return run, nil
 }
 
+// BootWatchFailed records that the watch this process was started with could
+// not be started, so that a browser is told and not only a terminal. A nil error
+// records nothing, which is the caller's ordinary case.
+//
+// # Why the console says this at all
+//
+// A stack whose boot watch failed and a stack that was never given a prompt draw
+// the same empty list. cmd/agent prints the failure, but the person about to use
+// this console is looking at a browser rather than at that terminal, and the
+// difference between "nothing has been asked for yet" and "what was asked for
+// did not happen" is exactly what they need. The frontend already draws a mode
+// line for the interpreter, from GET /examples — a fact about how this process
+// was configured that a screen has to be able to state — and this is that kind
+// of fact one step along. Issue #252.
+//
+// # It is this agent's account of its own failure and never a verdict
+//
+// The distinction Service.start's 422 arm already makes: nobody has been asked
+// to authorise anything, so nothing here reports what a verifier concluded. What
+// is stored is the error's own text — no generated.ErrorCode, for the reason the
+// package comment gives about attemptView.
+//
+// # And it is not the state rule being bent
+//
+// The package comment's third arrangement is that **no route accepts a state**.
+// This is not a route: it is the process that owns this console telling it what
+// happened inside it, before roles.Run is called and before anything can make a
+// request. Nothing on the wire reaches it, which is what keeps "an agent cannot
+// be told where its own mandates stand" true — and what is recorded is not a
+// mandate state in any case, since no mandate was ever minted.
+func (s *Service) BootWatchFailed(prompt string, err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bootPrompt = prompt
+	s.bootErr = err
+}
+
+// boot renders what GET /watches says about the boot watch, or nil when there is
+// nothing to say — which is every run where one started and every run where none
+// was asked for.
+func (s *Service) boot() *bootFailure {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.bootErr == nil {
+		return nil
+	}
+	return &bootFailure{Prompt: s.bootPrompt, Error: s.bootErr.Error()}
+}
+
 // reserve takes a slot, or refuses.
 func (s *Service) reserve() error {
 	s.mu.Lock()
@@ -617,8 +681,9 @@ func (s *Service) list(w http.ResponseWriter, _ *http.Request) {
 		out = append(out, run.summary())
 	}
 	// A named field rather than a bare array, so the answer has somewhere to
-	// grow a cursor or a count without every reader changing shape.
-	roles.OK(w, http.StatusOK, map[string]any{"watches": out})
+	// grow a cursor or a count without every reader changing shape. `boot` is
+	// the first thing that grew there — see listed.
+	roles.OK(w, http.StatusOK, listed{Watches: out, Boot: s.boot()})
 }
 
 // read is GET /watches/{id}.

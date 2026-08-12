@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"regexp"
 	"strings"
@@ -14,7 +17,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 )
 
 // TestAfterWatch is the decision in afterWatch's doc comment, as a table.
@@ -367,4 +372,180 @@ func TestAfterWatchSaysWhatEndedTheWatch(t *testing.T) {
 					"which of the two bounds ended it")
 		})
 	}
+}
+
+// aMerchantThatSellsNothing is the merchant a boot watch cannot find its offer
+// at: it answers the search, and the search matches.
+//
+// A server rather than a closed port, because the two are different failures and
+// only one of them is issue #252's. A refused connection would fail this process
+// at ready, long before any watch is started; what #252 is about is a merchant
+// that is up, answers, and has nothing that matches — which is exactly what
+// agent.ErrNothingToBuy means and what a live run against a wider catalogue
+// produced.
+func aMerchantThatSellsNothing(t *testing.T) string {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// assert rather than require: this runs on the server's goroutine, not
+		// the test's.
+		assert.Equal(t, "/search", r.URL.Path,
+			"a boot watch that failed before the search would make this test about a different failure")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"offers":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	return server.URL
+}
+
+// TestABootWatchThatFindsNothingStillLeavesAConsoleServing is issue #252.
+//
+// The reproduction is a live one: `make demo-live`, a prompt typed into the
+// browser, and `connect ECONNREFUSED 127.0.0.1:8086` — because the boot watch's
+// search matched no offer, run returned, and roles.Run was never reached. Every
+// other role in the stack was up; only the one the frontend talks to was gone.
+//
+// So the property is not "the failure is handled" but "the handler exists
+// anyway": consoleFor comes back with something to serve, that something answers
+// GET /watches, and the failure is on it rather than nowhere. A version that
+// returned the error instead hands back a nil handler and fails on the first
+// require below.
+func TestABootWatchThatFindsNothingStillLeavesAConsoleServing(t *testing.T) {
+	t.Parallel()
+
+	events, err := roles.Events(clock.New(), "agent", "")
+	require.NoError(t, err)
+
+	// The address from the live report. Nothing binds it — consoleFor builds a
+	// handler and never listens — so it is here as the text the third line below
+	// has to name, not as a port.
+	const addr = "127.0.0.1:8086"
+
+	var said strings.Builder
+	handler, err := consoleFor(t.Context(),
+		agent.Endpoints{Merchant: aMerchantThatSellsNothing(t)}, events,
+		addr,
+		watching{prompt: defaultPrompt, interpreter: interpret.Demo()},
+		true, &said)
+	require.NoError(t, err,
+		"a demonstration that could not find its offer must not deny a person the console they are about to use")
+	require.NotNil(t, handler, "there is nothing to hand roles.Run, which is the defect verbatim")
+
+	console := httptest.NewServer(handler)
+	t.Cleanup(console.Close)
+
+	var listed struct {
+		Watches []map[string]any `json:"watches"`
+		Boot    *struct {
+			Prompt string `json:"prompt"`
+			Error  string `json:"error"`
+		} `json:"boot"`
+	}
+	require.Equal(t, http.StatusOK, getJSON(t, console.URL+"/watches", &listed),
+		"this is the route the frontend proxies to, and answering it at all is the fix")
+	assert.Empty(t, listed.Watches, "nothing was authorised, so there is no run to list")
+
+	require.NotNil(t, listed.Boot,
+		"a stack whose boot watch failed is otherwise indistinguishable from one never given a prompt")
+	assert.Equal(t, defaultPrompt, listed.Boot.Prompt,
+		"the reason alone does not say what was searched for")
+	assert.Contains(t, listed.Boot.Error, "the search matched no offer",
+		"the merchant answered and had nothing matching, which is the failure the live run hit")
+
+	assert.Contains(t, said.String(), "the search matched no offer",
+		"a boot watch that silently does not exist is worse than one that stops the process, "+
+			"because the next person debugs the frontend")
+	assert.Contains(t, said.String(), defaultPrompt,
+		"the sentence is what makes the failure actionable to whoever is reading the terminal")
+	// The third line, and the only one whose absence the two above would not
+	// notice: dropping it on its own leaves this test green while the report
+	// reads exactly like the fatal error it replaced.
+	assert.Contains(t, said.String(), "serving regardless",
+		"the two lines above report a failure and stop there, which is what the old fatal error did; "+
+			"what tells a reader the process is still up is this line, and without it the terminal "+
+			"sends them to debug a console that is actually answering")
+	assert.Contains(t, said.String(), "http://"+addr+"/watches",
+		"naming the route is what makes the claim checkable in the next command rather than "+
+			"something the reader has to take on trust")
+}
+
+// TestABootWatchNobodyAskedForIsNotReported is the control on the test above.
+//
+// deploy/demo.json runs a second agent process with -addr and no -watch, and a
+// console that announced a failed boot watch there would be reporting something
+// that was never attempted. It is also what fails if the reporting is moved
+// somewhere that runs unconditionally.
+func TestABootWatchNobodyAskedForIsNotReported(t *testing.T) {
+	t.Parallel()
+
+	events, err := roles.Events(clock.New(), "agent", "")
+	require.NoError(t, err)
+
+	var said strings.Builder
+	// No merchant at all: with no boot watch asked for, nothing here reaches one.
+	handler, err := consoleFor(t.Context(), agent.Endpoints{}, events, "127.0.0.1:8086",
+		watching{prompt: defaultPrompt, interpreter: interpret.Demo()}, false, &said)
+	require.NoError(t, err)
+
+	console := httptest.NewServer(handler)
+	t.Cleanup(console.Close)
+
+	var listed struct {
+		Boot *struct {
+			Error string `json:"error"`
+		} `json:"boot"`
+	}
+	require.Equal(t, http.StatusOK, getJSON(t, console.URL+"/watches", &listed))
+	assert.Nil(t, listed.Boot, "nothing was asked for, so there is nothing that did not happen")
+	assert.Empty(t, said.String(), "and nothing for a terminal to say about it")
+}
+
+// TestAWatchWithNoConsoleStillStopsTheProcess is issue #252's second decision,
+// and it is what keeps the fix from flattening two paths into one.
+//
+// `bin/agent -watch` with no -addr is a combination this build permits —
+// flagsAgree refuses only -once beside -addr — and cmd/agent's package doc
+// documents it as a supported way to run this binary. That invocation has no
+// console to fall back to: there is nothing for it to be if the watch it was
+// asked for cannot start, so exiting is the only honest answer. run reaches it
+// through watchOnce, whose failure lands on afterWatch's default arm and is
+// returned.
+//
+// The same failure on the served path is reported and survived —
+// TestABootWatchThatFindsNothingStillLeavesAConsoleServing — so these two tests
+// are the pair, and a change that softened afterWatch to match would turn this
+// one red.
+func TestAWatchWithNoConsoleStillStopsTheProcess(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, flagsAgree("", false),
+		"-watch with no -addr has to be a combination this build permits, or the path below is unreachable")
+
+	var said strings.Builder
+	nothingToBuy := fmt.Errorf("%w: the search matched no offer", agent.ErrNothingToBuy)
+
+	err := afterWatch(&said, nothingToBuy, false)
+	require.Error(t, err, "an invocation with no console to fall back to has nothing left to be")
+	assert.ErrorIs(t, err, agent.ErrNothingToBuy,
+		"and the reason has to survive to the exit status's message, not be replaced by one about serving")
+}
+
+// getJSON reads a route and decodes what it answered, returning the status.
+//
+// Its own helper rather than http.Get so the request carries the test's context,
+// and assert rather than require throughout on the standing rule for helpers: one
+// containing require is unsafe the moment a caller invokes it from a goroutine,
+// however little the helper itself mentions concurrency.
+func getJSON(t *testing.T, url string, into any) int {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	assert.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	if !assert.NoError(t, err, "reaching the console") {
+		return 0
+	}
+	defer func() { _ = resp.Body.Close() }()
+	assert.NoError(t, json.NewDecoder(resp.Body).Decode(into), "decoding the answer")
+	return resp.StatusCode
 }

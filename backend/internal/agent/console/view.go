@@ -115,6 +115,41 @@ type examples struct {
 	Examples []string `json:"examples"`
 }
 
+// listed is what GET /watches answers with: every watch this console has
+// started, oldest first, and what became of the one this process was started
+// with when that one never got going.
+//
+// A struct where the route used to build a map, on the same reasoning the map's
+// single named field already carried — "so the answer has somewhere to grow a
+// cursor or a count without every reader changing shape". Boot is the first
+// thing that grew there, and a struct is where the argument for it can live.
+type listed struct {
+	Watches []summary `json:"watches"`
+
+	// Boot is the watch cmd/agent was configured with, when it failed, and null
+	// otherwise — which is both ordinary cases: a console nobody gave a prompt,
+	// and a console whose boot watch started and is therefore a row above.
+	//
+	// **`omitempty` is deliberately absent**, on summary.Title's reasoning. A
+	// consumer can tell "nothing failed" from "this build does not serve the
+	// field" only if the field is always there.
+	Boot *bootFailure `json:"boot"`
+}
+
+// bootFailure is the sentence this process was started with and why it did not
+// become a watch. See Service.BootWatchFailed for why a console says this at
+// all.
+//
+// Two fields and no third. There is no state — nothing was authorised, so there
+// is no run and no mandate for one to be about — and no error *code*, on
+// attemptView.Error's reasoning read one step earlier: the code vocabulary
+// belongs to verifiers, and no verifier was reached. What is here is this
+// agent's own account of its own failure, in the words the failure arrived in.
+type bootFailure struct {
+	Prompt string `json:"prompt"`
+	Error  string `json:"error"`
+}
+
 // summary is one row of GET /watches: enough for a reloaded console to redraw
 // its list, and no attempt detail.
 type summary struct {
