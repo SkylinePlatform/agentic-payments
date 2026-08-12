@@ -954,24 +954,43 @@ func vetted(w http.ResponseWriter, req authorisation) (
 // an enumeration that grew to three would still be an enumeration. Measuring
 // what is signed has no list in it.
 //
-// # Two places it counts bytes the mandates will not carry, both in the safe direction
+// # Where it counts bytes the mandates will not carry, and where it misses some
 //
-// checkout_hash arrives from the caller and is thrown away — ap2.IssuePayment
+// The timestamps are counted as this surface's own RFC 3339 strings while the
+// claims carry epoch seconds, which is over-counting and the direction to be
+// wrong in.
+//
+// checkout_hash goes both ways, and the second way is the one worth writing
+// down. It arrives from the caller and is thrown away — ap2.IssuePayment
 // recomputes it, and what gets signed is a digest of fixed length — so a caller
-// that sent an enormous one is refused for bytes no mandate was going to hold.
-// And the timestamps are counted as this surface's own RFC 3339 strings while
-// the claims carry epoch seconds. Both make the bound very slightly
-// conservative, which is the direction to be wrong in, and neither is worth an
-// exception: a normalisation here is a line somebody has to keep in step with
-// the adapter, and the whole point of measuring the object is that there is
-// nothing to keep in step.
+// that sent an enormous one is refused for bytes no mandate was going to hold,
+// and a caller that sent a *short* one is counted short of what the mandate will
+// carry. The schema requires the field and not a value, so the shortest is
+// empty, and it happens twice: the Checkout Mandate's own hash is empty in this
+// measure by construction, because approve builds that mandate out of the offer
+// alone. The miss is therefore at most two digests, and maxApprovedSize's worst
+// case is measured with both of them spent.
 //
-// The encoding is json.Marshal, which is never narrower than what the mandate
-// carries. pkg/sdjwt encodes a disclosure with SetEscapeHTML(false), so its
-// escaping is a strict subset of this one's: a value full of `<` costs six bytes
-// here and one there. The measure can therefore over-count and never under-count
-// it, which is what makes the ratio in maxApprovedSize a ceiling rather than an
-// observation.
+// Neither is worth an exception. A normalisation here is a line somebody has to
+// keep in step with the adapter, and the whole point of measuring the object is
+// that there is nothing to keep in step.
+//
+// # What it never misses is the part that grows
+//
+// The encoding is json.Marshal and pkg/sdjwt encodes a disclosure with
+// SetEscapeHTML(false), so its escaping is a strict subset of this one's: a
+// value full of `<` costs six bytes here and one there. Every byte a caller can
+// put into either mandate is therefore counted at least once, and what the
+// measure never saw — the vct, the salts, the digests, the _sd arrays, the JWT
+// headers and the signatures — is a constant beside it. That is what makes the
+// ratio in maxApprovedSize a ceiling rather than an observation.
+//
+// The constant stays constant because the disclosure count does. Both closed
+// mandates declare exactly one withholdable path — checkout and risk_data, per
+// generated.Disclosable — and neither is element-wise, so risk_data with a
+// thousand keys is one disclosure and one digest, as one with a single key is.
+// An x-disclosable-items on either schema is the change that would make the
+// count scale with the request, and it would want this arithmetic re-run.
 func weighed(w http.ResponseWriter, checkout generated.CheckoutMandate, payment generated.PaymentMandate) bool {
 	offered, err := json.Marshal(checkout)
 	if err != nil {
@@ -1275,7 +1294,9 @@ const maxSignedSize = 8 * maxRenderedSize
 // budget ran out, an array of empty arrays, payee.name, payee.id, the
 // instrument, and every byte value and several multibyte runes tried as each,
 // looking for one the disclosure encoder writes wider — the worst answer is
-// **44,272 bytes, 4.2% of the megabyte the middleware keeps.** Twenty-three
+// **44,288 bytes, 4.2% of the megabyte the middleware keeps**, on a purchase
+// naming no checkout_hash, which is where weighed's measure falls short of the
+// mandates by the most it can. Twenty-three
 // times over rather than sitting on the line, and four times further inside than
 // maxSignedSize's own margin, because this route amplifies 1.35× where that one
 // amplifies 5.9×.

@@ -472,7 +472,7 @@ func TestThePreviewStatesTheBoundsBeforeAnythingIsSigned(t *testing.T) {
 // the middleware keeps, a retry that is replayed, and two signatures. The bound
 // is maxApprovedSize and its comment carries the number.
 //
-// # Two shapes, because one of them is the whole argument
+// # Three shapes, because one of them is the whole argument
 //
 // The offer is what the issue measured and it is the obvious axis. risk_data is
 // the row that says why the bound is on what is signed rather than on the offer:
@@ -480,7 +480,15 @@ func TestThePreviewStatesTheBoundsBeforeAnythingIsSigned(t *testing.T) {
 // useful signals change faster than a protocol schema — it is written by whoever
 // called this route, it travels into the Payment Mandate as a disclosure, and a
 // bound that had only looked at the offer would not have seen a byte of it.
-// Both are grown to the boundary and both have to end at one pair.
+//
+// The third is that same axis on the purchase weighed measures least accurately,
+// and it is here for the number rather than for the argument: it is the input
+// that produces the largest answer this route can give, so the headroom the log
+// line below reports is the smallest there is rather than nearly it — which is
+// what maxApprovedSize's worst case is quoted from. Its own doc says why no
+// other shape can beat it.
+//
+// All three are grown to the boundary and all three have to end at one pair.
 //
 // The purchase is built by asking, and the risk in that is the one
 // TestOneDecisionSignsOnePairAtAnySize already answers for: a test that derives
@@ -498,6 +506,10 @@ func TestOneApprovalSignsOnePairAtAnySize(t *testing.T) {
 	}{
 		{"the offer, which is the shape the issue measured", approvalPaddedInTheOffer},
 		{"risk_data, which a bound on the offer would not have seen", approvalPaddedInTheRiskData},
+		{
+			"risk_data on a purchase naming no checkout_hash, where the measure counts least",
+			approvalPaddedInTheRiskDataOfAPurchaseNamingNoHash,
+		},
 	} {
 		t.Run(shape.name, func(t *testing.T) {
 			t.Parallel()
@@ -695,6 +707,21 @@ func approvalPaddedInTheOffer(padding int) string {
 func approvalPaddedInTheRiskData(padding int) string {
 	return approvalOf(theOffer,
 		thePaymentSide+`,"risk_data":{"device":"`+strings.Repeat("d", padding)+`"}`)
+}
+
+// approvalPaddedInTheRiskDataOfAPurchaseNamingNoHash is the same shape on the
+// purchase weighed measures least accurately.
+//
+// It exists so that the headroom the caller reports is the smallest there is
+// rather than nearly it. weighed counts the checkout_hash the caller sent and
+// the mandates carry a recomputed digest instead, so a caller sending none is
+// counted two digests short of what gets signed — the largest gap between the
+// measure and the mandates that any input can open, and therefore the input that
+// produces the largest answer this route can give. Every other axis is counted
+// byte for byte, so no other shape can beat it.
+func approvalPaddedInTheRiskDataOfAPurchaseNamingNoHash(padding int) string {
+	return approvalOf(theOffer,
+		thePaymentSideNamingNoHash+`,"risk_data":{"device":"`+strings.Repeat("d", padding)+`"}`)
 }
 
 // approvalOf wraps a merchant's offer and the payment half of the same purchase
@@ -1070,8 +1097,17 @@ const (
 	//
 	// checkout_hash is deliberately wrong, as it is in every other test that
 	// approves something: the surface recomputes it from the offer.
-	thePaymentSide = `"checkout_hash":"not-the-hash",` +
-		`"payee":{"id":"air-serbia","name":"Air Serbia"},` +
+	thePaymentSide = `"checkout_hash":"not-the-hash",` + theRestOfThePaymentSide
+
+	// thePaymentSideNamingNoHash is the same purchase with that claim left
+	// empty, which is a legal thing for an agent to send — the schema requires
+	// the field and not a value — and is the input weighed's measure falls
+	// furthest short on, since the mandate carries a recomputed digest of fixed
+	// length whatever arrived. See weighed's own doc for the direction and the
+	// size of the miss.
+	thePaymentSideNamingNoHash = `"checkout_hash":"",` + theRestOfThePaymentSide
+
+	theRestOfThePaymentSide = `"payee":{"id":"air-serbia","name":"Air Serbia"},` +
 		`"payment_amount":{"amount":18900,"currency":"USD"},` +
 		`"payment_instrument":{"id":"card-4242","type":"CARD"}`
 )
