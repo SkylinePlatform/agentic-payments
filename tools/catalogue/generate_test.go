@@ -201,9 +201,7 @@ func TestEveryMarkIsDrawnInTheAccentItsIdentifierChose(t *testing.T) {
 // Five per cent of an even share is about six standard deviations at this sample
 // size, so a fair hash clears it by a distance no run would ever close, while a
 // seeding favouring one accent by more than a twentieth fails — InDelta compares
-// with <=, so a twentieth exactly is the last thing it lets through. Both of the
-// identifier shapes this program produces are drawn, because the prefix is part
-// of what gets hashed.
+// with <=, so a twentieth exactly is the last thing it lets through.
 //
 // What pins the shipped shop is not here and does not need to be:
 // TestEveryDerivedMarkIsTheOneCommittedBesideIt compares all sixty marks byte for
@@ -211,12 +209,23 @@ func TestEveryMarkIsDrawnInTheAccentItsIdentifierChose(t *testing.T) {
 func TestTheAccentSeedingSpreadsEvenlyOverTheFour(t *testing.T) {
 	t.Parallel()
 
+	// Emptying the list is the one palette change that would turn every claim
+	// below into an integer divide-by-zero rather than a failure, so it is checked
+	// first and not because it is likely. It is *only* that case: a fifth accent
+	// passes here and is caught by the byte comparison instead, since every mark
+	// drawn in it would differ from the one committed.
 	require.NotEmpty(t, accents, "an empty palette would make the spread below a division by "+
-		"zero rather than a failure, and this is the check meant to notice a palette change")
+		"zero, and a panic is a worse way to learn this than a failing assertion")
 
 	const draws = 40000
 	counts := make(map[string]int, len(accents))
 	for i := range draws {
+		// Both prefixes this program puts in front of an identifier, because the
+		// whole string is hashed and a prefix shared by half the shop is the part
+		// most likely to skew one. The tails are counters rather than real
+		// Q-numbers and routes — three-letter codes would run out before twenty
+		// thousand and start repeating, and the seeding cannot tell the
+		// difference between a route and a number anyway.
 		id := "wd:Q" + strconv.Itoa(i)
 		if i%2 == 1 {
 			id = "route:BEG-" + strconv.Itoa(i)
@@ -249,7 +258,18 @@ func TestTheAccentSeedingSpreadsEvenlyOverTheFour(t *testing.T) {
 // a colour that is not one of them, so the assertion beside it would be skipped
 // for precisely the mark it exists to catch. Dropping one accent from that
 // search left the test green; this way there is no list to drop it from.
-var fillPattern = regexp.MustCompile(`fill="(#[0-9a-f]{6})"`)
+//
+// **The pattern reads any fill and not a hex shape, which is the same argument
+// one level down.** It used to be `#[0-9a-f]{6}`, and a lexical shape is
+// droppable exactly as a list is: drawing every graphite mark in `#1F5FBF`
+// instead — the same colour, uppercase — left thirteen of the sixty drawn in a
+// colour accentOf did not choose with this test still green, because a fill it
+// cannot lex reads as no fill at all. Only the byte comparison in
+// TestEveryDerivedMarkIsTheOneCommittedBesideIt noticed. Issue #292 measured it;
+// matching to the quote and comparing against the two known colours means there
+// is no shape to fall outside of either, and an uppercase ink would now be
+// reported rather than skipped, which is itself a drift worth failing on.
+var fillPattern = regexp.MustCompile(`fill="([^"]*)"`)
 
 func accentDrawn(svg []byte) (string, bool) {
 	for _, match := range fillPattern.FindAllSubmatch(svg, -1) {
