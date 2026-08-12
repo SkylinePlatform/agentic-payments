@@ -129,6 +129,7 @@ describe("parseRecord", () => {
     ).toEqual([
       "amount",
       "at",
+      "authorisation",
       "code",
       "correlation_id",
       "detail",
@@ -480,5 +481,91 @@ describe("the mandate, issue #201's artefact on the wire", () => {
         "recovered the mandate from this sentence would disagree with the wire " +
         "the first time an emitter reworded one",
     ).toBeUndefined();
+  });
+});
+
+describe("the authorisation a step was taken under", () => {
+  /** A frame carrying whatever `authorisation` the caller wants tested. */
+  function frameWith(authorisation: unknown): string {
+    return JSON.stringify({
+      seq: 4,
+      event: {
+        kind: "mandate_constructed",
+        role: "agent",
+        at: "2026-08-10T09:00:00Z",
+        mandate: { type: "checkout", state: "closed" },
+        authorisation,
+      },
+    });
+  }
+
+  it("comes through with all three members", () => {
+    const parsed = parseRecord(
+      frameWith({
+        typed: "kupi merdevine, najjeftinije",
+        signed: ["the amount is at most 200.00 USD"],
+        expires_at: "2026-08-10T20:04:31Z",
+      }),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    expect(parsed.record.event.authorisation).toEqual({
+      typed: "kupi merdevine, najjeftinije",
+      signed: ["the amount is at most 200.00 USD"],
+      expires_at: "2026-08-10T20:04:31Z",
+    });
+  });
+
+  it("comes through with an empty prompt, which is a real run", () => {
+    // A watch assembled by a caller with no sentence to report is still a watch,
+    // and the half that matters — what the Trusted Surface rendered — is there.
+    const parsed = parseRecord(
+      frameWith({ typed: "", signed: ["the amount is at most 200.00 USD"], expires_at: "2026-08-10T20:04:31Z" }),
+    );
+    expect(parsed.ok).toBe(true);
+  });
+
+  it.each([
+    [
+      "no sentence the surface rendered",
+      { typed: "buy me a ladder", signed: [], expires_at: "2026-08-10T20:04:31Z" },
+      "a card saying the user approved something, with nothing under it saying what",
+    ],
+    [
+      "no expiry",
+      { typed: "buy me a ladder", signed: ["the amount is at most 200.00 USD"] },
+      "limits a reader cannot tell a live authorisation from a spent one by",
+    ],
+    [
+      "a sentence that is not a sentence",
+      { typed: "", signed: [42], expires_at: "2026-08-10T20:04:31Z" },
+      "a lane rendering a number where a sentence belongs",
+    ],
+    [
+      "a prompt that is not a string",
+      { typed: null, signed: ["the amount is at most 200.00 USD"], expires_at: "2026-08-10T20:04:31Z" },
+      "quotation marks around `null`, which puts words in the user's mouth",
+    ],
+    ["not an object at all", "approved", "a string where a nested object belongs"],
+  ])("refuses a record whose authorisation carries %s", (_name, authorisation, because) => {
+    const parsed = parseRecord(frameWith(authorisation));
+    expect(parsed.ok, `otherwise the screen draws ${because}`).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.reason).toContain("authorisation");
+  });
+
+  it("lets a step carrying none through untouched", () => {
+    const parsed = parseRecord(
+      JSON.stringify({
+        seq: 5,
+        event: { kind: "mandate_verified", role: "mpp", at: "2026-08-10T09:00:00Z" },
+      }),
+    );
+    expect(parsed.ok, "a verifier is shown a minimised presentation and never the sentences").toBe(
+      true,
+    );
+    if (!parsed.ok) return;
+    expect(parsed.record.event.authorisation).toBeUndefined();
   });
 });

@@ -9,6 +9,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/pkg/sdjwt"
 )
 
@@ -392,6 +393,55 @@ func (w *Watch) audiences() Audiences {
 		Merchant:   w.Merchant.ID,
 		Processor:  w.ProcessorID,
 	}
+}
+
+// under decorates a step's own event options with the open mandate pair this
+// watch is spending.
+//
+// A wrapper the call sites pass their options *through*, rather than an option
+// they append: Go will not mix a variadic spread with further arguments in one
+// call, so an emit site that wanted both would have to assemble a slice by hand
+// — and one that assembled it and forgot to include this is the whole failure
+// mode. `w.under(…)...` is one shape every site in this file uses, and a site
+// that stopped using it is visible on the line rather than in what is absent
+// from it.
+//
+// It returns a slice so that "nothing to state" is a shorter option list rather
+// than a nil EventOpt somebody has to remember to guard.
+//
+// # Why it is gated here as well as in Validate
+//
+// obs.Validate refuses an authorisation carrying no sentence or no expiry, and
+// it refuses the **whole event** when it does — which on this path would take
+// four steps per attempt off the three-lane view and surface as a hole in the
+// sequence, roles away from the cause. That is the failure #205's review
+// measured for a half-named mandate, and the answer is the same one WithAmount's
+// call sites already use: the emitter states the fact only when it has one, and
+// Validate is what catches a call site that got the invariant wrong rather than
+// what the ordinary absence goes through.
+//
+// The absence is real rather than theoretical. An Authorisation assembled field
+// by field — a browser that has not been taught a field, a test fixture — can
+// arrive with no rendering and no expiry, and a watch is still perfectly able to
+// spend it: what it needs are the two open mandates, and the sentences are for a
+// screen. So a run like that draws a User lane with no card, which is the honest
+// answer, rather than losing every agent step it has.
+func (w *Watch) under(opts ...obs.EventOpt) []obs.EventOpt {
+	if len(w.Authorisation.Rendered) == 0 || w.Authorisation.ExpiresAt.IsZero() {
+		return opts
+	}
+	return append(opts, obs.WithAuthorisation(obs.Authorisation{
+		// Typed and Signed are two different kinds of claim and this is the one
+		// place both are in scope. The prompt is this agent's own copy of what
+		// the user wrote, which nothing signed; Rendered came back from POST
+		// /authorise, produced by the surface's own Render over the constraint
+		// set the user's key went over. obs.Authorisation's own comment is where
+		// that distinction is argued, and the two field names are the ones
+		// console/view.go already uses for it.
+		Typed:     w.Authorisation.Prompt,
+		Signed:    w.Authorisation.Rendered,
+		ExpiresAt: w.Authorisation.ExpiresAt,
+	}))
 }
 
 // Watched is what one run of the watch did.

@@ -27,6 +27,7 @@ export {
   parseRecord,
 } from "./events";
 export type {
+  AuthorisationRef,
   EventKind,
   EventRecord,
   MandateRef,

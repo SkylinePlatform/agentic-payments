@@ -14,7 +14,7 @@
 
 import { DIGEST_SHOWN, shortDigest } from "../digest";
 import type { StatusMeta } from "../status/model";
-import type { EventKind, EventRecord, MandateRef } from "../sse";
+import type { AuthorisationRef, EventKind, EventRecord, MandateRef } from "../sse";
 import type { Amount } from "../protocol";
 
 export { DIGEST_SHOWN, shortDigest };
@@ -110,6 +110,16 @@ export interface Step {
    * mandate, and never defaulted.
    */
   readonly mandate?: MandateRef;
+  /**
+   * The open mandate pair this step was taken under. Issue #213's field, read
+   * straight through from `ProtocolEvent.authorisation` on the same terms the
+   * three above are: absent on a step taken under no open mandate, and never
+   * invented.
+   *
+   * See {@link authorisationOf} for how the User lane picks one of these, and
+   * `AuthorisationRef` for why `typed` and `signed` are two different claims.
+   */
+  readonly authorisation?: AuthorisationRef;
 }
 
 /**
@@ -186,6 +196,41 @@ export function renderPrice(amount: Amount): string {
   const whole = digits.slice(0, digits.length - MINOR_DIGITS);
   const fraction = digits.slice(digits.length - MINOR_DIGITS);
   return `${whole}.${fraction} ${amount.currency}`;
+}
+
+/**
+ * The time, to the second, in the zone the reader's own machine keeps.
+ *
+ * **It lived in `EventLog.tsx` until #213 and moved here for `renderPrice`'s
+ * reason**, which is written out one declaration up: this module is the one in
+ * this directory that holds what the screen knows with no React in it, and two
+ * byte-identical renderers of one string with nothing comparing them is drift
+ * waiting to happen. The lanes now spell a time too — the card at the head of
+ * the User lane says how long the authorisation lasts — and the log and that
+ * card have to agree, because a reader comparing them is comparing one clock.
+ *
+ * The argument for `Date` is unchanged and is #214's, reported off a live run.
+ * `src/constraint/render.ts` refuses `Date` because it renders a sentence the
+ * user *signed*, so every reader has to see the same words whatever their zone.
+ * Nothing here carries a signature — the timestamps on this screen are a
+ * courtesy, not evidence — and a courtesy that reads two hours out from the
+ * reader's own clock, with nothing on screen saying whose zone it is, is worse
+ * than none. `Date` reads whatever offset the value carries and renders the
+ * reader's own zone back, which is also why no abbreviation needs to appear
+ * beside it.
+ *
+ * The instant is not lost: both callers put the original whole, offset included,
+ * in a `title` — for whoever is checking a row or a card against a server's own
+ * log, which keeps the zone it was written in.
+ */
+export function timeOf(at: string): string {
+  const date = new Date(at);
+  // The callers only ever hand this a value `parseRecord` let through, so this
+  // should not be reachable — but the raw string is a safer fallback than a
+  // blank or a thrown render on a malformed value neither should trust.
+  if (Number.isNaN(date.getTime())) return at;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 /**
@@ -479,6 +524,7 @@ export function group(records: readonly EventRecord[]): readonly Transaction[] {
       code: record.event.code,
       amount: record.event.amount,
       mandate: record.event.mandate,
+      authorisation: record.event.authorisation,
     });
     byCorrelation.set(id, steps);
   }
@@ -594,6 +640,60 @@ export function amountOf(attempt: Attempt): Amount | undefined {
   for (let i = attempt.steps.length - 1; i >= 0; i -= 1) {
     const amount = attempt.steps[i].amount;
     if (amount !== undefined) return amount;
+  }
+  return undefined;
+}
+
+/**
+ * The open mandate pair this attempt was made under, for the card at the head of
+ * the User lane — issue #213.
+ *
+ * # Why the lane needs this at all
+ *
+ * `group` keys on the correlation ID, which is right and which
+ * `docs/architecture/adr/0003` protects: no hop regenerates one. What follows is
+ * that a Human Not Present purchase and the approval that licensed it are two
+ * different correlations — the user signs at the Trusted Surface in a request of
+ * its own, and the purchase happens whenever the merchant's price moves, which
+ * may be an hour later. On the browser's path they are not even the same
+ * connection: the browser talks to the surface directly and hands the agent a
+ * signature already collected.
+ *
+ * So the User lane had nothing in it, on every browser-signed purchase, on a
+ * screen titled *Three parties, one purchase*. This is what it draws instead:
+ * not a step in this transaction and not a pointer elsewhere, but the
+ * authorisation itself — the sentences the user signed, and how long they last.
+ *
+ * # The first, scanning forward, and why that is not {@link amountOf}'s rule
+ *
+ * `amountOf` takes the *last* step carrying one, because an amount is a
+ * presentation choice among copies of one number and the most recent is the most
+ * decisive word available. Nothing here is decided as an attempt proceeds: every
+ * step of it is taken under the same authorisation, signed before any of them
+ * happened. So the first is the earliest evidence the screen has, and taking it
+ * means the card is drawn from the moment the attempt's first step arrives
+ * rather than changing as later ones do.
+ *
+ * A second authorisation appearing inside one attempt is not a state the wire
+ * can produce — a watch spends one pair — and if it somehow did, showing the one
+ * under which the attempt was begun is the honest reading of what was
+ * authorised.
+ *
+ * # It is not a renderer
+ *
+ * `signed` is the Trusted Surface's own `Render()` output, carried on the wire.
+ * Nothing in this module or in `Lanes.tsx` reaches `constraint/render.ts`, and
+ * that is the whole point: `/authorise/preview` exists so the sentences a user
+ * reads come from the party that signs, and a lane that re-rendered the
+ * constraints would be showing a second opinion of what a signature covers. The
+ * lane is downstream of a signature rather than upstream of one, which is why
+ * `constraint/architecture.test.ts` does not govern this screen — and
+ * `Lanes.test.tsx` holds the import rule directly, so the distinction is a
+ * property rather than an observation.
+ */
+export function authorisationOf(attempt: Attempt): AuthorisationRef | undefined {
+  for (const step of attempt.steps) {
+    if (step.authorisation !== undefined) return step.authorisation;
   }
   return undefined;
 }
