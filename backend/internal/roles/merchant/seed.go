@@ -158,24 +158,6 @@ const (
 	DemoLadderPrice         = 13900
 	DemoLadderPriceRepriced = 13500
 	DemoLadderCap           = 15000
-
-	// One concert ticket at $75.00, then $79.00 — both inside the $160.00 all
-	// in a prompt this package no longer names.
-	//
-	// **Issue #244 removed the offer these three named.** The prompt — "two
-	// tickets... up to $160 all in" — and its deploy/catalogue.json entry are
-	// gone; TestTheCatalogueFileIsTheDocumentedScenario no longer asserts on
-	// them, and shippedCatalogue(t) no longer lists DemoConcertID. What these
-	// three are not is deleted along with it: backend/internal/agent — a
-	// package this branch's scope does not reach, with a pull request in
-	// review there — still names DemoConcertID and DemoConcertPrice as Go
-	// symbols in its own tests, so removing them here would take an unrelated
-	// package's build down rather than one test in it. Coordinate their actual
-	// removal with whoever lands that work; until then these three describe a
-	// figure and an identifier this file no longer sells.
-	DemoConcertPrice         = 7500
-	DemoConcertPriceRepriced = 7900
-	DemoConcertCap           = 16000
 )
 
 // The catalogue's three identifiers, as deploy/catalogue.json states them.
@@ -195,17 +177,10 @@ const (
 // what tests written against the built scenario name, and
 // TestTheCatalogueFileIsTheDocumentedScenario is what keeps the file agreeing
 // with them. A fourth product acquires no constant here.
-//
-// DemoConcertID sits with DemoConcertPrice above rather than here, for the same
-// reason: it no longer names anything deploy/catalogue.json lists, and stays
-// only because backend/internal/agent still compiles against it.
 const (
 	DemoFlightID  = "route:BEG-PMI"
 	DemoBicycleID = "gtin:05012345678900"
 	DemoLadderID  = "gtin:05014477390221"
-
-	// DemoConcertID no longer names a listed offer. See DemoConcertPrice.
-	DemoConcertID = "event:vlado-georgijev-2026-11-14"
 )
 
 // DemoMerchantCategory is the MCC the demo merchant trades under.

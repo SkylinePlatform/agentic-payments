@@ -89,11 +89,15 @@ func TestProposeDoesNotCallTheSurface(t *testing.T) {
 // TestTheProposalKeepsTheDifferenceBetweenTwoAndNoAnswer is the half of issue
 // #133 that is easy to close by accident.
 //
-// Both rows go through the same call. The concert sentence names a count and
-// that number has to arrive, because a `quantity lte 2` bound cannot be read
-// as an instruction — that is the defect #133 is about. The ladders name none,
-// and answering 1 for them would be just as wrong in the other direction: it
-// looks harmless, it renders identically, and it makes every caller holding a
+// Both rows go through the same call. twoLaddersPrompt names a count and that
+// number has to arrive, because a `quantity lte 2` bound cannot be read as an
+// instruction — that is the defect #133 is about. It used to be the concert
+// prompt that made this row; issue #244 removed that prompt and its offer,
+// and twoLadders is the local scenario that replaced it, over the ladders'
+// own identifier and price — see its doc comment for why this could not stay
+// scripted into interpret.Demo(). The plain ladders prompt names none, and
+// answering 1 for it would be just as wrong in the other direction: it looks
+// harmless, it renders identically, and it makes every caller holding a
 // number of its own — cmd/agent's -quantity, POST /watches's own field —
 // unreachable, because an authorisation that always names a count can never
 // fall through to one. The zero is what keeps "nobody said" and "somebody said
@@ -102,17 +106,18 @@ func TestTheProposalKeepsTheDifferenceBetweenTwoAndNoAnswer(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
-		name   string
-		prompt string
-		want   int
-		why    string
+		name        string
+		prompt      string
+		interpreter interpret.IntentInterpreter
+		want        int
+		why         string
 	}{
 		{
-			name: "the sentence named a count", prompt: concertPrompt, want: 2,
-			why: "two tickets is what was typed, and quantity lte 2 alone cannot tell that from one",
+			name: "the sentence named a count", prompt: twoLaddersPrompt, interpreter: twoLadders, want: 2,
+			why: "two ladders is what was typed, and quantity lte 2 alone cannot tell that from one",
 		},
 		{
-			name: "the sentence named none", prompt: "find and buy telescopic ladders, cheapest", want: 0,
+			name: "the sentence named none", prompt: ladderPrompt, interpreter: interpret.Demo(), want: 0,
 			why: "the interpreter had no opinion, and a proposal that invented one would silently outrank every caller that does",
 		},
 	} {
@@ -128,7 +133,7 @@ func TestTheProposalKeepsTheDifferenceBetweenTwoAndNoAnswer(t *testing.T) {
 
 			got, err := w.client().Propose(t.Context(), agent.Intent{
 				Prompt:      tc.prompt,
-				Interpreter: interpret.Demo(),
+				Interpreter: tc.interpreter,
 				AgentKey:    agentKey,
 			})
 			require.NoError(t, err, "a scripted sentence has to produce a proposal")
@@ -165,10 +170,10 @@ func TestTheProposalCarriesWhenTheSentenceWantedToBuy(t *testing.T) {
 			why:  "\"when it drops below $200\" presupposes a price now and asks for it not to be acted on",
 		},
 		{
-			name: "a sentence with none", prompt: concertPrompt,
+			name: "a sentence with none", prompt: ladderPrompt,
 			want: interpret.TriggerImmediate,
-			why: "\"up to $160 all in\" is a cap, and a cap is not a condition to wait on — a person " +
-				"reading that sentence expects a purchase",
+			why: "\"find and buy\" is an instruction and \"cheapest\" is not a condition to wait on " +
+				"— a person reading that sentence expects a purchase",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
