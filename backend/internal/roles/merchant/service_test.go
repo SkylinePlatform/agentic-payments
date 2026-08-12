@@ -74,13 +74,16 @@ func newShopWatched(t *testing.T, events *obs.Emitter) shop {
 // newShopServedBy is the same merchant with its payment leg pointed at
 // whichever Processor the caller brought.
 //
-// The double is the ordinary case and the two tests that do not use it are the
+// The double is the ordinary case, and the one test that does not use it is the
 // reason this parameter exists: what HTTPProcessor makes of the answers a real
 // Merchant Payment Processor can give is unreachable through a double, which
-// records the Go call and never touches the wire. A caller passing anything
-// other than the double leaves shop.processor nil, so presented() is not
-// available to it — count the presentations at the handler instead, which is
-// where a caller running the real hop already is.
+// records the Go call and never touches the wire.
+//
+// **A caller passing anything other than the double leaves shop.processor nil**,
+// and presented() then panics on it rather than answering zero — loud, which is
+// the direction to be wrong in, but it is a panic and not a compile error, so
+// this comment is the whole of the warning. Count the presentations at the
+// handler instead, which is where a caller running the real hop already is.
 func newShopServedBy(t *testing.T, events *obs.Emitter, processor merchant.Processor) shop {
 	t.Helper()
 

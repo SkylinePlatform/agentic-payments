@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/problem"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant"
 )
@@ -374,6 +375,15 @@ func TestOnlyAnAnswerCarryingTheProcessorsVerdictIsARefusal(t *testing.T) {
 						"the merchant has to be able to tell this one from the rest: it is the "+
 							"answer that says the same request, presented again, will be answered "+
 							"rather than settled twice")
+				} else {
+					// The other half of the same claim, and the arm above proves
+					// nothing without it: a sentinel every refusal satisfies
+					// distinguishes nothing, and an implementation that wrapped
+					// ErrSettlementInFlight around all of them passes every other
+					// assertion in this file.
+					assert.NotErrorIs(t, err, merchant.ErrSettlementInFlight,
+						"presenting this again unchanged would be answered the same way, so a "+
+							"caller told to retry it would retry it until the mandate expires")
 				}
 				return
 			}
@@ -457,6 +467,12 @@ func TestAProcessorSayingInFlightIsNotAnsweredToTheBuyerAsARefusal(t *testing.T)
 			"happened")
 
 	require.NoError(t, events.Close(t.Context()), "draining the event log")
+	require.Equal(t,
+		[]obs.Kind{obs.KindMandateVerified, obs.KindMandatePresented}, log.kinds(),
+		"the control the count below is worthless without, and it is #224's own: it says the "+
+			"log was live and said everything this purchase did reach. Without it the zero is "+
+			"satisfied by a merchant emitting nothing at all — this test passes with no Emitter "+
+			"attached - so it would measure the wiring rather than what was announced")
 	assert.Zero(t, log.issued(),
 		"the receipt was signed and then dropped, so nobody holds it — and the retry a "+
 			"released 5xx invites would announce a second one for the same purchase")

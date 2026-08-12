@@ -967,6 +967,17 @@ func (s *Service) settle(w http.ResponseWriter, r *http.Request) {
 		// the life of the window, and a purchase whose processor was busy for a
 		// moment could never complete. A 503 hands the key back, and the retry
 		// reaches a processor that has by then finished and replays its answer.
+		//
+		// **What it costs, stated rather than discovered.** "Try again" is right
+		// for every answer that is transient and merely honest for one that is
+		// not: a processor answering request_malformed to a processor_nonce it
+		// never issued — the buyer's own value, forwarded — is permanent, and the
+		// watch re-delivers the same documents rather than re-minting them, so
+		// that retries until it stops. It does stop, and not on this hop: the
+		// delegations carry the user's expiry, and once it passes this merchant
+		// refuses them at decideChain and answers 422 with a receipt, which is a
+		// verdict and ends the run. Answering "refused" instead would end it
+		// sooner by asserting a decision nobody reached, which is #232.
 		roles.Fail(w, generated.ErrorCodeVerifierUnavailable,
 			fmt.Sprintf("initiating payment: %v", err))
 		return
