@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles/merchant/shop"
 )
 
 // The two paths this file reaches, from this package's directory.
@@ -141,18 +143,60 @@ func TestALiveMarkSaysWhereItCameFrom(t *testing.T) {
 // sixty — thirty-nine, as this snapshot falls — and markSVG has no category
 // parameter to reach for, so it does not compile either.
 //
-// What is left is the claim the test always made, and the pair below no longer
-// has to share a shelf to make it, because there is no shelf to share: the
-// `"sunglasses"` both offers used to carry went with the parameter. Two
-// identifiers draw two pictures; one identifier drawn twice draws one.
+// What is left is the claim the test always made, and issue #279 is what made it
+// falsifiable. Two calls to markDataURI with different identifiers **cannot**
+// return the same string whatever the grid does: liveMarkNote embeds the
+// identifier in the SVG comment and the title goes into a <title> element, so a
+// markSVG that drew one identical grid for all 194 fetched offers passed this
+// happily — which is precisely "a fetched shelf would be one picture repeated",
+// the assertion's own message.
+//
+// So both offers below are drawn with one title and one note, and the identifier
+// is the only thing left that differs. Anything that comes back different is the
+// grid, which is the thing the claim is about.
 func TestTwoOffersGetTwoMarks(t *testing.T) {
 	t.Parallel()
 
-	first := markDataURI("dummyjson:154", "Black Sun Glasses")
-	second := markDataURI("dummyjson:155", "Classic Sun Glasses")
+	// Not liveMarkNote's text, because that is the half of the picture that
+	// carries the identifier and would answer the question for the grid.
+	const note = "    One note for both, so only the grid can differ.\n"
+	first := string(markSVG("dummyjson:154", "Sun Glasses", note))
+	second := string(markSVG("dummyjson:155", "Sun Glasses", note))
 
 	assert.NotEqual(t, first, second,
-		"two offers drew the same mark, so a fetched shelf would be one picture repeated")
-	assert.Equal(t, first, markDataURI("dummyjson:154", "Black Sun Glasses"),
+		"two offers drew the same grid, so a fetched shelf would be one picture repeated with "+
+			"nothing but its comment to tell the rows apart")
+	assert.Equal(t, markDataURI("dummyjson:154", "Black Sun Glasses"),
+		markDataURI("dummyjson:154", "Black Sun Glasses"),
 		"a mark that varied between calls would give one offer two pictures across two searches in one run")
+}
+
+// TestAFetchedOffersPictureIsDrawnFromItsOwnIdentifier is the caller's half of
+// what markSVG's missing category parameter cannot hold.
+//
+// Dropping that parameter stops the *drawing* reaching the shelf. It does not
+// stop entryFor handing the shelf over, because a category is a string and so is
+// an identifier — markDataURI(p.Category, p.Title) compiles, and it draws one
+// picture per category for all 194 offers the recorded shop sells. That is the
+// repeated shelf the test above refuses, arrived at down the one path that
+// actually puts a picture on a fetched offer.
+//
+// Nothing else pins that path. The parity test and the two markDataURI tests all
+// call the drawing themselves, and the tests that drive Extend see only what
+// Validate asks of a fetched image_url — the data-URI prefix, which a picture
+// drawn from the wrong string carries just as happily.
+func TestAFetchedOffersPictureIsDrawnFromItsOwnIdentifier(t *testing.T) {
+	t.Parallel()
+
+	p := shop.Product{
+		ID:       "dummyjson:154",
+		Category: "sunglasses",
+		Title:    "Black Sun Glasses",
+	}
+
+	assert.Equal(t, markDataURI(p.ID, p.Title), entryFor(p).ImageURL,
+		"a fetched offer carries a picture drawn from something other than its own identifier, so "+
+			"the shelf on the screen says what kind of thing a row is — which is the one claim a "+
+			"mark is not allowed to make, and every offer on a shelf drawing the same picture is "+
+			"the loudest way to make it")
 }

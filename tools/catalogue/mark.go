@@ -78,7 +78,7 @@ func writeMarks(imagesPath string, offers []entry) error {
 
 	for _, o := range offers {
 		name := filepath.Base(o.ImageURL)
-		if err := os.WriteFile(filepath.Join(dir, name), mark(o), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, name), mark(o.ID, o.Title), 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", name, err)
 		}
 	}
@@ -114,9 +114,12 @@ func slug(id string) string {
 // Six shelves against four accents collide by pigeonhole, and the collision
 // issue #236 measured landed badly. graphite is the quietest of the four, and it
 // drew the flights and bicycles shelves entire — twenty of the sixty marks, a
-// third of the shop. Seeding on the identifier spreads all four through every
-// shelf instead: 14, 15, 14 and 17 as this snapshot falls, and no shelf drawn in
-// fewer than three of them.
+// third of the shop. Seeding on the identifier spreads the four across the shop
+// instead, and across each shelf rather than one to a shelf: 14, 15, 14 and 17 as
+// this snapshot falls, and no shelf drawn in fewer than three of them. Three
+// rather than four is bicycles, which is the smallest shelf and draws no
+// graphite — the earlier wording here said "all four through every shelf", which
+// its own next clause contradicted.
 //
 // # What "quietest" means, since it is a claim about colour
 //
@@ -150,16 +153,32 @@ func slug(id string) string {
 // willing to pay. Widening the palette to make a picture mean something is a
 // bigger change than the one it would buy.
 //
-// So the colour says nothing, deliberately, and a mark is now a function of the
-// identifier alone. TestAMarkSaysNothingAboutTheShelfItsOfferSitsOn is what
-// holds that, and it goes red if the category comes back into either this
-// function or its one call site.
+// So the colour says nothing, deliberately, and a mark is a function of the
+// identifier alone. **What keeps the drawing from reaching the shelf is the
+// signature**: neither this function nor [mark] is handed anything but an
+// identifier and a title, so seeding the accent on a category inside either is
+// `undefined: o` rather than a one-word edit for a test to notice. Issue #279 is
+// where that stopped resting on a test — the one written for it recomputed this
+// function's answer instead of reading the drawing, and passed under the
+// reversion it was named after.
 //
-// The argument is an identifier rather than the entry for that reason and not to
-// save a field access: a function handed the whole offer can reach the shelf, and
-// the merchant's copy of this drawing — backend/internal/roles/merchant/mark.go,
-// which the parity test there holds to the byte — dropped its category parameter
-// on the same ground rather than leaving it unread.
+// That is the reasoning AGENTS.md gives for joseVerifier having no KeyID method,
+// and the merchant's copy of this drawing —
+// backend/internal/roles/merchant/mark.go, which the parity test there holds to
+// the byte — dropped its own category parameter first, on the same ground.
+//
+// # Where the signature stops, which is worth stating rather than assuming
+//
+// It stops at the caller. A category is a string and so is an identifier, so
+// `mark(o.Category, o.Title)` in [writeMarks] compiles, and it is a worse
+// reversion than the one this section is about: the accent is not the only part
+// of the drawing a whole shelf would then share, the shape hash is too, so the
+// shelf becomes six drawings rather than sixty — which is the
+// category-illustration answer [writeMarks] rejects in its own comment. A
+// signature over two strings cannot
+// reach that, so a test does: TestEveryDerivedMarkIsTheOneCommittedBesideIt draws
+// through [writeMarks] rather than calling [mark] itself, for exactly this
+// reason.
 func accentOf(id string) string {
 	return accents[draw(id, "accent", len(accents))]
 }
@@ -170,9 +189,14 @@ func accentOf(id string) string {
 // therefore reads as a mark rather than as noise, with each cell's shape and
 // colour taken from the hash of the identifier. The frame is the hand-drawn
 // four's, to the pixel.
-func mark(o entry) []byte {
-	sum := sha256.Sum256([]byte("mark\x00" + o.ID))
-	accent := accentOf(o.ID)
+//
+// It takes an identifier and a title rather than the offer, and the two fields it
+// would otherwise reach for are the point: a mark claims nothing about what its
+// offer is, so the drawing is not given the shelf to claim it with. See [accentOf]
+// for the whole argument.
+func mark(id, title string) []byte {
+	sum := sha256.Sum256([]byte("mark\x00" + id))
+	accent := accentOf(id)
 
 	// Two columns decided and two mirrored. Eight cells, each taking two bits of
 	// shape and one of colour out of its own byte, so a cell's appearance
@@ -198,11 +222,11 @@ func mark(o entry) []byte {
 	var b strings.Builder
 	b.WriteString(`<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true">` + "\n")
 	b.WriteString("  <!--\n")
-	b.WriteString("    Generated by tools/catalogue from " + o.ID + ". Do not hand-edit: `make\n")
+	b.WriteString("    Generated by tools/catalogue from " + id + ". Do not hand-edit: `make\n")
 	b.WriteString("    catalogue` rewrites every file in this directory. The colours are the\n")
 	b.WriteString("    light-theme tokens frontend/src/styles.css declares, as literal hex.\n")
 	b.WriteString("  -->\n")
-	b.WriteString("  <title>" + escape(o.Title) + "</title>\n")
+	b.WriteString("  <title>" + escape(title) + "</title>\n")
 	fmt.Fprintf(&b, "  <rect x=\"6\" y=\"6\" width=\"188\" height=\"188\" rx=\"20\" fill=%q stroke=%q stroke-width=\"3\"/>\n",
 		wash, ink)
 
