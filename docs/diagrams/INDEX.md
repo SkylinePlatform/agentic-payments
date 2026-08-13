@@ -27,6 +27,13 @@ had touched.
 
 | Diagram | Owning document | Exported file |
 |---|---|---|
+| What breaks when an agent buys | [README.md](../../README.md) | `docs/diagrams/root-README-1.svg` |
+| The mandate lifecycle, and the refusal edge | [README.md](../../README.md) | `docs/diagrams/root-README-2.svg` |
+| Two mandates, and who verifies each | [README.md](../../README.md) | `docs/diagrams/root-README-3.svg` |
+| Open and closed | [README.md](../../README.md) | `docs/diagrams/root-README-4.svg` |
+| Who sees what | [README.md](../../README.md) | `docs/diagrams/root-README-5.svg` |
+| The TAP handshake at the merchant edge | [README.md](../../README.md) | `docs/diagrams/root-README-6.svg` |
+| Unknown agent against unverified agent | [README.md](../../README.md) | `docs/diagrams/root-README-7.svg` |
 | The three-layer model | [docs/architecture/README.md](../architecture/README.md) | `docs/diagrams/architecture-README-1.svg` |
 | Module dependencies | [docs/architecture/README.md](../architecture/README.md) | `docs/diagrams/architecture-README-2.svg` |
 | The agentic boundary | [docs/architecture/README.md](../architecture/README.md) | `docs/diagrams/architecture-README-3.svg` |
@@ -46,7 +53,14 @@ had touched.
 | Registry resolution | [docs/protocols/tap.md](../protocols/tap.md) | `docs/diagrams/protocols-tap-2.svg` |
 | Signature base construction | [docs/protocols/tap.md](../protocols/tap.md) | `docs/diagrams/protocols-tap-3.svg` |
 
-Eighteen diagrams, six owning documents. The exported filename is
+Twenty-five diagrams, seven owning documents. The exported filename is
 `<document-path-under-docs-with-dashes>-<n>.svg`, numbered in the order the
 mermaid blocks appear in that document — see the `diagrams` target in the
 `Makefile`.
+
+**The numbering is positional**, which matters for the root README more than for
+the others: it is the document the article series and any deck are built from,
+so a diagram inserted above another renumbers everything below it and silently
+breaks whatever already pointed at the old numbers. That is why the Visa TAP
+section is last in that document and not in protocol order — a chapter that
+grows when the milestone lands appends rather than renumbers.
