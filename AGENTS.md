@@ -296,8 +296,9 @@ tools/
   catalogue/            deploy/catalogue.json and its images, derived from a CC0
                         snapshot. A third tool-only module; `make catalogue`,
                         run by a person and by nothing in CI or `make demo`
-  bootstrap/            the suite over .githooks/ and over the tracked sentinel
-                        in backend/internal/core/generated/. A fourth tool-only
+  bootstrap/            the suite over .githooks/, over the tracked sentinel in
+                        backend/internal/core/generated/ and over the Node floor
+                        contracts/codegen.mk refuses below. A fourth tool-only
                         module and the one that generates nothing. No Go source
                         that is not a test
 backend/                ⬅ the Go module root. go.mod lives here, not at the top
@@ -547,9 +548,10 @@ builds against.
 **`tools/bootstrap` is the fourth, and it is the one that generates nothing.**
 The other three are kept out of `backend/go.mod` because a generator is not a
 dependency of the thing it generates; this one is kept out because its *subject*
-is the repository rather than the module — the hooks in `.githooks/` and the
-tracked sentinel in `backend/internal/core/generated/` — and a suite that drives
-`git checkout` in a temporary repository has no business in the build list of
+is the repository rather than the module — the hooks in `.githooks/`, the
+tracked sentinel in `backend/internal/core/generated/` and the Node floor
+`contracts/codegen.mk` refuses below — and a suite that drives `git checkout` or
+`make` in a temporary directory has no business in the build list of
 the thing that gets imported. It holds no non-test Go source, exactly as
 `internal/suite` holds none, and it is not `internal/suite`: that package's own
 comment says what it contains is one rule about every other `_test.go` file in
@@ -928,6 +930,19 @@ the day that Node shipped with every check on every pull request green.
 `frontend/src/test/webstorage.test.ts` is the guard, which can only fail on a
 Node where the collision happens — so the second leg is what makes the guard
 mean anything, and the two are one mechanism rather than two changes.
+
+**The floor that CI reads is stated three times, and only two of them can
+drift.** `engines` in `frontend/package.json` is the declaration npm acts on;
+`OLDEST_NODE` in `frontend/vite.config.ts` refuses below it when vitest starts;
+and since #295 the `frontend/node_modules` rule in `contracts/codegen.mk`
+refuses before `npm ci` runs at all — which is the wider case, because a Node
+too old to install never reaches a config file. That third one reads `engines`
+with sed rather than holding its own copy, so it cannot name a floor npm does
+not enforce; `OLDEST_NODE` is a transcription and is held to the original by
+`TestTheFloorViteConfigRefusesBelowIsTheOneEnginesDeclares` in `tools/bootstrap`.
+**`.nvmrc` is not a candidate for any of it** — it holds `22`, the line and not
+a version, and a floor derived from it would accept 22.0 through 22.12 and hand
+them to the failure the check exists to replace.
 
 **`make check` is no longer the whole of CI.** It is the local gate; the
 *Build and test*, *Lint* and *Contracts* jobs in `.github/workflows/ci.yml`
