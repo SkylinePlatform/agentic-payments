@@ -201,8 +201,10 @@ self-signed key, is that trust can be taken back.
 than it first looks.** There is no revocation list. The documented response
 schema has six members — `kty`, `kid`, `use`, `alg`, `n` and `e` — and none of
 them is `exp` or `nbf`, so a key has no way to say when it stops being valid,
-even though the verification steps twice instruct a merchant to block a message
-when "the public key has expired". There is no `ETag` on the live response and
+even though the verification steps reach for an expired public key three times —
+once to block the message outright, and twice, for the Agentic Consumer
+Recognition Object and the Agentic Payment Container, to say only that the
+content "may be inaccurate". There is no `ETag` on the live response and
 therefore no conditional request a verifier could make cheaply enough to make
 often. The only lifecycle signal that exists is the `Cache-Control: max-age` on
 that response, and a staleness hint is not a statement about trust.
@@ -263,6 +265,16 @@ is unprotected" would be wrong; "the message signature does not cover the body"
 is right, and a verifier that checks the message signature and then reads the
 body without checking those two objects has verified nothing about what it
 read.
+
+The same-key claim cannot be taken at face value. The specification's object
+examples reuse the header examples' `kid` while writing `"alg" : "PS256"`, where
+the message signature is `alg="Ed25519"` — one key identifier under two
+incompatible algorithms, which one key cannot do. Nor does it say how the
+objects are canonicalised beyond "a canonical representation of all fields in
+the object in the order received", which names no scheme, so two independent
+implementations will not agree. Both are unresolvable from public material;
+`../specs/2026-08-13-tap-implementation-decisions.md` records that #29 has to
+choose rather than transcribe.
 
 ```mermaid
 flowchart TB
@@ -440,7 +452,7 @@ things.
 |---|---|---|
 | Component names bare, as `@authority: example.com` | The component name is an `sf-string` — "the serialization of the component name itself is encased in double quotes", so `"@authority": example.com` | §2.5 |
 | The signature label inside the parameters line, as `"@signature-params": sig2=("@authority" "@path");…` | The value is the Inner List alone. "Note that this does not include the signature's label from the Signature-Input field." | §3.2 step 7, and the `signature-params-line` ABNF in §2.5 |
-| `alg` absent from the base while present in the header, and the remaining parameters in a different order from the header's | The `Signature-Input` value "MUST contain the same serialized value used in generating the signature base's `@signature-params` value", with "list order and parameter order … preserved" | §4.1 |
+| `alg` absent from the base while present in the header, so the two are not the same serialised value — once `alg` is removed, the sample's base and both Sample Request headers agree exactly | The `Signature-Input` value "MUST contain the same serialized value used in generating the signature base's `@signature-params` value", with "list order and parameter order … preserved" | §4.1 |
 
 Only the two component lines are affected by the first row; the
 `"@signature-params"` line in the sample *is* correctly quoted, which is part of
@@ -505,7 +517,7 @@ part worth re-reading before writing code.
 | The published material supplies nothing to revoke with: no revocation list, no `exp`/`nbf`, no `ETag` | Registry resolution |
 | The live directory holds one RSA key and no Ed25519 key, so it can verify no agent signature | Registry resolution |
 | TAP covers `@authority` and `@path` only — the method, the query string and the body are not signed | Signature base construction |
-| The body is protected by two separate object signatures, linked to the message signature by a shared `nonce` | Signature base construction |
+| The body is protected by two separate object signatures, linked to the message signature by a shared `nonce` — but their canonicalisation is unspecified and their `alg` contradicts the message signature's | Signature base construction |
 | Signature base reconstruction must match the signer's component *and* parameter ordering exactly | Signature base construction |
 | TAP uses Ed25519; AP2 forbids a deterministic scheme for the Checkout JWT — opposite requirements, different threat models | Signature base construction |
 | `created` and `expires` must be no more than eight minutes apart, or the message is blocked | Freshness: the eight-minute window and the nonce |

@@ -231,8 +231,8 @@ that blocks the legitimate commerce agents this project is about. TAP gives the
 edge a way to tell the two apart before the request reaches the storefront.
 
 **TAP is not a Visa-rails protocol**, and this is the correction worth carrying
-away. Verification happens at the *merchant edge* — Visa's own reference
-architecture places a CDN proxy in front of the merchant. Visa operates the
+away. Verification happens at the *merchant edge* — at the merchant itself, or at
+the CDN-like layer in front of it that the specification names. Visa operates the
 production trusted-agent directory, but a directory is not a settlement rail,
 and being listed in TAP's identity layer says nothing about which rails a
 payment later travels over. That topology is the specification's own, not this

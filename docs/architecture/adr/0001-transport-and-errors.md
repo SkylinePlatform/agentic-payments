@@ -15,8 +15,7 @@ once, rather than rediscovered separately in each service.
 
 TAP secures a request with RFC 9421 HTTP Message Signatures: the signature
 covers the request as an HTTP message — its authority and path, per TAP's own
-required covered components — not an arbitrary payload, and `pkg/httpsig`
-implements RFC 9421 in those terms.
+required covered components — not an arbitrary payload.
 `docs/protocols/tap.md` covers the signing mechanism itself. The fact this
 ADR needs from it is less the signing than the *place*: verification happens
 at the merchant edge, in the bot-mitigation proxy that already sits in front
