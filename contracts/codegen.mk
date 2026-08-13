@@ -118,6 +118,18 @@ generate-ts: $(FRONTEND)/node_modules
 # recognise. A floor it cannot parse is the opposite — that one fails, because a
 # guard silently switching itself off is exactly the state this rule exists to
 # leave nobody in.
+#
+# **There is one version it parses and still hands to npm, and it is deliberate.**
+# `engines` is a union with a hole in it — `^22.13.0 || >=24.0.0` — and this is a
+# floor, so 23.x reads as newer than 22.13 and reaches the EBADENGINE above. The
+# hole is jsdom's range rather than a rounding, and frontend/README.md says so.
+# Reading the second alternative means a second pattern that can fail to match,
+# which the arity check exists to refuse rather than guess at, and
+# refuseUnsupportedNode in frontend/vite.config.ts is a floor in the same shape —
+# the two are meant to read as one voice, so widening one alone would make them
+# disagree about what is supported. Node 23 reached end of life on 2025-06-01 and
+# .nvmrc names 22, so nobody arrives here by default. An `engines` that widens the
+# gap is the change to re-read this on.
 $(FRONTEND)/node_modules: $(FRONTEND)/package.json $(FRONTEND)/package-lock.json
 	@floor=$$(sed -n 's/^[[:space:]]*"node"[[:space:]]*:[[:space:]]*"^\([0-9][0-9]*\)\.\([0-9][0-9]*\)\..*/\1 \2/p' $(FRONTEND)/package.json); \
 	set -- $$floor; \

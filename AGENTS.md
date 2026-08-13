@@ -931,7 +931,7 @@ the day that Node shipped with every check on every pull request green.
 Node where the collision happens — so the second leg is what makes the guard
 mean anything, and the two are one mechanism rather than two changes.
 
-**The floor that CI reads is stated three times, and only two of them can
+**The floor that CI reads is stated three times, and only one of them can
 drift.** `engines` in `frontend/package.json` is the declaration npm acts on;
 `OLDEST_NODE` in `frontend/vite.config.ts` refuses below it when vitest starts;
 and since #295 the `frontend/node_modules` rule in `contracts/codegen.mk`
@@ -942,7 +942,11 @@ not enforce; `OLDEST_NODE` is a transcription and is held to the original by
 `TestTheFloorViteConfigRefusesBelowIsTheOneEnginesDeclares` in `tools/bootstrap`.
 **`.nvmrc` is not a candidate for any of it** — it holds `22`, the line and not
 a version, and a floor derived from it would accept 22.0 through 22.12 and hand
-them to the failure the check exists to replace.
+them to the failure the check exists to replace. It is still held against
+`engines`, by `TestTheLineNvmrcNamesIsOneEnginesAccepts` and for a different
+reason: the refusal names `nvm use`, `nvm use` reads that file, and a floor that
+moved to a major it does not name would leave the guard printing the one command
+that cannot fix it.
 
 **`make check` is no longer the whole of CI.** It is the local gate; the
 *Build and test*, *Lint* and *Contracts* jobs in `.github/workflows/ci.yml`

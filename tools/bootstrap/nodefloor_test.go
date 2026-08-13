@@ -21,7 +21,29 @@ const (
 	viteConfig   = "../../frontend/vite.config.ts"
 	codegenMk    = "../../contracts/codegen.mk"
 	rootMakefile = "../../Makefile"
+	nvmrc        = "../../.nvmrc"
 )
+
+// enginesNode is the raw range `engines` declares, read by key rather than by
+// the shape of a line. enginesFloor takes the lower bound of its first
+// alternative; the .nvmrc arm needs the rest of it.
+func enginesNode(t *testing.T) string {
+	t.Helper()
+
+	body, err := os.ReadFile(packageJSON)
+	require.NoError(t, err)
+
+	var pkg struct {
+		Engines struct {
+			Node string `json:"node"`
+		} `json:"engines"`
+	}
+	require.NoError(t, json.Unmarshal(body, &pkg))
+	require.NotEmpty(t, pkg.Engines.Node,
+		"%s declares no engines.node, so every floor in this suite is derived from nothing",
+		packageJSON)
+	return pkg.Engines.Node
+}
 
 // enginesFloor is the floor as `engines` in frontend/package.json declares it,
 // read through encoding/json.
@@ -35,23 +57,15 @@ const (
 func enginesFloor(t *testing.T) (major, minor int) {
 	t.Helper()
 
-	body, err := os.ReadFile(packageJSON)
-	require.NoError(t, err)
+	declared := enginesNode(t)
 
-	var pkg struct {
-		Engines struct {
-			Node string `json:"node"`
-		} `json:"engines"`
-	}
-	require.NoError(t, json.Unmarshal(body, &pkg))
-
-	m := regexp.MustCompile(`^\^(\d+)\.(\d+)\.`).FindStringSubmatch(pkg.Engines.Node)
+	m := regexp.MustCompile(`^\^(\d+)\.(\d+)\.`).FindStringSubmatch(declared)
 	require.Len(t, m, 3,
 		"engines.node is %q, which names no [major, minor] floor — so there is nothing "+
 			"here for the shell check to agree with and this suite is checking nothing",
-		pkg.Engines.Node)
+		declared)
 
-	major, err = strconv.Atoi(m[1])
+	major, err := strconv.Atoi(m[1])
 	require.NoError(t, err)
 	minor, err = strconv.Atoi(m[2])
 	require.NoError(t, err)
@@ -320,7 +334,9 @@ func TestASupportedNodeIsLetThroughUntouched(t *testing.T) {
 		{
 			"a later major",
 			fmt.Sprintf("%d.0.0", major+2),
-			"`engines` accepts every major above the floor's, and a `<` on the minor alone would not",
+			"a `<` on the minor alone would refuse it. major+2 rather than major+1 because " +
+				"`engines` is a union with a hole at the major in between, which this check " +
+				"lets through to npm on purpose — see the comment in contracts/codegen.mk",
 		},
 		{
 			"a version string it cannot parse",
@@ -339,4 +355,51 @@ func TestASupportedNodeIsLetThroughUntouched(t *testing.T) {
 				"the rule still has to install: %s", tc.why)
 		})
 	}
+}
+
+// TestTheLineNvmrcNamesIsOneEnginesAccepts holds the third transcription of the
+// floor — the one the refusal itself sends the reader to.
+//
+// The message names `nvm use`, and `nvm use` reads .nvmrc. A floor that moves to
+// a major that file does not name leaves the guard printing a command that
+// installs a Node the same guard then refuses: a message that does not lead to
+// the fix, which is #295 arriving through drift rather than through npm. Nothing
+// in this repository reads that file's content except actions/setup-node, so
+// without this arm the drift is caught after a push, by CI, on the same run that
+// hands a contributor the advice that cannot work.
+//
+// It is the shape TestTheFloorViteConfigRefusesBelowIsTheOneEnginesDeclares uses
+// and it is there for the same reason: construction cannot hold a transcription
+// to its original.
+func TestTheLineNvmrcNamesIsOneEnginesAccepts(t *testing.T) {
+	t.Parallel()
+
+	body, err := os.ReadFile(nvmrc)
+	require.NoError(t, err)
+	line, err := strconv.Atoi(strings.TrimSpace(string(body)))
+	require.NoError(t, err,
+		".nvmrc holds %q, which names no release line — so `nvm use` cannot resolve it "+
+			"and the message that sends the reader there is checking nothing", string(body))
+
+	major, _ := enginesFloor(t)
+	if line == major {
+		return
+	}
+
+	// Not the floor's own major, so the only other thing `engines` can accept is
+	// an open upper alternative. Refusing rather than guessing, as the shell
+	// check does: a range this cannot read is one nothing here is holding.
+	m := regexp.MustCompile(`\|\|\s*>=\s*(\d+)\.`).FindStringSubmatch(enginesNode(t))
+	require.Len(t, m, 2,
+		".nvmrc names Node %d and `engines` is %q, which has no `>=` alternative to accept "+
+			"it — so `nvm use` hands the reader a Node the check in contracts/codegen.mk "+
+			"refuses", line, enginesNode(t))
+	open, err := strconv.Atoi(m[1])
+	require.NoError(t, err)
+
+	assert.GreaterOrEqual(t, line, open,
+		"`engines` is %q and .nvmrc names Node %d, which falls in the gap between its two "+
+			"alternatives — the refusal in contracts/codegen.mk tells the reader to run "+
+			"`nvm use`, and doing so would install a Node npm then declines with the "+
+			"EBADENGINE that refusal exists to replace", enginesNode(t), line)
 }
