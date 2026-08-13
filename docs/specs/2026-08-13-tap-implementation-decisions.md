@@ -17,8 +17,9 @@ had assumed it was.
 
 **Sources are marked throughout**, in the four-way distinction
 `docs/protocols/tap.md` already keeps: **[SPEC]** the published Visa *Merchant
-Specifications* page, **[RFC]** RFC 9421 or RFC 8941, **[SAMPLE]** observed in Visa's
-sample repository and needing independent confirmation, **[PROJECT]** this
+Specifications* page, **[RFC]** RFC 9421 or RFC 8941, **[SAMPLE]** the "Sample Code to
+Create Signature Base" published on that same page, which is an illustration rather
+than a rule, **[PROJECT]** this
 repository's own reading. A decision held on [PROJECT] grounds is not weaker, but it
 is ours to defend and must never be quoted as though the specification required it.
 
@@ -32,7 +33,8 @@ appear nowhere in the specification. So the HTTP method is not signed, the query
 string is not signed, and the message signature does not cover the request body.
 `docs/protocols/tap.md`'s signature-base diagram and #24's scope line — "method,
 target URI, selected headers" — were both describing RFC 9421's worked example rather
-than TAP, and both are corrected under #33.
+than TAP. The diagram is corrected under #33; #24's scope line still says otherwise and
+is corrected under #307.
 
 **Say "the message signature does not cover the body" rather than "the body is not
 signed", because TAP has three signatures.** [SPEC] The Agentic Consumer Recognition
@@ -44,13 +46,14 @@ makes the unspecifiable canonicalisation of those two objects — see *What this
 do* — a gap in the protocol rather than a detail deferred.
 
 **Visa's own published sample builds a signature base that violates RFC 9421 in three
-ways** [SPEC] against [RFC]. The two *component* lines appear unquoted where §2.5
+ways** [SAMPLE] against [RFC]. The two *component* lines appear unquoted where §2.5
 requires an `sf-string` — the sample's `"@signature-params"` line is quoted correctly,
 which is what makes the defect easy to read past. The signature label `sig2=` is
 included where §3.2 step 7 excludes it. And the parameters are re-serialised rather
-than copied: `alg` is dropped and the rest appear in a different order from the
-header's, both of which §4.1 forbids, since it requires the header to carry the same
-serialised value the base was built from. Because Visa ships both sides of that
+than copied: `alg` is dropped, which §4.1 forbids, since it requires the header to
+carry the same serialised value the base was built from. Only `alg` — once it is
+removed, the sample's base and both Sample Request headers agree exactly. Because
+Visa ships both sides of that
 sample, their demonstration is self-consistent and wrong — and an RFC-correct
 implementation does not interoperate with a naive one. That is decision 4.
 
@@ -64,15 +67,19 @@ against. #26 should say so.
 
 ## Decision 1 — the agent's Ed25519 key lives in the registry, not in its JWKS
 
-The agent keeps publishing its ES256 key at `/.well-known/jwks.json` for AP2, exactly
-as today. Its Ed25519 TAP key is registered with `cmd/registry` and published
-nowhere else.
+The agent keeps handing its ES256 key to the Trusted Surface through
+`roles.PublicKey`, to be endorsed in the open mandate's `cnf`, exactly as today; it
+publishes no JWKS of its own — `roles.JWKSPath` is mounted by the surface, the
+merchant, the Credential Provider and the MPP, and by nothing in `cmd/agent`. Its
+Ed25519 TAP key is registered with `cmd/registry` and published nowhere else.
 
-**What forced the choice.** `roles.Peer.Only` and `roles.PublicKey` both refuse a key
-set that does not hold exactly one key, and both refusals are deliberate and
-documented. `roles.AwaitPeer` runs at merchant start-up, so an agent that published
-two keys would stop the merchant booting. The alternative was to widen both to select
-by algorithm.
+**What forced the choice.** `roles.PublicKey` refuses a key set that does not hold
+exactly one key, and `crypto.Store.JWKS` renders every publishable key across all
+slots — so a second key in the agent's own store breaks the agent itself, at
+`cmd/agent/main.go:721` and `:846`, before any mandate is signed. `roles.Peer.Only`
+refuses the same shape for any counterparty resolved over HTTP, which is what would
+bite if a TAP key were added to a role that does publish a set. Both refusals are
+deliberate and documented. The alternative was to widen both to select by algorithm.
 
 **Why the registry instead.** Widening two working AP2 refusals to accommodate a
 second protocol is the shape this repository exists to avoid — and the protocol
@@ -81,7 +88,8 @@ looks. [SPEC] An agent key reachable through its own JWKS would be a second look
 path the protocol does not have.
 
 **What it costs**, stated rather than discovered later: one agent now has two
-identities published in two places, and a reader has to be told which is which.
+identities — one registered with `cmd/registry`, one published nowhere at all and
+travelling inside every mandate's `cnf` — and a reader has to be told which is which.
 `cmd/agent`'s package documentation is where that gets said.
 
 ## Decision 2 — the proxy verifies everything merchant-bound, with no exemption list
@@ -94,6 +102,18 @@ or the Trusted Surface. [PROJECT] TAP is a merchant-edge protocol; signing every
 outbound would be over-application, and `internal/agent/purchase.go`'s single
 outbound choke point makes that the path of least resistance rather than a decision.
 Whatever implements this has to be selective at that choke point on purpose.
+
+**There are two outbound paths to the merchant, not one.** `internal/agent/purchase.go`
+carries the purchase leg, but `cmd/agent`'s `ready` fetches the merchant's
+`/.well-known/jwks.json` through `roles.AwaitPeer`, which accepts no client and falls
+back to `http.DefaultClient` (`internal/roles/jwks.go:112`), and a readiness failure is
+deliberately fatal. With `-merchant` pointing at the proxy, an unsigned probe is refused
+and the agent exits before any purchase. So this decision costs a signature-capable
+`AwaitPeer` — `roles.Peer` already carries a `Client` field; only `AwaitPeer`'s
+signature drops it — while `cmd/merchant`, `cmd/credprovider` and `cmd/mpp`, which
+await the *surface*, stay unsigned. The error message at `cmd/agent/main.go:992` has to
+learn to tell a 401 from an unreachable peer, or the first person to hit this spends the
+afternoon on the merchant's key set.
 
 **What forced the choice.** Those two endpoints are what AP2 key resolution needs. If
 the agent's `-merchant` flag points at the proxy and the proxy rejects unsigned
@@ -130,16 +150,19 @@ Cloudflare-dependency grounds. `dadrus/httpsig` is the runner-up and reportedly 
 the better `tag` semantics; whoever writes the bridge should look at both APIs before
 committing, and record which was taken and why.
 
-**Two consequences that must land in the same pull request**, because otherwise this
-decision leaves two false statements behind it:
+**Everything that names the package lands in the same pull request** — `git grep -n
+'pkg/httpsig'` is the list, and it reaches `AGENTS.md`'s layout tree and its "genuine
+gaps in the Go ecosystem" criterion, `docs/architecture/README.md`, ADR 0001 and
+`CONTRIBUTING.md`'s commit scopes. Two of them are not obvious from the deletion:
 
 - `backend/go.mod` currently has **no runtime dependency at all** — `testify` is
   test-only. This introduces the first one, and that is a change to a property the
   repository has been quietly proud of. It should be stated, not slipped in.
 - `internal/agent/interpret/gemini.go`'s *No SDK* comment argues against taking an
   SDK by naming "`pkg/httpsig` and `pkg/sdjwt`" as the precedent — the first half of
-  which stops existing. The argument it makes about Gemini is still sound and the
-  example has to change.
+  which stops existing — and `internal/agent/interpret/model.go`'s *Model* comment
+  makes the same argument in the same words, two files away. The argument each makes
+  about Gemini is still sound; the example has to change in both.
 
 **What was rejected.** Keeping `pkg/httpsig` and importing only an RFC 8941
 structured-field parser: it preserves the article's from-scratch story for the
@@ -173,10 +196,14 @@ and path — not whatever arrived on the socket after the proxy rewrote it.
 
 [RFC] §7.4.3 is explicit that an application behind a reverse proxy "could be
 configured to know the external target URI as seen by the client on the other side of
-the proxy". It is acute for TAP specifically, because TAP's architecture mandates a
-proxy [SPEC] and its only two covered components are exactly the two a proxy
-rewrites. A verifier that reads them off the incoming request verifies a statement
-about its own internal topology.
+the proxy". It is acute for TAP specifically. The specification defines **Site
+Protection Providers** as "typically a layer sitting in front of a Merchant's website
+… typically CDNs … or other such proxies" [SPEC], but it requires no such layer —
+validation "can be performed independently by the Merchant or by a Site Protection
+Provider on behalf of the Merchant" [SPEC]. This project puts a proxy there, per
+decision 2 [PROJECT], and TAP's only two covered components are exactly the two a
+proxy rewrites. A verifier that reads them off the incoming request verifies a
+statement about its own internal topology.
 
 **TLS is not terminated in the demo**, and the signature therefore covers an
 `http://` authority. That is wrong as a protocol demonstration and right as a
@@ -194,8 +221,9 @@ does not have to be built that way.
 `GET` only, so there is no body, no `content-digest`, and no collision with the
 idempotency middleware's body buffering. A second key from the existing
 `crypto.Store` — `authz.EdDSA` is already a row in its algorithm table and `Slot`'s
-own documentation names `"tap-agent"` as its example. A signing round-tripper at the
-agent's one outbound choke point, selective per decision 2. `cmd/registry` with
+own documentation names `"tap-agent"` as its example. A signing round-tripper at
+`internal/agent/purchase.go`'s outbound choke point, selective per decision 2, and the
+client `roles.AwaitPeer` has to start taking. `cmd/registry` with
 register and resolve. `cmd/proxy` as an `httputil.ReverseProxy` refusing with
 `agent_unknown` against `agent_unverified` — **both codes already exist in the
 generated enum, already render as 401, and are already classified in
@@ -204,16 +232,24 @@ generated enum, already render as 401, and are already classified in
 The pixel is close to free: `Lanes.tsx` already draws a "No lane yet" section whose
 comment names registry and proxy, so the handshake appears the moment the proxy
 emits. `laneOf` is **not** changed in this slice — `model.test.ts` asserts that
-registry and proxy have no lane, with the reason that answering `merchant` would draw
-a TAP step in an AP2 party's column. #32 designs the real view.
+registry has no lane, for a reason that names proxy too: answering `merchant` for
+either would draw a TAP step in an AP2 party's column. The matching `laneOf("proxy")`
+arm belongs in this slice, since this is the slice that stands the proxy up. #32
+designs the real view.
 
-**One trap this slice must not spring.** `deploy/demo.json` gives every process
-marked `implemented: false` a two-second `stubGrace`. Flipping both registry and
-proxy to `implemented: true` without health checks would spend four seconds against a
-three-second `-step`, sliding the watching agent's baseline past the price it is
-meant to refuse — so the `$210` refusal the demo exists to show would silently stop
-happening, with every check still green. `implemented: true` and a health endpoint
-land together, which `manifest.go`'s own rule 8 already enforces from the other side.
+**One trap this slice must not spring.** The runner gives any *implemented* process
+with no health check a flat two-second `stubGrace` (`internal/demo/runner.go:26`,
+spent at `runner.go:221`). Flipping both registry and proxy to `implemented: true`
+without health checks would spend four seconds between the merchant and agent-watch
+against a three-second `-step`, sliding the watching agent's baseline past the price
+it is meant to refuse — so the `$210` refusal the demo exists to show would stop
+happening. It would not be silent:
+`TestTheMerchantsFirstPriceOutlastsTheStackComingUp` in
+`backend/internal/demo/pacing_internal_test.go` fails on exactly that, twice over —
+the floor exceeds `-step`, and the floor is asserted to be zero in its own right — so
+`make check` refuses the flip until a health endpoint lands with it.
+`Manifest.Validate` already enforces the other direction, refusing an unimplemented
+process that carries one.
 
 ## What this does not do
 
