@@ -29,18 +29,30 @@ Three findings reshaped the milestone before a line was written.
 **TAP's required covered components are `@authority` and `@path`, and nothing
 else.** [SPEC] `@method`, `@target-uri`, `@query`, `@scheme` and `content-digest`
 appear nowhere in the specification. So the HTTP method is not signed, the query
-string is not signed, and the request body is not signed by the message signature at
-all. `docs/protocols/tap.md`'s signature-base diagram and #24's scope line — "method,
+string is not signed, and the message signature does not cover the request body.
+`docs/protocols/tap.md`'s signature-base diagram and #24's scope line — "method,
 target URI, selected headers" — were both describing RFC 9421's worked example rather
 than TAP, and both are corrected under #33.
 
+**Say "the message signature does not cover the body" rather than "the body is not
+signed", because TAP has three signatures.** [SPEC] The Agentic Consumer Recognition
+Object and the Agentic Payment Container are body-borne and carry their own, linked to
+the message signature by a shared `nonce`. The consequence a verifier has to act on is
+sharper than either phrasing: **a proxy that checks the message signature and then
+passes the body downstream has verified nothing about what it passed.** That is what
+makes the unspecifiable canonicalisation of those two objects — see *What this does not
+do* — a gap in the protocol rather than a detail deferred.
+
 **Visa's own published sample builds a signature base that violates RFC 9421 in three
-ways** [SPEC] against [RFC]: component names appear unquoted where §2.5 requires an
-`sf-string`; the signature label `sig2=` is included where §3.2 step 7 excludes it;
-and `alg` is dropped from the base while present in the header, where §4.1 requires
-the same serialised value. Because Visa ships both sides of that sample, their
-demonstration is self-consistent and wrong — and an RFC-correct implementation does
-not interoperate with a naive one. That is decision 4.
+ways** [SPEC] against [RFC]. The two *component* lines appear unquoted where §2.5
+requires an `sf-string` — the sample's `"@signature-params"` line is quoted correctly,
+which is what makes the defect easy to read past. The signature label `sig2=` is
+included where §3.2 step 7 excludes it. And the parameters are re-serialised rather
+than copied: `alg` is dropped and the rest appear in a different order from the
+header's, both of which §4.1 forbids, since it requires the header to carry the same
+serialised value the base was built from. Because Visa ships both sides of that
+sample, their demonstration is self-consistent and wrong — and an RFC-correct
+implementation does not interoperate with a naive one. That is decision 4.
 
 **The live directory holds nothing an agent signature could verify against.**
 `https://mcp.visa.com/.well-known/jwks`, measured 13 August 2026, returns a single
