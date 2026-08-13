@@ -14,8 +14,9 @@ constrain what can be chosen here; this ADR is where they get written down
 once, rather than rediscovered separately in each service.
 
 TAP secures a request with RFC 9421 HTTP Message Signatures: the signature
-covers the request as an HTTP message — method, path, headers — not an
-arbitrary payload, and `pkg/httpsig` implements RFC 9421 in those terms.
+covers the request as an HTTP message — its authority and path, per TAP's own
+required covered components — not an arbitrary payload, and `pkg/httpsig`
+implements RFC 9421 in those terms.
 `docs/protocols/tap.md` covers the signing mechanism itself. The fact this
 ADR needs from it is less the signing than the *place*: verification happens
 at the merchant edge, in the bot-mitigation proxy that already sits in front
@@ -107,9 +108,10 @@ merchant edge — the bot-mitigation proxy or CDN already in front of the
 storefront, which is the component TAP exists to stop blocking legitimate
 agents. Those products terminate and inspect ordinary HTTP requests and apply
 per-route policy to them; they do not parse gRPC frames. Choosing gRPC would
-mean either abandoning the deployment topology this project reads into TAP's
-reference architecture, on `AGENTS.md`'s authority, or writing the verifying
-proxy from scratch instead of configuring one that already exists.
+mean either abandoning the deployment topology TAP's own specification
+describes — its *Site Protection Providers* are "typically CDNs … or other such
+proxies" — or writing the verifying proxy from scratch instead of configuring
+one that already exists.
 
 gRPC's usual advantages are real and were weighed against that. Typed
 contracts this repository already has, from `contracts/`, generated into Go
