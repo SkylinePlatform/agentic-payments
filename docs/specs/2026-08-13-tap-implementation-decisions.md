@@ -1,0 +1,230 @@
+# The decisions Visa TAP is implemented under, made before any of it was written
+
+**Date:** 2026-08-13
+**Status:** decided, nothing built yet.
+**Issues:** #307. Binds #24, #25, #26, #29 and #30; the documentation corrections it
+depends on land under #33.
+
+## What this settles
+
+Five decisions, and the reason each was in front of us at all. Making them inside
+the first implementation pull request would have buried them in a diff, and each
+one shapes every TAP pull request after it.
+
+It also records what research against the published sources established, because
+three of the five exist only because the specification is not what this repository
+had assumed it was.
+
+**Sources are marked throughout**, in the four-way distinction
+`docs/protocols/tap.md` already keeps: **[SPEC]** the published Visa *Merchant
+Specifications* page, **[RFC]** RFC 9421 or RFC 8941, **[SAMPLE]** observed in Visa's
+sample repository and needing independent confirmation, **[PROJECT]** this
+repository's own reading. A decision held on [PROJECT] grounds is not weaker, but it
+is ours to defend and must never be quoted as though the specification required it.
+
+## What the research changed
+
+Three findings reshaped the milestone before a line was written.
+
+**TAP's required covered components are `@authority` and `@path`, and nothing
+else.** [SPEC] `@method`, `@target-uri`, `@query`, `@scheme` and `content-digest`
+appear nowhere in the specification. So the HTTP method is not signed, the query
+string is not signed, and the request body is not signed by the message signature at
+all. `docs/protocols/tap.md`'s signature-base diagram and #24's scope line — "method,
+target URI, selected headers" — were both describing RFC 9421's worked example rather
+than TAP, and both are corrected under #33.
+
+**Visa's own published sample builds a signature base that violates RFC 9421 in three
+ways** [SPEC] against [RFC]: component names appear unquoted where §2.5 requires an
+`sf-string`; the signature label `sig2=` is included where §3.2 step 7 excludes it;
+and `alg` is dropped from the base while present in the header, where §4.1 requires
+the same serialised value. Because Visa ships both sides of that sample, their
+demonstration is self-consistent and wrong — and an RFC-correct implementation does
+not interoperate with a naive one. That is decision 4.
+
+**The live directory holds nothing an agent signature could verify against.**
+`https://mcp.visa.com/.well-known/jwks`, measured 13 August 2026, returns a single
+2048-bit RSA key whose `kid` is a UUID, with `Cache-Control: max-age=3600`, no
+`ETag`, no `use`, no `alg`, and no Ed25519 key. The `GET /keys` operation the
+specification documents redirects to a marketing page. So a local registry is not a
+convenience that saves a Visa account — it is the only thing there is to resolve
+against. #26 should say so.
+
+## Decision 1 — the agent's Ed25519 key lives in the registry, not in its JWKS
+
+The agent keeps publishing its ES256 key at `/.well-known/jwks.json` for AP2, exactly
+as today. Its Ed25519 TAP key is registered with `cmd/registry` and published
+nowhere else.
+
+**What forced the choice.** `roles.Peer.Only` and `roles.PublicKey` both refuse a key
+set that does not hold exactly one key, and both refusals are deliberate and
+documented. `roles.AwaitPeer` runs at merchant start-up, so an agent that published
+two keys would stop the merchant booting. The alternative was to widen both to select
+by algorithm.
+
+**Why the registry instead.** Widening two working AP2 refusals to accommodate a
+second protocol is the shape this repository exists to avoid — and the protocol
+argument runs the same way, because in TAP the directory *is* where a verifier
+looks. [SPEC] An agent key reachable through its own JWKS would be a second lookup
+path the protocol does not have.
+
+**What it costs**, stated rather than discovered later: one agent now has two
+identities published in two places, and a reader has to be told which is which.
+`cmd/agent`'s package documentation is where that gets said.
+
+## Decision 2 — the proxy verifies everything merchant-bound, with no exemption list
+
+The agent signs every request it makes to the merchant, `GET /.well-known/jwks.json`
+and `GET /nonce` included. The proxy has no allow-list.
+
+It does **not** sign calls to the Credential Provider, the Merchant Payment Processor
+or the Trusted Surface. [PROJECT] TAP is a merchant-edge protocol; signing everything
+outbound would be over-application, and `internal/agent/purchase.go`'s single
+outbound choke point makes that the path of least resistance rather than a decision.
+Whatever implements this has to be selective at that choke point on purpose.
+
+**What forced the choice.** Those two endpoints are what AP2 key resolution needs. If
+the agent's `-merchant` flag points at the proxy and the proxy rejects unsigned
+requests "as an untrusted bot would be" — #30's first done-when — then AP2 breaks
+unless something gives.
+
+**Why no exemptions.** An allow-list is a list somebody maintains, and every entry on
+it is a path into the merchant that did not go through the check. #30's guarantee is
+worth more stated absolutely, and the cost is only that the agent signs two requests
+it would not have had to.
+
+## Decision 3 — `pkg/httpsig` is deleted, and RFC 9421 becomes a dependency
+
+**This reverses a stated position, so the reasoning matters more than the outcome.**
+
+`AGENTS.md` says `pkg/` holds implementations of public standards which are *genuine
+gaps in the Go ecosystem*. That criterion is the whole justification for the
+directory, and applied honestly it now splits the two packages apart.
+
+For **SD-JWT it still holds**. The eight standalone Go modules that exist carry
+between zero and sixteen stars, several target superseded drafts, two are archived,
+and pkg.go.dev reports no known importers for any of them. `pkg/sdjwt`'s own `doc.go`
+recorded that finding when it was written and it survives re-checking.
+
+For **RFC 9421 it does not**. Three maintained Go libraries implement the final RFC
+with Ed25519 and `tag` support and published-vector suites: `remitly-oss/httpsig-go`
+(the only stable v1.x, and what Cloudflare Research's own Go Web Bot Auth plugin
+depends on), `yaronf/httpsign`, and `dadrus/httpsig`. Keeping a stub in `pkg/` while
+three real implementations exist would make the directory's stated criterion untrue
+of half its contents.
+
+**`remitly-oss/httpsig-go` is the default choice**, on the stable-v1 and
+Cloudflare-dependency grounds. `dadrus/httpsig` is the runner-up and reportedly has
+the better `tag` semantics; whoever writes the bridge should look at both APIs before
+committing, and record which was taken and why.
+
+**Two consequences that must land in the same pull request**, because otherwise this
+decision leaves two false statements behind it:
+
+- `backend/go.mod` currently has **no runtime dependency at all** — `testify` is
+  test-only. This introduces the first one, and that is a change to a property the
+  repository has been quietly proud of. It should be stated, not slipped in.
+- `internal/agent/interpret/gemini.go`'s *No SDK* comment argues against taking an
+  SDK by naming "`pkg/httpsig` and `pkg/sdjwt`" as the precedent — the first half of
+  which stops existing. The argument it makes about Gemini is still sound and the
+  example has to change.
+
+**What was rejected.** Keeping `pkg/httpsig` and importing only an RFC 8941
+structured-field parser: it preserves the article's from-scratch story for the
+interesting half while removing the tedious half, but it leaves us maintaining an
+implementation of a standard with three mature alternatives, which is harder to
+defend than the SD-JWT case and would have to be re-argued every time someone asks.
+And a thin wrapper keeping the `pkg/httpsig` import path while delegating inward:
+that is a package claiming to implement a standard it does not, which is exactly the
+drift this repository spends its documentation hunting.
+
+## Decision 4 — the signature base is RFC-correct, and the divergence is documented
+
+Component names quoted, label excluded, `alg` present — per [RFC] §2.5, §3.2 step 7
+and §4.1, against the three divergences in Visa's sample described above.
+
+**What was rejected.** Reproducing Visa's base to interoperate with real TAP traffic.
+There is no real TAP traffic to interoperate with — the live directory holds no agent
+key — so the only thing that reading would buy is compatibility with a mistake, at
+the cost of implementing it knowingly. And accepting both behind a flag: a verifier
+that accepts two different canonicalisations of the same message is the
+canonicalisation hazard [RFC] §7.5.5 names outright.
+
+The divergence is an article finding rather than an embarrassment, and it is the same
+kind as AP2's two-mandates-not-three: the published material most implementers will
+copy is wrong, and saying exactly how is the useful thing.
+
+## Decision 5 — `@authority` is the proxy's external authority, configured
+
+The agent signs, and the proxy verifies against, the **externally visible** authority
+and path — not whatever arrived on the socket after the proxy rewrote it.
+
+[RFC] §7.4.3 is explicit that an application behind a reverse proxy "could be
+configured to know the external target URI as seen by the client on the other side of
+the proxy". It is acute for TAP specifically, because TAP's architecture mandates a
+proxy [SPEC] and its only two covered components are exactly the two a proxy
+rewrites. A verifier that reads them off the incoming request verifies a statement
+about its own internal topology.
+
+**TLS is not terminated in the demo**, and the signature therefore covers an
+`http://` authority. That is wrong as a protocol demonstration and right as a
+`make demo` that needs no certificates; it is recorded here rather than left for a
+reader to notice.
+
+## The first slice
+
+The dependency chain reads #24 → #25 → #26 → #30 → #32, which is five infrastructure
+pull requests before anything is visible. Most of the plumbing already exists, so it
+does not have to be built that way.
+
+**One signed browsing request, verified at the merchant edge, drawn on screen.**
+
+`GET` only, so there is no body, no `content-digest`, and no collision with the
+idempotency middleware's body buffering. A second key from the existing
+`crypto.Store` — `authz.EdDSA` is already a row in its algorithm table and `Slot`'s
+own documentation names `"tap-agent"` as its example. A signing round-tripper at the
+agent's one outbound choke point, selective per decision 2. `cmd/registry` with
+register and resolve. `cmd/proxy` as an `httputil.ReverseProxy` refusing with
+`agent_unknown` against `agent_unverified` — **both codes already exist in the
+generated enum, already render as 401, and are already classified in
+`testdata/rejections.json`**, so the refusal path costs nothing to reach.
+
+The pixel is close to free: `Lanes.tsx` already draws a "No lane yet" section whose
+comment names registry and proxy, so the handshake appears the moment the proxy
+emits. `laneOf` is **not** changed in this slice — `model.test.ts` asserts that
+registry and proxy have no lane, with the reason that answering `merchant` would draw
+a TAP step in an AP2 party's column. #32 designs the real view.
+
+**One trap this slice must not spring.** `deploy/demo.json` gives every process
+marked `implemented: false` a two-second `stubGrace`. Flipping both registry and
+proxy to `implemented: true` without health checks would spend four seconds against a
+three-second `-step`, sliding the watching agent's baseline past the price it is
+meant to refuse — so the `$210` refusal the demo exists to show would silently stop
+happening, with every check still green. `implemented: true` and a health endpoint
+land together, which `manifest.go`'s own rule 8 already enforces from the other side.
+
+## What this does not do
+
+**It does not decide where the crypto ports live once `core/identity` needs them.**
+That package is a `doc.go` today. The options are that `core/identity` imports
+`core/authz` — legal, and the first cross-axis import inside core — or that the ports
+move to a neutral home, which touches fifteen packages. It is #31's decision and
+should be made after the proxy exists, not before.
+
+**It does not design the nonce store.** #27. Worth knowing when it starts:
+`crypto.Challenger` is *verifier-issued* while RFC 9421's `nonce` is *signer-chosen*,
+so TAP needs a seen-set rather than a challenge, and `TestTheReplayThisDoesNotStop`
+is a passing test asserting the current limitation — a test to invert rather than a
+paragraph to notice.
+
+**It does not settle the body-signed objects.** [SPEC] specifies their canonicalisation
+as "a canonical representation of all fields in the object in the order received"
+and names no scheme — not JCS, not anything. Two implementations will not agree.
+That is the one part of TAP which cannot be implemented interoperably from public
+material, and #29 has to record the chosen canonicalisation as this project's design
+rather than transcribe one that does not exist.
+
+**It does not resolve which key signs the body objects.** [SPEC] says they carry "the
+same private key" as the message signature while showing the message signature as
+Ed25519 and both objects as PS256, which one key cannot do. Unresolvable from public
+sources.
