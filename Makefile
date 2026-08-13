@@ -373,13 +373,33 @@ setup-verify: ## Prove `make setup` leaves a tree the toolchain can load, from n
 # exported on demand, by whoever needs a picture for an article.
 MERMAID_CLI ?= @mermaid-js/mermaid-cli@11.4.2
 
+# The export name is the document's path with docs/ stripped and the separators
+# flattened, not its basename: two documents named README.md in different
+# directories share a basename, so the second export would overwrite the first
+# and nothing would say so. A name seen twice fails the target for that reason —
+# the alternative is a reader finding out instead of the build.
+#
+# The root README is spelled root-README rather than README, and that is the one
+# name the rule does not derive. Stripping a leading docs/ leaves docs/README.md
+# — the documentation index — as README too, so the two would collide the day
+# either of them gained a mermaid block. The guard below would catch it, and
+# catching it is worse than not being able to write it: the failure would arrive
+# for whoever next edited an unrelated document, naming two files neither of
+# which they had touched.
 .PHONY: diagrams
-diagrams: ## Export inline mermaid from docs/ to SVG for the article series
+diagrams: ## Export inline mermaid from docs/ and the README to SVG for the article series
 	@mkdir -p docs/diagrams
-	@for doc in $$(find docs -name '*.md' -not -path 'docs/diagrams/*' -not -path 'docs/specs/*' -not -path 'docs/plans/*'); do \
+	@names=""; \
+	for doc in README.md $$(find docs -name '*.md' -not -path 'docs/diagrams/*' -not -path 'docs/specs/*' -not -path 'docs/plans/*' | sort); do \
 		grep -q '```mermaid' $$doc || continue; \
-		name=$$(basename $$doc .md); \
-		echo "diagrams: $$doc"; \
+		name=$$(echo $$doc | sed -e 's|^README\.md$$|root/README.md|' -e 's|^docs/||' -e 's|\.md$$||' -e 's|/|-|g'); \
+		case " $$names " in \
+			*" $$name "*) \
+				echo "diagrams: two documents export as $$name — the second would overwrite the first" >&2; \
+				exit 1;; \
+		esac; \
+		names="$$names $$name"; \
+		echo "diagrams: $$doc -> $$name"; \
 		npx -y $(MERMAID_CLI) -i $$doc -o docs/diagrams/$$name.md --outputFormat svg >/dev/null; \
 	done
 	@echo "diagrams: exported to docs/diagrams/"

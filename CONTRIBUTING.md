@@ -48,6 +48,21 @@ at the repository root needs.
 `make check` regenerates too, so it is never the hooks that make a build
 correct — they only stop the editor being wrong between builds.
 
+### Which Node
+
+`make check` needs no Node at all, so this only binds work that touches the
+frontend, the demo or the diagrams.
+
+`.nvmrc` names the Node **line** CI builds and type-checks with — the major on
+its own, so that `nvm install` and `actions/setup-node` both take the newest
+patch of it rather than freezing on one. `engines` in `frontend/package.json`
+names the floor inside that line, `^22.13.0`, and an older 22.x is refused by
+name at `npm ci` instead of failing later. Anything newer works too and is
+tested: the frontend suite runs on `.nvmrc`'s version and again on the current
+release, which is what stopped a Node-version-dependent break from being
+invisible ([#269](https://github.com/SkylinePlatform/agentic-payments/issues/269)).
+Node 20 is out — it reached end of life on 2026-04-30.
+
 ## Workflow
 
 All changes go through a pull request. This holds even for a solo contributor —
