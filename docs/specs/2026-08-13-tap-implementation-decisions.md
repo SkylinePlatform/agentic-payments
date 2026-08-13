@@ -150,10 +150,15 @@ Cloudflare-dependency grounds. `dadrus/httpsig` is the runner-up and reportedly 
 the better `tag` semantics; whoever writes the bridge should look at both APIs before
 committing, and record which was taken and why.
 
-**Everything that names the package lands in the same pull request** — `git grep -n
-'pkg/httpsig'` is the list, and it reaches `AGENTS.md`'s layout tree and its "genuine
-gaps in the Go ecosystem" criterion, `docs/architecture/README.md`, ADR 0001 and
-`CONTRIBUTING.md`'s commit scopes. Two of them are not obvious from the deletion:
+**Everything that names the package lands in the same pull request**, and `git grep -n
+'pkg/httpsig'` is the list rather than anything written here — it reaches `AGENTS.md`'s
+layout tree and its "genuine gaps in the Go ecosystem" criterion, and
+`docs/architecture/README.md` in three places including the `core-isolation` row.
+Widen it to the bare `httpsig` for `CONTRIBUTING.md`'s commit scopes and `AGENTS.md`'s,
+which name the package without its path. No ADR mentions it: an earlier draft of this
+sentence said ADR 0001 did, which was true when it was written and stopped being true
+when #33 removed the reference — a stale list is the argument for running the grep.
+Two entries are not obvious from the deletion:
 
 - `backend/go.mod` currently has **no runtime dependency at all** — `testify` is
   test-only. This introduces the first one, and that is a change to a property the
