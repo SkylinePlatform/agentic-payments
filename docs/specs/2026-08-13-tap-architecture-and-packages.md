@@ -114,7 +114,8 @@ func (s *Store) StandardSigner(slot Slot) (crypto.Signer, error)
 //
 // Same caller, other direction. A public key is material this module already
 // moves — roles.PublicKey hands one to a Trusted Surface as a JWK, and every
-// role publishes one at /.well-known/jwks.json — so what this adds is a second
+// role that serves HTTP publishes one at /.well-known/jwks.json — so what this
+// adds is a second
 // encoding of something already public, not a second thing that is public.
 func (s *KeySet) StandardPublicKey(ref authz.KeyRef) (crypto.PublicKey, error)
 ```
@@ -507,11 +508,20 @@ func NewVerifier(cfg VerifierConfig) (*Verifier, error)
 
 // Verify checks one inbound request and returns the identity it proves.
 //
-// The order is the specification's, and each step's failure is a different
-// code — see errors.go. Select the signature by its tag; require @authority
-// and @path; resolve keyid against the directory; check the algorithm the
-// directory registered against the one the header claims; verify; check
-// freshness against the injected clock; record the nonce.
+// Each step's failure is a different code — see errors.go. Select the
+// signature by its tag; require @authority and @path; resolve keyid against
+// the directory; check the algorithm the directory registered against the one
+// the header claims; verify; check freshness against the injected clock;
+// record the nonce.
+//
+// The first two steps are the specification's, in its order. The last two are
+// not, deliberately: the specification checks the timestamps and the nonce
+// before it locates the key or validates the signature, and recording a nonce
+// for a request whose signature has not verified hands an unauthenticated
+// caller a way to fill the seen-set. Freshness follows it because it is our own
+// check against the injected clock around the library's verification rather
+// than one the library performs (decision 3). The algorithm check is ours too,
+// and is decision 4's defence rather than a step the specification lists.
 func (v *Verifier) Verify(ctx context.Context, r *http.Request) (identity.Verified, error)
 
 // ---- errors.go ---------------------------------------------------------
@@ -683,7 +693,10 @@ func VerifiedAgent(r *http.Request, trusted bool) (identity.Verified, bool)
 
 ### `cmd/registry` and `cmd/proxy`
 
-Both through `roles.Main`, like the other five [TREE, `internal/roles/run.go`].
+Both through `roles.Main`, like `cmd/surface`, `cmd/credprovider`, `cmd/mpp` and
+`cmd/merchant`. `cmd/agent` is the exception and stays one — it mints its emitter
+before it knows whether it will serve at all, so it calls `roles.Run` itself
+[TREE, `internal/roles/run.go`, the comment on `FlushGrace`].
 
 ```
 registry  -addr :8087
@@ -708,9 +721,11 @@ on every `make demo` and because the agent mints a fresh key per start
 [TREE, `roles.NewIdentity`], so a seed file would be stale by construction.
 
 `cmd/agent`'s package documentation gains the paragraph decision 1 asks for: this
-agent now has two identities published in two places — an ES256 key at
-`/.well-known/jwks.json` for AP2, and an Ed25519 key in the registry for TAP —
-and which is which.
+agent now has two identities and neither is published from a JWKS of its own — an
+ES256 key handed to the Trusted Surface through `roles.PublicKey` and travelling
+endorsed in every open mandate's `cnf`, and an Ed25519 key registered with
+`cmd/registry`, which is where a TAP verifier resolves it. `cmd/agent` mounts no
+`roles.JWKSPath` [TREE], and the paragraph has to say which key is which.
 
 ### `internal/platform` additions
 
@@ -760,18 +775,29 @@ func (s *Store) Import(slot Slot, jwk []byte, idempotencyKey string) (authz.KeyR
 
 ### The demo topology
 
-`deploy/demo.json` gains `registry` before `merchant` and `proxy` after it, and
-the agents' `-merchant` moves to the proxy's address. Order: collector, surface,
-registry, merchant, credprovider, mpp, proxy, agent-watch, agent-buy, frontend.
+`deploy/demo.json` already carries `registry` and `proxy`, both `implemented:
+false` and both after `mpp` [TREE]. They move: `registry` above `merchant`,
+`proxy` below `mpp`, and the agents' `-merchant` moves to the proxy's address.
+Order: collector, surface, registry, merchant, credprovider, mpp, proxy,
+agent-watch, agent-buy, frontend.
 
-**The trap the decisions spec names, restated because it is the one that fails
-silently.** Every process marked `implemented: false` gets a two-second
-`stubGrace` [TREE, `internal/demo/runner.go`]. Flipping both new processes to
-`implemented: true` without health endpoints spends four seconds against a
-three-second merchant `-step`, sliding the watching agent's baseline past the
-`$210` it is meant to refuse — so the refusal the demo exists to show stops
-happening with every check green. `implemented: true` and `GET /healthz` land in
-the same commit.
+**The trap the decisions spec names, restated because the ordering above changes
+its arithmetic.** The flat two-second `stubGrace` is what an *implemented*
+process with no health check costs: `settle` has nothing to wait on and sleeps it
+out in full [TREE, `internal/demo/runner.go`, the `p.Health == ""` branch]. An
+*unimplemented* one costs nothing — it is waited on only until it exits, and both
+stubs exit at once today, which is why the floor is zero now. Registry leaves the
+window by moving above the merchant; the proxy does not. So flipping the proxy to
+`implemented: true` without a health endpoint spends two seconds between the
+merchant and agent-watch where there were none, pushing the watching agent's
+baseline towards the `$210` it is meant to refuse. It would not be silent:
+`TestTheMerchantsFirstPriceOutlastsTheStackComingUp` [TREE,
+`internal/demo/pacing_internal_test.go`] asserts that floor is zero as a property
+in its own right, so `make check` refuses the flip. Only that assertion goes red
+here — three seconds of `-step` still clears two seconds of floor; the decisions
+spec says four seconds and "twice over" because it was written against today's
+manifest, where registry sits inside the window too. `implemented: true` and
+`GET /healthz` land in the same commit.
 
 ---
 
@@ -1077,10 +1103,16 @@ only code that can be wrong.
 
 **Ed25519's determinism is what makes the strongest version of this possible**,
 and it is worth one sentence in the file. `pkg/sdjwt`'s RFC 9901 vectors take the
-ES256 signature on trust, because ECDSA is non-deterministic and the RFC's exact
-bytes cannot be reproduced [TREE]. TAP signs with Ed25519, so B.2.6's signature
-*can* be reproduced exactly — which needs `crypto.Store.Import` to adopt the
-RFC's private key, and is the whole reason that function exists.
+ES256 signature on trust because that package may not import `crypto/ecdsa`
+[TREE, `pkg/sdjwt/golden_rfc9901_test.go`]; the signature itself is settled
+separately, in `internal/platform/crypto`'s `TestRFC9901IssuerSignatureVerifies`,
+from the RFC's published *public* key alone [TREE]. That verify-only pattern is
+available for RFC 9421 B.2.6 at no cost and needs no private key. What Ed25519's
+determinism adds is the stronger claim — B.2.6's signature reproduced byte for
+byte — and that is what needs `crypto.Store.Import` to adopt the RFC's private
+key, in the one package `key-material-containment` lets hold it. Decision 11's
+second opinion is therefore about whether byte-for-byte reproduction is worth the
+function, not about whether conformance is checkable without it.
 
 ---
 
