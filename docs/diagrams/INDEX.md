@@ -14,8 +14,9 @@ The exported name is the document's path under `docs/` with the separators
 flattened, rather than its file name. Two documents called `README.md` in
 different directories would otherwise export to one file and the second would
 silently overwrite the first, with nothing in the run saying so — which is what
-the root `README.md` did to the three rows above the day it gained a mermaid
-block. `make diagrams` now refuses a collision instead of taking it.
+the root `README.md` did to `docs/architecture/README.md`'s three diagrams the
+day it gained a mermaid block. `make diagrams` now refuses a collision instead
+of taking it.
 
 The root `README.md` is the one name that is not derived, and it is spelled
 `root-README`. Stripping a leading `docs/` would leave it as `README`, which is
@@ -27,13 +28,13 @@ had touched.
 
 | Diagram | Owning document | Exported file |
 |---|---|---|
-| What breaks when an agent buys | [README.md](../../README.md) | `docs/diagrams/root-README-1.svg` |
-| The mandate lifecycle, and the refusal edge | [README.md](../../README.md) | `docs/diagrams/root-README-2.svg` |
-| Two mandates, and who verifies each | [README.md](../../README.md) | `docs/diagrams/root-README-3.svg` |
-| Open and closed | [README.md](../../README.md) | `docs/diagrams/root-README-4.svg` |
-| Who sees what | [README.md](../../README.md) | `docs/diagrams/root-README-5.svg` |
-| The TAP handshake at the merchant edge | [README.md](../../README.md) | `docs/diagrams/root-README-6.svg` |
-| Unknown agent against unverified agent | [README.md](../../README.md) | `docs/diagrams/root-README-7.svg` |
+| What breaks when an agent buys | [README.md](https://github.com/SkylinePlatform/agentic-payments/blob/main/README.md) | `docs/diagrams/root-README-1.svg` |
+| The mandate lifecycle, and the refusal edge | [README.md](https://github.com/SkylinePlatform/agentic-payments/blob/main/README.md) | `docs/diagrams/root-README-2.svg` |
+| Two mandates, and who verifies each | [README.md](https://github.com/SkylinePlatform/agentic-payments/blob/main/README.md) | `docs/diagrams/root-README-3.svg` |
+| Open and closed | [README.md](https://github.com/SkylinePlatform/agentic-payments/blob/main/README.md) | `docs/diagrams/root-README-4.svg` |
+| Who sees what | [README.md](https://github.com/SkylinePlatform/agentic-payments/blob/main/README.md) | `docs/diagrams/root-README-5.svg` |
+| The TAP handshake at the merchant edge | [README.md](https://github.com/SkylinePlatform/agentic-payments/blob/main/README.md) | `docs/diagrams/root-README-6.svg` |
+| Unknown agent against unverified agent | [README.md](https://github.com/SkylinePlatform/agentic-payments/blob/main/README.md) | `docs/diagrams/root-README-7.svg` |
 | The three-layer model | [docs/architecture/README.md](../architecture/README.md) | `docs/diagrams/architecture-README-1.svg` |
 | Module dependencies | [docs/architecture/README.md](../architecture/README.md) | `docs/diagrams/architecture-README-2.svg` |
 | The agentic boundary | [docs/architecture/README.md](../architecture/README.md) | `docs/diagrams/architecture-README-3.svg` |
