@@ -1929,50 +1929,20 @@ func TestTheNameIsAskedForRatherThanTakenFromTheBrowser(t *testing.T) {
 	watcher.AssertNumberOfCalls(t, "Authorise", 0)
 }
 
-// TestAConsoleWhoseBootWatchFailedSaysSoToABrowser is the browser half of issue
-// #252's first decision.
+// TestTheListIsTheListAndNothingElse is what the three boot-watch tests here
+// became — issue #320.
 //
-// A stack whose boot watch failed and a stack that was never given a prompt draw
-// the same empty list, and the difference between them is the difference between
-// "nothing has been asked for yet" and "what was asked for did not happen".
-// cmd/agent says it in the terminal; a person looking at a browser is not
-// looking at that terminal. The frontend's interpreter mode line is the
-// precedent — a fact about how this process was configured that a screen has to
-// be able to state — and this is that kind of fact one step along.
-func TestAConsoleWhoseBootWatchFailedSaysSoToABrowser(t *testing.T) {
-	t.Parallel()
-
-	const typed = "buy a flight to Palma when it drops below $200, this summer"
-	const because = "agent: nothing in this merchant's catalogue matches what the user " +
-		"described: the search matched no offer"
-
-	c := newConsole(t, nothing)
-	c.service.BootWatchFailed(typed, errors.New(because))
-
-	status, list := c.get(t, "/watches")
-	require.Equal(t, http.StatusOK, status, "the console still serves, which is the whole of #252")
-
-	watches, ok := list["watches"].([]any)
-	require.True(t, ok, "the list is still a list, whatever else the answer has grown")
-	assert.Empty(t, watches,
-		"a boot watch that never started is not a row — there is no authorisation for one to be about")
-
-	boot := list.nested(t, "boot")
-	assert.Equal(t, typed, boot["prompt"],
-		"the reason alone says a search matched nothing and not what was searched for")
-	assert.Equal(t, because, boot["error"],
-		"it travels verbatim, because a browser saying only that something failed sends the "+
-			"reader back to a terminal they may not have")
-}
-
-// TestAConsoleNobodyGaveAPromptSaysNothingAboutOne is the control on the test
-// above, and it is the one a field that is always populated would fail.
+// They asserted a `boot` member on GET /watches: the sentence this process was
+// started with and why it did not become a watch, served so that a browser was
+// told and not only a terminal. #313 took the boot watch out of the manifest, so
+// the reader those tests were for — somebody who ran `make demo`, opened a
+// browser and never asked for a watch — cannot arise; and the frontend never drew
+// the field in the first place. The failure is still printed, by cmd/agent, to
+// the terminal of the person who now has to type -watch to get one.
 //
-// `boot` is served on every answer, on summary.Title's reasoning — so a consumer
-// can tell "nothing failed" from "this build does not serve the field" — and it
-// is null unless a boot watch actually failed, so that "nothing failed" is what
-// it says.
-func TestAConsoleNobodyGaveAPromptSaysNothingAboutOne(t *testing.T) {
+// What is asserted instead is the shape that is left, because a response losing a
+// member is worth one line saying which members it has.
+func TestTheListIsTheListAndNothingElse(t *testing.T) {
 	t.Parallel()
 
 	c := newConsole(t, nothing)
@@ -1980,25 +1950,10 @@ func TestAConsoleNobodyGaveAPromptSaysNothingAboutOne(t *testing.T) {
 	status, list := c.get(t, "/watches")
 	require.Equal(t, http.StatusOK, status)
 
-	value, present := list["boot"]
-	assert.True(t, present,
-		"a consumer cannot tell 'nothing failed' from 'this build does not say' unless the field is always there")
-	assert.Nil(t, value,
-		"inventing a failure for a console nobody gave a prompt is the mirror image of the defect")
-}
-
-// TestABootWatchThatStartedIsNotAFailure pins the other half of the recorder: it
-// is told about failures and about nothing else.
-//
-// A nil error is what the caller has in hand on the path where the watch did
-// start, and a recorder that stored it anyway would put an empty sentence and an
-// empty reason on the list of every successful run.
-func TestABootWatchThatStartedIsNotAFailure(t *testing.T) {
-	t.Parallel()
-
-	c := newConsole(t, nothing)
-	c.service.BootWatchFailed("buy a flight to Palma when it drops below $200, this summer", nil)
-
-	_, list := c.get(t, "/watches")
-	assert.Nil(t, list["boot"], "a watch that started is not something to report going wrong")
+	watches, ok := list["watches"].([]any)
+	require.True(t, ok, "the list is a list, which is the one thing this response promises")
+	assert.Empty(t, watches, "a console nobody has asked for anything has no rows")
+	assert.Len(t, list, 1,
+		"one member. `boot` was the second and issue #320 removed it; a third arriving without "+
+			"a decision behind it is what this count is for")
 }

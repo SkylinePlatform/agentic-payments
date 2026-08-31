@@ -536,22 +536,18 @@ func TestABootWatchThatFindsNothingStillLeavesAConsoleServing(t *testing.T) {
 
 	var listed struct {
 		Watches []map[string]any `json:"watches"`
-		Boot    *struct {
-			Prompt string `json:"prompt"`
-			Error  string `json:"error"`
-		} `json:"boot"`
 	}
 	require.Equal(t, http.StatusOK, getJSON(t, console.URL+"/watches", &listed),
 		"this is the route the frontend proxies to, and answering it at all is the fix")
 	assert.Empty(t, listed.Watches, "nothing was authorised, so there is no run to list")
 
-	require.NotNil(t, listed.Boot,
-		"a stack whose boot watch failed is otherwise indistinguishable from one never given a prompt")
-	assert.Equal(t, defaultPrompt, listed.Boot.Prompt,
-		"the reason alone does not say what was searched for")
-	assert.Contains(t, listed.Boot.Error, "the search matched no offer",
-		"the merchant answered and had nothing matching, which is the failure the live run hit")
-
+	// **The terminal is the whole of where this is reported**, since issue #320.
+	// It used to be said twice, the second time as a `boot` member on the answer
+	// above, so that a browser was told and not only a terminal. The reader that
+	// was for — somebody who ran `make demo` and opened a browser without ever
+	// asking for a watch — cannot arise since #313 took the boot watch out of the
+	// manifest, and the frontend never drew the field. What is left is a person
+	// who typed -watch, looking at these three lines.
 	assert.Contains(t, said.String(), "the search matched no offer",
 		"a boot watch that silently does not exist is worse than one that stops the process, "+
 			"because the next person debugs the frontend")
@@ -592,13 +588,13 @@ func TestABootWatchNobodyAskedForIsNotReported(t *testing.T) {
 	t.Cleanup(console.Close)
 
 	var listed struct {
-		Boot *struct {
-			Error string `json:"error"`
-		} `json:"boot"`
+		Watches []map[string]any `json:"watches"`
 	}
 	require.Equal(t, http.StatusOK, getJSON(t, console.URL+"/watches", &listed))
-	assert.Nil(t, listed.Boot, "nothing was asked for, so there is nothing that did not happen")
-	assert.Empty(t, said.String(), "and nothing for a terminal to say about it")
+	assert.Empty(t, listed.Watches, "nothing was asked for, so there is nothing to list")
+	assert.Empty(t, said.String(),
+		"and nothing for a terminal to say about it — which since issue #320 is the only place "+
+			"a boot watch failure is said at all, so an empty terminal here is the whole assertion")
 }
 
 // TestAWatchWithNoConsoleStillStopsTheProcess is issue #252's second decision,

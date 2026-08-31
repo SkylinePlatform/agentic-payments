@@ -659,11 +659,17 @@ func afterWatch(out io.Writer, err error, once bool) error {
 // and the person who is about to type something is on the other side of a
 // browser that needs this process listening.
 //
-// **It is reported and not swallowed**, in two places because they have two
-// readers: loudly on out, for whoever is watching the terminal, and through
-// console.Service.BootWatchFailed, so that GET /watches says so too. A boot
-// watch that silently did not exist would be worse than one that stopped the
-// process, because the next person debugs the frontend.
+// **It is reported and not swallowed**, loudly on out, for whoever is watching
+// the terminal it was typed at. A boot watch that silently did not exist would
+// be worse than one that stopped the process, because the next person debugs the
+// frontend.
+//
+// It used to be reported in two places, because it used to have two readers:
+// `GET /watches` carried it as a `boot` member so that a browser was told as
+// well. Issue #320 removed that half. The browser reader was somebody who ran
+// `make demo` and opened a page without ever asking for a watch, and since #313
+// no manifest starts one — so the only reader left is the person who typed
+// -watch, at this terminal.
 //
 // **-watch with no -addr still exits.** That invocation has no console to fall
 // back to, so there is nothing else for it to be — run's own branch calls
@@ -774,13 +780,19 @@ func consoleFor(
 			Quantity: cfg.quantity,
 		})
 		if err != nil {
-			// Reported twice, at two readers, and returned to neither. See this
-			// function's own comment and serveConsole's above it.
-			service.BootWatchFailed(cfg.prompt, err)
+			// Said here and returned to nobody. See this function's own comment
+			// and serveConsole's above it.
+			//
+			// **It used to be said twice**, the second time on `GET /watches` as a
+			// `boot` member, so that a browser was told and not only a terminal.
+			// Issue #320 removed that half: the reader it was for was somebody who
+			// ran `make demo` and opened a browser without ever asking for a
+			// watch, and since #313 no manifest starts one. What is left is a
+			// person who typed -watch, at the terminal these three lines are
+			// printed to.
 			_, _ = fmt.Fprintf(out, "agent: the watch this process was asked for did not start: %v\n", err)
 			_, _ = fmt.Fprintf(out, "agent:   typed %q\n", cfg.prompt)
-			_, _ = fmt.Fprintf(out, "agent: the console is serving regardless, and says so"+
-				" — GET http://%s/watches carries it.\n", addr)
+			_, _ = fmt.Fprintf(out, "agent: the console is serving regardless — GET http://%s/watches.\n", addr)
 		} else {
 			fmt.Printf("  typed      %q\n", cfg.prompt)
 			fmt.Printf("  watch      %s — GET http://%s/watches/%s\n", run.ID(), addr, run.ID())
