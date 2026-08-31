@@ -524,6 +524,15 @@ func (c *Client) call(ctx context.Context, method, url string, body, into any) e
 //
 // # The measured worst case, so the next widening has something to compare against
 //
+// **Two routes reach that worst case now, and issue #314 is what added the
+// second.** GET /catalogue answers every offer with every field by definition,
+// which is exactly the document the query below assembles — so the size is
+// unchanged and the *frequency* is not: a search reached this only for a query
+// that happened to match everything, and the shop window a console draws on
+// every page load reaches it always. The headroom below is therefore being spent
+// routinely rather than in a corner case, which is a reason to watch the number
+// rather than a reason to raise it.
+//
 // GET /search is the answer that fills this, and the widest one a merchant can
 // give is a query every offer satisfies against the catalogue `make demo-live`
 // assembles: `[{"op":"eq","field":"merchant.id","value":"air-serbia"}]` over the

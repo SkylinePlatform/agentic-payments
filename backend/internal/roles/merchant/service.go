@@ -467,6 +467,11 @@ func (s *Service) Handler() (http.Handler, error) {
 		// Shelves for what is published and why the open half of the vocabulary
 		// is not.
 		mux.HandleFunc("GET "+ShelvesPath, s.shelves)
+		// And the third question about the catalogue: not "what matches these
+		// limits" and not "what shelves are there", but "what is on them". See
+		// Catalogue.Browse for why that is a route of its own rather than a
+		// search with nothing to search on.
+		mux.HandleFunc("GET "+CataloguePath, s.browse)
 	}
 	if s.Challenge != nil {
 		mux.Handle("GET "+roles.NoncePath, roles.Nonce(s.Challenge))
@@ -711,6 +716,32 @@ func (s *Service) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	roles.OK(w, http.StatusOK, results)
+}
+
+// CataloguePath is where this merchant publishes everything it sells.
+//
+// Named beside ShelvesPath rather than written into the mux inline, and for the
+// same reason: a caller that has to reach it — the Shopping Agent's console does
+// — should be naming a constant this package exports rather than a string it
+// keeps its own copy of.
+const CataloguePath = "/catalogue"
+
+// browse answers GET /catalogue.
+//
+// A safe method, so no idempotency key reaches it and nothing is remembered:
+// roles.Middleware skips the safe methods by RFC 9110, which is the argument
+// search's own doc comment makes at length and which applies here for one extra
+// reason. This catalogue's prices move on a schedule, so a remembered answer is
+// a shop window showing yesterday's numbers — and unlike a search, whose caller
+// is an agent that knows to re-quote, this one's caller is a person reading a
+// table.
+//
+// It has no failure of its own to report. The route is registered only when
+// there is a Catalogue to ask, NewCatalogue refuses one with no offers, and
+// Browse evaluates nothing that could be malformed — which is the whole
+// difference between this and the route above it.
+func (s *Service) browse(w http.ResponseWriter, _ *http.Request) {
+	roles.OK(w, http.StatusOK, s.Catalogue.Browse())
 }
 
 // The claims a merchant's own offer carries.

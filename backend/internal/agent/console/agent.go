@@ -106,6 +106,36 @@ func (a *Agent) ProposeFrom(
 	}, reading)
 }
 
+// ProposeStated settles on a chosen offer under a stated limit.
+//
+// The agent key is this console's, exactly as on the read path: it is the key
+// both open mandates will endorse in cnf, and it is not something a caller gets
+// to name. Everything else came from a person looking at a table.
+func (a *Agent) ProposeStated(
+	ctx context.Context, item string, limit generated.Amount, quantity int,
+) (agent.Proposal, error) {
+	if a.Client == nil {
+		return agent.Proposal{}, errors.New("console: this agent has no client to reach its counterparties with")
+	}
+	return a.Client.ProposeStated(ctx, agent.Intent{
+		Item: item, AgentKey: a.AgentKey,
+	}, limit, quantity)
+}
+
+// Catalogue asks the merchant for everything it sells.
+//
+// No interpreter and no key, on Describe's reasoning read one question wider: a
+// shop window is a read of the shop's own catalogue, and there is nothing about
+// it for a user to approve because nothing about it is a purchase. What it must
+// not be mistaken for is a search — see agent.Client.Catalogue, which carries
+// the argument for why the two are different questions.
+func (a *Agent) Catalogue(ctx context.Context) ([]agent.Offer, error) {
+	if a.Client == nil {
+		return nil, errors.New("console: this agent has no client to reach its counterparties with")
+	}
+	return a.Client.Catalogue(ctx)
+}
+
 // Describe asks the merchant to say what one offer is.
 //
 // No interpreter and no key: naming a thing is a read of the shop's own

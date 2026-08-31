@@ -105,6 +105,46 @@ func (c *Catalogue) Search(constraints []generated.Constraint) (Results, error) 
 	return results, nil
 }
 
+// Browse returns every offer the catalogue holds, priced at one instant.
+//
+// # It is a shop window, and it is deliberately not a search
+//
+// Search's whole claim is that an offer appears in its results exactly when a
+// mandate carrying those constraints would authorise buying it. **Browse makes
+// no such claim and must never be read as making one.** Nothing has been
+// evaluated here: these are the things this merchant sells, at what they cost
+// right now, and whether any of them may be bought is decided later, by a
+// verifier, against limits a user has actually signed for.
+//
+// That distinction is why this is a second method rather than Search with an
+// empty constraint set. ErrNoConstraints exists precisely because emptiness
+// reads as "everything is permitted" to a mandate and "nothing is filtered" to
+// a query, and answering the whole catalogue to an empty set would collapse the
+// two readings this package closed on purpose. A caller that wants everything
+// is asking a different question, so it gets a different method and the answer
+// says so.
+//
+// # One clock read, and that is the reason this is not seven searches
+//
+// A console offering a category filter could have asked Search once per shelf —
+// item.category eq "flights", then "cameras", and so on — and got the same rows
+// out. What it would also have got is one ObservedAt per call: a table showing
+// prices from moments that never co-existed, which is the exact failure that
+// field's own comment exists to prevent, one screen further out. Here the clock
+// is read once for the whole answer, so every price on a page was true together.
+//
+// The order is the catalogue's own, as Offers gives it. Sorting and filtering
+// are the caller's, over a list it already holds; doing either here would put a
+// presentation decision inside the party that prices things.
+func (c *Catalogue) Browse() Results {
+	now := c.clock.Now()
+	out := Results{Offers: make([]PricedOffer, 0, len(c.offers)), ObservedAt: now}
+	for _, o := range c.offers {
+		out.Offers = append(out.Offers, c.priced(o, now))
+	}
+	return out
+}
+
 // satisfies reports whether every expression holds for the subject.
 //
 // Conjunctive, which is the reading constraint.Evaluate gives a mandate's

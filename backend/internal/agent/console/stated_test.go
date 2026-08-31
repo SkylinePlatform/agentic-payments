@@ -1,0 +1,231 @@
+package console_test
+
+// GET /offers and the stated half of POST /proposals — issue #314.
+//
+// The claims here are about the *routes*. That the agent settles on the right
+// offer under a stated limit, spells the fields the registry knows and derives
+// the trigger from a fresh price is internal/agent's, and that is where its
+// tests are. What this file is for is that the console offers a catalogue at
+// all, that a proposal is made from a sentence or from a limit and never from
+// both, that nothing invents a sentence nobody typed, and that a watch started
+// from a signed authorisation no longer needs one.
+
+import (
+	"errors"
+	"net/http"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
+
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/console"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
+)
+
+// listingBody is what GET /offers answers with, decoded as its own type for
+// proposedBody's reason: a test asserts the wire, not a Go type that happens to
+// produce it.
+type listingBody struct {
+	Offers []agent.Offer `json:"offers"`
+}
+
+// shelf is what the merchant sells, as the mocked agent answers it.
+//
+// Two offers rather than one, and they differ in category: the console is the
+// party a browser filters by shelf against, so a fixture with one category could
+// not tell a field that travels from a field that is dropped.
+func shelf() []agent.Offer {
+	return []agent.Offer{
+		{
+			ID: "gtin:05012345678900", Category: "bicycles",
+			Title: "Vitesse Urbain 7", Retailer: "Sever Cycles",
+			Price: generated.Amount{Amount: 45000, Currency: "USD"},
+			Step:  0, Final: false,
+		},
+		{
+			ID: "route:BEG-PMI", Category: "flights",
+			Title: "Belgrade → Palma de Mallorca", Retailer: "Adria Wings",
+			Price: generated.Amount{Amount: 24000, Currency: "USD"},
+			Step:  0, Final: false,
+		},
+	}
+}
+
+// TestTheConsoleOffersWhatTheMerchantSells is the route the first screen is
+// built on.
+//
+// It asserts the category as well as the identifier, because that field is the
+// one thing on an offer that is *not* presentation — item.category is a
+// registered constraint field — and it is what a person filters the table by. An
+// offer arriving without it is a shelf nobody can pick from, which reads on
+// screen as a filter that matches nothing rather than as a missing field.
+func TestTheConsoleOffersWhatTheMerchantSells(t *testing.T) {
+	t.Parallel()
+
+	c := newConsoleWith(t, func(w *console.MockWatcher) {
+		w.EXPECT().Catalogue(mock.Anything).Return(shelf(), nil).Maybe()
+	})
+
+	var got listingBody
+	resp := doRequest(t, http.MethodGet, c.url+"/offers", "", nil)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, decodeStrict(t, resp, &got),
+		"the console has to be able to say what the merchant sells, or its first screen is empty")
+
+	require.Len(t, got.Offers, 2, "both offers the merchant listed have to reach the browser")
+	assert.Equal(t, "bicycles", got.Offers[0].Category,
+		"the shelf an offer sits on is what a person filters the table by, and it is a field a "+
+			"verifier reads rather than presentation the agent may drop")
+	assert.Equal(t, "flights", got.Offers[1].Category)
+	assert.Equal(t, "Vitesse Urbain 7", got.Offers[0].Title,
+		"and the merchant's own name for it, which is the only thing on the row a person can read")
+}
+
+// TestACatalogueTheMerchantWouldNotGiveIsNotAnEmptyShop is the failure a browser
+// must be able to tell apart from a shop with nothing in it.
+//
+// An empty table drawn for a merchant that did not answer is the worst available
+// outcome: it is indistinguishable from a working console reporting an empty
+// catalogue, so nobody looks at the merchant.
+func TestACatalogueTheMerchantWouldNotGiveIsNotAnEmptyShop(t *testing.T) {
+	t.Parallel()
+
+	c := newConsoleWith(t, func(w *console.MockWatcher) {
+		w.EXPECT().Catalogue(mock.Anything).
+			Return(nil, errors.New("dial tcp: connection refused")).Maybe()
+	})
+
+	resp := doRequest(t, http.MethodGet, c.url+"/offers", "", nil)
+	defer func() { _ = resp.Body.Close() }()
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode,
+		"a merchant that did not answer is a counterparty failing, not this console reporting an "+
+			"empty shop — and 502 is the arm Service.start's own error table already gives it")
+}
+
+// TestAProposalIsMadeFromASentenceOrFromALimitAndNeverBoth is the refusal the
+// route exists to make.
+//
+// The two are not interchangeable and that is why neither may be defaulted to. A
+// sentence's limits are *inferred* — the whole reason the Trusted Surface renders
+// them before anybody signs — while a stated limit is the person's own number. A
+// request carrying both is a caller that has not decided which it is asking, and
+// silently preferring one would put a constraint set in front of somebody that is
+// not the set they thought they were asking for.
+func TestAProposalIsMadeFromASentenceOrFromALimitAndNeverBoth(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, nothing)
+
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		why  string
+	}{
+		{
+			name: "neither",
+			body: map[string]any{"item": item},
+			why: "a request naming no sentence and no limit says nothing about what may be spent, " +
+				"and a proposal with no limit in it is one nobody should be asked to sign",
+		},
+		{
+			name: "both",
+			body: map[string]any{
+				"prompt": "find and buy telescopic ladders, cheapest",
+				"item":   item,
+				"limit":  map[string]any{"amount": 15000, "currency": "USD"},
+			},
+			why: "the sentence's limits are inferred and the stated one is not, so answering with " +
+				"either would be answering a question this caller did not ask",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			resp := doRequest(t, http.MethodPost, c.url+"/proposals", "key-"+tc.name, tc.body)
+			defer func() { _ = resp.Body.Close() }()
+			assert.Equal(t, http.StatusUnprocessableEntity, resp.StatusCode, tc.why)
+		})
+	}
+}
+
+// TestAProposalFromAStatedLimitNamesNoSentence is the field that stays empty,
+// and the reason it is asserted rather than left to look after itself.
+//
+// Nobody typed anything. `Run.title`'s own comment is the precedent — an
+// identifier substituted for a name is the identifier wearing the name's clothes
+// — and a sentence assembled here out of a limit and an item would be this agent
+// putting words in a person's mouth on a screen that then shows them, under a
+// heading saying it is what they asked for.
+//
+// The trigger is asserted beside it because it is the one thing on this response
+// the agent *did* read, and the pair is the whole shape of the stated path: no
+// sentence, and a reading made from a price rather than from words.
+func TestAProposalFromAStatedLimitNamesNoSentence(t *testing.T) {
+	t.Parallel()
+
+	made := proposal()
+	made.Trigger = interpret.TriggerConditional
+	c := newConsoleWith(t, func(w *console.MockWatcher) {
+		w.EXPECT().ProposeStated(mock.Anything, item, mock.Anything, mock.Anything).
+			Return(made, nil).Maybe()
+	})
+
+	var got proposedBody
+	status := postAnswering(t, "stated-key", c.url+"/proposals", map[string]any{
+		"item":     item,
+		"limit":    map[string]any{"amount": 15000, "currency": "USD"},
+		"quantity": 2,
+	}, &got)
+	require.Equal(t, http.StatusOK, status, "a chosen offer under a stated limit has to propose")
+
+	assert.Empty(t, got.Prompt,
+		"nobody typed a sentence, and one invented here would reach the consent screen under a "+
+			"heading claiming the user asked for it")
+	assert.Equal(t, interpret.TriggerConditional, got.Trigger,
+		"the trigger is the one thing on this response the agent read for itself, and a screen "+
+			"that cannot say whether this buys now or waits has no business collecting a signature")
+}
+
+// TestAWatchStartedFromASignatureNeedsNoSentence is the other end of the same
+// decision, and the one that had to move.
+//
+// Service.Start required a prompt unconditionally, so that Run.typed always had a
+// source. With an authorisation in hand there is nothing left to interpret — the
+// limits are signed already — and the only remaining job of the prompt is that
+// field. A purchase chosen from the catalogue has no sentence, so the
+// requirement had to become conditional or the flow could not exist.
+//
+// The second row is what keeps that from being a hole: without a signature this
+// agent is about to interpret the sentence, so a watch with no sentence is a
+// watch with nothing to authorise, and it is still refused.
+func TestAWatchStartedFromASignatureNeedsNoSentence(t *testing.T) {
+	t.Parallel()
+
+	c := newConsole(t, nothing)
+
+	t.Run("with a signature", func(t *testing.T) {
+		resp := doRequest(t, http.MethodPost, c.url+"/watches", "signed-no-prompt", map[string]any{
+			"item":          item,
+			"quantity":      1,
+			"authorisation": anAuthorisationBody(),
+		})
+		defer func() { _ = resp.Body.Close() }()
+		assert.Equal(t, http.StatusCreated, resp.StatusCode,
+			"the limits are signed already, so there is nothing a sentence would be read for — "+
+				"and a purchase chosen from a table has no sentence to give")
+	})
+
+	t.Run("without one", func(t *testing.T) {
+		resp := doRequest(t, http.MethodPost, c.url+"/watches", "unsigned-no-prompt", map[string]any{
+			"item":     item,
+			"quantity": 1,
+		})
+		defer func() { _ = resp.Body.Close() }()
+		assert.Equal(t, http.StatusUnprocessableEntity, resp.StatusCode,
+			"with nothing signed this agent is about to interpret the sentence, so a watch with "+
+				"no sentence is a watch with nothing to authorise")
+	})
+}
