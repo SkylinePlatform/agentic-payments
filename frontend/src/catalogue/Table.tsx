@@ -1,7 +1,7 @@
 import { useId, useState } from "react";
 
 import type { Offer } from "../consent/model";
-import { formatAmount } from "../protocol";
+import { formatAmount, minorUnitDigits, toMajorUnits, toMinorUnits } from "../protocol";
 
 /**
  * The product table — #109's second slice.
@@ -169,11 +169,35 @@ export function openingLimit(price: number): number {
   return Math.max(1, rounded === price ? price - Math.max(1, step / 10) : rounded);
 }
 
-/** Parses the limit box into minor units, or null when it holds nothing usable. */
-function parsedLimit(raw: string): number | null {
+/**
+ * Parses the limit box into minor units of `currency`, or null when it holds
+ * nothing usable.
+ *
+ * **Through `toMinorUnits` rather than `× 100`**, and that is not tidiness. This
+ * function used to multiply by a hundred, three lines from where `formatAmount`'s
+ * own comment says the exponent must come from `Intl` "rather than a hardcoded
+ * 100, which is what makes JPY come out as ¥189 rather than ¥1.89". A ¥40,000
+ * limit typed into that version reached the agent as 4,000,000 minor units — a
+ * hundredfold error in the single number the whole authorisation is about, on a
+ * screen whose entire purpose is that the buyer sets it.
+ *
+ * The `isSafeInteger` guard is this side's, on `Row`'s own reasoning about the
+ * line total: past 2^53 the product stops being exact, and a ceiling that reads
+ * as one number and is another is worse than a field that refuses.
+ *
+ * **This does not contradict `constraint/render.ts`, which hardcodes two minor
+ * digits on purpose.** That file is a *renderer*, its output is the sentence a
+ * signature covers, and its own comment forbids reusing `formatAmount` because
+ * Go's `render.go` makes the same assumption and the two must be identically
+ * wrong or the golden vectors part. This is a *control*: nothing here is
+ * rendered, nothing is signed, and the row beside it already prices the offer
+ * with `formatAmount`. A box that disagreed with the price printed next to it
+ * would be the drift, not the fix.
+ */
+function parsedLimit(raw: string, currency: string): number | null {
   const major = Number.parseFloat(raw);
   if (!Number.isFinite(major) || major <= 0) return null;
-  const minor = Math.round(major * 100);
+  const minor = toMinorUnits(major, currency);
   return Number.isSafeInteger(minor) && minor > 0 ? minor : null;
 }
 
@@ -198,16 +222,20 @@ function Row({
   // clearing it before typing a new value — the field has to hold what was
   // typed, and parsedQuantity is only asked what that means at Buy.
   const [raw, setRaw] = useState("1");
+  // How many decimal places this offer's currency has — 2 for USD, 0 for JPY.
+  // Read once here rather than at each of the three places below that need it,
+  // and never as a literal: see parsedLimit.
+  const digits = minorUnitDigits(offer.price.currency);
   // The limit box's own text, on the quantity box's reasoning: a controlled
   // input that rewrote a half-typed number would fight anybody clearing it.
   const [limitRaw, setLimitRaw] = useState(() =>
-    (openingLimit(offer.price.amount) / 100).toFixed(2),
+    toMajorUnits({ ...offer.price, amount: openingLimit(offer.price.amount) }).toFixed(digits),
   );
   const quantityId = useId();
   const limitId = useId();
 
   const quantity = parsedQuantity(raw);
-  const limit = stated ? parsedLimit(limitRaw) : null;
+  const limit = stated ? parsedLimit(limitRaw, offer.price.currency) : null;
   // A row whose limit box holds nothing usable cannot be bought: the agent
   // refuses a limit of zero, and a Buy that produced a 422 a person cannot read
   // is worse than a button that says it is not ready.
@@ -286,7 +314,10 @@ function Row({
             id={limitId}
             type="number"
             min={0}
-            step="0.01"
+            // The smallest step this currency has, so a JPY field steps in whole
+            // yen and a KWD one in thousandths. `1 / 10 ** digits` rather than a
+            // literal, for parsedLimit's reason one line up.
+            step={1 / 10 ** digits}
             value={limitRaw}
             disabled={busy || blocked}
             onChange={(event) => setLimitRaw(event.target.value)}

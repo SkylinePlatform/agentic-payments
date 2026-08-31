@@ -705,6 +705,24 @@ func (s *Service) offers(w http.ResponseWriter, r *http.Request) {
 		refuse(w, err)
 		return
 	}
+	// **An empty answer is refused here as well as in the client**, and the
+	// duplication is the point rather than an oversight. agent.Client.Catalogue
+	// already refuses one, so on the wiring this process actually runs the branch
+	// below is unreachable — but Watcher is an interface, `listing.Offers` is a
+	// slice, and a nil slice marshals as `"offers": null`. A browser that decoded
+	// that would call `.map` on null and take the whole screen down, and the
+	// stack trace would name a React component rather than the counterparty that
+	// answered with nothing.
+	//
+	// **A plain error rather than agent.ErrNothingToBuy**, and the distinction is
+	// the one refuse's own table draws. That sentinel is answered 422 — this
+	// agent's account of a request it cannot fulfil — and an empty catalogue is
+	// not a bad request. It is a counterparty behaving in a way NewCatalogue does
+	// not permit, which is the default arm's 502.
+	if len(found) == 0 {
+		refuse(w, errors.New("console: the merchant listed nothing at all"))
+		return
+	}
 	roles.OK(w, http.StatusOK, listing{Offers: found})
 }
 

@@ -47,10 +47,12 @@ Which is which, and how far along each is, is [section 3](#two-questions-two-pro
 
 The interesting moment is not the purchase. It is the one before it.
 
-An agent has been told to buy below a cap. A price arrives that is above it, and
-the agent tries anyway — agents are not always right, which is the entire reason
-any of this exists. **A verifier refuses it, and signs a receipt for the
-refusal.** Then a price arrives below the cap, and the same authorisation buys.
+An agent has been told to buy below a cap — **you tell it**, by picking something
+out of the merchant's catalogue and typing what you are willing to pay. A price
+arrives that is above it, and the agent tries anyway — agents are not always
+right, which is the entire reason any of this exists. **A verifier refuses it,
+and signs a receipt for the refusal.** Then a price arrives below the cap, and
+the same authorisation buys.
 
 Both halves matter. A system where the agent decides whether its own purchase
 was allowed has no guarantees in it at all; and a refusal nobody can prove
@@ -60,6 +62,12 @@ afterwards is a refusal you have to take somebody's word for.
 
 *One run of `make demo`, on 13 August 2026. The amounts are whatever the
 catalogue held that day; the shape is the point.*
+
+`make demo` opens on an empty screen and the catalogue — nothing is bought until
+somebody buys it, and the screenshot above is a purchase somebody made. Whether a
+run shows the refusal depends on where the merchant's price schedule has got to
+when the agent takes its first quote; the sequence cycles, so a run that showed
+only the purchase will show the refusal on another.
 
 The part nobody expects is what the refusal does to the authorisation. It does
 not burn it.

@@ -12,6 +12,7 @@ package console_test
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"testing"
 
@@ -103,6 +104,40 @@ func TestACatalogueTheMerchantWouldNotGiveIsNotAnEmptyShop(t *testing.T) {
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode,
 		"a merchant that did not answer is a counterparty failing, not this console reporting an "+
 			"empty shop — and 502 is the arm Service.start's own error table already gives it")
+}
+
+// TestAnEmptyCatalogueIsAMerchantFailingRatherThanAnEmptyBody is the branch that
+// is unreachable through the wiring this process runs, and is here anyway.
+//
+// agent.Client.Catalogue already refuses an empty answer, so no real Watcher can
+// reach this. Watcher is an interface, `listing.Offers` is a slice, and **a nil
+// slice marshals as `"offers": null`** — which a browser decodes and then calls
+// `.map` on, taking the whole screen down with a stack trace naming a React
+// component rather than the counterparty that answered with nothing. That is not
+// a hypothetical: it is what a mocked Watcher returning nothing did to
+// Console.test.tsx before the guard existed.
+//
+// 502 rather than 422, on refuse's own table: agent.ErrNothingToBuy is this
+// agent's account of a request it cannot fulfil, and a shop with nothing in it
+// is a counterparty in a state NewCatalogue does not permit.
+func TestAnEmptyCatalogueIsAMerchantFailingRatherThanAnEmptyBody(t *testing.T) {
+	t.Parallel()
+
+	c := newConsoleWith(t, func(w *console.MockWatcher) {
+		w.EXPECT().Catalogue(mock.Anything).Return(nil, nil).Maybe()
+	})
+
+	resp := doRequest(t, http.MethodGet, c.url+"/offers", "", nil)
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err, "reading what the console answered")
+
+	assert.Equal(t, http.StatusBadGateway, resp.StatusCode,
+		"a merchant listing nothing is a counterparty this agent cannot work with, not a "+
+			"request this agent will not serve")
+	assert.NotContains(t, string(body), "null",
+		"the one thing this route must never put on the wire is a null offers array, because "+
+			"every caller of it maps over what comes back")
 }
 
 // TestAProposalIsMadeFromASentenceOrFromALimitAndNeverBoth is the refusal the

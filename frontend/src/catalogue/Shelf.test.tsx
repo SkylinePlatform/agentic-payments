@@ -194,6 +194,65 @@ describe("the limit a buyer sets", () => {
   });
 });
 
+describe("a currency whose minor unit is not a hundredth", () => {
+  // The defect this exists to hold shut: the limit box multiplied by a hardcoded
+  // 100, three lines from where `formatAmount`'s own comment says the exponent
+  // has to come from `Intl` "rather than a hardcoded 100, which is what makes
+  // JPY come out as ¥189 rather than ¥1.89".
+  //
+  // JPY has no minor unit at all, so 45000 JPY is ¥45,000 and not ¥450.00. Under
+  // the old code the box opened on "400.00" beside a price reading ¥45,000, and
+  // a limit typed as 40000 reached the agent as 4,000,000 — a hundredfold error
+  // in the one number this whole screen exists to let a person set.
+  //
+  // `contracts/instrument/amount.json` is USD-only in practice today, which is
+  // exactly why this is a test rather than a comment: nothing on the demo path
+  // can go red for it, so only a fixture can.
+
+  function inYen(): Offer {
+    return anOffer({ price: { amount: 45000, currency: "JPY" } });
+  }
+
+  it("opens the box in whole yen, beside a price in whole yen", () => {
+    render(<Shelf offers={[inYen()]} onChoose={vi.fn()} choosing={null} />);
+
+    const box = screen.getByLabelText(/most you will pay/i) as HTMLInputElement;
+    expect(
+      box.value,
+      "a box reading 400.00 against a price of ¥45,000 is off by two orders of magnitude, and " +
+        "it is the number the signature is about",
+    ).toBe("40000");
+  });
+
+  it("reports what was typed as whole yen, not as hundredths", async () => {
+    const onChoose = vi.fn();
+    render(<Shelf offers={[inYen()]} onChoose={onChoose} choosing={null} />);
+
+    const box = screen.getByLabelText(/most you will pay/i);
+    await userEvent.clear(box);
+    await userEvent.type(box, "38000");
+    await userEvent.click(screen.getByRole("button", { name: /^buy$/i }));
+
+    expect(
+      onChoose.mock.calls[0],
+      "JPY minor units are whole yen: multiplying by 100 here would authorise a hundred times " +
+        "what the person typed",
+    ).toEqual(["gtin:0001", 1, 38000]);
+  });
+
+  it("still reads the sentence off the same comparison", async () => {
+    // The trigger line is derived from minor units on both sides, so it is
+    // currency-agnostic by construction — asserted so that a future fix to the
+    // conversion cannot quietly make the two disagree.
+    render(<Shelf offers={[inYen()]} onChoose={vi.fn()} choosing={null} />);
+
+    const box = screen.getByLabelText(/most you will pay/i);
+    await userEvent.clear(box);
+    await userEvent.type(box, "45000");
+    expect(screen.getByTestId("limit-effect").textContent).toMatch(/buys now/i);
+  });
+});
+
 describe("the limit a row opens on", () => {
   // A table rather than one case, because the rounding is what makes the number
   // read as one a person would have typed — 400.00 rather than 440.00 — and the
