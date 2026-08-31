@@ -139,6 +139,28 @@ numbers.
 `internal/agent` still cannot import the evaluator, and
 `TestTheAgentCannotReachAConstraintEvaluator` still holds it.
 
+### A stale row can predict the wrong trigger, and the consent screen is what catches it
+
+The table is fetched once and the merchant's prices move every three to six
+seconds, so the row's sentence — *waits until it costs 380.00 USD or less* — is
+computed against a number that can already be a step old. `ProposeStated`
+re-quotes, so the trigger it derives can differ from the one the row predicted:
+somebody who set a limit expecting to wait can get `immediate`, because the price
+came down between the page load and the click.
+
+**That is not repaired here and does not need to be**, because the screen that
+collects the signature states the agent's own reading. `Consent.tsx` draws
+`whenItBuys(proposal.trigger)` in a zone of its own, outside the signed box,
+unconditionally on both paths — issue #198 put it there for exactly this class of
+problem, where two authorisations render identically from their constraints and
+differ only in when they fire. `canSign` is gated on that value being one the
+browser recognises, so a trigger this build cannot read disables signing rather
+than guessing.
+
+So the row predicts and the consent screen tells. Polling the catalogue to keep
+the prediction current would spend the single-clock-read property for a sentence
+that is already backed up one screen later.
+
 ### `openValue`, and a bug the test found before the code shipped
 
 `generated.Constraint.Value` is `any`, so a `generated.Amount` assigned into it
