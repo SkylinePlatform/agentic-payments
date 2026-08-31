@@ -203,7 +203,7 @@ or learn the collector's address. Point it elsewhere with `VITE_COLLECTOR_URL`.
 
 `/watches` is proxied to the Shopping Agent's console API at
 `http://127.0.0.1:8086` — `VITE_AGENT_URL` — which is the address the
-`agent-watch` entry in `deploy/demo.json` gives it. Same reason, plus a sharper
+`agent` entry in `deploy/demo.json` gives it. Same reason, plus a sharper
 one: `POST` carrying `Idempotency-Key` is not a simple request, so a browser
 preflights it, and the idempotency middleware every role runs treats `OPTIONS`
 as safe and passes it to a mux that answers 405. Solving that with CORS would

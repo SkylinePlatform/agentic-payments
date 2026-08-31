@@ -78,7 +78,7 @@ func TestBannerExplainsEveryStateThatIsNotUp(t *testing.T) {
 // TestTheBannerSaysWhatThisRunWasGiven is what keeps a screenshot attributable
 // once `make demo-live` appends to more than one process.
 //
-// `make demo` and `make demo-live` start the same eight processes from the same
+// `make demo` and `make demo-live` start the same nine processes from the same
 // manifest, and the second produces a demonstration none of the committed
 // screenshots show: the agent reads free text, and the merchant sells stock
 // fetched from a shop at start-up. Nothing on the screen said which run this

@@ -9,7 +9,7 @@
 //
 // # -interpreter chooses which implementation reads the prompt
 //
-// `scripted`, the default, is interpret.Demo(): a fixed table of five prompts,
+// `scripted`, the default, is interpret.Demo(): a fixed table of prompts,
 // no key and no network. `gemini` is a model behind the same interface, reading
 // GEMINI_API_KEY from the environment. `auto` is a third value beside them: it
 // asks for whichever is available rather than for a model by name — the model
@@ -18,7 +18,7 @@
 //
 // **The default is what deploy/demo.json runs and must stay so.** `make demo`
 // has to come up without a key and without reaching anything, and the golden
-// numbers every screenshot in this repository shows are the scripted five.
+// numbers every screenshot in this repository shows are the scripted ones.
 //
 // **There is no fallback.** `-interpreter gemini` with no key refuses to start,
 // because an agent asked for a model and quietly handed a fixed table produces a
@@ -37,7 +37,7 @@
 // default was the first shape considered: with no key set the two select the
 // same interpreter, so a machine with none would see nothing change. What it
 // would cost is the guarantee itself — whether `make demo` reads
-// deterministically from the scripted five would then depend on whether the
+// deterministically from the scripted table would then depend on whether the
 // operator's shell happens to export GEMINI_API_KEY for some unrelated reason,
 // rather than on anything written in this repository. Writing `-interpreter
 // auto` into deploy/demo.json instead looked like the fix and was tried next,
@@ -68,9 +68,11 @@
 //
 // The two are independent. Both can be given, in which case the Human Present
 // purchase runs first, which is what puts a full set of events in the log before
-// the watch has anything to show. deploy/demo.json gives them to two processes
-// rather than one anyway, and its $comment says why: the reason is failure
-// isolation rather than ordering.
+// the watch has anything to show. **deploy/demo.json gives neither**, since issue
+// #313 — `make demo` opens on an empty screen and a browser starts what it wants
+// — so both flags are now things a person types. While that manifest did run them
+// it ran them as two processes rather than one, for failure isolation rather than
+// ordering, and flagsAgree still refuses -buy beside -addr.
 //
 // # Why it stays up afterwards
 //
@@ -100,11 +102,13 @@
 // GET /watches/{id} and GET /healthz, so a browser can start a watch and read
 // where each mandate in it stands.
 //
-// **-addr defaults to empty, meaning do not serve.** deploy/demo.json runs two
-// agent processes and the Human Present one has no business listening, so both
-// are what they were byte for byte until one is given the flag. With it set,
-// -watch still runs one watch on startup from -prompt, registered in the console
-// so that a first load has something to show.
+// **-addr defaults to empty, meaning do not serve.** A Human Present purchase
+// approved at the moment of purchase has no standing authorisation for a console
+// to track, so `bin/agent -buy` has no business listening and is byte for byte
+// what it was until the flag is given. With it set, -watch still runs one watch
+// on startup from -prompt, registered in the console so that a first load has
+// something to show — which deploy/demo.json no longer asks for, and which
+// nothing but a person typing -watch reaches.
 //
 // **That startup watch failing does not stop the console** — issue #252 — and
 // the argument for it is in serveConsole. It is reported loudly and the console
@@ -297,7 +301,7 @@ func run() error {
 	//
 	// **What decides it is what a console serving anyway would cost.** This
 	// process's /healthz answers from the handler and knows nothing about the
-	// merchant, so agent-watch would pass its health check; demo.Runner settles
+	// merchant, so the agent would pass its health check; demo.Runner settles
 	// each process's state during startup and demo.Banner prints it once, neither
 	// revised afterwards. The demonstration would therefore report the agent **up**
 	// over a stack nobody can transact on. A banner that lies is worse than a
@@ -325,9 +329,8 @@ func run() error {
 	}
 
 	// Only where a prompt will actually be read. The Human Present flow never
-	// calls an interpreter, and deploy/demo.json's agent-buy is that process —
-	// a line there would say something true about a collaborator it does not
-	// have.
+	// calls an interpreter, and `bin/agent -buy` is that invocation — a line
+	// there would say something true about a collaborator it does not have.
 	if *watch || *addr != "" {
 		fmt.Printf("  [ ok ] %-13s %s\n", "interpreter", reading)
 	}
@@ -587,7 +590,7 @@ func geminiInterpreter(apiKey, model string, clk authz.Clock) (interpret.IntentI
 //
 // # Why the expiry case is here rather than left to the default arm
 //
-// It is not reached by `make demo` — deploy/demo.json gives agent-watch -addr,
+// It is not reached by `make demo` — deploy/demo.json gives its one agent -addr,
 // which routes through serveConsole, where console.Run records the terminal
 // state instead. It is reached by `bin/agent -watch` with no -addr, which the
 // package doc above documents as a supported way to run this binary. Every word
@@ -656,11 +659,17 @@ func afterWatch(out io.Writer, err error, once bool) error {
 // and the person who is about to type something is on the other side of a
 // browser that needs this process listening.
 //
-// **It is reported and not swallowed**, in two places because they have two
-// readers: loudly on out, for whoever is watching the terminal, and through
-// console.Service.BootWatchFailed, so that GET /watches says so too. A boot
-// watch that silently did not exist would be worse than one that stopped the
-// process, because the next person debugs the frontend.
+// **It is reported and not swallowed**, loudly on out, for whoever is watching
+// the terminal it was typed at. A boot watch that silently did not exist would
+// be worse than one that stopped the process, because the next person debugs the
+// frontend.
+//
+// It used to be reported in two places, because it used to have two readers:
+// `GET /watches` carried it as a `boot` member so that a browser was told as
+// well. Issue #320 removed that half. The browser reader was somebody who ran
+// `make demo` and opened a page without ever asking for a watch, and since #313
+// no manifest starts one — so the only reader left is the person who typed
+// -watch, at this terminal.
 //
 // **-watch with no -addr still exits.** That invocation has no console to fall
 // back to, so there is nothing else for it to be — run's own branch calls
@@ -771,13 +780,19 @@ func consoleFor(
 			Quantity: cfg.quantity,
 		})
 		if err != nil {
-			// Reported twice, at two readers, and returned to neither. See this
-			// function's own comment and serveConsole's above it.
-			service.BootWatchFailed(cfg.prompt, err)
+			// Said here and returned to nobody. See this function's own comment
+			// and serveConsole's above it.
+			//
+			// **It used to be said twice**, the second time on `GET /watches` as a
+			// `boot` member, so that a browser was told and not only a terminal.
+			// Issue #320 removed that half: the reader it was for was somebody who
+			// ran `make demo` and opened a browser without ever asking for a
+			// watch, and since #313 no manifest starts one. What is left is a
+			// person who typed -watch, at the terminal these three lines are
+			// printed to.
 			_, _ = fmt.Fprintf(out, "agent: the watch this process was asked for did not start: %v\n", err)
 			_, _ = fmt.Fprintf(out, "agent:   typed %q\n", cfg.prompt)
-			_, _ = fmt.Fprintf(out, "agent: the console is serving regardless, and says so"+
-				" — GET http://%s/watches carries it.\n", addr)
+			_, _ = fmt.Fprintf(out, "agent: the console is serving regardless — GET http://%s/watches.\n", addr)
 		} else {
 			fmt.Printf("  typed      %q\n", cfg.prompt)
 			fmt.Printf("  watch      %s — GET http://%s/watches/%s\n", run.ID(), addr, run.ID())

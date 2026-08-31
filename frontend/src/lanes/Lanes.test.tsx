@@ -865,10 +865,12 @@ const CLOSED_PAYMENT = { type: "payment", state: "closed" } as const;
  * user's own steps are genuinely not in this transaction, and the User lane read
  * *Nothing yet.* on every purchase somebody had personally approved.
  *
- * The boot watch that `make demo` starts does not reproduce it: `cmd/agent`
- * signs through the agent's own client, so the surface's steps land inside the
- * same correlation and the lane fills up by accident. That is the gap this
- * fixture exists to close.
+ * A watch started from a terminal does not reproduce it: `bin/agent -watch` signs
+ * through the agent's own client, so the surface's steps land inside the same
+ * correlation and the lane fills up by accident. That is the gap this fixture
+ * exists to close — and since issue #313 took the boot watch out of
+ * `deploy/demo.json`, the accident is no longer even on the demo path: every
+ * purchase `make demo` shows is one a browser started, which is the case below.
  *
  * The authorisation is a parameter so that the one case with no readable signing
  * instant runs through the identical stream. Passing it per step rather than

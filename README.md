@@ -329,6 +329,12 @@ so this page does not have to keep a list that goes stale.
 | Frontend | <http://localhost:5173> |
 | Collector | <http://localhost:8085> |
 
+**It opens on an empty screen.** Nothing is bought until you buy it: the frontend
+shows what the merchant sells, you pick a row, say how many and type the most you
+are willing to pay, and the Trusted Surface asks you to sign what that comes to.
+Whether the agent buys immediately or waits is decided by the limit you set
+against the price on the day — and the screen says which, before you sign.
+
 You need **Go 1.26+** and **Node 22.13+**. Older Go toolchains download the
 right one themselves. Nothing else — no Docker, no database, no accounts, no
 keys.

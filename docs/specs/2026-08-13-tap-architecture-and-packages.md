@@ -778,26 +778,27 @@ func (s *Store) Import(slot Slot, jwk []byte, idempotencyKey string) (authz.KeyR
 `deploy/demo.json` already carries `registry` and `proxy`, both `implemented:
 false` and both after `mpp` [TREE]. They move: `registry` above `merchant`,
 `proxy` below `mpp`, and the agents' `-merchant` moves to the proxy's address.
-Order: collector, surface, registry, merchant, credprovider, mpp, proxy,
-agent-watch, agent-buy, frontend.
+Order: collector, surface, registry, merchant, credprovider, mpp, proxy, agent,
+frontend. *There is one agent since #313, not two — `agent-watch` and `agent-buy`
+were both removed and the survivor renamed.*
 
-**The trap the decisions spec names, restated because the ordering above changes
-its arithmetic.** The flat two-second `stubGrace` is what an *implemented*
-process with no health check costs: `settle` has nothing to wait on and sleeps it
-out in full [TREE, `internal/demo/runner.go`, the `p.Health == ""` branch]. An
-*unimplemented* one costs nothing — it is waited on only until it exits, and both
-stubs exit at once today, which is why the floor is zero now. Registry leaves the
-window by moving above the merchant; the proxy does not. So flipping the proxy to
-`implemented: true` without a health endpoint spends two seconds between the
-merchant and agent-watch where there were none, pushing the watching agent's
-baseline towards the `$210` it is meant to refuse. It would not be silent:
-`TestTheMerchantsFirstPriceOutlastsTheStackComingUp` [TREE,
-`internal/demo/pacing_internal_test.go`] asserts that floor is zero as a property
-in its own right, so `make check` refuses the flip. Only that assertion goes red
-here — three seconds of `-step` still clears two seconds of floor; the decisions
-spec says four seconds and "twice over" because it was written against today's
-manifest, where registry sits inside the window too. `implemented: true` and
-`GET /healthz` land in the same commit.
+**The trap the decisions spec names — and issue #313 dissolved it.** Kept rather
+than deleted, so the next reader can tell it was considered rather than missed.
+
+*As written:* the flat two-second `stubGrace` is what an *implemented* process
+with no health check costs [TREE, `internal/demo/runner.go`, the `p.Health == ""`
+branch]. Flipping the proxy to `implemented: true` without a health endpoint
+spends two seconds between the merchant and the watching agent where there were
+none, pushing that agent's baseline towards the `$210` it is meant to refuse — and
+`TestTheMerchantsFirstPriceOutlastsTheStackComingUp` asserted the floor was zero
+as a property in its own right, so `make check` refused the flip.
+
+**Neither survives.** With no boot watch there is no start-up baseline for
+`stubGrace` to slide, so the arithmetic has nothing to be about; the test was
+deleted with the guarantee it held. Flipping a stub now costs two seconds of
+start-up and nothing else. `implemented: true` and `GET /healthz` should still land
+in the same commit — a role reported as up that answers nothing is its own defect —
+but no gate enforces it and this spec no longer claims one does.
 
 ---
 

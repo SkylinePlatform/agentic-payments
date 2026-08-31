@@ -367,10 +367,13 @@ func TestTheHumanPresentFlowRunsEndToEnd(t *testing.T) {
 // emit the same two kinds and carried no digest either, on a *bare* closed
 // mandate rather than a chain — ap2.CheckoutDigestOfMandate and
 // ap2.PaymentDigestOfMandate are that shape's accessor. It matters which flow
-// this is: deploy/demo.json starts agent-buy, this flow, before agent-watch,
-// deliberately, so this is the very first agent lane a viewer of the
-// three-lane view sees, and until this test the agent's column there floated
-// free of the spine from the first frame.
+// this is: deploy/demo.json used to start this flow at boot, so it was the very
+// first agent lane a viewer of the three-lane view saw, and until this test the
+// agent's column there floated free of the spine from the first frame. Issue
+// #313 took that entry out — `make demo` opens on an empty screen now — so this
+// flow reaches a viewer through `bin/agent -buy` rather than on its own. What
+// the test pins is unchanged: a Human Present purchase names its checkout in
+// every mandate event it emits, whoever started it.
 func TestTheHumanPresentFlowsMandateEventsNameTheCheckoutToo(t *testing.T) {
 	t.Parallel()
 

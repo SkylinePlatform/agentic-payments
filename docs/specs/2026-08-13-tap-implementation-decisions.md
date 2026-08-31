@@ -242,19 +242,28 @@ either would draw a TAP step in an AP2 party's column. The matching `laneOf("pro
 arm belongs in this slice, since this is the slice that stands the proxy up. #32
 designs the real view.
 
-**One trap this slice must not spring.** The runner gives any *implemented* process
-with no health check a flat two-second `stubGrace` (`internal/demo/runner.go:26`,
-spent at `runner.go:221`). Flipping both registry and proxy to `implemented: true`
-without health checks would spend four seconds between the merchant and agent-watch
-against a three-second `-step`, sliding the watching agent's baseline past the price
-it is meant to refuse — so the `$210` refusal the demo exists to show would stop
-happening. It would not be silent:
-`TestTheMerchantsFirstPriceOutlastsTheStackComingUp` in
-`backend/internal/demo/pacing_internal_test.go` fails on exactly that, twice over —
-the floor exceeds `-step`, and the floor is asserted to be zero in its own right — so
-`make check` refuses the flip until a health endpoint lands with it.
-`Manifest.Validate` already enforces the other direction, refusing an unimplemented
-process that carries one.
+**One trap this slice must not spring — and issue #313 dissolved it.** The
+paragraph below is kept rather than deleted, because a spec that quietly drops a
+named hazard leaves the next reader unable to tell it was considered.
+
+*As written:* the runner gives any *implemented* process with no health check a flat
+two-second `stubGrace` (`internal/demo/runner.go:26`, spent at `runner.go:221`).
+Flipping both registry and proxy to `implemented: true` without health checks would
+spend four seconds between the merchant and the watching agent against a
+three-second `-step`, sliding that agent's baseline past the price it is meant to
+refuse — so the `$210` refusal the demo exists to show would stop happening. It
+would not be silent: `TestTheMerchantsFirstPriceOutlastsTheStackComingUp` in
+`backend/internal/demo/pacing_internal_test.go` failed on exactly that.
+
+**Both the trap and the gate are gone.** #313 removed the boot watch from
+`deploy/demo.json`, so no baseline is taken at start-up at all — a person clicks
+Buy whenever they click it, and the merchant's schedule has been cycling since it
+started. There is no window for `stubGrace` to slide, so flipping either stub costs
+nothing but two seconds of start-up. That test went with the property it checked;
+`make check` no longer refuses the flip, **and no longer needs to**.
+
+`Manifest.Validate` still enforces the other direction, refusing an unimplemented
+process that carries a health check.
 
 ## What this does not do
 
