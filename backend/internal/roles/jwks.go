@@ -2,6 +2,7 @@ package roles
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -157,6 +158,82 @@ func (p *Peer) Only(ctx context.Context) (authz.Verifier, error) {
 		return nil, fmt.Errorf(
 			"%s publishes %d keys and this caller has no kid to choose with", p.Base, len(refs))
 	}
+}
+
+// Counterparty is one peer to wait for, and what to call it when it does not
+// answer.
+//
+// Role is the name a reader sees. It is not derivable from Base — "surface" and
+// `http://localhost:8084` are the same fact in two vocabularies, and the one a
+// person can act on is the first.
+type Counterparty struct {
+	Role string
+	Base string
+}
+
+// AwaitPeers waits for several counterparties at once, and is what a caller with
+// more than one should use.
+//
+// # The defect it exists to remove — issue #87
+//
+// The obvious shape is a loop over AwaitPeer under one context.WithTimeout, and
+// it is what cmd/agent did for four peers. Two things are wrong with it and the
+// second is worse.
+//
+// **A slow peer spends everybody's budget.** The deadline is shared, so a first
+// peer that takes most of it leaves the rest with almost nothing, and they fail
+// near-instantly having been given no real chance to answer.
+//
+// **And the error names the wrong one.** Whichever peer was being polled when
+// the shared deadline expired is the one in the message — so a reader is sent to
+// look at a role that was healthy, while the one that was actually slow is not
+// mentioned. That is the half that costs time, because it is confidently wrong
+// rather than unhelpful.
+//
+// # Concurrent rather than a budget divided
+//
+// A per-peer slice of the deadline would fix the first half and not the second,
+// and it would also be a worse answer to what the caller means: it does not care
+// what order they come up in, only that they all do. So each peer gets the
+// caller's whole deadline and they run together, which makes a slow one cost its
+// own time and nobody else's.
+//
+// # Every failure is reported, not the first
+//
+// Peers come up together, so several being down is the ordinary case rather than
+// an edge — starting the stack by hand is exactly when this mechanism is used at
+// all. Reporting one would have a reader fix it, run again and meet the next.
+// errors.Join keeps them in the order they were asked for, so the message reads
+// in the same order as the list at the call site.
+//
+// The verifiers come back in that order too, one per peer, so a caller that
+// needs them is not left matching them up by hand.
+func AwaitPeers(ctx context.Context, peers ...Counterparty) ([]authz.Verifier, error) {
+	found := make([]authz.Verifier, len(peers))
+	failed := make([]error, len(peers))
+
+	var wg sync.WaitGroup
+	for i, p := range peers {
+		wg.Go(func() {
+			verifier, err := AwaitPeer(ctx, p.Base)
+			if err != nil {
+				// Named here rather than at the call site, because this is the
+				// only place that still knows which peer this was.
+				failed[i] = fmt.Errorf("%s: %w", p.Role, err)
+				return
+			}
+			found[i] = verifier
+		})
+	}
+	wg.Wait()
+
+	// Each goroutine writes one index of its own and reads none, so there is
+	// nothing here for a mutex to protect; wg.Wait is the barrier that makes the
+	// writes visible.
+	if err := errors.Join(failed...); err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
 // AwaitPeer resolves a counterparty's single key, waiting for it to come up.

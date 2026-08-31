@@ -992,22 +992,35 @@ func ready(ctx context.Context, e agent.Endpoints, wait time.Duration) error {
 	ready, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 
-	for _, c := range []struct{ role, base string }{
-		{"surface", e.Surface},
-		{"merchant", e.Merchant},
-		{"credprovider", e.CredProvider},
-		{"mpp", e.MPP},
-	} {
-		if _, err := roles.AwaitPeer(ready, c.base); err != nil {
-			// Being told to stop is not a diagnosis of the counterparty. Saying
-			// "unreachable" during a deliberate shutdown sends whoever reads the
-			// log looking at a role that was fine.
-			if ctx.Err() != nil {
-				return fmt.Errorf("stopped while waiting for %s: %w", c.role, ctx.Err())
-			}
-			return fmt.Errorf("%s is unreachable or publishes a key this agent cannot read: %w", c.role, err)
+	// **Together rather than in turn**, which is issue #87. Waiting in sequence
+	// under one deadline let the first peer spend everybody's budget, and named
+	// whichever one was being polled when that deadline expired — so the message
+	// pointed at a healthy role while the slow one went unmentioned. This is the
+	// only caller with more than one peer; the three roles that wait for the
+	// Trusted Surface alone still call AwaitPeer directly, because a budget
+	// cannot be shared between one thing.
+	peers := []roles.Counterparty{
+		{Role: "surface", Base: e.Surface},
+		{Role: "merchant", Base: e.Merchant},
+		{Role: "credprovider", Base: e.CredProvider},
+		{Role: "mpp", Base: e.MPP},
+	}
+	if _, err := roles.AwaitPeers(ready, peers...); err != nil {
+		// Being told to stop is not a diagnosis of the counterparty. Saying
+		// "unreachable" during a deliberate shutdown sends whoever reads the
+		// log looking at a role that was fine.
+		if ctx.Err() != nil {
+			return fmt.Errorf("stopped while waiting for counterparties: %w", ctx.Err())
 		}
-		fmt.Printf("  [ ok ] %-13s %s\n", c.role, c.base)
+		return fmt.Errorf("a counterparty is unreachable or publishes a key this agent cannot read: %w", err)
+	}
+
+	// Printed after they have all answered rather than as each does, so the
+	// banner reads in the order this function declares whichever order they came
+	// up in. Four goroutines printing as they finished would scramble it, and
+	// this block is what a screenshot of a start-up shows.
+	for _, p := range peers {
+		fmt.Printf("  [ ok ] %-13s %s\n", p.Role, p.Base)
 	}
 
 	return nil
