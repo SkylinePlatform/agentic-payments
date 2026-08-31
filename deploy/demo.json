@@ -295,6 +295,8 @@
         "http://localhost:8084",
         "-collector",
         "http://127.0.0.1:8085/events",
+        "-mpp",
+        "http://localhost:8083",
         "-step",
         "3s",
         "-step-max",
