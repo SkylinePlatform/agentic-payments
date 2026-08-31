@@ -198,7 +198,9 @@ export function Consent({
     return (
       <section className="flex flex-col gap-3">
         {heading}
-        <p className="font-sans text-sm text-graphite">Asking the Trusted Surface what it would sign…</p>
+        <p className="font-sans text-sm text-graphite">
+          Asking the Trusted Surface what it would sign…
+        </p>
       </section>
     );
   }
@@ -207,15 +209,56 @@ export function Consent({
     <section className="flex flex-col gap-8">
       {heading}
 
-      <section className="flex flex-col gap-1" aria-labelledby="asked">
-        <h3 id="asked" className="font-sans text-sm text-graphite">
-          What you asked for
-        </h3>
-        <p className="font-sans text-graphite">{proposal.prompt}</p>
-        <p className="font-sans text-sm text-graphite">This text is not what you sign.</p>
-      </section>
+      {/*
+        **Two zones, and which one is drawn is decided by whether anybody typed
+        anything** — issue #314.
 
-      <section className="flex flex-col gap-2 border border-graphite/40 px-4 py-3" data-testid="signed-box" aria-labelledby="signing">
+        The first zone exists because a sentence and its interpretation are two
+        different things, and showing them side by side is what makes a misreading
+        catchable: a "summer" that quietly included September is caught by
+        comparison and by nothing else. That whole argument needs a sentence, and
+        a purchase chosen from the catalogue has none — nobody typed one,
+        `agent.ProposeStated` called no interpreter, and `proposal.prompt` is the
+        empty string all the way down the wire.
+
+        What replaces it is not nothing, because the choice still has to be shown:
+        an offer identifier is not something a person recognises, the limit is
+        theirs and the count is theirs, and every one of those is outside the
+        signed box. Drawing an empty "What you asked for" instead would be this
+        screen quoting a sentence nobody said.
+
+        Neither zone is part of what is signed and both say so, which is the one
+        thing they have in common and the reason the line below is shared.
+      */}
+      {proposal.prompt === "" ? (
+        <section className="flex flex-col gap-1" aria-labelledby="chose" data-testid="chose">
+          <h3 id="chose" className="font-sans text-sm text-graphite">
+            What you chose
+          </h3>
+          <p className="font-sans text-graphite">
+            {proposal.offer.title} &mdash; {proposal.quantity}
+            {proposal.quantity === 1 ? " item" : " items"}
+          </p>
+          <p className="font-sans text-sm text-graphite">
+            You picked this from the merchant&rsquo;s catalogue and set the limit yourself. The
+            sentences below are how the Trusted Surface words that.
+          </p>
+        </section>
+      ) : (
+        <section className="flex flex-col gap-1" aria-labelledby="asked">
+          <h3 id="asked" className="font-sans text-sm text-graphite">
+            What you asked for
+          </h3>
+          <p className="font-sans text-graphite">{proposal.prompt}</p>
+          <p className="font-sans text-sm text-graphite">This text is not what you sign.</p>
+        </section>
+      )}
+
+      <section
+        className="flex flex-col gap-2 border border-graphite/40 px-4 py-3"
+        data-testid="signed-box"
+        aria-labelledby="signing"
+      >
         <h3 id="signing" className="font-sans text-sm text-ink">
           What you are signing
         </h3>
@@ -310,7 +353,11 @@ export function Consent({
         `offers` in the product table on the same screen.
       */}
       {preference !== undefined && (
-        <section className="flex flex-col gap-1" data-testid="preferred" aria-labelledby="preferred">
+        <section
+          className="flex flex-col gap-1"
+          data-testid="preferred"
+          aria-labelledby="preferred"
+        >
           <h3 id="preferred" className="font-sans text-sm text-graphite">
             Why this offer
           </h3>
@@ -329,7 +376,11 @@ export function Consent({
         </section>
       )}
 
-      <section className="flex flex-col gap-1" data-testid="offer-card" aria-labelledby="what-it-is">
+      <section
+        className="flex flex-col gap-1"
+        data-testid="offer-card"
+        aria-labelledby="what-it-is"
+      >
         <h3 id="what-it-is" className="font-sans text-sm text-graphite">
           What {proposal.item} is
         </h3>

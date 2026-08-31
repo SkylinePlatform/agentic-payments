@@ -1,15 +1,18 @@
 import { useEffect, useState } from "react";
 
+import { Shelf } from "../../catalogue/Shelf";
 import { Table } from "../../catalogue/Table";
 import { withQuantity } from "../../catalogue/quantity";
 import {
   candidates,
   fetchExamples,
+  fetchOffers,
   interpret,
+  proposeStated,
   READING_GONE,
   RequestFailed,
 } from "../../consent/client";
-import type { Proposal, Reading } from "../../consent/model";
+import type { Offer, Proposal, Reading } from "../../consent/model";
 import { whatItPrefers, whenItBuys } from "../../consent/model";
 import { Tracker } from "../../tracker/Tracker";
 
@@ -150,6 +153,12 @@ export function Console({
   const [proposal, setProposal] = useState<Proposal | null>(null);
   // The offer a second POST /candidates is being asked for, or null — see `choose`.
   const [choosing, setChoosing] = useState<string | null>(null);
+  // What the merchant sells, or null until GET /offers has answered — issue
+  // #314. `null` is "not told yet" on `examples`' own reasoning, not "an empty
+  // shop": the two look identical on screen and only one of them is the
+  // merchant's answer.
+  const [catalogue, setCatalogue] = useState<readonly Offer[] | null>(null);
+  const [shopError, setShopError] = useState<string | null>(null);
 
   useEffect(() => {
     // Not cancelled on unmount: this component is mounted afresh each time
@@ -167,6 +176,20 @@ export function Console({
     fetchExamples()
       .then(setExamples)
       .catch(() => setExamples(null));
+  }, []);
+
+  useEffect(() => {
+    // **This failure is surfaced where the menu's is swallowed**, and the two are
+    // not the same kind of thing. An unanswered GET /examples costs a sentence
+    // about what the agent understands, and the box still works; an unanswered
+    // GET /offers is the whole screen, because under `make demo` there is nothing
+    // else to buy from. A silent empty table would be indistinguishable from a
+    // shop with nothing in it, which sends nobody to look at the merchant.
+    fetchOffers()
+      .then(setCatalogue)
+      .catch((err: unknown) => {
+        setShopError(err instanceof Error ? err.message : String(err));
+      });
   }, []);
 
   /**
@@ -268,6 +291,46 @@ export function Console({
   }
 
   /**
+   * A row picked out of the catalogue, under the limit typed on it — issue #314.
+   *
+   * The sibling of {@link choose} and deliberately not a branch inside it: the
+   * two sign different things. `choose` spends a reading, so the limits came out
+   * of a sentence and the agent is being asked which offer they apply to. This
+   * one has no reading and never will — nobody typed anything — so what reaches
+   * the Trusted Surface is the ceiling in the box, the count beside it, and the
+   * item.
+   *
+   * **The limit is sent rather than appended here**, which is the one place this
+   * departs from what `withQuantity` does one field along. `client.ts`'s own
+   * comment carries the argument: a count is a count, and a limit has to be
+   * compared against a fresh price to say whether this authorisation buys now or
+   * waits — a comparison this browser cannot make honestly, because the number on
+   * the table can be a schedule step old.
+   *
+   * `limit === null` cannot reach here: `Table` makes the Buy button inert while
+   * the box holds nothing usable, so a click is only possible with a number in
+   * hand. The guard is here anyway because the signature permits it and a
+   * proposal built from `null` would be a 422 nobody can read.
+   */
+  async function chooseStated(offerID: string, quantity: number, limit: number | null) {
+    if (limit === null || catalogue === null) return;
+    const offer = catalogue.find((o) => o.id === offerID);
+    if (offer === undefined) return;
+
+    setChoosing(offerID);
+    setError(null);
+    try {
+      onBuy(
+        await proposeStated(offerID, { amount: limit, currency: offer.price.currency }, quantity),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setChoosing(null);
+    }
+  }
+
+  /**
    * A proposal pinned to `offerID`, against `held` — and against a reading made
    * afresh if the agent is no longer holding that one.
    *
@@ -331,207 +394,245 @@ export function Console({
           </p>
         ))}
 
-      <div className="flex flex-col gap-2">
-        <label htmlFor="console-prompt" className="font-display text-lg text-ink">
-          What would you like me to buy?
-        </label>
-        {/*
-          The box's two honest states, said before anybody types rather than
-          discovered as a 422 after. GET /examples is the signal: a scripted
-          interpreter publishes its menu, a model-backed one publishes none
-          because with a model any sentence is admissible — see
-          console.Agent.Examples. Gated on the same `examples` state the menu
-          below renders from, so the two can never disagree about which world
-          this is.
-
-          **Three states rather than two**, which is the whole of why this is
-          not `examples.length > 0` on its own. The sentence is a claim about
-          the agent that is running, and the only thing entitled to make it is
-          that agent's own answer — so until one arrives, or when none does,
-          this says nothing at all. A screen that guessed here would guess
-          "reads free text" in precisely the cases where the agent is
-          unreachable, which is the box lying again with better manners.
-
-          The remaining assumption is one this repository's own wiring holds
-          up: a *non-empty* menu is unambiguous, and an *empty* one means a
-          model because `cmd/agent` builds `interpret.Demo()` for every scripted
-          interpreter it can be asked for, and that table is never empty. An
-          interpreter that published `Prompts()` with nothing in it would read
-          as model-backed here, and would be a scripted agent that refuses
-          everything — worth knowing before adding one.
-        */}
-        {examples !== null && (
-          <p className="font-sans text-sm text-ink" data-testid="interpreter-mode">
-            {examples.length > 0
-              ? "This agent only understands the sentences below. Click one, or type it exactly."
-              : "This agent reads free text. Type anything you'd like it to buy."}
-          </p>
-        )}
-        {/*
-          Disabled while a call is in flight — issue #299 names this among what
-          the old screen got wrong. The box stayed live for the whole 60-second
-          window, so a person could edit a sentence that was no longer the one
-          being read, and the answer that arrived would be about text no longer on
-          screen. What is typed is kept rather than cleared: this is a pause, not
-          a reset.
-        */}
-        <textarea
-          id="console-prompt"
-          className="min-h-28 border border-graphite/40 bg-wash px-3 py-2 font-sans text-sm text-ink disabled:cursor-not-allowed disabled:opacity-60"
-          value={prompt}
-          disabled={busy}
-          onChange={(event) => setPrompt(event.target.value)}
-        />
-        {/*
-          Set here because this is the only moment it can be: the next screen
-          shows the agent's own sentence, already signed by the time a reader
-          would otherwise learn the two were never the same text.
-        */}
-        <p className="font-sans text-xs text-graphite">
-          The agent interprets this. You sign what it understood, not this
-          text.
-        </p>
-      </div>
-
-      {examples !== null && examples.length > 0 && (
-        <div data-testid="examples" className="flex flex-col gap-2">
-          <span className="font-sans text-xs uppercase tracking-widest text-graphite">
-            Sentences the agent can answer
-          </span>
-          <div className="flex flex-wrap gap-2">
-            {examples.map((example) => (
-              <button
-                key={example}
-                type="button"
-                onClick={() => setPrompt(example)}
-                className="border border-graphite/40 px-3 py-1.5 text-left font-sans text-sm text-ink hover:bg-wash"
-              >
-                {example}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="flex flex-col gap-2">
-        <div>
-          {/*
-            Disabled while a row's proposal is in flight, and that is the same rule
-            the table's own `choosing` prop cites rather than a second one.
-            `client.ts` states it about this very button: a fresh idempotency key
-            per click "is what makes a *retry* safe, not what makes a double-click
-            safe", and "what actually prevents it is `Console.tsx` disabling the
-            button". Gating the rows and leaving this one live applied half of it.
-
-            What the other half was worth: `choose` awaits, then calls `onBuy`
-            unconditionally. An Interpret landing in that window runs
-            `setProposal(null)` and fetches a proposal for whatever the box now
-            holds, and the resolving `choose` then hands the surface a proposal
-            built from the earlier sentence — over a table that had already been
-            replaced. Nothing mis-signs, because the consent screen renders the
-            proposal it was given, but the screen a person read and the mandate
-            they are asked for would have come from two different prompts.
-
-            **Issue #299 turns one call into two, so there are more windows of
-            that kind rather than fewer, and `busy` is what closes them.** It is
-            true from the first `setPhase` to the `finally` that clears it — one
-            flag over both legs — so each of the three reads the same way:
-
-              - **A second Interpret while `/interpret` runs.** Refused: `busy`.
-              - **A second Interpret while `/candidates` runs**, which is the one
-                the split creates and the interesting one, because the reading is
-                already on screen and the screen looks finished. Refused for the
-                same reason, so what a person is reading and what the search is
-                for cannot come apart.
-              - **An Interpret while a row is in flight**, which is #301's own
-                window and now also covers the re-read `pinned` may do: `choosing`
-                is set for the whole of `choose`, and `busy` is true for the
-                re-read inside it, so either flag alone would be enough and both
-                are set.
-
-            What is deliberately *not* gated is a **second row** clicked while the
-            first is in flight. `Table` already makes every other row inert
-            through `choosing`, which is where that belongs — a row knows which
-            row it is, and this button does not.
-          */}
-          <button
-            type="button"
-            onClick={() => void discover()}
-            disabled={busy || choosing !== null || prompt.trim() === ""}
-            className="border border-ink px-4 py-2 font-sans text-sm text-ink hover:bg-ink hover:text-paper disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Interpret
-          </button>
-        </div>
-        {/*
-          `role="status"` — a polite live region — announces the phase itself, so
-          a screen-reader user is told the state changed without needing to be
-          focused on this node when it does. The house pattern, argued at
-          `routes/consent/Signing.tsx`: `role="alert"` is assertive and is for an
-          outcome, and progress is not one.
-
-          **This is the line issue #299 was filed for the absence of.** Before it,
-          `pending` was read at exactly one place — to dim the button above — so
-          three sequential network calls, one of them capped at 60 seconds, showed
-          a person nothing at all.
-
-          It is deliberately *not* connected to `/events`. The six protocol event
-          kinds are closed on purpose (`obs/event.go`, ADR 0003 Decision 2) and
-          nothing is emitted anywhere on this path; a stream that carried a
-          progress line would be making an interpretation look like a protocol
-          moment.
-        */}
-        {phase !== null && (
-          <p role="status" className="font-sans text-sm text-graphite" data-testid="happening">
-            {HAPPENING[phase]}
-          </p>
-        )}
-      </div>
-
       {/*
-        What the agent understood, drawn the moment POST /interpret answers and
-        left up while POST /candidates runs — issue #299's more interesting half.
+        **The box is drawn only for an agent that can actually read one**, and
+        issue #314 is where that stopped being a detail. `make demo` runs
+        `-interpreter scripted`, which knows three sentences — so for every other
+        sentence the box was a control that took input and answered 422, on a
+        screen whose whole job is to be understood. A person did not choose what
+        to buy there; they guessed which of three sentences the agent had been
+        told about.
 
-        Every line here is a fact **nothing signs**: the quantity, the trigger and
-        the preference are exactly what `Consent.tsx` puts outside its signed box.
-        The limits are absent on purpose and the last line says so rather than
-        leaving a reader to notice — a screen that showed limits of its own would
-        be showing sentences the Trusted Surface did not write, which is what
-        `constraint/architecture.test.ts` exists to prevent.
+        `GET /examples` already told the two worlds apart, and the screen already
+        read it — to word a paragraph. It now decides whether the box exists at
+        all: a non-empty menu is a scripted agent, and the catalogue below is the
+        only honest way in; an empty one is a model-backed agent, where any
+        sentence is admissible and free text is the whole point of running
+        `make demo-live`.
+
+        **`null` draws nothing either**, on the three-state reasoning the
+        paragraph inside already spells out. An unanswered `GET /examples` is not
+        an answer, and a box drawn on a guess would be drawn precisely when the
+        agent is unreachable.
+
+        The sentence chips went with the box rather than moving above the table.
+        They were a menu for a control that no longer exists in the world that had
+        one, and in the world that keeps the box there is no menu to show —
+        `console.Agent.Examples` answers nothing for a model-backed interpreter,
+        because any sentence is admissible.
       */}
-      {reading !== null && (
-        <div className="flex flex-col gap-1" data-testid="reading">
-          <h2 className="font-display text-sm font-medium uppercase tracking-widest text-ink">
-            What the agent understood
-          </h2>
-          <p className="font-sans text-sm text-ink">Quantity {reading.quantity}</p>
-          <p className="font-sans text-sm text-ink">{whenItBuys(reading.trigger).sentence}</p>
-          {preference !== undefined && (
-            <p className="font-sans text-sm text-ink">{preference.sentence}</p>
+      {examples !== null && examples.length === 0 && (
+        <div className="flex flex-col gap-6" data-testid="free-text">
+          <div className="flex flex-col gap-2">
+            <label htmlFor="console-prompt" className="font-display text-lg text-ink">
+              What would you like me to buy?
+            </label>
+            {/*
+            The box's two honest states, said before anybody types rather than
+            discovered as a 422 after. GET /examples is the signal: a scripted
+            interpreter publishes its menu, a model-backed one publishes none
+            because with a model any sentence is admissible — see
+            console.Agent.Examples. Gated on the same `examples` state the menu
+            below renders from, so the two can never disagree about which world
+            this is.
+
+            **Three states rather than two**, which is the whole of why this is
+            not `examples.length > 0` on its own. The sentence is a claim about
+            the agent that is running, and the only thing entitled to make it is
+            that agent's own answer — so until one arrives, or when none does,
+            this says nothing at all. A screen that guessed here would guess
+            "reads free text" in precisely the cases where the agent is
+            unreachable, which is the box lying again with better manners.
+
+            The remaining assumption is one this repository's own wiring holds
+            up: a *non-empty* menu is unambiguous, and an *empty* one means a
+            model because `cmd/agent` builds `interpret.Demo()` for every scripted
+            interpreter it can be asked for, and that table is never empty. An
+            interpreter that published `Prompts()` with nothing in it would read
+            as model-backed here, and would be a scripted agent that refuses
+            everything — worth knowing before adding one.
+          */}
+            {examples !== null && (
+              <p className="font-sans text-sm text-ink" data-testid="interpreter-mode">
+                {examples.length > 0
+                  ? "This agent only understands the sentences below. Click one, or type it exactly."
+                  : "This agent reads free text. Type anything you'd like it to buy."}
+              </p>
+            )}
+            {/*
+            Disabled while a call is in flight — issue #299 names this among what
+            the old screen got wrong. The box stayed live for the whole 60-second
+            window, so a person could edit a sentence that was no longer the one
+            being read, and the answer that arrived would be about text no longer on
+            screen. What is typed is kept rather than cleared: this is a pause, not
+            a reset.
+          */}
+            <textarea
+              id="console-prompt"
+              className="min-h-28 border border-graphite/40 bg-wash px-3 py-2 font-sans text-sm text-ink disabled:cursor-not-allowed disabled:opacity-60"
+              value={prompt}
+              disabled={busy}
+              onChange={(event) => setPrompt(event.target.value)}
+            />
+            {/*
+            Set here because this is the only moment it can be: the next screen
+            shows the agent's own sentence, already signed by the time a reader
+            would otherwise learn the two were never the same text.
+          */}
+            <p className="font-sans text-xs text-graphite">
+              The agent interprets this. You sign what it understood, not this text.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <div>
+              {/*
+              Disabled while a row's proposal is in flight, and that is the same rule
+              the table's own `choosing` prop cites rather than a second one.
+              `client.ts` states it about this very button: a fresh idempotency key
+              per click "is what makes a *retry* safe, not what makes a double-click
+              safe", and "what actually prevents it is `Console.tsx` disabling the
+              button". Gating the rows and leaving this one live applied half of it.
+
+              What the other half was worth: `choose` awaits, then calls `onBuy`
+              unconditionally. An Interpret landing in that window runs
+              `setProposal(null)` and fetches a proposal for whatever the box now
+              holds, and the resolving `choose` then hands the surface a proposal
+              built from the earlier sentence — over a table that had already been
+              replaced. Nothing mis-signs, because the consent screen renders the
+              proposal it was given, but the screen a person read and the mandate
+              they are asked for would have come from two different prompts.
+
+              **Issue #299 turns one call into two, so there are more windows of
+              that kind rather than fewer, and `busy` is what closes them.** It is
+              true from the first `setPhase` to the `finally` that clears it — one
+              flag over both legs — so each of the three reads the same way:
+
+                - **A second Interpret while `/interpret` runs.** Refused: `busy`.
+                - **A second Interpret while `/candidates` runs**, which is the one
+                  the split creates and the interesting one, because the reading is
+                  already on screen and the screen looks finished. Refused for the
+                  same reason, so what a person is reading and what the search is
+                  for cannot come apart.
+                - **An Interpret while a row is in flight**, which is #301's own
+                  window and now also covers the re-read `pinned` may do: `choosing`
+                  is set for the whole of `choose`, and `busy` is true for the
+                  re-read inside it, so either flag alone would be enough and both
+                  are set.
+
+              What is deliberately *not* gated is a **second row** clicked while the
+              first is in flight. `Table` already makes every other row inert
+              through `choosing`, which is where that belongs — a row knows which
+              row it is, and this button does not.
+            */}
+              <button
+                type="button"
+                onClick={() => void discover()}
+                disabled={busy || choosing !== null || prompt.trim() === ""}
+                className="border border-ink px-4 py-2 font-sans text-sm text-ink hover:bg-ink hover:text-paper disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Interpret
+              </button>
+            </div>
+            {/*
+            `role="status"` — a polite live region — announces the phase itself, so
+            a screen-reader user is told the state changed without needing to be
+            focused on this node when it does. The house pattern, argued at
+            `routes/consent/Signing.tsx`: `role="alert"` is assertive and is for an
+            outcome, and progress is not one.
+
+            **This is the line issue #299 was filed for the absence of.** Before it,
+            `pending` was read at exactly one place — to dim the button above — so
+            three sequential network calls, one of them capped at 60 seconds, showed
+            a person nothing at all.
+
+            It is deliberately *not* connected to `/events`. The six protocol event
+            kinds are closed on purpose (`obs/event.go`, ADR 0003 Decision 2) and
+            nothing is emitted anywhere on this path; a stream that carried a
+            progress line would be making an interpretation look like a protocol
+            moment.
+          */}
+            {phase !== null && (
+              <p role="status" className="font-sans text-sm text-graphite" data-testid="happening">
+                {HAPPENING[phase]}
+              </p>
+            )}
+          </div>
+
+          {reading !== null && (
+            <div className="flex flex-col gap-1" data-testid="reading">
+              <h2 className="font-display text-sm font-medium uppercase tracking-widest text-ink">
+                What the agent understood
+              </h2>
+              <p className="font-sans text-sm text-ink">Quantity {reading.quantity}</p>
+              <p className="font-sans text-sm text-ink">{whenItBuys(reading.trigger).sentence}</p>
+              {preference !== undefined && (
+                <p className="font-sans text-sm text-ink">{preference.sentence}</p>
+              )}
+              <p className="font-sans text-xs text-graphite">
+                None of this is signed. The limits it read are worded by the Trusted Surface, and
+                you read them there before you sign anything.
+              </p>
+            </div>
           )}
-          <p className="font-sans text-xs text-graphite">
-            None of this is signed. The limits it read are worded by the Trusted
-            Surface, and you read them there before you sign anything.
-          </p>
         </div>
       )}
 
       {full && (
         <p className="font-sans text-sm text-ink">
-          The agent is already watching as many purchases as it can take on.
-          Wait for one to finish, then try again.
+          The agent is already watching as many purchases as it can take on. Wait for one to finish,
+          then try again.
         </p>
       )}
 
       {error !== null && <p className="font-sans text-sm text-broken">{error}</p>}
 
-      {proposal !== null && (
+      {/*
+        **Two tables, and they are not the same table drawn twice.**
+
+        With a proposal in hand the limits came out of a sentence: the search has
+        already narrowed the shop to what that sentence describes, and the Trusted
+        Surface is about to render the ceiling it read. A limit box on those rows
+        would take a number that reaches no mandate, which is worse than no box.
+
+        Without one — every purchase under `make demo` — the rows are the whole
+        catalogue and the ceiling is the person's own. That is what `stated`
+        carries into {@link Table}, and it is why `Shelf` owns the filters:
+        sixty-three rows need finding in, and three rows a sentence settled on do
+        not.
+
+        The proposal's table wins while there is one, rather than sitting beside
+        the catalogue, because a screen showing both would be offering two ways to
+        buy the same thing under different limits with nothing saying which is
+        which.
+      */}
+      {proposal !== null ? (
         <div className="flex flex-col gap-2" data-testid="product-table-section">
           <h2 className="font-display text-sm font-medium uppercase tracking-widest text-ink">
             What the merchant sells
           </h2>
-          <Table proposal={proposal} onChoose={choose} choosing={choosing} />
+          <Table
+            offers={proposal.offers ?? [proposal.offer]}
+            stated={false}
+            onChoose={(offerID, quantity) => void choose(offerID, quantity)}
+            choosing={choosing}
+          />
         </div>
+      ) : (
+        <>
+          {shopError !== null && (
+            <p className="font-sans text-sm text-broken" data-testid="shop-error">
+              The merchant did not say what it sells: {shopError}
+            </p>
+          )}
+          {catalogue !== null && (
+            <Shelf
+              offers={catalogue}
+              onChoose={(offerID, quantity, limit) => void chooseStated(offerID, quantity, limit)}
+              choosing={choosing}
+            />
+          )}
+        </>
       )}
 
       <Tracker />

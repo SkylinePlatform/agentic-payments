@@ -56,7 +56,14 @@ function renderConsole(refusal: Refusal | null = null) {
  * that actually mean something.
  */
 function stubFetch(routes: Record<string, unknown>) {
-  const withDefaults: Record<string, unknown> = { "/watches": { watches: [] }, ...routes };
+  const withDefaults: Record<string, unknown> = {
+    "/watches": { watches: [] },
+    // The shop window, defaulted for the same reason /watches is: every render of
+    // this component asks for it, and a test about the box has no business
+    // restating what the merchant sells.
+    "/offers": aCatalogue(),
+    ...routes,
+  };
   vi.stubGlobal("fetch", (url: string) => {
     const fixture = withDefaults[url];
     if (fixture === undefined) {
@@ -115,6 +122,43 @@ function aReading(): Reading {
   };
 }
 
+/**
+ * What `GET /offers` answers with — issue #314's fixture, and the console's first
+ * call.
+ *
+ * Two rows on two shelves, because the catalogue table filters by category and a
+ * fixture with one shelf could not tell a filter that works from one that draws
+ * every row whatever is pressed.
+ */
+function aCatalogue() {
+  return {
+    offers: [
+      {
+        id: "gtin:05012345678900",
+        category: "bicycles",
+        title: "Vitesse Urbain 7",
+        description: "Seven-speed city bicycle",
+        image_url: "/images/catalogue/bicycle.svg",
+        retailer: "Sever Cycles",
+        price: { amount: 45000, currency: "USD" },
+        step: 0,
+        final: false,
+      },
+      {
+        id: "route:BEG-PMI",
+        category: "flights",
+        title: "Belgrade to Palma de Mallorca",
+        description: "Direct, 2h 40m",
+        image_url: "/images/catalogue/flight.svg",
+        retailer: "Adria Wings",
+        price: { amount: 24000, currency: "USD" },
+        step: 0,
+        final: false,
+      },
+    ],
+  };
+}
+
 /** A JSON response, which is what every fixture below is. */
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status });
@@ -149,6 +193,7 @@ function stubDiscovery(answers: {
   vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
     if (url === "/watches") return Promise.resolve(json({ watches: [] }));
     if (url === "/examples") return Promise.resolve(json({ examples: [] }));
+    if (url === "/offers") return Promise.resolve(json(aCatalogue()));
 
     const body = JSON.parse(String(init?.body ?? "{}")) as { prompt?: string } & Search;
     if (url === "/interpret") {
@@ -174,24 +219,52 @@ afterEach(() => {
 });
 
 describe("the shopping console", () => {
-  it("offers the sentences the agent is scripted for, before anybody is refused", async () => {
+  it("draws no box at all for a scripted agent, and the catalogue instead — issue #314", async () => {
+    // `make demo` runs -interpreter scripted, which knows three sentences. The
+    // box used to be drawn anyway, with those three offered beneath it as a menu
+    // — so a person did not choose what to buy, they guessed which of three
+    // sentences the agent had been told about, and everything else they typed
+    // came back 422.
+    //
+    // A non-empty menu is now the signal that there is nothing worth typing into,
+    // and the shop window is the way in.
     stubFetch({ "/examples": { examples: ["buy a flight to Palma under $200, this summer"] } });
     renderConsole();
 
-    expect(await screen.findByText(/buy a flight to Palma under \$200, this summer/)).toBeTruthy();
-    // Said before the box is touched, not learned from a 422 afterwards.
-    expect(await screen.findByText(/only understands the sentences below/i)).toBeTruthy();
+    expect(await screen.findByTestId("shelf")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByTestId("free-text")).toBeNull());
+    expect(
+      screen.queryByRole("textbox"),
+      "a control that takes a sentence and refuses all but three of them is worse than no control",
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("examples"),
+      "the menu went with the box: it was a list of the only sentences that control accepted",
+    ).toBeNull();
   });
 
-  it("shows nothing when the interpreter has no menu", async () => {
-    // -interpreter gemini or -interpreter auto with a key: any sentence is
-    // admissible, so there is no menu and inventing one would offer sentences
-    // nothing is scripted for.
+  it("draws the box for an agent that reads free text, with no menu beside it", async () => {
+    // -interpreter gemini, or -interpreter auto with a key: any sentence is
+    // admissible, so there is a box and no menu — inventing one would offer
+    // sentences nothing is scripted for.
     stubFetch({ "/examples": { examples: [] } });
     renderConsole();
 
-    await waitFor(() => expect(screen.queryByTestId("examples")).toBeNull());
+    expect(await screen.findByRole("textbox")).toBeTruthy();
     expect(await screen.findByText(/reads free text/i)).toBeTruthy();
+    expect(screen.queryByTestId("examples")).toBeNull();
+  });
+
+  it("draws the catalogue beneath the box for an agent that reads free text", async () => {
+    // Both, and in that order: `make demo-live` is the one target where a
+    // sentence is worth typing, and it is also the one where the shop is widest.
+    // Taking the table away there would make free text the only way in, which is
+    // the defect this issue removed pointed the other way.
+    stubFetch({ "/examples": { examples: [] } });
+    renderConsole();
+
+    expect(await screen.findByRole("textbox")).toBeTruthy();
+    expect(await screen.findByTestId("shelf")).toBeTruthy();
   });
 
   it("promises nothing about the box until the agent has said what it understands", async () => {
@@ -199,14 +272,21 @@ describe("the shopping console", () => {
     // be one it invented. Deterministic on purpose: a test that raced the
     // resolved fetch would pass on a slow machine and prove nothing on a fast
     // one.
-    vi.stubGlobal("fetch", (url: string) =>
-      url === "/examples"
-        ? new Promise(() => {})
-        : Promise.resolve(new Response(JSON.stringify({ watches: [] }))),
-    );
+    vi.stubGlobal("fetch", (url: string) => {
+      if (url === "/examples") return new Promise(() => {});
+      if (url === "/offers") return Promise.resolve(json(aCatalogue()));
+      return Promise.resolve(json({ watches: [] }));
+    });
     renderConsole();
 
-    await screen.findByRole("textbox");
+    // The shop window is what proves this screen rendered at all — without it, an
+    // absent box would be indistinguishable from a component that threw.
+    await screen.findByTestId("shelf");
+    expect(
+      screen.queryByRole("textbox"),
+      "an unanswered call is not evidence, and a box drawn on a guess would be drawn precisely " +
+        "when the agent is unreachable",
+    ).toBeNull();
     expect(
       screen.queryByTestId("interpreter-mode"),
       "the first paint has no answer to base a claim on, and an unanswered call is not evidence",
@@ -218,23 +298,88 @@ describe("the shopping console", () => {
     // failed /examples resolved to an empty menu, and an empty menu is how a
     // model-backed interpreter looks — so a browser that could not reach the
     // agent at all promised free text on its behalf.
-    stubFetch({
-      "/examples": { status: 500, body: "the agent is not up" },
-      "/interpret": { status: 422, body: 'interpret: no script for this prompt: "buy a boat"' },
-    });
+    stubFetch({ "/examples": { status: 500, body: "the agent is not up" } });
     renderConsole();
 
-    // Driving a whole interpretation is what makes this deterministic: by the
-    // time the agent's own refusal is on screen, the failed /examples has long
-    // since settled, so an absent claim is an absent claim rather than a race.
-    await userEvent.type(screen.getByRole("textbox"), "buy a boat");
-    await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
-    await screen.findByText(/no script for this prompt/);
+    // Waiting on the shop window is what makes this deterministic: it is a second
+    // call to the same unreachable agent, so by the time its answer is on screen
+    // the failed /examples has long since settled — and an absent claim is an
+    // absent claim rather than a race.
+    //
+    // It used to drive a whole interpretation to get that guarantee. It cannot
+    // any more, and the reason is the finding rather than an inconvenience: with
+    // no answer from /examples there is no box to type into, which is exactly
+    // what this test now asserts one line down.
+    await screen.findByTestId("shelf");
 
+    expect(
+      screen.queryByRole("textbox"),
+      "an agent that did not answer is not an agent that answered 'anything goes', and a box " +
+        "drawn here would be this browser promising free text on an unreachable agent's behalf",
+    ).toBeNull();
     expect(
       screen.queryByTestId("interpreter-mode"),
       "an agent that did not answer is not an agent that answered 'anything goes'",
     ).toBeNull();
+  });
+
+  it("buys a catalogue row under the limit typed on it, and sends no sentence — issue #314", async () => {
+    // The whole of the stated path: a row, a count, a ceiling, and no prompt
+    // anywhere. What the agent answers is a proposal whose `prompt` is the empty
+    // string, which is what the consent screen keys its zone off.
+    const sent: unknown[] = [];
+    vi.stubGlobal("fetch", (url: string, init?: RequestInit) => {
+      if (url === "/watches") return Promise.resolve(json({ watches: [] }));
+      if (url === "/examples")
+        return Promise.resolve(
+          json({ examples: ["buy me this bicycle when it drops below $400"] }),
+        );
+      if (url === "/offers") return Promise.resolve(json(aCatalogue()));
+      if (url === "/proposals") {
+        sent.push(JSON.parse(String(init?.body ?? "{}")));
+        return Promise.resolve(json({ ...aProposal(), prompt: "" }));
+      }
+      return Promise.resolve(new Response("not stubbed: " + url, { status: 404 }));
+    });
+    renderConsole();
+
+    await screen.findByTestId("shelf");
+    const rows = within(screen.getByTestId("product-table"));
+    const limit = rows.getAllByLabelText(/most you will pay/i)[0];
+    await userEvent.clear(limit);
+    await userEvent.type(limit, "380.00");
+    await userEvent.click(rows.getAllByRole("button", { name: /^buy$/i })[0]);
+
+    await waitFor(() => expect(bought).toHaveLength(1));
+    expect(
+      sent[0],
+      "the limit goes to the agent in minor units of the offer's own currency: the trigger has " +
+        "to be derived against a fresh price, and this table's number can be a schedule step old",
+    ).toEqual({
+      item: "gtin:05012345678900",
+      limit: { amount: 38000, currency: "USD" },
+      quantity: 1,
+    });
+    expect(
+      bought[0]?.prompt,
+      "nobody typed anything, and a sentence invented here would reach the consent screen under " +
+        "a heading claiming the user asked for it",
+    ).toBe("");
+  });
+
+  it("says the merchant did not answer rather than drawing an empty shop", async () => {
+    // An unanswered GET /examples costs a sentence and the box still works. An
+    // unanswered GET /offers is the whole screen under `make demo`, and a silent
+    // empty table is indistinguishable from a shop with nothing in it — which
+    // sends nobody to look at the merchant.
+    stubFetch({
+      "/examples": { examples: ["buy me this bicycle when it drops below $400"] },
+      "/offers": { status: 502, body: "the merchant did not answer" },
+    });
+    renderConsole();
+
+    expect(await screen.findByTestId("shop-error")).toBeTruthy();
+    expect(screen.queryByTestId("product-table")).toBeNull();
   });
 
   it("renders the agent's own sentence on a refusal and keeps what was typed", async () => {
@@ -244,7 +389,9 @@ describe("the shopping console", () => {
     });
     renderConsole();
 
-    const box = screen.getByRole("textbox");
+    // Awaited rather than taken synchronously: the box exists only once
+    // GET /examples has said this agent reads free text — issue #314.
+    const box = await screen.findByRole("textbox");
     await userEvent.type(box, "buy a boat");
     await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
 
@@ -267,7 +414,10 @@ describe("the shopping console", () => {
     });
     renderConsole();
 
-    await userEvent.type(await screen.findByRole("textbox"), "find and buy telescopic ladders, cheapest");
+    await userEvent.type(
+      await screen.findByRole("textbox"),
+      "find and buy telescopic ladders, cheapest",
+    );
     await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
 
     expect(await screen.findByText(/already watching as many/i)).toBeTruthy();
@@ -283,11 +433,17 @@ describe("the shopping console", () => {
     });
     renderConsole();
 
-    await userEvent.type(screen.getByRole("textbox"), "find and buy telescopic ladders, cheapest");
+    await userEvent.type(
+      await screen.findByRole("textbox"),
+      "find and buy telescopic ladders, cheapest",
+    );
     await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
 
     expect(await screen.findByText("Telescopic ladder")).toBeTruthy();
-    expect(bought, "nothing is signed by fetching a proposal — only a row's own Buy does that").toEqual([]);
+    expect(
+      bought,
+      "nothing is signed by fetching a proposal — only a row's own Buy does that",
+    ).toEqual([]);
   });
 
   it("hands the proposal to the Trusted Surface only once a row is bought, with the chosen quantity signed as a constraint", async () => {
@@ -298,7 +454,10 @@ describe("the shopping console", () => {
     });
     renderConsole();
 
-    await userEvent.type(screen.getByRole("textbox"), "find and buy telescopic ladders, cheapest");
+    await userEvent.type(
+      await screen.findByRole("textbox"),
+      "find and buy telescopic ladders, cheapest",
+    );
     await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
     await screen.findByText("Telescopic ladder");
 
@@ -604,7 +763,9 @@ describe("the shopping console", () => {
     await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
 
     const reading = await screen.findByRole("status");
-    expect(reading.textContent, "the slow leg, named while it runs").toMatch(/reading your sentence/i);
+    expect(reading.textContent, "the slow leg, named while it runs").toMatch(
+      /reading your sentence/i,
+    );
     expect(
       (screen.getByRole("textbox") as HTMLTextAreaElement).disabled,
       "and the box is inert, so nobody edits a sentence that is no longer the one in flight",
@@ -693,7 +854,10 @@ describe("the shopping console", () => {
     await userEvent.click((await screen.findAllByRole("button", { name: /buy/i }))[1]);
 
     expect(await screen.findByText(/matched no offer/)).toBeTruthy();
-    expect(readings, "the sentence is read once, because reading it again answers nothing").toHaveLength(1);
+    expect(
+      readings,
+      "the sentence is read once, because reading it again answers nothing",
+    ).toHaveLength(1);
     expect(bought, "and nothing is handed on").toEqual([]);
   });
 

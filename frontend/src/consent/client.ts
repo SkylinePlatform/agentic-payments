@@ -28,7 +28,8 @@
  * `/watches` entries — so the paths below are exactly what the browser asks for.
  */
 
-import type { Authorised, Previewed, Proposal, Reading } from "./model";
+import type { Amount } from "../protocol";
+import type { Authorised, Offer, Previewed, Proposal, Reading } from "./model";
 
 /**
  * A fresh idempotency key.
@@ -263,6 +264,47 @@ export async function candidates(interpretationID: string, item?: string): Promi
 }
 
 /**
+ * What the merchant sells — `GET /offers`.
+ *
+ * The first call this screen makes, and the only one it makes before anybody has
+ * done anything. **Nothing it returns has been evaluated against any limit**: it
+ * is a shop window, and a row appearing here is no statement that a mandate would
+ * authorise buying it. Whether one would is settled at the Trusted Surface,
+ * against limits a person actually signed for, three screens later.
+ *
+ * A `GET`, so no idempotency key: the prices move on a schedule and a remembered
+ * answer is a table of numbers that have stopped being true.
+ */
+export async function fetchOffers(): Promise<readonly Offer[]> {
+  const body = await unwrap<{ offers: Offer[] }>(await request("/offers"));
+  return body.offers;
+}
+
+/**
+ * A proposal for an offer somebody picked, under a limit they typed — `POST
+ * /proposals` with no prompt.
+ *
+ * **The limit is sent rather than appended here**, and that is a deliberate
+ * departure from what `catalogue/quantity.ts` does one field along. Appending
+ * `quantity lte n` in the browser is safe because a count is a count; a limit is
+ * not, because the agent has to compare it against a *fresh* price to say whether
+ * this authorisation buys now or waits, and the number on this table can be a
+ * schedule step old. So the comparison happens where the fresh price is, and the
+ * trigger comes back as a reading the agent made rather than a claim this browser
+ * supplied.
+ *
+ * `limit` is in minor units of the offer's own currency. The agent refuses a
+ * mismatch rather than converting: nothing in this system holds exchange rates.
+ */
+export async function proposeStated(
+  item: string,
+  limit: Amount,
+  quantity: number,
+): Promise<Proposal> {
+  return post<Proposal>("/proposals", { item, limit, quantity });
+}
+
+/**
  * What the surface would sign, before it signs anything — `POST
  * /authorise/preview`. Only the three fields the surface's `authorisation`
  * decode reads: the offer and the free-slot count in `p` are this screen's own
@@ -311,7 +353,11 @@ export async function refuse(p: Proposal, digest: string): Promise<void> {
  * key regardless of why the previous attempt failed, because nothing about
  * retrying it can produce a second signature.
  */
-export async function authorise(p: Proposal, digest: string, idempotencyKey?: string): Promise<Authorised> {
+export async function authorise(
+  p: Proposal,
+  digest: string,
+  idempotencyKey?: string,
+): Promise<Authorised> {
   return post<Authorised>(
     "/authorise",
     {

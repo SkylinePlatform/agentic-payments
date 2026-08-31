@@ -238,6 +238,10 @@ export default defineConfig(({ mode }) => {
         "/interpret": { target: agent, changeOrigin: true },
         "/candidates": { target: agent, changeOrigin: true },
         "/examples": { target: agent, changeOrigin: true },
+        // What the merchant sells — issue #314. The console's first screen is a
+        // table rather than a box, so this is the one call the Buying screen
+        // makes before anybody has done anything.
+        "/offers": { target: agent, changeOrigin: true },
       },
     },
 
