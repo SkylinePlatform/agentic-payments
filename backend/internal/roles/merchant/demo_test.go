@@ -667,10 +667,11 @@ func TestAJitteredScheduleKeepsTheCatalogueAndInventoryAgreeing(t *testing.T) {
 //
 // The merchant's schedule starts at boot (NewDemoService reads the clock at
 // construction) and, after #163, spends its whole one-shot sequence in a few
-// seconds. `agent-watch`'s own scripted run wins that race — it takes its
-// baseline within half a second of the merchant starting, see
-// deploy/demo.json's `$comment` — but a watch a person starts from the browser
-// a minute later does not: every later poll sees the same frozen last price,
+// seconds. The boot watch this manifest used to start won that race — it took
+// its baseline within half a second of the merchant starting — but a watch a
+// person starts from the browser a minute later does not, and since issue #313
+// took the boot watch away that later watch is the only kind there is: every
+// later poll sees the same frozen last price,
 // `q.Step == last` never gets to be false, and internal/agent's Watch.Run
 // never attempts anything (see that file's baseline logic, roughly
 // `last := baseline.Step` and the skip on no change).

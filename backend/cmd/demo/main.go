@@ -15,14 +15,14 @@
 // It hands one named process extra args on top of whatever the manifest
 // already gives it, repeatable for more than one process or more than one
 // flag against the same one. `make demo-live`, beside `make demo` in the
-// Makefile, is this flag applied twice: `-interpreter auto` to agent-watch,
-// so the agent reads a sentence nobody scripted, and `-catalogue-live
+// Makefile, is this flag applied twice: `-interpreter auto` to the agent,
+// so it reads a sentence nobody scripted, and `-catalogue-live
 // dummyjson` to the merchant, so that sentence arrives at a shelf nobody
-// wrote down. The same eight processes deploy/demo.json names, unmodified,
+// wrote down. The same nine processes deploy/demo.json names, unmodified,
 // with two of them handed flags the manifest itself does not carry.
 //
 // **Repeatable is what that costs and what it buys.** It was one flag when
-// this was written; a second manifest would by now have to enumerate the eight
+// this was written; a second manifest would by now have to enumerate the nine
 // processes again for each combination somebody wanted, while -append composes
 // by being given twice. What each appended flag then makes true of the run is
 // printed under its process in the startup banner — see demo.Process.Appended,
@@ -30,14 +30,14 @@
 // what it was.
 //
 // That is the alternative to a second manifest, and the reason is drift: a
-// file enumerating the same eight processes a second time is a file that can
+// file enumerating the same nine processes a second time is a file that can
 // say something different from the first the moment either one changes and
 // the other does not, and nothing would notice. -append cannot drift that
 // way, because there is only one topology — this binary loads it once, and
 // what -append does to it is orthogonal to what the topology says: it does
 // not know what a process does with the args it hands over, only the process
 // this run's caller named and the args they gave it. See
-// deploy/demo.json's own $comment for the argument that decided agent-watch
+// deploy/demo.json's own $comment for the argument that decided the agent
 // is the one process `make demo-live` reaches for, and why the flag it
 // appends is not written into that file directly.
 //

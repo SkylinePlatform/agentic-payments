@@ -25,7 +25,7 @@ import (
 //     describing no route at all, because GET /checkout?from=BEG&to=PMI would
 //     otherwise answer a refusal for every route on earth from a merchant that
 //     had reported itself healthy. A public test shop sells no flights, so
-//     `-catalogue-live` alone would fail agent-buy on every run.
+//     `-catalogue-live` alone would fail a Human Present purchase on every run.
 //   - It would not even test the thing the issue is about. What makes a
 //     model-backed interpreter worth having is that one sentence, evaluated by
 //     one verifier, narrows a shelf its author never read. Two shelves that are

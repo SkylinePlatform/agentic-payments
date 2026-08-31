@@ -93,7 +93,7 @@ type Process struct {
 	// deploy/demo.json would be a claim about a run that had not happened yet.
 	//
 	// It exists so the banner can say what this run actually is. `make
-	// demo-live` now appends to two processes rather than one — agent-watch
+	// demo-live` now appends to two processes rather than one — the agent
 	// gets an interpreter that reads free text, the merchant gets a shop
 	// fetched at start-up — and the demonstration those two produce is not the
 	// one every committed screenshot shows. A viewer who cannot see which flags
@@ -189,21 +189,21 @@ func (p Process) Path(root string) string { return filepath.Join(root, p.Dir) }
 // # Why this exists instead of a second manifest
 //
 // `make demo-live` runs the exact stack `make demo` runs, with two processes
-// handed a flag the manifest does not carry: agent-watch gets `-interpreter
+// handed a flag the manifest does not carry: the agent gets `-interpreter
 // auto`, and — since issue #243 — the merchant gets `-catalogue-live dummyjson`.
 // It was one process when this was written, and that it is now two is the
 // argument rather than a footnote: a second manifest would have had to enumerate
-// the eight processes again for each combination somebody wanted, while this
+// the nine processes again for each combination somebody wanted, while this
 // composes by being applied twice.
 //
 // The two shapes considered were a second manifest file and an override applied
-// here; a second file enumerating the same eight processes is the one that can
+// here; a second file enumerating the same nine processes is the one that can
 // drift from this one the moment either changes and the other does not, so it
 // lost. Append is
 // the whole of the other shape: it does not know what a process does with the
 // args it hands over, only that a name in this manifest gets some appended to
 // what it already has. deploy/demo.json's own $comment carries the argument
-// for *why* agent-watch is the one process that gets this, and why the flag
+// for *why* the agent is the one process that gets this, and why the flag
 // it appends is not written into that file directly.
 //
 // # Fails on an unknown name, at the same moment Validate would

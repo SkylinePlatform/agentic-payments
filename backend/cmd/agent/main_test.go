@@ -199,9 +199,13 @@ func TestOnceAndAddrCannotBothBeGiven(t *testing.T) {
 // nobody uses.
 //
 // The three rows above the last are what keep the refusal from over-reaching, and
-// each is an invocation somebody actually runs: -addr alone is agent-watch, -buy
-// alone is agent-buy, and -buy with -once is the documented smoke test that prints
-// the receipts and gives the shell back.
+// each is an invocation somebody actually runs: -addr alone is deploy/demo.json's
+// one agent, -buy alone is `bin/agent -buy` from a terminal, and -buy with -once is
+// the documented smoke test that prints the receipts and gives the shell back.
+//
+// Two of those three used to be manifest entries. Issue #313 took the -buy one out
+// of the manifest, so that row is now an invocation a person types rather than one
+// `make demo` runs; the refusal it holds open is unchanged either way.
 func TestBuyAndAddrCannotBothBeGiven(t *testing.T) {
 	t.Parallel()
 
@@ -218,11 +222,11 @@ func TestBuyAndAddrCannotBothBeGiven(t *testing.T) {
 		},
 		{
 			name: "addr alone", addr: "127.0.0.1:8086",
-			why: "this is deploy/demo.json's agent-watch, and refusing it would take down `make demo`",
+			why: "this is deploy/demo.json's agent, and refusing it would take down `make demo`",
 		},
 		{
 			name: "buy alone", buy: true,
-			why: "this is deploy/demo.json's agent-buy, which has no business listening and does not",
+			why: "this is `bin/agent -buy` from a terminal, which has no business listening and does not",
 		},
 		{
 			name: "buy with once", buy: true, once: true,
@@ -370,8 +374,14 @@ func TestAutoNamesWhichArmItChose(t *testing.T) {
 }
 
 // makeDemoLiveAppend finds what `make demo-live`'s recipe in the repository's
-// Makefile passes to cmd/demo's `-append` flag for agent-watch, or fails the
+// Makefile passes to cmd/demo's `-append` flag for the agent, or fails the
 // test with why it could not.
+//
+// The process is named `agent`, and was `agent-watch` until issue #313 took the
+// boot watch out of the manifest: with `-watch` gone, a name stating the flag it
+// ran would have been the drift deploy/demo.json's own naming rule exists to
+// prevent. The literal below has to match that file, which is the point of
+// reading the Makefile rather than restating what it says.
 //
 // "../../../Makefile" is the same three levels shippedTopology in
 // internal/demo climbs from backend/internal/demo to reach deploy/demo.json —
@@ -385,9 +395,9 @@ func makeDemoLiveAppend(t *testing.T) string {
 	match := regexp.MustCompile(`(?m)^demo-live:.*\n(?:\t.*\n)*`).FindString(string(raw))
 	require.NotEmpty(t, match, "no demo-live target found in the Makefile — has it been renamed?")
 
-	value := regexp.MustCompile(`-append\s+agent-watch=-interpreter,(\S+)`).FindStringSubmatch(match)
+	value := regexp.MustCompile(`-append\s+agent=-interpreter,(\S+)`).FindStringSubmatch(match)
 	require.Len(t, value, 2,
-		"demo-live's recipe does not pass -append agent-watch=-interpreter,<value> in the shape this test expects")
+		"demo-live's recipe does not pass -append agent=-interpreter,<value> in the shape this test expects")
 	return value[1]
 }
 
@@ -738,8 +748,9 @@ func TestCounterpartiesDownDenyTheConsoleThatABootWatchDoesNot(t *testing.T) {
 // TestCounterpartiesDownStopTheProcessBeforeItAttemptsAPurchase is the second
 // invocation, and it is what stops the two from being flattened into one.
 //
-// `bin/agent -buy` with no -addr is what deploy/demo.json's agent-buy runs, and it
-// is the one path #257 touched that stays exactly as it was: ready gates it, and
+// `bin/agent -buy` with no -addr is the Human Present flow from a terminal — it was
+// deploy/demo.json's agent-buy until issue #313 took that entry out, and it is the
+// one path #257 touched that stays exactly as it was: ready gates it, and
 // the purchase is never attempted against a stack that is down. What the assertion
 // pins is which failure comes back — the counterparty that did not answer, not the
 // quote that could not be taken.
@@ -909,16 +920,32 @@ func TestTheShippedTopologyAsksForNothingThisBuildRefuses(t *testing.T) {
 	// The check above is a NoError, so it passes on flags nobody read: an
 	// invocation that reported nothing would leave it comparing two zero values
 	// and calling that agreement. What grounds it is that this topology
-	// demonstrably has both an agent that serves and an agent that buys — the
-	// $comment in that file is largely about why they are two processes — so
-	// reading neither is reading nothing.
+	// demonstrably has an agent that serves, so a run of the loop that read
+	// nothing is distinguishable from one that read the flags and found them
+	// agreeable.
+	//
+	// **It used to be grounded on both halves, and issue #313 took one away.**
+	// The manifest had a second agent process passing -buy, so the loop could
+	// assert it had read a -buy as well as an -addr. That process is gone —
+	// `make demo` starts no purchase of its own — so `buying` is zero here for a
+	// reason rather than a defect, and asserting otherwise would be this test
+	// demanding a boot purchase the demonstration deliberately no longer makes.
+	//
+	// The subject is unchanged and the check is still live: what this test is
+	// about is that nothing in the manifest asks for the pair flagsAgree refuses,
+	// and adding -buy to the entry below still turns it red. `buying` is counted
+	// rather than dropped so that the argument above stays measurable from the
+	// code — a future manifest that reintroduced a buying agent would want the
+	// assertion back, and the counter is what a reader checks it against.
 	require.NotZero(t, started,
 		"no process in the manifest starts this binary, so the loop above checked nothing")
 	assert.NotZero(t, serving,
 		"nothing in the topology was read as passing -addr, so the flags above were not read at all "+
 			"— `make demo` serves the console the frontend proxies to")
-	assert.NotZero(t, buying,
-		"nothing in the topology was read as passing -buy, which is the flag this refusal is about")
+	assert.Zero(t, buying,
+		"the manifest starts an agent with -buy, which since #313 it must not: `make demo` comes up "+
+			"with an empty screen, and a Human Present purchase nobody asked for is exactly what that "+
+			"issue removed")
 }
 
 // TestEveryWayOfWritingAFlagIsRead is what makes invocation's claim about the

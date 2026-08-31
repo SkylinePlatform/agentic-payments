@@ -297,7 +297,7 @@ func run() error {
 	//
 	// **What decides it is what a console serving anyway would cost.** This
 	// process's /healthz answers from the handler and knows nothing about the
-	// merchant, so agent-watch would pass its health check; demo.Runner settles
+	// merchant, so the agent would pass its health check; demo.Runner settles
 	// each process's state during startup and demo.Banner prints it once, neither
 	// revised afterwards. The demonstration would therefore report the agent **up**
 	// over a stack nobody can transact on. A banner that lies is worse than a
@@ -325,9 +325,8 @@ func run() error {
 	}
 
 	// Only where a prompt will actually be read. The Human Present flow never
-	// calls an interpreter, and deploy/demo.json's agent-buy is that process —
-	// a line there would say something true about a collaborator it does not
-	// have.
+	// calls an interpreter, and `bin/agent -buy` is that invocation — a line
+	// there would say something true about a collaborator it does not have.
 	if *watch || *addr != "" {
 		fmt.Printf("  [ ok ] %-13s %s\n", "interpreter", reading)
 	}
@@ -587,7 +586,7 @@ func geminiInterpreter(apiKey, model string, clk authz.Clock) (interpret.IntentI
 //
 // # Why the expiry case is here rather than left to the default arm
 //
-// It is not reached by `make demo` — deploy/demo.json gives agent-watch -addr,
+// It is not reached by `make demo` — deploy/demo.json gives its one agent -addr,
 // which routes through serveConsole, where console.Run records the terminal
 // state instead. It is reached by `bin/agent -watch` with no -addr, which the
 // package doc above documents as a supported way to run this binary. Every word
