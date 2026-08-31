@@ -238,6 +238,44 @@ func TestAProposalFromAStatedLimitNamesNoSentence(t *testing.T) {
 	c.watcher.AssertNumberOfCalls(t, "ProposeStated", 1)
 }
 
+// TestTheReadPathIgnoresAQuantityTheBrowserSent is the claim the request struct
+// makes about its own `quantity` field, made breakable.
+//
+// The comment there says accepting a count on the read path "would let a browser
+// overwrite what the sentence said it wanted", and until this it was true by
+// construction and by nothing else: the branch simply did not read the field, so
+// a branch that started reading it would go green.
+//
+// It matters because of what the two paths mean. On the stated path the count is
+// the person's — they typed it into the row beside the limit. On the read path it
+// is the *interpretation's*, which is issue #133's whole subject: a sentence
+// naming two tickets produces `quantity lte 2`, that number is what the consent
+// screen shows, and a request field quietly winning over it would put a count on
+// screen that the sentence never asked for.
+func TestTheReadPathIgnoresAQuantityTheBrowserSent(t *testing.T) {
+	t.Parallel()
+
+	// The request below sends 99, which nothing in this fixture set uses, so a
+	// handler that started reading the field would answer with it and nothing
+	// else would have to change for this to notice.
+	c := newConsole(t, nothing)
+
+	var got proposedBody
+	status := postAnswering(t, "read-path-quantity", c.url+"/proposals", map[string]any{
+		"prompt":   "find and buy telescopic ladders, cheapest",
+		"quantity": 99,
+	}, &got)
+	require.Equal(t, http.StatusOK, status, "a sentence has to propose at all")
+
+	assert.NotEqual(t, 99, got.Quantity,
+		"the count on the read path is the one the sentence named, and a browser that could "+
+			"overwrite it would put a basket size on the consent screen that nothing interpreted")
+	assert.Equal(t, 1, got.Quantity,
+		"proposal() names no count, so what comes back is `resolved`'s one — pinned rather than "+
+			"left at NotEqual, because a handler answering some third number would also satisfy "+
+			"the line above")
+}
+
 // TestABasketBelowNoneIsRefusedRatherThanResolved is the gap `resolved` opens.
 //
 // Zero means "the caller stated no count" and becomes one, which is right: a

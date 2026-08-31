@@ -641,7 +641,9 @@ func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
 
 		// Quantity is only read on the stated path. On the read path the count
 		// comes from the interpretation, and accepting one here would let a
-		// browser overwrite what the sentence said it wanted.
+		// browser overwrite what the sentence said it wanted — issue #133's
+		// subject, one field along. TestTheReadPathIgnoresAQuantityTheBrowserSent
+		// is what fails if this branch starts reading it.
 		Quantity int `json:"quantity"`
 	}
 	if !roles.DecodeJSON(w, r, &req) {
