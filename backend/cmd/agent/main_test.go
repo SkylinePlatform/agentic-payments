@@ -739,7 +739,9 @@ func TestCounterpartiesDownDenyTheConsoleThatABootWatchDoesNot(t *testing.T) {
 		"the diagnosis has to be the counterparty rather than the console's own address, or the "+
 			"failure was reported and carried past and this process is serving")
 	assert.Contains(t, err.Error(), "surface",
-		"which counterparty did not answer is what sends the reader to the right process")
+		"which counterparties did not answer is what sends the reader to the right process — "+
+			"since #87 the error names every one of them rather than whichever was being polled "+
+			"when the shared deadline ran out, and `surface` is the first of the four")
 }
 
 // TestCounterpartiesDownStopTheProcessBeforeItAttemptsAPurchase is the second
@@ -767,7 +769,9 @@ func TestCounterpartiesDownStopTheProcessBeforeItAttemptsAPurchase(t *testing.T)
 	assert.Contains(t, err.Error(), "unreachable",
 		"the counterparties are what failed, and a quote attempted anyway reports the dial instead")
 	assert.Contains(t, err.Error(), "surface",
-		"ready stops at the first counterparty that did not answer, which is before any merchant is quoted")
+		"ready waits for all four together and reports every one that did not answer — since #87 "+
+			"it no longer stops at the first, so this is the surface appearing in a list of four "+
+			"rather than the loop having halted on it")
 }
 
 // TestAnInterpreterThatCannotBeBuiltDeniesTheConsole is the sixth site out of

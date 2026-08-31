@@ -992,22 +992,55 @@ func ready(ctx context.Context, e agent.Endpoints, wait time.Duration) error {
 	ready, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 
-	for _, c := range []struct{ role, base string }{
-		{"surface", e.Surface},
-		{"merchant", e.Merchant},
-		{"credprovider", e.CredProvider},
-		{"mpp", e.MPP},
-	} {
-		if _, err := roles.AwaitPeer(ready, c.base); err != nil {
-			// Being told to stop is not a diagnosis of the counterparty. Saying
-			// "unreachable" during a deliberate shutdown sends whoever reads the
-			// log looking at a role that was fine.
-			if ctx.Err() != nil {
-				return fmt.Errorf("stopped while waiting for %s: %w", c.role, ctx.Err())
-			}
-			return fmt.Errorf("%s is unreachable or publishes a key this agent cannot read: %w", c.role, err)
+	// **Together rather than in turn**, which is issue #87. Waiting in sequence
+	// under one deadline let the first peer spend everybody's budget, and named
+	// whichever one was being polled when that deadline expired — so the message
+	// pointed at a healthy role while the slow one went unmentioned. This is the
+	// only caller with more than one peer; the three roles that wait for the
+	// Trusted Surface alone still call AwaitPeer directly, because a budget
+	// cannot be shared between one thing.
+	peers := []roles.Counterparty{
+		{Role: "surface", Base: e.Surface},
+		{Role: "merchant", Base: e.Merchant},
+		{Role: "credprovider", Base: e.CredProvider},
+		{Role: "mpp", Base: e.MPP},
+	}
+	// **Said before the wait, because the wait is now silent.** Sequentially each
+	// peer printed its own line as it answered, so a staggered start-up showed
+	// them ticking off; concurrently there is nothing to show until they have all
+	// finished, and up to `wait` of saying nothing reads as a hung process rather
+	// than a waiting one. One line, before, is what replaces it — and unlike four
+	// goroutines printing as they finish, it cannot come out in a different order
+	// on two runs. Under `make demo` the roles are health-gated before this
+	// binary starts, so this line and the block below arrive together.
+	fmt.Printf("  waiting    %d counterparties, up to %s\n", len(peers), wait)
+
+	if _, err := roles.AwaitPeers(ready, peers...); err != nil {
+		// Being told to stop is not a diagnosis of the counterparty. Saying
+		// "unreachable" during a deliberate shutdown sends whoever reads the
+		// log looking at a role that was fine.
+		if ctx.Err() != nil {
+			return fmt.Errorf("stopped while waiting for counterparties: %w", ctx.Err())
 		}
-		fmt.Printf("  [ ok ] %-13s %s\n", c.role, c.base)
+		// Plural, and the newline is deliberate. errors.Join separates its
+		// entries with "\n", so a run with two peers down renders as a list —
+		// and a list that begins on the same line as this sentence reads as one
+		// long sentence whose second half is a URL.
+		return fmt.Errorf(
+			"one or more counterparties are unreachable or publish a key this agent cannot read:\n%w", err)
+	}
+
+	// Printed after they have all answered rather than as each does, so the
+	// banner reads in the order this function declares whichever order they came
+	// up in. Four goroutines printing as they finished would scramble it, and
+	// this block is what a screenshot of a start-up shows.
+	//
+	// **Nothing is printed for a peer that failed**, and that is not a gap: the
+	// error names every one that did not answer, so a reader holding this list of
+	// four knows the rest were fine. Printing partial successes as well would say
+	// the same thing twice, in a run that is about to return an error anyway.
+	for _, p := range peers {
+		fmt.Printf("  [ ok ] %-13s %s\n", p.Role, p.Base)
 	}
 
 	return nil

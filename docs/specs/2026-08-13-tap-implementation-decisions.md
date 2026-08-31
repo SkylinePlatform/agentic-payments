@@ -105,15 +105,29 @@ Whatever implements this has to be selective at that choke point on purpose.
 
 **There are two outbound paths to the merchant, not one.** `internal/agent/purchase.go`
 carries the purchase leg, but `cmd/agent`'s `ready` fetches the merchant's
-`/.well-known/jwks.json` through `roles.AwaitPeer`, which accepts no client and falls
-back to `http.DefaultClient` (`internal/roles/jwks.go:112`), and a readiness failure is
-deliberately fatal. With `-merchant` pointing at the proxy, an unsigned probe is refused
-and the agent exits before any purchase. So this decision costs a signature-capable
-`AwaitPeer` — `roles.Peer` already carries a `Client` field; only `AwaitPeer`'s
-signature drops it — while `cmd/merchant`, `cmd/credprovider` and `cmd/mpp`, which
-await the *surface*, stay unsigned. The error message at `cmd/agent/main.go:992` has to
-learn to tell a 401 from an unreachable peer, or the first person to hit this spends the
-afternoon on the merchant's key set.
+`/.well-known/jwks.json` through `internal/roles`' peer-waiting, which accepts no
+client and falls back to `http.DefaultClient`, and a readiness failure is deliberately
+fatal. With `-merchant` pointing at the proxy, an unsigned probe is refused and the
+agent exits before any purchase. So this decision costs a signature-capable wait —
+`roles.Peer` already carries a `Client` field; only the waiting helpers' signatures
+drop it — while `cmd/merchant`, `cmd/credprovider` and `cmd/mpp`, which await the
+*surface*, stay unsigned. `ready`'s error has to learn to tell a 401 from an
+unreachable peer, or the first person to hit this spends the afternoon on the
+merchant's key set.
+
+**There are two helpers to change, not one, and issue #87 is why.** `cmd/agent`'s
+`ready` no longer calls `roles.AwaitPeer`: it waits for its four counterparties
+concurrently through `roles.AwaitPeers`, which is the one that has to take the client,
+and which passes it down to `AwaitPeer` for each peer. Changing `AwaitPeer` alone would
+leave the agent's actual path unsigned while every test of the singular helper went
+green — and the agent is the only caller this decision is about, since the three roles
+that await the surface stay unsigned either way. TAP also *adds* peers to that list —
+the registry (#26) and the proxy (#30) — which is the same reason the plural helper
+exists at all.
+
+*Symbols rather than line numbers, since this paragraph carried two of them and #87
+moved both. A spec citing a line is a spec that goes stale on the next edit to a file it
+does not own.*
 
 **What forced the choice.** Those two endpoints are what AP2 key resolution needs. If
 the agent's `-merchant` flag points at the proxy and the proxy rejects unsigned
@@ -228,7 +242,7 @@ idempotency middleware's body buffering. A second key from the existing
 `crypto.Store` — `authz.EdDSA` is already a row in its algorithm table and `Slot`'s
 own documentation names `"tap-agent"` as its example. A signing round-tripper at
 `internal/agent/purchase.go`'s outbound choke point, selective per decision 2, and the
-client `roles.AwaitPeer` has to start taking. `cmd/registry` with
+client `roles.AwaitPeers` has to start taking, and pass down to `AwaitPeer`. `cmd/registry` with
 register and resolve. `cmd/proxy` as an `httputil.ReverseProxy` refusing with
 `agent_unknown` against `agent_unverified` — **both codes already exist in the
 generated enum, already render as 401, and are already classified in
