@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import type { Offer, Proposal } from "../consent/model";
+import type { Offer } from "../consent/model";
 import { Table } from "./Table";
 
 function anOffer(overrides: Partial<Offer> = {}): Offer {
@@ -19,25 +19,9 @@ function anOffer(overrides: Partial<Offer> = {}): Offer {
   };
 }
 
-function aProposal(overrides: Partial<Proposal> = {}): Proposal {
-  const offer = anOffer();
-  return {
-    prompt: "buy me this bicycle when it drops below $400",
-    constraints: [{ op: "lte", field: "amount", value: 40000 }],
-    agent_key: {} as Proposal["agent_key"],
-    item: offer.id,
-    offer,
-    offers: [offer],
-    watch_slots_free: 8,
-    quantity: 1,
-    trigger: "conditional",
-    ...overrides,
-  };
-}
-
 describe("the product table", () => {
   it("shows what the merchant published for each offer the search found", () => {
-    render(<Table proposal={aProposal()} onChoose={vi.fn()} choosing={null} />);
+    render(<Table offers={[anOffer()]} stated={false} onChoose={vi.fn()} choosing={null} />);
 
     expect(screen.getByText("Bicycle")).toBeTruthy();
     expect(screen.getByText("Two Wheels Ltd")).toBeTruthy();
@@ -49,28 +33,26 @@ describe("the product table", () => {
 
   it("renders one row per offer the search found, not only the one settled on", () => {
     const other = anOffer({ id: "gtin:0002", title: "A different bicycle" });
-    render(
-      <Table
-        proposal={aProposal({ offers: [anOffer(), other] })}
-        onChoose={vi.fn()}
-        choosing={null}
-      />,
-    );
+    render(<Table offers={[anOffer(), other]} stated={false} onChoose={vi.fn()} choosing={null} />);
 
     expect(screen.getByText("Bicycle")).toBeTruthy();
     expect(screen.getByText("A different bicycle")).toBeTruthy();
   });
 
-  it("falls back to the single settled offer when the search list is absent", () => {
-    const { offers: _offers, ...withoutOffers } = aProposal();
-    render(<Table proposal={withoutOffers as Proposal} onChoose={vi.fn()} choosing={null} />);
+  it("draws the one row it was given", () => {
+    // The fallback this used to assert — `proposal.offers ?? [proposal.offer]` —
+    // moved to `Console.tsx` with issue #314, because this component no longer
+    // takes a proposal: the catalogue table has no proposal to fall back from.
+    // What is left here is that one offer draws one row, which is the property
+    // the fallback existed to produce.
+    render(<Table offers={[anOffer()]} stated={false} onChoose={vi.fn()} choosing={null} />);
 
     expect(screen.getByText("Bicycle")).toBeTruthy();
   });
 
   it("reports the offer and the quantity a row was bought at, rather than building a proposal", async () => {
     const onChoose = vi.fn();
-    render(<Table proposal={aProposal()} onChoose={onChoose} choosing={null} />);
+    render(<Table offers={[anOffer()]} stated={false} onChoose={onChoose} choosing={null} />);
 
     const quantityBox = screen.getByLabelText(/quantity/i);
     await userEvent.clear(quantityBox);
@@ -80,13 +62,16 @@ describe("the product table", () => {
     expect(onChoose).toHaveBeenCalledTimes(1);
     expect(
       onChoose.mock.calls[0],
-      "which offer and how many is all this component knows; turning that into something signable needs the prompt, which only the console holds",
-    ).toEqual(["gtin:05012345678900", 3]);
+      "which offer, how many and — on the catalogue's rows — the ceiling typed on this one is " +
+        "all this component knows; turning that into something signable is the console's, " +
+        "because only it holds the reading or the currency. `null` because these rows came from " +
+        "a sentence, so there was no limit box to type into",
+    ).toEqual(["gtin:05012345678900", 3, null]);
   });
 
   it("defaults the quantity to one when the row is bought without being touched", async () => {
     const onChoose = vi.fn();
-    render(<Table proposal={aProposal()} onChoose={onChoose} choosing={null} />);
+    render(<Table offers={[anOffer()]} stated={false} onChoose={onChoose} choosing={null} />);
 
     await userEvent.click(screen.getByRole("button", { name: /buy/i }));
 
@@ -106,7 +91,7 @@ describe("the product table", () => {
     // mandate would be signed and then refused, which is the defect #298 was
     // filed about wearing a different hat.
     const onChoose = vi.fn();
-    render(<Table proposal={aProposal()} onChoose={onChoose} choosing={null} />);
+    render(<Table offers={[anOffer()]} stated={false} onChoose={onChoose} choosing={null} />);
 
     await userEvent.clear(screen.getByLabelText(/quantity/i));
     await userEvent.click(screen.getByRole("button", { name: /buy/i }));
@@ -126,7 +111,7 @@ describe("the product table", () => {
     // and turning this into a validation gate would put a decision in the browser
     // that belongs to the verifier.
     const onChoose = vi.fn();
-    render(<Table proposal={aProposal()} onChoose={onChoose} choosing={null} />);
+    render(<Table offers={[anOffer()]} stated={false} onChoose={onChoose} choosing={null} />);
 
     const quantityBox = screen.getByLabelText(/quantity/i);
     await userEvent.clear(quantityBox);
@@ -152,9 +137,7 @@ describe("the product table", () => {
     const settled = anOffer();
     const other = anOffer({ id: "gtin:0002", title: "A bicycle the search did not settle on" });
     const onChoose = vi.fn();
-    render(
-      <Table proposal={aProposal({ offers: [settled, other] })} onChoose={onChoose} choosing={null} />,
-    );
+    render(<Table offers={[settled, other]} stated={false} onChoose={onChoose} choosing={null} />);
 
     const buyButtons = screen.getAllByRole("button", { name: /buy/i });
     expect(buyButtons).toHaveLength(2);
@@ -177,10 +160,8 @@ describe("the product table", () => {
     // ones a copy-paste would bring back.
     render(
       <Table
-        proposal={aProposal({
-          offers: [anOffer(), anOffer({ id: "gtin:0002", title: "Another" })],
-          rank: { by: "price", direction: "ascending" },
-        })}
+        offers={[anOffer(), anOffer({ id: "gtin:0002", title: "Another" })]}
+        stated={false}
         onChoose={vi.fn()}
         choosing={null}
       />,
@@ -194,7 +175,7 @@ describe("the product table", () => {
     // `amount` bounds the total: merchant.Catalogue.Subject is handed
     // Price × Quantity. Three of a $450 offer under a $500 cap was a mandate
     // that could only be refused, and it used to be signed first.
-    render(<Table proposal={aProposal()} onChoose={vi.fn()} choosing={null} />);
+    render(<Table offers={[anOffer()]} stated={false} onChoose={vi.fn()} choosing={null} />);
 
     expect(
       screen.queryByText(/×/),
@@ -215,11 +196,7 @@ describe("the product table", () => {
     const settled = anOffer();
     const other = anOffer({ id: "gtin:0002", title: "Another" });
     render(
-      <Table
-        proposal={aProposal({ offers: [settled, other] })}
-        onChoose={vi.fn()}
-        choosing="gtin:0002"
-      />,
+      <Table offers={[settled, other]} stated={false} onChoose={vi.fn()} choosing="gtin:0002" />,
     );
 
     const buyButtons = screen.getAllByRole("button", { name: /buy/i });
@@ -236,7 +213,8 @@ describe("the product table", () => {
   it("shows whether a price can still move, so a row not yet worth its cap still reads as one worth watching", () => {
     render(
       <Table
-        proposal={aProposal({ offers: [anOffer({ step: 0, final: false })] })}
+        offers={[anOffer({ step: 0, final: false })]}
+        stated={false}
         onChoose={vi.fn()}
         choosing={null}
       />,
@@ -245,11 +223,52 @@ describe("the product table", () => {
 
     render(
       <Table
-        proposal={aProposal({ offers: [anOffer({ step: 2, final: true })] })}
+        offers={[anOffer({ step: 2, final: true })]}
+        stated={false}
         onChoose={vi.fn()}
         choosing={null}
       />,
     );
     expect(screen.getByText(/final price/i)).toBeTruthy();
+  });
+});
+
+describe("which controls a row carries", () => {
+  // The `stated` prop's doc comment claims that a limit box on a proposal's rows
+  // "would let somebody type a ceiling that never reaches a mandate". Nothing
+  // asserted the box was absent, so deleting every `{stated && …}` block left the
+  // whole suite green — the value assertions above catch the `null`, not the
+  // control.
+
+  it("carries no limit box on rows a sentence narrowed to", () => {
+    render(<Table offers={[anOffer()]} stated={false} onChoose={vi.fn()} choosing={null} />);
+
+    expect(
+      screen.queryByLabelText(/most you will pay/i),
+      "the limits came out of the sentence and the Trusted Surface is about to render them; a " +
+        "box here takes a number that reaches no mandate",
+    ).toBeNull();
+    expect(screen.queryByTestId("limit-effect")).toBeNull();
+    expect(screen.queryByText(/your limit/i)).toBeNull();
+  });
+
+  it("carries one on rows the buyer sets the limit on", () => {
+    render(<Table offers={[anOffer()]} stated={true} onChoose={vi.fn()} choosing={null} />);
+
+    expect(screen.getByLabelText(/most you will pay/i)).toBeTruthy();
+    expect(screen.getByTestId("limit-effect")).toBeTruthy();
+  });
+
+  it("reports the ceiling it was given, alongside the offer and the count", async () => {
+    const onChoose = vi.fn();
+    render(<Table offers={[anOffer()]} stated={true} onChoose={onChoose} choosing={null} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /^buy$/i }));
+
+    expect(
+      onChoose.mock.calls[0]?.[2],
+      "a third argument of null here is the catalogue path silently losing the one number it " +
+        "exists to collect",
+    ).not.toBeNull();
   });
 });

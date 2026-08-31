@@ -123,9 +123,26 @@ flowchart LR
     the categories it sells`"] --> I
     I -->|"`typed constraints,
     schema-validated`"| TS
+    C["`a catalogue row
+    and a limit typed on it`"] -->|"`typed constraints,
+    no interpreter`"| TS
     TS -->|"user signature"| SIGN
     SIGN --> VER
 ```
+
+**The second arrow into the Trusted Surface is issue #314's, and it is the one
+`make demo` uses.** A person picking a row out of the merchant's catalogue and
+typing a ceiling has stated the limits rather than implied them, so there is
+nothing to interpret and no model is called — `agent.ProposeStated` builds the
+three constraints directly. That path is not a way *around* the boundary above:
+the constraints still go to the Trusted Surface, are still rendered by its own
+renderer, and are still signed there. What changes is only which side of the
+`LLM permitted` box the reading happens on, and on this path it happens in a
+person's head.
+
+The interpreted path is the one `make demo-live` exercises, and it is the harder
+and more interesting of the two — which is why everything about the boundary is
+written against it.
 
 The shelves are the second arrow in, and they are data rather than a judgement:
 `GET /shelves` on the merchant answers with the categories it sells, the agent

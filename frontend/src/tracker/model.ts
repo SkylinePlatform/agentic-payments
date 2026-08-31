@@ -209,6 +209,20 @@ export interface RunSummary {
   readonly correlation_id: string;
   readonly typed: string;
   readonly item: string;
+  /**
+   * The merchant's own name for `item` — `console.summary.Title`.
+   *
+   * **Nothing signs it and nothing can**, which is why it is here rather than in
+   * `protocol/`: no verifier sees a title and no constraint addresses one. It is
+   * the shop's word, relayed, exactly as issue #242 treats it on the three-lane
+   * view's head.
+   *
+   * Empty when the merchant could not be asked or answered with something that
+   * is not a name — `agent.Client.Describe` refuses rather than truncating — and
+   * a row draws nothing for it in that case. It never substitutes for `item`,
+   * and `item` never substitutes for it.
+   */
+  readonly title: string;
   readonly quantity: number;
   readonly expires_at: string;
   /** `runState.String()` — read through {@link runStatus}, never compared as a literal. */
@@ -223,6 +237,8 @@ export interface RunView {
   readonly typed: string;
   readonly signed: readonly string[];
   readonly item: string;
+  /** See {@link RunSummary.title}. */
+  readonly title: string;
   readonly quantity: number;
   readonly expires_at: string;
   readonly state: string;

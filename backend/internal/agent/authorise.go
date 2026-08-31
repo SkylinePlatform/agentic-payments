@@ -60,6 +60,15 @@ const (
 // merchant.ShelvesPath.
 const shelvesPath = "/shelves"
 
+// merchantCataloguePath is where the merchant publishes everything it sells.
+//
+// A fifth copy, held to merchant.CataloguePath by the same test. It is nearer the
+// parameters' failure mode than the path above it: Catalogue reports what it could
+// not fetch rather than treating silence as an empty shop, so a typo here is a
+// console that says the merchant did not answer — loud, and blaming the wrong
+// party, which is exactly what the comparison exists to prevent.
+const merchantCataloguePath = "/catalogue"
+
 // itemIDField is the one field this file writes.
 //
 // **Two string prefixes used to sit beside it, and issue #132 is the whole story
@@ -112,6 +121,42 @@ const shelvesPath = "/shelves"
 //     would have had part of every interpretation silently withheld from the
 //     merchant.
 const itemIDField = "item.id"
+
+// The two fields ProposeStated writes, and the only other constraint.Field names
+// this package spells.
+//
+// They are here beside itemIDField rather than inline for its reason: a field
+// name written at a call site is a copy of the registry that nothing compares,
+// and a misspelling produces `constraint_type_unknown` at the moment of purchase
+// — after a person has read the sentence it rendered as and signed it, which is
+// the failure interpret.Validate exists to move earlier. TestTheAgentSpellsTheFieldsTheRegistryKnows
+// is what holds all three against internal/core/authz/constraint.
+//
+// The read path writes neither: an interpreter answers with whatever fields it
+// read, and narrow appends only the item. These two exist because on the stated
+// path there is no interpreter to have produced them, and the caller must not be
+// the one naming a field — a browser that could name a field could name one the
+// verifier does not know, and the refusal would arrive three parties away.
+const (
+	amountField   = "amount"
+	quantityField = "quantity"
+)
+
+// ErrLimitUnusable means a caller stated a limit this agent cannot act on.
+//
+// A sentinel rather than a plain error, and the reason is which status a browser
+// gets. console.refuse answers its default arm with 502 — *the merchant did not
+// answer* — which is the wrong thing to tell somebody about a request that never
+// reached a merchant. It is the same defect POST /watches has for a missing
+// prompt, fixed there at the handler edge; a limit is checked deep enough inside
+// ProposeStated that the edge cannot see it, so it travels as a sentinel and the
+// handler maps it to 422 alongside the interpretation failures.
+//
+// The four things it covers are all facts about the request: no ceiling, a
+// ceiling of nothing, a ceiling in a currency the offer is not priced in, and a
+// basket whose total no amount can hold. None of them is a counterparty
+// misbehaving, and none of them is fixed by trying again.
+var ErrLimitUnusable = errors.New("agent: the limit stated cannot be acted on")
 
 // ErrNothingToBuy means discovery found no candidate to watch.
 //
@@ -336,7 +381,21 @@ func (c *Client) Authorise(ctx context.Context, in Intent) (Authorisation, error
 // whether to watch something benefits from knowing whether the number in front
 // of them can still move.
 type Offer struct {
-	ID          string           `json:"id"`
+	ID string `json:"id"`
+	// Category is the shelf the merchant keeps this on, in the shop's own
+	// spelling — and it is the one field here that is *not* presentation.
+	//
+	// item.category is a registered constraint field, so a verifier reads this
+	// vocabulary and a mandate can be written against it; merchant.Offer's own
+	// comment lists it beside ID and Attributes as what authorisation sees,
+	// against Title, Description, ImageURL and Retailer which it does not. It is
+	// carried here so a person can filter a catalogue by shelf without the
+	// console inventing a second vocabulary for the shelves — GET /shelves
+	// publishes the same strings, and the two have to agree.
+	//
+	// Nothing in this package reads it, which is the rule the fields below are
+	// held to as well. Carrying is not reading.
+	Category    string           `json:"category"`
 	Title       string           `json:"title"`
 	Description string           `json:"description"`
 	ImageURL    string           `json:"image_url"`
@@ -530,6 +589,213 @@ func (c *Client) Propose(ctx context.Context, in Intent) (Proposal, error) {
 		return Proposal{}, err
 	}
 	return c.ProposeFrom(ctx, in, interpretation)
+}
+
+// ProposeStated settles on an offer the caller has already chosen, under a limit
+// the caller has already set, reading no sentence and calling no interpreter.
+//
+// # Read against Propose, which is the whole of what this is
+//
+// Propose exists because somebody typed words and the limits have to be inferred
+// from them — which is the interesting and the dangerous half, and why the
+// Trusted Surface renders what was inferred before anybody signs. This is the
+// other case: a person picked a row out of a table and typed a number into it,
+// so there is nothing to infer and nothing an interpreter could add. Under
+// `make demo` that is every purchase, because the scripted table knows three
+// sentences and a shop of sixty-three offers is not three sentences.
+//
+// **No interpreter is called, and hard rule 2 is why that is stated rather than
+// implied.** An LLM may appear only in internal/agent/interpret, and the rule
+// this path has to respect is the narrower one underneath it: a limit reaching a
+// verifier must be one a person actually agreed to. Here it is one they typed.
+//
+// # The constraints are still this agent's, and that is the point of the route
+//
+// The browser could have appended `amount lte …` itself — src/catalogue/quantity.ts
+// already appends `quantity lte n`, with its own argument for why that is right —
+// and the reason it does not is Trigger. Whether this authorisation buys now or
+// waits is decided by comparing the limit against what the offer costs, and the
+// price on a table in a browser can be a step old while the one settle just read
+// cannot. So the comparison happens on the side that has the fresh number, and
+// the answer travels as a reading this agent made rather than as a claim the
+// caller supplied.
+//
+// The set is exactly three constraints and there is no fourth by construction:
+// what to buy, what it may cost, and how many. narrow appends the first, so the
+// item is pinned by the same function and in the same spelling every other path
+// uses — which is what keeps `the item is …` on the consent screen identical
+// whichever way the purchase was proposed.
+//
+// # What it refuses
+//
+// A limit in a currency the offer is not priced in, because this agent holds no
+// rates and a cap of 400 USD says nothing about a price of 380 EUR — the same
+// refusal merchant.CatalogueFile makes one layer down, where a single currency
+// for the whole file is argued for on exactly these terms. A limit of zero or
+// less, which is not a limit anybody meant. And a quantity below one, which is
+// not a basket.
+//
+// It does not refuse a limit below every price the schedule will ever reach.
+// That is a purchase that never happens, and it is a legitimate thing to
+// authorise: a watch that buys nothing is the honest outcome of a limit nothing
+// met, and refusing it here would be this agent deciding whether somebody's price
+// is realistic.
+func (c *Client) ProposeStated(
+	ctx context.Context, in Intent, limit generated.Amount, quantity int,
+) (Proposal, error) {
+	var out Proposal
+
+	switch {
+	case in.Item == "":
+		return out, fmt.Errorf("%w: nothing was chosen to buy", ErrNothingToBuy)
+	case limit.Amount <= 0:
+		return out, fmt.Errorf("%w: a limit of %d is not a limit anybody meant",
+			ErrLimitUnusable, limit.Amount)
+	case limit.Currency == "":
+		return out, fmt.Errorf("%w: a limit with no currency cannot be compared to a price",
+			ErrLimitUnusable)
+	case quantity < 1:
+		return out, fmt.Errorf("%w: a basket of %d is not a basket", ErrLimitUnusable, quantity)
+	}
+
+	// nil constraints and a named item: candidates turns that into a search on
+	// item.id alone, which is the same substitution Describe relies on. Rank is
+	// zero because ranking chooses among candidates and a named item has one.
+	item, offer, offers, err := c.settle(ctx, nil, in.Item, interpret.Rank{})
+	if err != nil {
+		return out, err
+	}
+
+	if offer.Price.Currency != limit.Currency {
+		return out, fmt.Errorf("%w: %s is priced in %s and the limit is in %s, and this agent holds no rates",
+			ErrLimitUnusable, item, offer.Price.Currency, limit.Currency)
+	}
+
+	// **The limit is the order total**, because that is what the constraint it
+	// becomes actually bounds — see triggerFor, and merchant.Catalogue.Subject,
+	// which is handed Price × Quantity. Nothing here multiplies the limit: the
+	// number the person typed is the ceiling on the purchase, and this is only
+	// working out what the purchase costs today so the trigger can be read
+	// against the same thing a verifier will.
+	//
+	// Refused rather than wrapped, on merchant.Catalogue.Quote's own reasoning
+	// one party along: generated.Amount holds minor units in an int, so a large
+	// enough quantity wraps, and a wrapped total is a negative or tiny price that
+	// a cap constraint waves through.
+	line := offer.Price.Amount * quantity
+	if quantity != 0 && (line/quantity != offer.Price.Amount || line < 0) {
+		return out, fmt.Errorf("%w: %d of %s overflows what an amount can hold",
+			ErrLimitUnusable, quantity, item)
+	}
+
+	amount := amountField
+	count := quantityField
+	ceiling, err := openValue(limit)
+	if err != nil {
+		return out, err
+	}
+	basket, err := openValue(quantity)
+	if err != nil {
+		return out, err
+	}
+	stated := []generated.Constraint{
+		{Op: "lte", Field: &amount, Value: ceiling},
+		{Op: "lte", Field: &count, Value: basket},
+	}
+
+	return Proposal{
+		Item:        item,
+		Offer:       offer,
+		Offers:      offers,
+		Constraints: narrow(stated, item),
+		AgentKey:    in.AgentKey,
+		Quantity:    quantity,
+		Trigger:     triggerFor(limit, generated.Amount{Amount: line, Currency: offer.Price.Currency}),
+		// No preference: nothing was ranked, because nothing was chosen from.
+		// applies() makes the same call for a caller-named item on the read
+		// path, and reporting one here would be a false account of a real
+		// choice in exactly the way its comment describes.
+	}, nil
+}
+
+// openValue turns a Go value into the open value a constraint carries, by
+// putting it through JSON exactly as the wire will.
+//
+// # This is not ceremony, and a struct genuinely does not work here
+//
+// generated.Constraint.Value is `any`, so a generated.Amount assigned to it
+// compiles and marshals to precisely the right JSON. What it does not do is
+// *parse*: constraint.parseMoney reads `map[string]any`, because every other
+// constraint in this system arrived over a wire and was decoded from JSON, and
+// a Go struct assigned in-process is the one shape that never was. So a
+// proposal built with the struct is one the Trusted Surface would render
+// perfectly and this process could not read back — the disagreement being
+// invisible until something on this side tried.
+//
+// interpret's scripted table has never had the problem because it declares its
+// constraints as JSON text and unmarshals them, which is the same answer arrived
+// at from the other direction. This is that answer in a form ProposeStated can
+// use without hand-writing generated.Amount's field names into a string, which
+// would be a second copy of a spelling the type already owns.
+//
+// **It is applied to the count as well as to the amount**, though an int happens
+// to parse today. The property worth having is not "each of these two currently
+// works" but "the value in a Proposal this process holds is the value a verifier
+// will be handed", and that is only true if nothing takes the short path. A
+// number that arrives from JSON is a float64, and a package that had both
+// spellings in circulation would be one bad comparison away from a bug nobody
+// can reproduce over HTTP.
+func openValue(v any) (any, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("agent: encoding a constraint value: %w", err)
+	}
+	var out any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("agent: decoding a constraint value: %w", err)
+	}
+	return out, nil
+}
+
+// triggerFor decides whether an authorisation buys now or waits, from the limit
+// against what the *purchase* costs today.
+//
+// **This is a reading and not an evaluation**, and the distinction is the one
+// AGENTS.md draws when it says constraints are evaluated by the verifier and
+// never by the agent. Nothing here decides whether a purchase is permitted: the
+// merchant will evaluate `amount lte …` against its own price at the moment of
+// sale, and it may well refuse an attempt this function called immediate,
+// because the price can move between the two. What this answers is the much
+// weaker question a screen needs — is this person telling the agent to buy, or
+// telling it to wait — which interpret.Trigger already exists to carry and which
+// a sentence answers with its words rather than with its numbers.
+//
+// Issue #198 is where that field's meaning was settled, and the asymmetry it
+// records applies unchanged: the agent reads an absent trigger as a watch,
+// because a loop with nobody in front of it is safer not buying. Here there is
+// no absence — one of the two is always returned — so the caution lands on the
+// screen instead, which is where a person can act on it.
+//
+// # It takes the line total, and getting that wrong reintroduces issue #298
+//
+// **`amount` at the verifier bounds what will actually be charged, not what one
+// of the thing costs.** merchant.Catalogue.Subject says so in as many words —
+// "a cap is compared against what will actually be charged, so the caller
+// multiplies (Quote does) and this does not" — and Quote is what builds the
+// LinePrice the merchant signs the checkout over. So a limit compared here
+// against a *unit* price would call a purchase immediate that the merchant then
+// refuses for exceeding the cap, at any quantity above one. That is issue #298
+// exactly: a mandate signed first and refused afterwards, on the demonstration's
+// headline screen.
+//
+// line is passed in rather than computed here because ProposeStated has already
+// had to compute it — it needs the same number for the overflow refusal — and
+// two multiplications of one fact is how the two come to disagree.
+func triggerFor(limit, line generated.Amount) interpret.Trigger {
+	if limit.Amount >= line.Amount {
+		return interpret.TriggerImmediate
+	}
+	return interpret.TriggerConditional
 }
 
 // Interpret is Propose's first half: fetch the merchant's shelves, read the
@@ -786,7 +1052,10 @@ func (c *Client) sign(ctx context.Context, prompt string, proposal Proposal) (Au
 // between two offers the merchant already said match, and rank.go's own comment is
 // where the difference between ordering and evaluating is argued out.
 type candidate struct {
-	ID          string           `json:"id"`
+	ID string `json:"id"`
+	// Category mirrors merchant.Offer's own field. See Offer.Category for why
+	// this one is not presentation and the four below it are.
+	Category    string           `json:"category"`
 	Title       string           `json:"title"`
 	Description string           `json:"description"`
 	ImageURL    string           `json:"image_url"`
@@ -797,6 +1066,63 @@ type candidate struct {
 	// has started watching yet.
 	Step  int  `json:"step"`
 	Final bool `json:"final"`
+}
+
+// Catalogue asks the merchant for everything it sells, priced together.
+//
+// # It is not Discover with no constraints, and it must not become one
+//
+// candidates below refuses an empty query, and the merchant refuses one too:
+// merchant.ErrNoConstraints exists because emptiness reads as "everything is
+// permitted" to a mandate and "nothing is filtered" to a search. So a console
+// that wants a shop window asks a different question at a different route, and
+// what comes back carries no claim that any of it may be bought. Whether it may
+// is decided by a verifier, against limits somebody signed for, later.
+//
+// **Nothing this returns has been evaluated against anything**, and a caller
+// that treats a row here as authorised has misread it exactly as badly as a
+// caller that decided something from Offer.Title. The one honest use is showing
+// a person what is on sale so they can choose.
+//
+// # The size of the answer, and why the cap does not move for it
+//
+// This is the widest body this client reads, and it is the same worst case
+// GET /search already had: maxResponse's own comment measures a query every
+// offer satisfies over `make demo-live`'s merged shelf at 124.5 KiB, and that
+// answer is every offer with every field, which is precisely what this route
+// returns. What changes is not the size but the frequency — a search reached it
+// only for a query that happened to match everything, and this reaches it on
+// every page load — so the headroom recorded there is now being spent routinely
+// rather than in a corner case. The number is unchanged and
+// TestTheWidestAnswerAMerchantCanGiveFitsThisLimit measures both shapes.
+func (c *Client) Catalogue(ctx context.Context) ([]Offer, error) {
+	var results struct {
+		Offers []candidate `json:"offers"`
+	}
+	url := strings.TrimSuffix(c.Endpoints.Merchant, "/") + merchantCataloguePath
+	if err := c.call(ctx, http.MethodGet, url, nil, &results); err != nil {
+		return nil, fmt.Errorf("asking the merchant what it sells: %w", err)
+	}
+
+	out := make([]Offer, 0, len(results.Offers))
+	for _, o := range results.Offers {
+		// candidates makes the same refusal for the same reason: an offer with
+		// no identifier is one nothing downstream can name, and a row a person
+		// could click that resolves to nothing is worse than a shorter list.
+		if o.ID == "" {
+			return nil, fmt.Errorf("%w: the merchant listed an offer with no identifier",
+				ErrNothingToBuy)
+		}
+		out = append(out, Offer(o))
+	}
+	if len(out) == 0 {
+		// NewCatalogue refuses a catalogue with no offers, so an empty answer is
+		// a merchant that is not the one this agent thinks it is talking to —
+		// and a console drawing an empty table would report that as a shop with
+		// nothing in it.
+		return nil, fmt.Errorf("%w: the merchant listed nothing at all", ErrNothingToBuy)
+	}
+	return out, nil
 }
 
 // candidates asks the merchant what it sells that a set of constraints

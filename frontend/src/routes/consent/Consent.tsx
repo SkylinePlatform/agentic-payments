@@ -23,9 +23,14 @@ import { Signing } from "./Signing";
  *
  * Six zones, and only one of them is what the signature covers:
  *
- * 1. **What you asked for** — the user's own words. This is the one screen
- *    where that is literally true, because they were typed into the console's
- *    own box in this browser, rather than reported by an agent somewhere else.
+ * 1. **What you asked for**, or **What you chose** — issue #314 made this zone
+ *    two. With a sentence it is the user's own words, and this is the one screen
+ *    where that is literally true, because they were typed into the console's own
+ *    box in this browser rather than reported by an agent somewhere else. Without
+ *    one — a row picked out of the catalogue, which is every purchase under
+ *    `make demo` — it is the offer, the count and the limit they set, because an
+ *    identifier is not something a person recognises. Neither is signed and both
+ *    say so.
  * 2. **What you are signing** — `previewed.rendered`, the sentences the
  *    Trusted Surface's own `Render()` produced from the interpretation. Never
  *    the prompt, and never a second renderer: `constraint/architecture.test.ts`
@@ -73,8 +78,10 @@ import { Signing } from "./Signing";
  *    signed.
  *
  * **Zones 3, 4 and 5 are the same kind of fact and still have a heading each.**
- * All three are the agent's reading of the sentence and none is signed, so one
- * box holding them would have been shorter. They are separate because the
+ * All three are the agent's reading of what it was given — a sentence on one
+ * path, a row and a limit on the other, which is what `readFrom` below picks the
+ * wording for — and none is signed, so one box holding them would have been
+ * shorter. They are separate because the
  * consent design records the basket size as belonging *"under a label of its
  * own"*, and because they answer different questions: how many, when, and which
  * one. A shared heading would have to be vague enough to cover all three, and
@@ -180,6 +187,18 @@ export function Consent({
   // the enablement from another is two carriers that can disagree, which is
   // the defect `Signing.tsx`'s `isSigned` exists to have already fixed once.
   const buying = whenItBuys(proposal.trigger);
+  // **Whose reading the three captions below are describing** — issue #314, found
+  // by taking the screenshot the README ships.
+  //
+  // All three said the agent had read *a sentence*, which is exactly right on the
+  // interpreted path and false on the catalogue one: nobody typed anything,
+  // `agent.ProposeStated` called no interpreter, and what the agent read was a
+  // price. Saying it anyway puts those words two lines under a heading that has
+  // just told the reader they chose from a catalogue.
+  //
+  // One binding rather than three literals, because the three sit in different
+  // zones and would otherwise be corrected one at a time.
+  const readFrom = proposal.prompt === "" ? "what you chose" : "your sentence";
   // undefined when the sentence named no preference, which is what the zone below
   // renders nothing for. See whyThisOffer.
   const preference = whyThisOffer(proposal.rank, (proposal.offers ?? [proposal.offer]).length);
@@ -198,7 +217,9 @@ export function Consent({
     return (
       <section className="flex flex-col gap-3">
         {heading}
-        <p className="font-sans text-sm text-graphite">Asking the Trusted Surface what it would sign…</p>
+        <p className="font-sans text-sm text-graphite">
+          Asking the Trusted Surface what it would sign…
+        </p>
       </section>
     );
   }
@@ -207,15 +228,56 @@ export function Consent({
     <section className="flex flex-col gap-8">
       {heading}
 
-      <section className="flex flex-col gap-1" aria-labelledby="asked">
-        <h3 id="asked" className="font-sans text-sm text-graphite">
-          What you asked for
-        </h3>
-        <p className="font-sans text-graphite">{proposal.prompt}</p>
-        <p className="font-sans text-sm text-graphite">This text is not what you sign.</p>
-      </section>
+      {/*
+        **Two zones, and which one is drawn is decided by whether anybody typed
+        anything** — issue #314.
 
-      <section className="flex flex-col gap-2 border border-graphite/40 px-4 py-3" data-testid="signed-box" aria-labelledby="signing">
+        The first zone exists because a sentence and its interpretation are two
+        different things, and showing them side by side is what makes a misreading
+        catchable: a "summer" that quietly included September is caught by
+        comparison and by nothing else. That whole argument needs a sentence, and
+        a purchase chosen from the catalogue has none — nobody typed one,
+        `agent.ProposeStated` called no interpreter, and `proposal.prompt` is the
+        empty string all the way down the wire.
+
+        What replaces it is not nothing, because the choice still has to be shown:
+        an offer identifier is not something a person recognises, the limit is
+        theirs and the count is theirs, and every one of those is outside the
+        signed box. Drawing an empty "What you asked for" instead would be this
+        screen quoting a sentence nobody said.
+
+        Neither zone is part of what is signed and both say so, which is the one
+        thing they have in common and the reason the line below is shared.
+      */}
+      {proposal.prompt === "" ? (
+        <section className="flex flex-col gap-1" aria-labelledby="chose" data-testid="chose">
+          <h3 id="chose" className="font-sans text-sm text-graphite">
+            What you chose
+          </h3>
+          <p className="font-sans text-graphite">
+            {proposal.offer.title} &mdash; {proposal.quantity}
+            {proposal.quantity === 1 ? " item" : " items"}
+          </p>
+          <p className="font-sans text-sm text-graphite">
+            You picked this from the merchant&rsquo;s catalogue and set the limit yourself. The
+            sentences below are how the Trusted Surface words that.
+          </p>
+        </section>
+      ) : (
+        <section className="flex flex-col gap-1" aria-labelledby="asked">
+          <h3 id="asked" className="font-sans text-sm text-graphite">
+            What you asked for
+          </h3>
+          <p className="font-sans text-graphite">{proposal.prompt}</p>
+          <p className="font-sans text-sm text-graphite">This text is not what you sign.</p>
+        </section>
+      )}
+
+      <section
+        className="flex flex-col gap-2 border border-graphite/40 px-4 py-3"
+        data-testid="signed-box"
+        aria-labelledby="signing"
+      >
         <h3 id="signing" className="font-sans text-sm text-ink">
           What you are signing
         </h3>
@@ -264,8 +326,8 @@ export function Consent({
           <p className="font-mono text-sm text-broken">{buying.raw}</p>
         )}
         <p className="font-sans text-sm text-graphite">
-          The agent&rsquo;s reading of your sentence, and not part of what you sign. Whenever it
-          buys, it is still held to the limits above.
+          The agent&rsquo;s reading of {readFrom}, and not part of what you sign. Whenever it buys,
+          it is still held to the limits above.
         </p>
       </section>
 
@@ -286,8 +348,8 @@ export function Consent({
         </h3>
         <p className="font-sans text-ink">Quantity {proposal.quantity}</p>
         <p className="font-sans text-sm text-graphite">
-          The agent&rsquo;s reading of your sentence, and not part of what you sign. Whatever it
-          puts in the basket is still held to the limits above.
+          The agent&rsquo;s reading of {readFrom}, and not part of what you sign. Whatever it puts
+          in the basket is still held to the limits above.
         </p>
       </section>
 
@@ -310,7 +372,11 @@ export function Consent({
         `offers` in the product table on the same screen.
       */}
       {preference !== undefined && (
-        <section className="flex flex-col gap-1" data-testid="preferred" aria-labelledby="preferred">
+        <section
+          className="flex flex-col gap-1"
+          data-testid="preferred"
+          aria-labelledby="preferred"
+        >
           <h3 id="preferred" className="font-sans text-sm text-graphite">
             Why this offer
           </h3>
@@ -323,13 +389,17 @@ export function Consent({
             <p className="font-mono text-sm text-broken">{preference.raw}</p>
           )}
           <p className="font-sans text-sm text-graphite">
-            The agent&rsquo;s reading of your sentence, and not part of what you sign. Whichever
-            offer it preferred, the one it settled on is named in the limits above.
+            The agent&rsquo;s reading of {readFrom}, and not part of what you sign. Whichever offer
+            it preferred, the one it settled on is named in the limits above.
           </p>
         </section>
       )}
 
-      <section className="flex flex-col gap-1" data-testid="offer-card" aria-labelledby="what-it-is">
+      <section
+        className="flex flex-col gap-1"
+        data-testid="offer-card"
+        aria-labelledby="what-it-is"
+      >
         <h3 id="what-it-is" className="font-sans text-sm text-graphite">
           What {proposal.item} is
         </h3>

@@ -32,7 +32,7 @@ you would be disputing.
 
 ```mermaid
 flowchart LR
-    U["User"] -->|"a sentence, in words"| A["Shopping Agent"]
+    U["User"] -->|"a sentence, or a row and a limit"| A["Shopping Agent"]
     A -->|"an order"| M["Merchant"]
     M -.-> Q1["Who is this agent?"]
     M -.-> Q2["What did the user actually approve?"]
@@ -47,10 +47,12 @@ Which is which, and how far along each is, is [section 3](#two-questions-two-pro
 
 The interesting moment is not the purchase. It is the one before it.
 
-An agent has been told to buy below a cap. A price arrives that is above it, and
-the agent tries anyway — agents are not always right, which is the entire reason
-any of this exists. **A verifier refuses it, and signs a receipt for the
-refusal.** Then a price arrives below the cap, and the same authorisation buys.
+An agent has been told to buy below a cap — **you tell it**, by picking something
+out of the merchant's catalogue and typing what you are willing to pay. A price
+arrives that is above it, and the agent tries anyway — agents are not always
+right, which is the entire reason any of this exists. **A verifier refuses it,
+and signs a receipt for the refusal.** Then a price arrives below the cap, and
+the same authorisation buys.
 
 Both halves matter. A system where the agent decides whether its own purchase
 was allowed has no guarantees in it at all; and a refusal nobody can prove
@@ -60,6 +62,12 @@ afterwards is a refusal you have to take somebody's word for.
 
 *One run of `make demo`, on 13 August 2026. The amounts are whatever the
 catalogue held that day; the shape is the point.*
+
+`make demo` opens on an empty screen and the catalogue — nothing is bought until
+somebody buys it, and the screenshot above is a purchase somebody made. Whether a
+run shows the refusal depends on where the merchant's price schedule has got to
+when the agent takes its first quote; the sequence cycles, so a run that showed
+only the purchase will show the refusal on another.
 
 The part nobody expects is what the refusal does to the authorisation. It does
 not burn it.
@@ -166,22 +174,29 @@ holding an authorisation wider than the one you signed.
 
 ### What the user signs
 
-Not the prompt.
+Not what you asked for. What a verifier will be handed.
 
-An LLM turns free text into typed constraints. That is the only place a model
-appears anywhere in this repository, and it appears before anything is signed.
-From there the Trusted Surface — a separate party, which the protocol requires
-to be non-agentic — renders those constraints as sentences and takes the
-signature over *them*.
+**There are two ways to ask.** Pick something out of the merchant's catalogue and
+type the most you will pay, which is what `make demo` offers and what needs no
+model at all; or type free text, which needs one and is what `make demo-live` is
+for. An LLM appears only on the second, only in one package, and only before
+anything is signed.
 
-![The Trusted Surface's zone: what you asked for, and beneath it what you are signing](docs/images/consent.png)
+Either way the Trusted Surface — a separate party, which the protocol requires to
+be non-agentic — renders the constraints as sentences and takes the signature over
+*them*.
+
+![The Trusted Surface's zone: what you chose, and beneath it what you are signing](docs/images/consent.png)
+
+*Two of a $450.00 bicycle under a limit of $700.00. The screen says it will wait,
+because 2 × 450 does not fit inside 700 — the cap bounds what will be charged,
+not what one of the thing costs.*
 
 Note what the screen says about itself. The agent "has proposed, and it is
-finished"; the surface is "a different party", talking to your browser
-directly; and the sentence you typed is labelled **this text is not what you
-sign**. The rendering comes from the surface's own renderer, reached through
-`/authorise/preview`, precisely so that the sentence you read is the sentence
-the signature covers.
+finished"; the surface is "a different party", talking to your browser directly;
+and what you chose is labelled **not what you sign**. The rendering comes from
+the surface's own renderer, reached through `/authorise/preview`, precisely so
+that the sentence you read is the sentence the signature covers.
 
 ### Who sees what
 

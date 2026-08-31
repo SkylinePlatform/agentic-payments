@@ -72,6 +72,7 @@ import (
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/agent/interpret"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/authz"
+	"github.com/SkylinePlatform/agentic-payments/backend/internal/core/generated"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/obs"
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/roles"
 )
@@ -108,6 +109,20 @@ type Watcher interface {
 	ProposeFrom(
 		ctx context.Context, prompt, item string, reading interpret.Interpretation,
 	) (agent.Proposal, error)
+
+	// ProposeStated settles on an offer the caller already chose, under a limit
+	// the caller already set — no sentence, no interpreter. See
+	// agent.Client.ProposeStated, and note that the trigger comes back as a
+	// reading this agent made against a fresh price rather than as anything the
+	// caller supplied.
+	ProposeStated(
+		ctx context.Context, item string, limit generated.Amount, quantity int,
+	) (agent.Proposal, error)
+
+	// Catalogue asks the merchant for everything it sells, priced together, so a
+	// person can choose from a table instead of guessing a sentence. Nothing in
+	// it has been evaluated against any limit — see agent.Client.Catalogue.
+	Catalogue(ctx context.Context) ([]agent.Offer, error)
 
 	// Describe asks the merchant what one offer is, so that a row can be named
 	// by something a person can read rather than by the identifier a constraint
@@ -196,7 +211,13 @@ type Service struct {
 // the merchant's, the quantity is a number — and everything that says on what
 // terms the purchase may happen comes back from the Trusted Surface, signed.
 type Watching struct {
-	// Prompt is what the user typed. Required.
+	// Prompt is what the user typed.
+	//
+	// **Required only when Authorisation is nil**, since issue #314. Without a
+	// signature this agent is about to interpret the sentence, so a watch with
+	// none is a watch with nothing to authorise; with one, the limits are signed
+	// already and the prompt's only remaining job is Run.typed — which a purchase
+	// chosen from the catalogue legitimately has nothing to put in. See Start.
 	Prompt string
 	// Item, when set, is the offer the caller already picked; see
 	// agent.Intent.Item for why naming one skips the search and nothing else.
@@ -276,6 +297,13 @@ func (s *Service) Handler() (http.Handler, error) {
 	// already makes here. It reads a table fixed at construction.
 	mux.HandleFunc("GET /examples", s.examples)
 
+	// A GET on the same terms, and the route this console's first screen is
+	// built on: what the merchant sells, so a person can choose from a table
+	// rather than guess a sentence. It evaluates nothing and changes nothing —
+	// see agent.Client.Catalogue for why that makes it a different question from
+	// a search rather than a search with nothing to search on.
+	mux.HandleFunc("GET /offers", s.offers)
+
 	// A GET, which is what settles the idempotency question for it: RFC 9110
 	// §9.2.1 safe methods sit outside the middleware by method semantics rather
 	// than by a route exemption, which is the argument GET /nonce and GET
@@ -327,8 +355,21 @@ func (s *Service) Start(ctx context.Context, in Watching) (*Run, error) {
 	if s.Watcher == nil {
 		return nil, errors.New("console: a console needs an agent to start watches with")
 	}
-	if strings.TrimSpace(in.Prompt) == "" {
-		return nil, errors.New("console: a watch needs the sentence the user typed")
+	// **Required only when there is no signature yet**, and issue #314 is why
+	// that qualifier arrived. Without an authorisation this agent is about to
+	// interpret the sentence, so a watch with no sentence is a watch with
+	// nothing to authorise. With one, the limits are already signed and the
+	// prompt's only remaining job is Run.typed — and a purchase chosen from the
+	// catalogue has no sentence, because nobody typed one.
+	//
+	// The empty string travels rather than being filled in. `Run.title`'s own
+	// comment is the precedent and it is exact: an identifier substituted for a
+	// name is the identifier wearing the name's clothes, and a sentence
+	// assembled here out of a limit and an item would be this agent putting
+	// words in a person's mouth on a screen that then shows them what they
+	// "asked for".
+	if in.Authorisation == nil && strings.TrimSpace(in.Prompt) == "" {
+		return nil, errors.New("console: a watch this agent has to authorise needs the sentence the user typed")
 	}
 
 	if err := s.reserve(); err != nil {
@@ -508,6 +549,23 @@ func (s *Service) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Refused at the edge, the way POST /proposals refuses the same absence, and
+	// for the code rather than for the refusal. Service.Start makes this check
+	// too and has to — it is called by cmd/agent as well — but it answers a plain
+	// error, which the switch below maps through its default arm to 502. That
+	// tells a browser the merchant did not answer, about a request that never
+	// reached a merchant. A body this handler can see is wrong is 422, which is
+	// what every other malformed request on this route already gets.
+	//
+	// **Only when there is no authorisation**, which is the whole of issue #314's
+	// change here: with one, the limits are signed and nothing is left to read a
+	// sentence for. See Service.Start.
+	if req.Authorisation == nil && strings.TrimSpace(req.Prompt) == "" {
+		http.Error(w, "console: a watch this agent has to authorise needs the sentence the user typed",
+			http.StatusUnprocessableEntity)
+		return
+	}
+
 	run, err := s.Start(context.WithoutCancel(r.Context()), Watching{
 		Prompt:        req.Prompt,
 		Item:          req.Item,
@@ -577,14 +635,66 @@ func (s *Service) start(w http.ResponseWriter, r *http.Request) {
 // is reserved here.
 func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Prompt string `json:"prompt"`
-		Item   string `json:"item"`
+		Prompt string            `json:"prompt"`
+		Item   string            `json:"item"`
+		Limit  *generated.Amount `json:"limit"`
+
+		// Quantity is only read on the stated path. On the read path the count
+		// comes from the interpretation, and accepting one here would let a
+		// browser overwrite what the sentence said it wanted — issue #133's
+		// subject, one field along. TestTheReadPathIgnoresAQuantityTheBrowserSent
+		// is what fails if this branch starts reading it.
+		Quantity int `json:"quantity"`
 	}
 	if !roles.DecodeJSON(w, r, &req) {
 		return
 	}
-	if strings.TrimSpace(req.Prompt) == "" {
-		http.Error(w, "console: a proposal needs the sentence the user typed", http.StatusUnprocessableEntity)
+
+	// **Exactly one of the two, and both refusals are 422 rather than a
+	// default.** A request naming neither is a caller that has not decided what
+	// it is asking; a request naming both is worse, because the two answers
+	// differ — a sentence's limits are inferred and rendered for approval, a
+	// stated limit is the person's own — and silently preferring one would put a
+	// set of constraints in front of somebody that is not the set they thought
+	// they were asking for.
+	typed := strings.TrimSpace(req.Prompt) != ""
+	stated := req.Limit != nil
+	switch {
+	case typed && stated:
+		http.Error(w,
+			"console: a proposal is made from a sentence or from a limit somebody set, never both",
+			http.StatusUnprocessableEntity)
+		return
+	case !typed && !stated:
+		http.Error(w,
+			"console: a proposal needs either the sentence the user typed or the limit they set",
+			http.StatusUnprocessableEntity)
+		return
+	}
+
+	// **Zero resolves to one; a negative is refused.** `resolved` treats anything
+	// below one as unstated, which is right for zero — a browser that sent no
+	// count meant one — and wrong for `-5`, which is a caller that said something
+	// and would have it silently discarded. ProposeStated refuses a basket below
+	// one, and without this the refusal is unreachable over HTTP, so the test
+	// asserting it would be asserting a state the wire cannot produce.
+	if req.Quantity < 0 {
+		http.Error(w, "console: a basket cannot hold fewer than none of something",
+			http.StatusUnprocessableEntity)
+		return
+	}
+
+	if stated {
+		proposal, err := s.Watcher.ProposeStated(r.Context(), req.Item, *req.Limit, resolved(req.Quantity))
+		if err != nil {
+			refuse(w, err)
+			return
+		}
+		// The empty prompt is the answer rather than a gap: nobody typed
+		// anything, and inventing a sentence here would put words in a person's
+		// mouth on a screen that then shows them what they "asked for". See
+		// proposed.Prompt and console.Run.title's own precedent.
+		roles.OK(w, http.StatusOK, s.proposalOf("", proposal))
 		return
 	}
 
@@ -595,6 +705,45 @@ func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	roles.OK(w, http.StatusOK, s.proposalOf(req.Prompt, proposal))
+}
+
+// offers is GET /offers: what the merchant sells, priced together.
+//
+// A safe method, so it sits outside the idempotency middleware by method
+// semantics — the argument GET /examples and GET /watches/{id}/… already make in
+// this file. Nothing is remembered, which matters more here than on either of
+// those: these prices move on a schedule, and a remembered answer is a shop
+// window showing numbers that have stopped being true.
+//
+// The failure is a 502 through refuse, and it is the ordinary one: this console
+// cannot answer what the merchant would not tell it, and a browser drawing an
+// empty table would report a merchant that did not answer as a shop with nothing
+// in it.
+func (s *Service) offers(w http.ResponseWriter, r *http.Request) {
+	found, err := s.Watcher.Catalogue(r.Context())
+	if err != nil {
+		refuse(w, err)
+		return
+	}
+	// **An empty answer is refused here as well as in the client**, and the
+	// duplication is the point rather than an oversight. agent.Client.Catalogue
+	// already refuses one, so on the wiring this process actually runs the branch
+	// below is unreachable — but Watcher is an interface, `listing.Offers` is a
+	// slice, and a nil slice marshals as `"offers": null`. A browser that decoded
+	// that would call `.map` on null and take the whole screen down, and the
+	// stack trace would name a React component rather than the counterparty that
+	// answered with nothing.
+	//
+	// **A plain error rather than agent.ErrNothingToBuy**, and the distinction is
+	// the one refuse's own table draws. That sentinel is answered 422 — this
+	// agent's account of a request it cannot fulfil — and an empty catalogue is
+	// not a bad request. It is a counterparty behaving in a way NewCatalogue does
+	// not permit, which is the default arm's 502.
+	if len(found) == 0 {
+		refuse(w, errors.New("console: the merchant listed nothing at all"))
+		return
+	}
+	roles.OK(w, http.StatusOK, listing{Offers: found})
 }
 
 // interpret is POST /interpret: the slow half, on its own — issue #299.
@@ -760,7 +909,16 @@ func refuse(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 	case errors.Is(err, interpret.ErrNoScript),
 		errors.Is(err, interpret.ErrNoConstraints),
-		errors.Is(err, agent.ErrNothingToBuy):
+		errors.Is(err, agent.ErrNothingToBuy),
+		// The stated half of POST /proposals, added with issue #314. It sits in
+		// this arm and not the default one because every limit it covers is a
+		// fact about the *request* — no ceiling, a ceiling of nothing, a currency
+		// the offer is not priced in, a basket whose total no amount can hold —
+		// and none of them is a merchant that did not answer. The default arm's
+		// 502 would send a browser to look at a counterparty this call never
+		// reached, which is the defect POST /watches has for a missing prompt and
+		// fixes at its own edge.
+		errors.Is(err, agent.ErrLimitUnusable):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 	default:
 		http.Error(w, err.Error(), http.StatusBadGateway)

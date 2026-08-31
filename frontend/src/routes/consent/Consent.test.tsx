@@ -483,4 +483,75 @@ describe("the consent screen", () => {
     resolveRefuse(new Response(JSON.stringify({ constraints_digest: "d" }), { status: 200 }));
     await waitFor(() => expect(refusals).toHaveLength(1));
   });
+
+  describe("a purchase chosen from the catalogue", () => {
+    // Issue #314. `agent.ProposeStated` calls no interpreter, so `prompt` is the
+    // empty string all the way down the wire — and this screen has to draw the
+    // choice rather than quote a sentence nobody said.
+
+    it("names what was chosen instead of quoting a sentence nobody typed", async () => {
+      stubFetch({ "/authorise/preview": { body: aPreview() } });
+      renderConsent({ ...aProposal(), prompt: "" });
+
+      const chose = await screen.findByTestId("chose");
+      expect(
+        chose.textContent,
+        "the offer's own title, which is the only part a person recognises",
+      ).toContain("Telescopic ladder, 3.8 m");
+      expect(
+        screen.queryByText(/what you asked for/i),
+        "there is no sentence, and a zone headed 'what you asked for' over an empty line would " +
+          "be this screen quoting one",
+      ).toBeNull();
+    });
+
+    it("keeps the choice outside the signed box", async () => {
+      // The standard this whole screen is held to: what a person reads inside
+      // that box is what their signature covers. The item and the limit reach a
+      // mandate as constraints the surface worded; the title and the count do
+      // not, and the count is one line away from sitting inside a box that claims
+      // otherwise.
+      stubFetch({ "/authorise/preview": { body: aPreview() } });
+      renderConsent({ ...aProposal(), prompt: "" });
+
+      const box = await screen.findByTestId("signed-box");
+      expect(within(box).queryByTestId("chose")).toBeNull();
+      expect(box.textContent).not.toContain("Telescopic ladder, 3.8 m");
+    });
+
+    it("does not say the agent read a sentence nobody typed", async () => {
+      // Found by taking the screenshot the README ships. The three captions under
+      // the unsigned zones said "the agent's reading of your sentence" — right on
+      // the interpreted path and false here, two lines under a heading that has
+      // just said the reader chose from a catalogue.
+      stubFetch({ "/authorise/preview": { body: aPreview() } });
+      renderConsent({ ...aProposal(), prompt: "" });
+
+      await screen.findByTestId("chose");
+      const said = document.body.textContent ?? "";
+      expect(
+        said,
+        "nobody typed anything, so an agent that read a sentence read something that does not exist",
+      ).not.toMatch(/reading of your sentence/i);
+      expect(
+        said,
+        "what it read is the row and the limit, which is what the zone above calls what you chose",
+      ).toMatch(/reading of what you chose/i);
+    });
+
+    it("still quotes the sentence when there was one", async () => {
+      // The other half, so the branch above cannot pass by never drawing either.
+      stubFetch({ "/authorise/preview": { body: aPreview() } });
+      renderConsent(aProposal());
+
+      expect(await screen.findByText(/what you asked for/i)).toBeTruthy();
+      expect(screen.getByText("find and buy telescopic ladders, cheapest")).toBeTruthy();
+      expect(screen.queryByTestId("chose")).toBeNull();
+      expect(
+        document.body.textContent ?? "",
+        "and the captions say sentence here, so the branch above cannot pass by saying " +
+          "'what you chose' on both paths",
+      ).toMatch(/reading of your sentence/i);
+    });
+  });
 });

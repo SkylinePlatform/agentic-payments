@@ -263,4 +263,26 @@ func TestTheWidestAnswerAMerchantCanGiveFitsThisLimit(t *testing.T) {
 			"showing the shop's picture at all — which is issue #300 reverted without anything "+
 			"saying so",
 		photographs)
+
+	// GET /catalogue reaches the same worst case, and issue #314 is why that is
+	// asserted here rather than measured separately.
+	//
+	// Browse answers every offer with every field, which is precisely the
+	// document the query above assembles — so the two are the *same* body, and a
+	// second measurement would be a second number to keep in step with this one.
+	// What changed with #314 is not the size but how often it is reached: a
+	// search hit it only for a query matching everything, and a shop window hits
+	// it on every page load.
+	//
+	// Compared as encoded bodies rather than as Results values, because the
+	// claim that matters is about bytes on a wire against a byte limit. A
+	// Browse that quietly dropped a field would still be a valid Results and
+	// would sail past a struct comparison of lengths.
+	var window strings.Builder
+	require.NoError(t, json.NewEncoder(&window).Encode(catalogue.Browse()),
+		"the shop window has to encode, or the merchant could not send it")
+	assert.Equal(t, body.String(), window.String(),
+		"GET /catalogue and a search every offer satisfies are the same document, so a difference "+
+			"here means one of them is dropping or adding something the other is not — and the "+
+			"measurement beside maxResponse describes only one of the two")
 }

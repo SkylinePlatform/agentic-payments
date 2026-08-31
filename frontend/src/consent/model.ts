@@ -16,6 +16,21 @@ import type { Amount, Constraint, PaymentInstrument, PublicKey } from "../protoc
 /** The merchant's own description of one thing it sells — `agent.Offer`. */
 export interface Offer {
   readonly id: string;
+  /**
+   * The shelf the merchant keeps this on, in the shop's own spelling —
+   * `agent.Offer.Category`, and the same strings `GET /shelves` publishes.
+   *
+   * **The one field here that is not presentation.** `item.category` is a
+   * registered constraint field, so a verifier reads this vocabulary and a
+   * mandate can be written against it — which is why the agent is allowed to
+   * carry it while `title` and the rest travel only because a person has to read
+   * something. The catalogue table filters by it.
+   *
+   * Optional for `step` and `final`'s reason, one issue along: it arrived with
+   * #314 and this interface is shared with the consent screen, whose offer card
+   * may hold an object decoded from a response that predates it.
+   */
+  readonly category?: string;
   readonly title: string;
   readonly description: string;
   readonly image_url: string;
@@ -375,10 +390,7 @@ const PREFERRED: Record<RankField, Record<RankDirection, string>> = {
  * a missing explanation for a purchase the screen fully describes, and every
  * preference is applied among offers the constraints already authorise.
  */
-export function whyThisOffer(
-  rank: Rank | undefined,
-  candidates: number,
-): Preference | undefined {
+export function whyThisOffer(rank: Rank | undefined, candidates: number): Preference | undefined {
   if (rank === undefined) {
     return undefined;
   }
