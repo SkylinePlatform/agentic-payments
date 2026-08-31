@@ -28,8 +28,8 @@ is a decision about which claims a billboard is allowed to make at all.
 
 **Visa TAP lands next, and a document written as though it will not is a
 document that gets rewritten.** The AP2 milestone is closed; #24–#33 are all
-open, and two of the ten processes in `deploy/demo.json` are stubs waiting on
-#26 and #30. The skeleton below is chosen so that TAP arrives as a body filled
+open, and two of the nine processes in `deploy/demo.json` are stubs waiting on
+#26 and #30 — ten until #313 took the second agent out. The skeleton below is chosen so that TAP arrives as a body filled
 in and one table cell flipped, rather than as surgery.
 
 ## The reader
