@@ -186,16 +186,15 @@ Either way the Trusted Surface — a separate party, which the protocol requires
 be non-agentic — renders the constraints as sentences and takes the signature over
 *them*.
 
-![The Trusted Surface's zone: what you asked for, and beneath it what you are signing](docs/images/consent.png)
+![The Trusted Surface's zone: what you chose, and beneath it what you are signing](docs/images/consent.png)
 
-*Screenshot from the free-text path, which is why it shows a typed sentence. On
-the catalogue path the first zone reads **What you chose** and names the offer,
-the count and your limit; everything below it is identical, because what is being
-signed does not depend on how you asked.*
+*Two of a $450.00 bicycle under a limit of $700.00. The screen says it will wait,
+because 2 × 450 does not fit inside 700 — the cap bounds what will be charged,
+not what one of the thing costs.*
 
 Note what the screen says about itself. The agent "has proposed, and it is
 finished"; the surface is "a different party", talking to your browser directly;
-and what you asked for is labelled **not what you sign**. The rendering comes from
+and what you chose is labelled **not what you sign**. The rendering comes from
 the surface's own renderer, reached through `/authorise/preview`, precisely so
 that the sentence you read is the sentence the signature covers.
 

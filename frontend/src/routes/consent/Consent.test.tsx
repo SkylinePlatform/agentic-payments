@@ -519,6 +519,26 @@ describe("the consent screen", () => {
       expect(box.textContent).not.toContain("Telescopic ladder, 3.8 m");
     });
 
+    it("does not say the agent read a sentence nobody typed", async () => {
+      // Found by taking the screenshot the README ships. The three captions under
+      // the unsigned zones said "the agent's reading of your sentence" — right on
+      // the interpreted path and false here, two lines under a heading that has
+      // just said the reader chose from a catalogue.
+      stubFetch({ "/authorise/preview": { body: aPreview() } });
+      renderConsent({ ...aProposal(), prompt: "" });
+
+      await screen.findByTestId("chose");
+      const said = document.body.textContent ?? "";
+      expect(
+        said,
+        "nobody typed anything, so an agent that read a sentence read something that does not exist",
+      ).not.toMatch(/reading of your sentence/i);
+      expect(
+        said,
+        "what it read is the row and the limit, which is what the zone above calls what you chose",
+      ).toMatch(/reading of what you chose/i);
+    });
+
     it("still quotes the sentence when there was one", async () => {
       // The other half, so the branch above cannot pass by never drawing either.
       stubFetch({ "/authorise/preview": { body: aPreview() } });
@@ -527,6 +547,11 @@ describe("the consent screen", () => {
       expect(await screen.findByText(/what you asked for/i)).toBeTruthy();
       expect(screen.getByText("find and buy telescopic ladders, cheapest")).toBeTruthy();
       expect(screen.queryByTestId("chose")).toBeNull();
+      expect(
+        document.body.textContent ?? "",
+        "and the captions say sentence here, so the branch above cannot pass by saying " +
+          "'what you chose' on both paths",
+      ).toMatch(/reading of your sentence/i);
     });
   });
 });
