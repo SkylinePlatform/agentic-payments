@@ -94,7 +94,7 @@ refuseUnsupportedNode(runningOn);
 const DEFAULT_COLLECTOR = "http://127.0.0.1:8085";
 
 /**
- * The Shopping Agent's console API, matching `-addr` on the `agent-watch` entry
+ * The Shopping Agent's console API, matching `-addr` on the `agent` entry
  * in deploy/demo.json. Overridable with VITE_AGENT_URL, in VITE_COLLECTOR_URL's
  * shape and for the same reason.
  */

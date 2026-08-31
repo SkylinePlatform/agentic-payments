@@ -48,7 +48,59 @@ const (
 // startupFloor went with it, for the same reason and not as a tidy-up: it was
 // that test's only caller.
 //
-// What survives is below, and it never depended on when a watch started.
+// What survives is below, and it never depended on when a watch started. What did
+// *not* survive is an ordering assertion that had nothing to do with the boot
+// watch and was only ever a precondition of it —
+// TestTheProcessesComeUpInAnOrderThatWorks is where that property now lives, on
+// its own terms rather than as somebody else's guard clause.
+
+// TestTheProcessesComeUpInAnOrderThatWorks pins the two orderings
+// deploy/demo.json opens by declaring, and which nothing checked.
+//
+// # Why this exists at all
+//
+// The file's first paragraph is "**Order matters.**", and it gives two reasons.
+// Until issue #313 the only test that read a process's *position* was the
+// start-up margin check, which asked whether the merchant came up before the
+// watching agent — a precondition of its own arithmetic rather than a claim about
+// the topology. That check went with the boot watch, and the manifest was left
+// opening with a rule nothing could break.
+//
+// # The two rules, and why only these two
+//
+// **The collector is first.** Every role emits into it, and a role that starts
+// before it is listening loses whatever it emits in the meantime — there is no
+// retry, deliberately, because an event log that pushed back on the roles would
+// be the coupling ADR 0003 forbids. That is the one ordering mistake here with a
+// silent failure mode: the demonstration comes up, everything reports healthy,
+// and the first steps of a transaction are simply missing from the log.
+//
+// **The frontend is last.** It proxies to the collector and to the agent, and
+// there is nothing to look at until they answer. This one is not silent — issue
+// #267 is what a frontend probing something that is not up looks like — but it is
+// the other half of the sentence the manifest opens with, and a rule stated in
+// prose with only half of it checked is the half nobody notices.
+//
+// Nothing else about the order is asserted, because nothing else about it is
+// claimed. The agent sits after the roles so that the console it serves is backed
+// by a stack that is up, which `ready` enforces at run time rather than by
+// position — and a test pinning every pair would fail on any rearrangement rather
+// than on a wrong one.
+func TestTheProcessesComeUpInAnOrderThatWorks(t *testing.T) {
+	t.Parallel()
+
+	m, err := Load(shippedTopology)
+	require.NoError(t, err, "the shipped manifest does not load")
+	require.NotEmpty(t, m.Processes, "an empty manifest would make both checks below pass on nothing")
+
+	assert.Equal(t, "collector", m.Processes[0].Name,
+		"a role that starts before the collector is listening loses whatever it emits, with no "+
+			"retry and no error — the demonstration comes up healthy and the first steps of a "+
+			"transaction are missing from the log")
+	assert.Equal(t, "frontend", m.Processes[len(m.Processes)-1].Name,
+		"the frontend proxies to the collector and to the agent, and there is nothing for it to "+
+			"show until both answer")
+}
 
 // TestThePollStaysUnderTheShortestPriceHold is the rule deploy/demo.json spends
 // a paragraph on and nothing checked.

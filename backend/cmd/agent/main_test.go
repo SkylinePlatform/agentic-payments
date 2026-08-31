@@ -571,10 +571,11 @@ func TestABootWatchThatFindsNothingStillLeavesAConsoleServing(t *testing.T) {
 
 // TestABootWatchNobodyAskedForIsNotReported is the control on the test above.
 //
-// deploy/demo.json runs a second agent process with -addr and no -watch, and a
-// console that announced a failed boot watch there would be reporting something
-// that was never attempted. It is also what fails if the reporting is moved
-// somewhere that runs unconditionally.
+// `bin/agent -addr …` with no -watch is a console asked to serve and asked for no
+// watch, which is what deploy/demo.json runs since issue #313 — and a console that
+// announced a failed boot watch there would be reporting something that was never
+// attempted. It is also what fails if the reporting is moved somewhere that runs
+// unconditionally.
 func TestABootWatchNobodyAskedForIsNotReported(t *testing.T) {
 	t.Parallel()
 
@@ -868,6 +869,47 @@ func boolFlag(value string, joined bool) bool {
 	return err == nil && set
 }
 
+// topologyProcess is one entry of deploy/demo.json, in the three members the two
+// tests below read.
+//
+// Decoded rather than grepped, on TestMakeDemoDoesNotReachAShop's own reasoning:
+// that file's $comment discusses these flags at length, so a search of its text
+// finds the argument and reports it as the thing the argument forbids. What
+// matters is what a process would be *started with*.
+type topologyProcess struct {
+	Name    string   `json:"name"`
+	Command string   `json:"command"`
+	Args    []string `json:"args"`
+}
+
+// agentsInTopology returns every entry of the shipped manifest that starts this
+// binary.
+//
+// Shared by the two tests below rather than copied into each, because they
+// disagree about what they are checking and must not disagree about what they
+// are checking it over. It uses require, and every caller is on the test
+// goroutine.
+func agentsInTopology(t *testing.T) []topologyProcess {
+	t.Helper()
+
+	raw, err := os.ReadFile("../../../deploy/demo.json")
+	require.NoError(t, err, "this test has to read the manifest `make demo` starts, or it pins nothing")
+
+	var manifest struct {
+		Processes []topologyProcess `json:"processes"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &manifest),
+		"the manifest has to parse, or the loops below read nothing")
+
+	var agents []topologyProcess
+	for _, p := range manifest.Processes {
+		if strings.HasSuffix(p.Command, "/agent") {
+			agents = append(agents, p)
+		}
+	}
+	return agents
+}
+
 // TestTheShippedTopologyAsksForNothingThisBuildRefuses is the other half of the
 // refusal #257 added: flagsAgree grew a pair it rejects, and the one file in this
 // repository that starts this binary without a person typing it must not be
@@ -879,38 +921,16 @@ func boolFlag(value string, joined bool) bool {
 // symptom arriving from #257's fix, which is the one way this change could break
 // the demonstration it is meant to protect.
 //
-// Decoded rather than grepped, on TestMakeDemoDoesNotReachAShop's own reasoning:
-// that file's $comment discusses these flags at length, so a search of its text
-// finds the argument and reports it as the thing the argument forbids. What matters
-// is what a process would be started with.
+// It reads what a process would be started with — see agentsInTopology.
 func TestTheShippedTopologyAsksForNothingThisBuildRefuses(t *testing.T) {
 	t.Parallel()
 
-	raw, err := os.ReadFile("../../../deploy/demo.json")
-	require.NoError(t, err, "this test has to read the manifest `make demo` starts, or it pins nothing")
-
-	var manifest struct {
-		Processes []struct {
-			Name    string   `json:"name"`
-			Command string   `json:"command"`
-			Args    []string `json:"args"`
-		} `json:"processes"`
-	}
-	require.NoError(t, json.Unmarshal(raw, &manifest),
-		"the manifest has to parse, or the loop below reads nothing")
-
-	started, serving, buying := 0, 0, 0
-	for _, p := range manifest.Processes {
-		if !strings.HasSuffix(p.Command, "/agent") {
-			continue
-		}
+	started, serving := 0, 0
+	for _, p := range agentsInTopology(t) {
 		started++
 		addr, once, buy := invocation(p.Args)
 		if addr != "" {
 			serving++
-		}
-		if buy {
-			buying++
 		}
 		assert.NoError(t, flagsAgree(addr, once, buy),
 			"%s is started with a combination this build refuses at parse time, so `make demo` would "+
@@ -925,27 +945,60 @@ func TestTheShippedTopologyAsksForNothingThisBuildRefuses(t *testing.T) {
 	// agreeable.
 	//
 	// **It used to be grounded on both halves, and issue #313 took one away.**
-	// The manifest had a second agent process passing -buy, so the loop could
-	// assert it had read a -buy as well as an -addr. That process is gone —
-	// `make demo` starts no purchase of its own — so `buying` is zero here for a
-	// reason rather than a defect, and asserting otherwise would be this test
-	// demanding a boot purchase the demonstration deliberately no longer makes.
+	// The manifest had a second agent process passing -buy, so this loop could
+	// assert it had read a -buy as well as an -addr. That process is gone, so
+	// `buying` is zero for a reason rather than a defect — and what the counter is
+	// for now is TestTheShippedTopologyStartsNoPurchaseOfItsOwn below, which is a
+	// claim about the demonstration rather than about flagsAgree and therefore
+	// gets a name of its own.
 	//
-	// The subject is unchanged and the check is still live: what this test is
-	// about is that nothing in the manifest asks for the pair flagsAgree refuses,
-	// and adding -buy to the entry below still turns it red. `buying` is counted
-	// rather than dropped so that the argument above stays measurable from the
-	// code — a future manifest that reintroduced a buying agent would want the
-	// assertion back, and the counter is what a reader checks it against.
+	// **`serving` grounds this test and does not ground all of it**, which is
+	// worth being exact about rather than letting the sentence above imply
+	// otherwise. It proves `invocation` reads *-addr*. If the reader of *-buy*
+	// broke, `buying` would be zero, `flagsAgree(addr, once, false)` would return
+	// nil, and every assertion here would pass over a manifest that did ask for
+	// the refused pair. TestEveryWayOfWritingAFlagIsRead is what covers that, and
+	// it is named here because a reader deciding whether this check is sound has
+	// no other way to find it.
 	require.NotZero(t, started,
 		"no process in the manifest starts this binary, so the loop above checked nothing")
 	assert.NotZero(t, serving,
 		"nothing in the topology was read as passing -addr, so the flags above were not read at all "+
 			"— `make demo` serves the console the frontend proxies to")
+}
+
+// TestTheShippedTopologyStartsNoPurchaseOfItsOwn is issue #313's decision, held
+// where somebody undoing it would have to look.
+//
+// **It is a claim about the demonstration and not about flagsAgree**, which is why
+// it is not a third assertion inside the test above. `-buy` on its own is a
+// perfectly legal invocation — TestBuyAndAddrCannotBothBeGiven has a row saying so,
+// and `bin/agent -buy` is how the Human Present flow is run by hand — so a manifest
+// carrying it would be refused by nothing in this binary. What refuses it is the
+// decision that `make demo` opens on an empty screen, and this is where that
+// decision is written down as something a change can break.
+//
+// A reintroduced buying process would turn it red with a message naming the issue,
+// which is the outcome: not "this is invalid" but "this was removed on purpose, and
+// here is why".
+func TestTheShippedTopologyStartsNoPurchaseOfItsOwn(t *testing.T) {
+	t.Parallel()
+
+	buying, started := 0, 0
+	for _, p := range agentsInTopology(t) {
+		started++
+		_, _, buy := invocation(p.Args)
+		if buy {
+			buying++
+		}
+	}
+
+	require.NotZero(t, started,
+		"no process in the manifest starts this binary, so the count below is over nothing")
 	assert.Zero(t, buying,
-		"the manifest starts an agent with -buy, which since #313 it must not: `make demo` comes up "+
-			"with an empty screen, and a Human Present purchase nobody asked for is exactly what that "+
-			"issue removed")
+		"the manifest starts an agent with -buy, which since #313 it must not: `make demo` comes "+
+			"up with an empty screen, and a Human Present purchase nobody asked for is exactly what "+
+			"that issue removed")
 }
 
 // TestEveryWayOfWritingAFlagIsRead is what makes invocation's claim about the
@@ -974,10 +1027,13 @@ func TestEveryWayOfWritingAFlagIsRead(t *testing.T) {
 		why      string
 	}{
 		{
-			name: "as the manifest writes them", args: []string{"-addr", "127.0.0.1:8086", "-buy"},
+			name:     "the bare spelling, as a manifest writes them",
+			args:     []string{"-addr", "127.0.0.1:8086", "-buy"},
 			wantAddr: "127.0.0.1:8086", wantBuy: true,
-			why: "this is deploy/demo.json's own spelling, so a reading that missed it would make " +
-				"the check over that file vacuous today rather than eventually",
+			why: "since #313 no manifest entry passes -buy, which is what makes this row load " +
+				"bearing rather than redundant: it is now the only thing proving invocation reads " +
+				"that flag at all, and the two checks over deploy/demo.json both pass silently " +
+				"over a reader that stopped",
 		},
 		{
 			name: "joined by an equals sign", args: []string{"-addr=127.0.0.1:8086", "-buy=true"},

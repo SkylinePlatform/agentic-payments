@@ -95,7 +95,7 @@ perfectly well; it changes what the demonstration buys.
 
 ## `implemented: false`
 
-Seven of the nine processes are still stubs that print a line and exit. The
+Two of the nine processes are still stubs that print a line and exit. The
 runner **starts them anyway** and expects the exit, reporting them as *not built
 yet* alongside the issue that will build them.
 
