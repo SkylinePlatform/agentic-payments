@@ -258,3 +258,76 @@ describe("the mandate tracker", () => {
     await waitFor(() => expect(calls).toBe(2));
   });
 });
+
+describe("a purchase nobody typed a sentence for", () => {
+  // Issue #314. Under `make demo` every purchase is chosen from the catalogue, so
+  // `console.Run.typed` is the empty string and an unconditional quotation renders
+  // a bare pair of quotation marks on every row — on the screen a viewer looks at
+  // for the rest of the run.
+
+  function chosen(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "run-c",
+      correlation_id: "c-c",
+      typed: "",
+      title: "Vitesse Urbain 7",
+      item: "gtin:05012345678900",
+      quantity: 1,
+      expires_at: "2026-08-31T23:59:59Z",
+      state: "watching",
+      attempts: 0,
+      ...overrides,
+    };
+  }
+
+  function serve(row: Record<string, unknown>) {
+    vi.stubGlobal("fetch", (url: string) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(
+            url === "/watches"
+              ? { watches: [row] }
+              : { ...row, signed: [], baseline: null, attempts: [], unminted: 0, bought: null, error: "" },
+          ),
+        ),
+      ),
+    );
+  }
+
+  it("names the thing instead of quoting nothing", async () => {
+    serve(chosen());
+    render(<Tracker />);
+
+    expect(await screen.findByTestId("named")).toBeTruthy();
+    expect(screen.getByTestId("named").textContent).toBe("Vitesse Urbain 7");
+    expect(
+      screen.queryByTestId("typed"),
+      "there is no sentence, and a pair of empty quotation marks is this screen quoting one",
+    ).toBeNull();
+  });
+
+  it("draws neither when the merchant could not be asked for a name", async () => {
+    // `agent.Client.Describe` refuses rather than truncating, so an empty title is
+    // a state that reaches this screen. The identifier is on the row already and
+    // must not stand in — #242's rule.
+    serve(chosen({ title: "" }));
+    render(<Tracker />);
+
+    await screen.findByTestId("run-run-c");
+    expect(screen.queryByTestId("named")).toBeNull();
+    expect(screen.queryByTestId("typed")).toBeNull();
+    expect(
+      screen.getByTestId("run-run-c").textContent,
+      "the identifier is still on the row, where it always was — it is not a substitute for a name",
+    ).toContain("gtin:05012345678900");
+  });
+
+  it("still quotes a sentence when there was one", async () => {
+    // The other half, so the branch above cannot pass by never drawing either.
+    serve(chosen({ typed: "buy me this bicycle when it drops below $400" }));
+    render(<Tracker />);
+
+    expect((await screen.findByTestId("typed")).textContent).toContain("buy me this bicycle");
+    expect(screen.queryByTestId("named")).toBeNull();
+  });
+});

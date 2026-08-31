@@ -48,37 +48,6 @@ type started struct {
 // It carries no state and names no watch, because nothing was created. offer is
 // the merchant's own description of what item names — see agent.Offer — and is
 // here so a consent screen can say what an identifier refers to.
-// listing is the body GET /offers returns: what the merchant sells.
-//
-// A wrapper rather than a bare array, on the shape every other list in this
-// package already uses — `{"watches": …}`, `{"examples": …}`, the merchant's own
-// `{"offers": …}`. A top-level array is a body nothing can be added to later
-// without changing its type, and this one already has an obvious candidate: the
-// instant the prices were read at, which merchant.Results carries and this
-// deliberately does not.
-//
-// **It does not carry that instant, and the omission is the decision.** The
-// merchant reads its clock once for the whole answer so that no two prices in
-// it come from moments that never co-existed — see merchant.Catalogue.Browse —
-// and that property is what makes the table honest. What a browser would do
-// with the timestamp is print it, and a printed instant on a page whose numbers
-// are already moving reads as a freshness guarantee this console cannot make:
-// the answer was true when the merchant sent it, and the only way to know it
-// still is to ask again. So the page shows prices and not a time, and a caller
-// that wants the merchant's own instant asks the merchant.
-type listing struct {
-	// Offers is everything the merchant sells, in its own catalogue order.
-	//
-	// Never nil: agent.Client.Catalogue refuses an empty answer, because
-	// NewCatalogue refuses a catalogue with no offers and a shop with nothing in
-	// it is a counterparty that is not the one this agent thinks it is talking
-	// to.
-	//
-	// Nothing here has been evaluated against any limit. It is a shop window,
-	// and a caller that reads a row as authorised has misread it.
-	Offers []agent.Offer `json:"offers"`
-}
-
 type proposed struct {
 	Prompt      string                 `json:"prompt"`
 	Constraints []generated.Constraint `json:"constraints"`
@@ -165,6 +134,37 @@ type proposed struct {
 	// zero refuses to send anybody to a consent screen. Two tabs racing still
 	// end in a 429.
 	WatchSlotsFree int `json:"watch_slots_free"`
+}
+
+// listing is the body GET /offers returns: what the merchant sells.
+//
+// A wrapper rather than a bare array, on the shape every other list in this
+// package already uses — `{"watches": …}`, `{"examples": …}`, the merchant's own
+// `{"offers": …}`. A top-level array is a body nothing can be added to later
+// without changing its type, and this one already has an obvious candidate: the
+// instant the prices were read at, which merchant.Results carries and this
+// deliberately does not.
+//
+// **It does not carry that instant, and the omission is the decision.** The
+// merchant reads its clock once for the whole answer so that no two prices in
+// it come from moments that never co-existed — see merchant.Catalogue.Browse —
+// and that property is what makes the table honest. What a browser would do
+// with the timestamp is print it, and a printed instant on a page whose numbers
+// are already moving reads as a freshness guarantee this console cannot make:
+// the answer was true when the merchant sent it, and the only way to know it
+// still is to ask again. So the page shows prices and not a time, and a caller
+// that wants the merchant's own instant asks the merchant.
+type listing struct {
+	// Offers is everything the merchant sells, in its own catalogue order.
+	//
+	// Never nil: agent.Client.Catalogue refuses an empty answer, because
+	// NewCatalogue refuses a catalogue with no offers and a shop with nothing in
+	// it is a counterparty that is not the one this agent thinks it is talking
+	// to.
+	//
+	// Nothing here has been evaluated against any limit. It is a shop window,
+	// and a caller that reads a row as authorised has misread it.
+	Offers []agent.Offer `json:"offers"`
 }
 
 // interpreted is what POST /interpret answers with: a name for the reading, and

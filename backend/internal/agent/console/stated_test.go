@@ -203,9 +203,16 @@ func TestAProposalFromAStatedLimitNamesNoSentence(t *testing.T) {
 
 	made := proposal()
 	made.Trigger = interpret.TriggerConditional
+
+	// **Matched exactly rather than with mock.Anything**, because forwarding these
+	// two is the whole of what this handler does on this branch. Against
+	// mock.Anything the test passed just as well if the handler had sent a
+	// ceiling of zero and a basket of one — which is a limit nobody set, on the
+	// one route where the limit is the point.
 	c := newConsoleWith(t, func(w *console.MockWatcher) {
-		w.EXPECT().ProposeStated(mock.Anything, item, mock.Anything, mock.Anything).
-			Return(made, nil).Maybe()
+		w.EXPECT().ProposeStated(
+			mock.Anything, item, generated.Amount{Amount: 15000, Currency: "USD"}, 2,
+		).Return(made, nil).Maybe()
 	})
 
 	var got proposedBody
@@ -222,6 +229,42 @@ func TestAProposalFromAStatedLimitNamesNoSentence(t *testing.T) {
 	assert.Equal(t, interpret.TriggerConditional, got.Trigger,
 		"the trigger is the one thing on this response the agent read for itself, and a screen "+
 			"that cannot say whether this buys now or waits has no business collecting a signature")
+
+	// The expectation above is `.Maybe()`, on the standing hazard that testify
+	// fails from whichever goroutine called the mock — so a handler that never
+	// called ProposeStated at all would satisfy it. The count is asserted here,
+	// on the test goroutine, which is what makes the exact argument match mean
+	// anything.
+	c.watcher.AssertNumberOfCalls(t, "ProposeStated", 1)
+}
+
+// TestABasketBelowNoneIsRefusedRatherThanResolved is the gap `resolved` opens.
+//
+// Zero means "the caller stated no count" and becomes one, which is right: a
+// browser that sent nothing meant one. A negative is a caller that *said*
+// something, and resolving it would discard what they said — so
+// agent.ProposeStated's own "a basket of %d is not a basket" refusal would be
+// unreachable over HTTP, and the unit test asserting it would be asserting a
+// state the wire cannot produce.
+func TestABasketBelowNoneIsRefusedRatherThanResolved(t *testing.T) {
+	t.Parallel()
+
+	c := newConsoleWith(t, func(w *console.MockWatcher) {
+		w.EXPECT().ProposeStated(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(agent.Proposal{}, nil).Maybe()
+	})
+
+	resp := doRequest(t, http.MethodPost, c.url+"/proposals", "negative-basket", map[string]any{
+		"item":     item,
+		"limit":    map[string]any{"amount": 15000, "currency": "USD"},
+		"quantity": -5,
+	})
+	defer func() { _ = resp.Body.Close() }()
+
+	assert.Equal(t, http.StatusUnprocessableEntity, resp.StatusCode,
+		"a count below none is something the caller said, and silently reading it as one is this "+
+			"console deciding what somebody meant")
+	c.watcher.AssertNumberOfCalls(t, "ProposeStated", 0)
 }
 
 // TestAWatchStartedFromASignatureNeedsNoSentence is the other end of the same

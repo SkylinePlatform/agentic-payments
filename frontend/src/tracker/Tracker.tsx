@@ -129,7 +129,36 @@ function RunRow({ run }: { readonly run: RunView }) {
         <code className="font-mono text-sm text-ink">{run.id}</code>
         <Status word={status.label} pip={status.pip} ending={status.ending} raw={status.raw} />
       </div>
-      <p className="font-sans text-sm text-ink">&ldquo;{run.typed}&rdquo;</p>
+      {/*
+        **The quotation is drawn only when there is something to quote**, and
+        issue #314 is what made that a live case rather than a defensive one.
+        A purchase chosen from the catalogue has no sentence — nobody typed one,
+        `agent.ProposeStated` called no interpreter, and `console.Run.typed` is
+        the empty string all the way down the wire — so an unconditional
+        `&ldquo;{run.typed}&rdquo;` renders a bare pair of quotation marks on
+        every row this demonstration now produces. That is the same defect the
+        consent screen fixes one screen earlier, and this is the screen a viewer
+        looks at for the rest of the run.
+
+        What stands in its place is the merchant's own name for the thing, which
+        is what a person recognises. It is **not** the identifier: #242's rule is
+        that `gtin:05012345678900` substituted for a title is the identifier
+        wearing the name's clothes, and the line below already prints it. A run
+        with neither draws neither — `title` is empty when the merchant could not
+        be asked — and the row is still a row, with its state, its item and its
+        attempts.
+      */}
+      {run.typed !== "" ? (
+        <p className="font-sans text-sm text-ink" data-testid="typed">
+          &ldquo;{run.typed}&rdquo;
+        </p>
+      ) : (
+        run.title !== "" && (
+          <p className="font-sans text-sm text-ink" data-testid="named">
+            {run.title}
+          </p>
+        )
+      )}
       <p className="font-sans text-xs text-graphite">
         {run.item} · quantity {run.quantity}
       </p>

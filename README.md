@@ -32,7 +32,7 @@ you would be disputing.
 
 ```mermaid
 flowchart LR
-    U["User"] -->|"a sentence, in words"| A["Shopping Agent"]
+    U["User"] -->|"a sentence, or a row and a limit"| A["Shopping Agent"]
     A -->|"an order"| M["Merchant"]
     M -.-> Q1["Who is this agent?"]
     M -.-> Q2["What did the user actually approve?"]
@@ -174,22 +174,30 @@ holding an authorisation wider than the one you signed.
 
 ### What the user signs
 
-Not the prompt.
+Not what you asked for. What a verifier will be handed.
 
-An LLM turns free text into typed constraints. That is the only place a model
-appears anywhere in this repository, and it appears before anything is signed.
-From there the Trusted Surface — a separate party, which the protocol requires
-to be non-agentic — renders those constraints as sentences and takes the
-signature over *them*.
+**There are two ways to ask.** Pick something out of the merchant's catalogue and
+type the most you will pay, which is what `make demo` offers and what needs no
+model at all; or type free text, which needs one and is what `make demo-live` is
+for. An LLM appears only on the second, only in one package, and only before
+anything is signed.
+
+Either way the Trusted Surface — a separate party, which the protocol requires to
+be non-agentic — renders the constraints as sentences and takes the signature over
+*them*.
 
 ![The Trusted Surface's zone: what you asked for, and beneath it what you are signing](docs/images/consent.png)
 
+*Screenshot from the free-text path, which is why it shows a typed sentence. On
+the catalogue path the first zone reads **What you chose** and names the offer,
+the count and your limit; everything below it is identical, because what is being
+signed does not depend on how you asked.*
+
 Note what the screen says about itself. The agent "has proposed, and it is
-finished"; the surface is "a different party", talking to your browser
-directly; and the sentence you typed is labelled **this text is not what you
-sign**. The rendering comes from the surface's own renderer, reached through
-`/authorise/preview`, precisely so that the sentence you read is the sentence
-the signature covers.
+finished"; the surface is "a different party", talking to your browser directly;
+and what you asked for is labelled **not what you sign**. The rendering comes from
+the surface's own renderer, reached through `/authorise/preview`, precisely so
+that the sentence you read is the sentence the signature covers.
 
 ### Who sees what
 

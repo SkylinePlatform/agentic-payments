@@ -142,6 +142,22 @@ const (
 	quantityField = "quantity"
 )
 
+// ErrLimitUnusable means a caller stated a limit this agent cannot act on.
+//
+// A sentinel rather than a plain error, and the reason is which status a browser
+// gets. console.refuse answers its default arm with 502 — *the merchant did not
+// answer* — which is the wrong thing to tell somebody about a request that never
+// reached a merchant. It is the same defect POST /watches has for a missing
+// prompt, fixed there at the handler edge; a limit is checked deep enough inside
+// ProposeStated that the edge cannot see it, so it travels as a sentinel and the
+// handler maps it to 422 alongside the interpretation failures.
+//
+// The four things it covers are all facts about the request: no ceiling, a
+// ceiling of nothing, a ceiling in a currency the offer is not priced in, and a
+// basket whose total no amount can hold. None of them is a counterparty
+// misbehaving, and none of them is fixed by trying again.
+var ErrLimitUnusable = errors.New("agent: the limit stated cannot be acted on")
+
 // ErrNothingToBuy means discovery found no candidate to watch.
 //
 // A refusal rather than an empty result, on the reasoning interpret.ErrNoConstraints
@@ -633,11 +649,13 @@ func (c *Client) ProposeStated(
 	case in.Item == "":
 		return out, fmt.Errorf("%w: nothing was chosen to buy", ErrNothingToBuy)
 	case limit.Amount <= 0:
-		return out, fmt.Errorf("agent: a limit of %d is not a limit anybody meant", limit.Amount)
+		return out, fmt.Errorf("%w: a limit of %d is not a limit anybody meant",
+			ErrLimitUnusable, limit.Amount)
 	case limit.Currency == "":
-		return out, errors.New("agent: a limit with no currency cannot be compared to a price")
+		return out, fmt.Errorf("%w: a limit with no currency cannot be compared to a price",
+			ErrLimitUnusable)
 	case quantity < 1:
-		return out, fmt.Errorf("agent: a basket of %d is not a basket", quantity)
+		return out, fmt.Errorf("%w: a basket of %d is not a basket", ErrLimitUnusable, quantity)
 	}
 
 	// nil constraints and a named item: candidates turns that into a search on
@@ -649,9 +667,25 @@ func (c *Client) ProposeStated(
 	}
 
 	if offer.Price.Currency != limit.Currency {
-		return out, fmt.Errorf(
-			"agent: %s is priced in %s and the limit is in %s, and this agent holds no rates",
-			item, offer.Price.Currency, limit.Currency)
+		return out, fmt.Errorf("%w: %s is priced in %s and the limit is in %s, and this agent holds no rates",
+			ErrLimitUnusable, item, offer.Price.Currency, limit.Currency)
+	}
+
+	// **The limit is the order total**, because that is what the constraint it
+	// becomes actually bounds — see triggerFor, and merchant.Catalogue.Subject,
+	// which is handed Price × Quantity. Nothing here multiplies the limit: the
+	// number the person typed is the ceiling on the purchase, and this is only
+	// working out what the purchase costs today so the trigger can be read
+	// against the same thing a verifier will.
+	//
+	// Refused rather than wrapped, on merchant.Catalogue.Quote's own reasoning
+	// one party along: generated.Amount holds minor units in an int, so a large
+	// enough quantity wraps, and a wrapped total is a negative or tiny price that
+	// a cap constraint waves through.
+	line := offer.Price.Amount * quantity
+	if quantity != 0 && (line/quantity != offer.Price.Amount || line < 0) {
+		return out, fmt.Errorf("%w: %d of %s overflows what an amount can hold",
+			ErrLimitUnusable, quantity, item)
 	}
 
 	amount := amountField
@@ -676,7 +710,7 @@ func (c *Client) ProposeStated(
 		Constraints: narrow(stated, item),
 		AgentKey:    in.AgentKey,
 		Quantity:    quantity,
-		Trigger:     triggerFor(limit, offer.Price),
+		Trigger:     triggerFor(limit, generated.Amount{Amount: line, Currency: offer.Price.Currency}),
 		// No preference: nothing was ranked, because nothing was chosen from.
 		// applies() makes the same call for a caller-named item on the read
 		// path, and reporting one here would be a false account of a real
@@ -724,7 +758,7 @@ func openValue(v any) (any, error) {
 }
 
 // triggerFor decides whether an authorisation buys now or waits, from the limit
-// against what the thing costs today.
+// against what the *purchase* costs today.
 //
 // **This is a reading and not an evaluation**, and the distinction is the one
 // AGENTS.md draws when it says constraints are evaluated by the verifier and
@@ -741,8 +775,24 @@ func openValue(v any) (any, error) {
 // because a loop with nobody in front of it is safer not buying. Here there is
 // no absence — one of the two is always returned — so the caution lands on the
 // screen instead, which is where a person can act on it.
-func triggerFor(limit, price generated.Amount) interpret.Trigger {
-	if limit.Amount >= price.Amount {
+//
+// # It takes the line total, and getting that wrong reintroduces issue #298
+//
+// **`amount` at the verifier bounds what will actually be charged, not what one
+// of the thing costs.** merchant.Catalogue.Subject says so in as many words —
+// "a cap is compared against what will actually be charged, so the caller
+// multiplies (Quote does) and this does not" — and Quote is what builds the
+// LinePrice the merchant signs the checkout over. So a limit compared here
+// against a *unit* price would call a purchase immediate that the merchant then
+// refuses for exceeding the cap, at any quantity above one. That is issue #298
+// exactly: a mandate signed first and refused afterwards, on the demonstration's
+// headline screen.
+//
+// line is passed in rather than computed here because ProposeStated has already
+// had to compute it — it needs the same number for the overflow refusal — and
+// two multiplications of one fact is how the two come to disagree.
+func triggerFor(limit, line generated.Amount) interpret.Trigger {
+	if limit.Amount >= line.Amount {
 		return interpret.TriggerImmediate
 	}
 	return interpret.TriggerConditional

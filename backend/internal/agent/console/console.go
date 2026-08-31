@@ -211,7 +211,13 @@ type Service struct {
 // the merchant's, the quantity is a number — and everything that says on what
 // terms the purchase may happen comes back from the Trusted Surface, signed.
 type Watching struct {
-	// Prompt is what the user typed. Required.
+	// Prompt is what the user typed.
+	//
+	// **Required only when Authorisation is nil**, since issue #314. Without a
+	// signature this agent is about to interpret the sentence, so a watch with
+	// none is a watch with nothing to authorise; with one, the limits are signed
+	// already and the prompt's only remaining job is Run.typed — which a purchase
+	// chosen from the catalogue legitimately has nothing to put in. See Start.
 	Prompt string
 	// Item, when set, is the offer the caller already picked; see
 	// agent.Intent.Item for why naming one skips the search and nothing else.
@@ -664,6 +670,18 @@ func (s *Service) propose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// **Zero resolves to one; a negative is refused.** `resolved` treats anything
+	// below one as unstated, which is right for zero — a browser that sent no
+	// count meant one — and wrong for `-5`, which is a caller that said something
+	// and would have it silently discarded. ProposeStated refuses a basket below
+	// one, and without this the refusal is unreachable over HTTP, so the test
+	// asserting it would be asserting a state the wire cannot produce.
+	if req.Quantity < 0 {
+		http.Error(w, "console: a basket cannot hold fewer than none of something",
+			http.StatusUnprocessableEntity)
+		return
+	}
+
 	if stated {
 		proposal, err := s.Watcher.ProposeStated(r.Context(), req.Item, *req.Limit, resolved(req.Quantity))
 		if err != nil {
@@ -889,7 +907,16 @@ func refuse(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 	case errors.Is(err, interpret.ErrNoScript),
 		errors.Is(err, interpret.ErrNoConstraints),
-		errors.Is(err, agent.ErrNothingToBuy):
+		errors.Is(err, agent.ErrNothingToBuy),
+		// The stated half of POST /proposals, added with issue #314. It sits in
+		// this arm and not the default one because every limit it covers is a
+		// fact about the *request* — no ceiling, a ceiling of nothing, a currency
+		// the offer is not priced in, a basket whose total no amount can hold —
+		// and none of them is a merchant that did not answer. The default arm's
+		// 502 would send a browser to look at a counterparty this call never
+		// reached, which is the defect POST /watches has for a missing prompt and
+		// fixes at its own edge.
+		errors.Is(err, agent.ErrLimitUnusable):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 	default:
 		http.Error(w, err.Error(), http.StatusBadGateway)

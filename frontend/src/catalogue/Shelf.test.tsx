@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Offer } from "../consent/model";
 import { Shelf } from "./Shelf";
+import { toMinorUnits } from "../protocol";
 import { openingLimit } from "./Table";
 
 function anOffer(overrides: Partial<Offer> = {}): Offer {
@@ -135,8 +136,11 @@ describe("the limit a buyer sets", () => {
     render(<Shelf offers={[anOffer()]} onChoose={vi.fn()} choosing={null} />);
 
     const box = screen.getByLabelText(/most you will pay/i) as HTMLInputElement;
-    expect(Number.parseFloat(box.value) * 100).toBeLessThan(45000);
-    expect(screen.getByTestId("limit-effect").textContent).toMatch(/waits until it costs/i);
+    // Through the same conversion the component uses. Multiplying by a literal
+    // hundred here is what made the JPY defect invisible to this assertion for
+    // as long as the code had the same literal in it.
+    expect(toMinorUnits(Number.parseFloat(box.value), "USD")).toBeLessThan(45000);
+    expect(screen.getByTestId("limit-effect").textContent).toMatch(/waits until it comes to/i);
   });
 
   it("says buys now once the limit reaches the price, and waits below it", async () => {
@@ -159,7 +163,7 @@ describe("the limit a buyer sets", () => {
     await userEvent.clear(box);
     await userEvent.type(box, "380.00");
     expect(screen.getByTestId("limit-effect").textContent).toMatch(
-      /waits until it costs .?380\.00/i,
+      /waits until it comes to .?380\.00/i,
     );
   });
 
@@ -191,6 +195,69 @@ describe("the limit a buyer sets", () => {
     expect(screen.getByTestId("limit-effect").textContent).toMatch(
       /type what you are willing to pay/i,
     );
+  });
+});
+
+describe("the limit is a ceiling on the purchase, not on one of the thing", () => {
+  // Issue #298, on the path that would have reintroduced it. `amount` at the
+  // verifier bounds what will be charged — merchant.Catalogue.Subject is handed
+  // Price × Quantity — so a row comparing the box against the *unit* price says
+  // "Buys now" about a purchase the merchant then refuses for exceeding the cap.
+  //
+  // Every other test in this file uses a quantity of one, which is precisely the
+  // value where the line total and the unit price coincide and the defect is
+  // invisible.
+
+  async function withQuantity(n: string) {
+    const box = screen.getByLabelText(/quantity/i);
+    await userEvent.clear(box);
+    await userEvent.type(box, n);
+  }
+
+  it("waits when the limit clears one of them and not three", async () => {
+    render(<Shelf offers={[anOffer()]} onChoose={vi.fn()} choosing={null} />);
+
+    await withQuantity("3");
+    const limit = screen.getByLabelText(/most you will pay/i);
+    await userEvent.clear(limit);
+    await userEvent.type(limit, "460.00");
+
+    expect(
+      screen.getByTestId("limit-effect").textContent,
+      "three at $450.00 come to $1,350.00, so a ceiling of $460.00 authorises nothing today — " +
+        "'buys now' here is a mandate signed straight into a refusal",
+    ).toMatch(/waits until all 3 come to/i);
+  });
+
+  it("buys now once the limit clears all of them, and says the total it buys at", async () => {
+    render(<Shelf offers={[anOffer()]} onChoose={vi.fn()} choosing={null} />);
+
+    await withQuantity("3");
+    const limit = screen.getByLabelText(/most you will pay/i);
+    await userEvent.clear(limit);
+    await userEvent.type(limit, "1400.00");
+
+    const said = screen.getByTestId("limit-effect").textContent ?? "";
+    expect(said).toMatch(/buys now/i);
+    expect(
+      said,
+      "the number it buys at is the line total, which is also what the cell two along prints",
+    ).toMatch(/1,350\.00/);
+  });
+
+  it("sends the ceiling unmultiplied, because that is what the constraint bounds", async () => {
+    // The number typed *is* the ceiling on the purchase. A screen that multiplied
+    // it by the quantity would authorise three times what the person agreed to.
+    const onChoose = vi.fn();
+    render(<Shelf offers={[anOffer()]} onChoose={onChoose} choosing={null} />);
+
+    await withQuantity("3");
+    const limit = screen.getByLabelText(/most you will pay/i);
+    await userEvent.clear(limit);
+    await userEvent.type(limit, "1400.00");
+    await userEvent.click(screen.getByRole("button", { name: /^buy$/i }));
+
+    expect(onChoose.mock.calls[0]).toEqual(["gtin:0001", 3, 140000]);
   });
 });
 
@@ -264,6 +331,8 @@ describe("the limit a row opens on", () => {
     [24000, 20000, "and the flight, which lands on the cap its scripted sentence used to carry"],
     [145900, 100000, "just past a power of ten, where one leading digit costs the larger drop"],
     [100, 90, "already on its leading digit, so it steps down one order further"],
+    [1000, 900, "a power of ten, which is where an inexact log10 would have opened at the price"],
+    [100000, 90000, "and a larger one, for the same reason"],
     [1, 1, "never below one: the agent refuses a limit of zero"],
     [0, 1, "a free offer is not a reason to open on a value Buy would reject"],
   ])("opens %d at %d — %s", (price, want) => {

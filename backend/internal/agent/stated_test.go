@@ -42,6 +42,11 @@ func sellingOne(t *testing.T, id string, price generated.Amount) *Client {
 	return &Client{Endpoints: Endpoints{Merchant: server.URL}}
 }
 
+// field is what generated.Constraint's optional Field member needs. propose_test.go
+// has a generic one, and it is `package agent_test` — this file is `package agent`,
+// so it cannot see it.
+func field(name string) *string { return &name }
+
 func usd(amount int) generated.Amount {
 	return generated.Amount{Amount: amount, Currency: "USD"}
 }
@@ -96,6 +101,111 @@ func TestTheTriggerComesFromTheLimitAgainstThePrice(t *testing.T) {
 			assert.Equal(t, tc.want, got.Trigger, tc.why)
 		})
 	}
+}
+
+// TestTheLimitBoundsThePurchaseAndNotOneOfTheThing is issue #298, on the path
+// that would have reintroduced it.
+//
+// # The claim, and where it comes from
+//
+// `amount` at the verifier bounds **what will actually be charged**.
+// merchant.Catalogue.Subject says so on the line that builds it — "a cap is
+// compared against what will actually be charged, so the caller multiplies
+// (Quote does) and this does not" — Quote is what produces the LinePrice, and the
+// merchant signs its checkout over that. So a limit of 400.00 against three of a
+// 450.00 offer is a cap on 1,350.00 and not on 450.00.
+//
+// The first version of ProposeStated compared the limit against `offer.Price`,
+// which is the *unit* price the search returns. At any quantity above one that is
+// wrong in both directions and both are bad:
+//
+//   - a limit at or above the unit price reads as an instruction to buy, so the
+//     agent buys immediately and the merchant refuses it for exceeding the cap —
+//     a mandate signed first and refused afterwards, which is #298 verbatim;
+//   - a limit below it reads as a wait for a price the schedule may well reach,
+//     while the mandate it produced could never have been satisfied.
+//
+// # Why every other test in this file uses one
+//
+// Because at a quantity of one the line total *is* the unit price, so the whole
+// defect is invisible. That is the finding rather than an excuse: a suite whose
+// fixtures all sit on the one value where two quantities coincide cannot see them
+// come apart, and this is the row that makes them.
+func TestTheLimitBoundsThePurchaseAndNotOneOfTheThing(t *testing.T) {
+	t.Parallel()
+
+	const id = "gtin:05012345678900"
+
+	for _, tc := range []struct {
+		name     string
+		limit    int
+		quantity int
+		want     interpret.Trigger
+		why      string
+	}{
+		{
+			name: "above one of them and below three", limit: 46000, quantity: 3,
+			want: interpret.TriggerConditional,
+			why: "three at 450.00 come to 1,350.00, so a ceiling of 460.00 authorises nothing " +
+				"today — calling this immediate buys straight into a refusal, which is #298",
+		},
+		{
+			name: "above three of them", limit: 140000, quantity: 3,
+			want: interpret.TriggerImmediate,
+			why:  "1,400.00 clears 1,350.00, so this is somebody telling the agent to buy",
+		},
+		{
+			name: "exactly three of them", limit: 135000, quantity: 3,
+			want: interpret.TriggerImmediate,
+			why:  "the constraint is lte, so the exact total already satisfies it",
+		},
+		{
+			name: "one short of three of them", limit: 134999, quantity: 3,
+			want: interpret.TriggerConditional,
+			why:  "one minor unit under the total is a purchase that cannot happen yet",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := sellingOne(t, id, usd(45000))
+			got, err := client.ProposeStated(t.Context(), Intent{Item: id}, usd(tc.limit), tc.quantity)
+			require.NoError(t, err, tc.why)
+			assert.Equal(t, tc.want, got.Trigger, tc.why)
+
+			// The constraint itself is untouched by any of this: the number the
+			// person typed *is* the ceiling on the purchase, so nothing multiplies
+			// it. What the quantity changes is only what the trigger is read
+			// against — asserted here so a "fix" that multiplied the limit would
+			// go red rather than quietly authorising three times as much.
+			assert.Contains(t, got.Constraints, generated.Constraint{
+				Op: "lte", Field: field("amount"),
+				Value: map[string]any{
+					"amount": float64(tc.limit), "currency": "USD",
+				},
+			}, "the ceiling that reaches a mandate is the one that was typed, unmultiplied")
+		})
+	}
+}
+
+// TestABasketNoAmountCanHoldIsRefused is the other half of the line total.
+//
+// merchant.Catalogue.Quote refuses the same multiplication for the same reason —
+// "generated.Amount holds minor units in an int, so a large enough quantity wraps,
+// and a wrapped total is a negative or tiny price that a cap constraint waves
+// through". This agent computes that product too, one party earlier, so it has to
+// make the same refusal or hand a verifier a trigger read off a wrapped number.
+func TestABasketNoAmountCanHoldIsRefused(t *testing.T) {
+	t.Parallel()
+
+	const id = "gtin:05012345678900"
+	client := sellingOne(t, id, usd(1<<62))
+
+	_, err := client.ProposeStated(t.Context(), Intent{Item: id}, usd(1<<62), 8)
+	require.Error(t, err, "eight of a price this size does not fit in an int and must not be silently wrapped")
+	assert.ErrorIs(t, err, ErrLimitUnusable,
+		"a basket that overflows is a fact about the request, so a browser has to be told 422 "+
+			"rather than sent to look at a merchant that answered perfectly well")
 }
 
 // TestAStatedProposalRanksNothing is the field that has to stay empty, and it is

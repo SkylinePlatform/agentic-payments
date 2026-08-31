@@ -139,6 +139,34 @@ numbers.
 `internal/agent` still cannot import the evaluator, and
 `TestTheAgentCannotReachAConstraintEvaluator` still holds it.
 
+### The limit is a ceiling on the purchase, not on one of the thing
+
+**`amount` at the verifier bounds what will actually be charged.**
+`merchant.Catalogue.Subject` says so on the line that builds it — *"a cap is
+compared against what will actually be charged, so the caller multiplies (Quote
+does) and this does not"* — `Quote` produces the `LinePrice`, and the merchant
+signs its checkout over that.
+
+So the number typed into the row is the ceiling on the **order total**, the
+constraint carries it unmultiplied, and everything that compares against it
+compares against `price × quantity`: `agent.triggerFor`, and the sentence under
+the box.
+
+**Getting that wrong reintroduces issue #298**, which is how the first version of
+this was written. Comparing the limit against the *unit* price makes a ceiling of
+400.00 read as an instruction to buy three 450.00 items — the agent buys, and the
+merchant refuses it for exceeding a cap on 1,350.00. A mandate signed first and
+refused afterwards, on the demonstration's headline screen. In the other
+direction a limit below the unit price reads as a wait for a price the schedule
+may well reach, while the mandate could never have been satisfied.
+
+It was invisible for one reason worth recording: **every fixture used a quantity
+of one**, which is the single value where the line total and the unit price
+coincide. `TestTheLimitBoundsThePurchaseAndNotOneOfTheThing` is the row that makes
+them come apart, and the overflow refusal beside it is
+`merchant.Catalogue.Quote`'s own, made one party earlier — a wrapped total is a
+negative or tiny price that a cap constraint waves through.
+
 ### A stale row can predict the wrong trigger, and the consent screen is what catches it
 
 The table is fetched once and the merchant's prices move every three to six

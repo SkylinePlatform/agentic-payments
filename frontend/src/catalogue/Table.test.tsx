@@ -232,3 +232,43 @@ describe("the product table", () => {
     expect(screen.getByText(/final price/i)).toBeTruthy();
   });
 });
+
+describe("which controls a row carries", () => {
+  // The `stated` prop's doc comment claims that a limit box on a proposal's rows
+  // "would let somebody type a ceiling that never reaches a mandate". Nothing
+  // asserted the box was absent, so deleting every `{stated && …}` block left the
+  // whole suite green — the value assertions above catch the `null`, not the
+  // control.
+
+  it("carries no limit box on rows a sentence narrowed to", () => {
+    render(<Table offers={[anOffer()]} stated={false} onChoose={vi.fn()} choosing={null} />);
+
+    expect(
+      screen.queryByLabelText(/most you will pay/i),
+      "the limits came out of the sentence and the Trusted Surface is about to render them; a " +
+        "box here takes a number that reaches no mandate",
+    ).toBeNull();
+    expect(screen.queryByTestId("limit-effect")).toBeNull();
+    expect(screen.queryByText(/your limit/i)).toBeNull();
+  });
+
+  it("carries one on rows the buyer sets the limit on", () => {
+    render(<Table offers={[anOffer()]} stated={true} onChoose={vi.fn()} choosing={null} />);
+
+    expect(screen.getByLabelText(/most you will pay/i)).toBeTruthy();
+    expect(screen.getByTestId("limit-effect")).toBeTruthy();
+  });
+
+  it("reports the ceiling it was given, alongside the offer and the count", async () => {
+    const onChoose = vi.fn();
+    render(<Table offers={[anOffer()]} stated={true} onChoose={onChoose} choosing={null} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /^buy$/i }));
+
+    expect(
+      onChoose.mock.calls[0]?.[2],
+      "a third argument of null here is the catalogue path silently losing the one number it " +
+        "exists to collect",
+    ).not.toBeNull();
+  });
+});

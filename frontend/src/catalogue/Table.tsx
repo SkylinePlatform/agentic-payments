@@ -106,7 +106,7 @@ export function Table({
           </th>
           {stated && (
             <th className="py-2 pr-3 font-sans text-xs uppercase tracking-widest text-graphite">
-              Your limit
+              Your limit, in total
             </th>
           )}
           <th className="sr-only">Buy</th>
@@ -163,8 +163,14 @@ function parsedQuantity(raw: string): number {
  * before it is touched.
  */
 export function openingLimit(price: number): number {
-  if (price <= 1) return 1;
-  const step = 10 ** Math.floor(Math.log10(price));
+  if (!Number.isSafeInteger(price) || price <= 1) return 1;
+  // The digit count rather than `Math.log10`, which the ECMAScript spec does not
+  // require to be exactly rounded: an engine answering 2.9999999999999996 for
+  // log10(1000) would give a step of 100 and open the box *at* the price, which
+  // is the one thing this function's own comment says must never happen. A
+  // string's length is exact on every engine, and `price` is an integer number of
+  // minor units by construction.
+  const step = 10 ** (String(price).length - 1);
   const rounded = Math.floor(price / step) * step;
   return Math.max(1, rounded === price ? price - Math.max(1, step / 10) : rounded);
 }
@@ -236,6 +242,9 @@ function Row({
 
   const quantity = parsedQuantity(raw);
   const limit = stated ? parsedLimit(limitRaw, offer.price.currency) : null;
+  // Declared before `total` below, which needs it, and read after — the value it
+  // is compared against is the line total rather than the unit price. See
+  // `buysNow`.
   // A row whose limit box holds nothing usable cannot be bought: the agent
   // refuses a limit of zero, and a Buy that produced a 422 a person cannot read
   // is worse than a button that says it is not ready.
@@ -256,6 +265,17 @@ function Row({
   // honest answer promises none.
   const total = offer.price.amount * quantity;
   const totalIsExact = Number.isSafeInteger(total);
+  // What the limit is actually a ceiling on. `amount` at the verifier bounds what
+  // will be charged, not what one of the thing costs —
+  // `merchant.Catalogue.Subject` is handed Price × Quantity — so a row that
+  // compared the box against the unit price would say "Buys now" about a purchase
+  // the merchant is going to refuse, which is issue #298 with a new spelling.
+  //
+  // The same number `agent.triggerFor` reads, and the same one printed as the
+  // line total two cells to the left. Where it cannot be held exactly the row
+  // says nothing rather than guessing, on the reasoning `totalIsExact` already
+  // applies to the figure beside it.
+  const buysNow = limit !== null && totalIsExact && limit >= total;
 
   return (
     <tr className="border-b border-graphite/40 align-top">
@@ -308,7 +328,7 @@ function Row({
       {stated && (
         <td className="py-3 pr-3">
           <label htmlFor={limitId} className="sr-only">
-            Most you will pay for {offer.title}
+            Most you will pay in total for {offer.title}
           </label>
           <input
             id={limitId}
@@ -339,9 +359,13 @@ function Row({
           <p className="mt-1 font-sans text-xs text-graphite" data-testid="limit-effect">
             {limit === null
               ? "Type what you are willing to pay."
-              : limit >= offer.price.amount
-                ? `Buys now, at ${formatAmount(offer.price)}.`
-                : `Waits until it costs ${formatAmount({ ...offer.price, amount: limit })} or less.`}
+              : !totalIsExact
+                ? "That many is more than a price can hold."
+                : buysNow
+                  ? `Buys now, at ${formatAmount({ ...offer.price, amount: total })}.`
+                  : `Waits until ${quantity > 1 ? `all ${quantity}` : "it"} come${
+                      quantity > 1 ? "" : "s"
+                    } to ${formatAmount({ ...offer.price, amount: limit })} or less.`}
           </p>
         </td>
       )}

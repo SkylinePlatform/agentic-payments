@@ -367,6 +367,38 @@ describe("the shopping console", () => {
     ).toBe("");
   });
 
+  it("replaces the catalogue with the proposal's rows rather than showing both", async () => {
+    // `Console.tsx` justifies the ternary with "a screen showing both would be
+    // offering two ways to buy the same thing under different limits with nothing
+    // saying which is which". Every other assertion here is a findBy, so turning
+    // the ternary into a fragment left the whole suite green — the claim was
+    // unbreakable until this asserted the absence.
+    stubFetch({
+      "/examples": { examples: [] },
+      "/interpret": { body: aReading() },
+      "/candidates": { body: aProposal() },
+    });
+    renderConsole();
+
+    await screen.findByTestId("shelf");
+    await userEvent.type(
+      await screen.findByRole("textbox"),
+      "find and buy telescopic ladders, cheapest",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /interpret/i }));
+    await screen.findByTestId("product-table-section");
+
+    expect(
+      screen.queryByTestId("shelf"),
+      "the catalogue's rows carry a limit box and the proposal's do not, so both on one screen " +
+        "is two ways to buy the same thing under different limits",
+    ).toBeNull();
+    expect(
+      screen.queryByLabelText(/most you will pay/i),
+      "and the box itself has to be gone, not merely the section around it",
+    ).toBeNull();
+  });
+
   it("says the merchant did not answer rather than drawing an empty shop", async () => {
     // An unanswered GET /examples costs a sentence and the box still works. An
     // unanswered GET /offers is the whole screen under `make demo`, and a silent
