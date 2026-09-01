@@ -312,6 +312,13 @@ func TestTheAccentSeedingSpreadsEvenlyOverTheFour(t *testing.T) {
 // whole subject is a drawing that changed must not answer confidently about one
 // it cannot see.
 //
+// **The comparison against wash and ink is exact**, which is a property rather
+// than an oversight and was in the previous doc: an ink written `#0F1729` in one
+// case and `#0f1729` in another would be *reported* rather than skipped, so the
+// caller fails on it. A drawing whose two fixed colours drifted in spelling is
+// worth failing on, and a reader that normalised them away would be deciding for
+// the caller which drifts matter.
+//
 // **`none` is not a colour**, which is the one thing the shape of this reader had
 // to be told. `fill="none"` is how SVG says *do not paint this*, so a stroked path
 // that draws its accent on the outline carries it — and reporting it as a second
@@ -370,8 +377,15 @@ func accentDrawn(svg []byte) ([]string, error) {
 	return painted, nil
 }
 
-// TestTheAccentReaderReadsWhatABrowserWouldDraw is the test accentDrawn never had,
-// and issue #294 is what its absence cost three times.
+// TestTheAccentReaderReadsEveryWayAColourCanBeWritten is the test accentDrawn
+// never had, and issue #294 is what its absence cost three times.
+//
+// **The name is what it checks and no more.** It was
+// TestTheAccentReaderReadsWhatABrowserWouldDraw for one commit, which claims
+// something the reader deliberately does not do: `fill-opacity="0"` on every
+// accented cell leaves this reader agreeing with accentOf while a browser draws
+// nothing — measured, and the byte comparison is what catches it. The subject
+// here is how a colour is *written*, which is where all three defects were.
 //
 // Every version of that reader was exercised only through the sixty marks — a body
 // of input that by construction cannot contain the spelling the *next* drawing will
@@ -383,7 +397,7 @@ func accentDrawn(svg []byte) ([]string, error) {
 // They are hand-written SVG rather than marks, deliberately. A row built by drawing
 // a real mark could only contain spellings this program already emits, which is the
 // input set that hid all three defects.
-func TestTheAccentReaderReadsWhatABrowserWouldDraw(t *testing.T) {
+func TestTheAccentReaderReadsEveryWayAColourCanBeWritten(t *testing.T) {
 	t.Parallel()
 
 	const accent = signal
