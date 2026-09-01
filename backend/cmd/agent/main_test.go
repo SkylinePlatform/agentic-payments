@@ -727,7 +727,8 @@ func TestAWatchWithNoConsoleStillStopsTheProcess(t *testing.T) {
 // answer roles.AwaitPeer's key-set request with a 404, so the polling still times
 // out, the tests still read `unreachable`, and they still pass. What is wrong is
 // that the fixture would then be exactly the case the paragraph above says it is
-// not, and both tests would pass through the other branch with nothing noticing.
+// not, and both tests would pass through the other branch with nothing noticing —
+// which is why the guard below is about the premise rather than about a count.
 //
 // Port 1 cannot be drawn. The kernel allocates ephemeral ports from a range
 // starting far above it — net.ipv4.ip_local_port_range, 32768 by default — so no
@@ -735,7 +736,9 @@ func TestAWatchWithNoConsoleStillStopsTheProcess(t *testing.T) {
 // privilege no test has or wants. It is this module's existing spelling for the
 // same thing rather than a new invention: internal/platform/obs's absentCollector
 // and internal/demo's health-check fixtures both name it, with the measurement
-// that put it there.
+// that put it there. Only one place asserts the premise, and it is the test
+// below — the other two rely on the same property and say so in prose, which is
+// the state this constant was in until #325.
 const nothingIsListeningAt = "http://127.0.0.1:1"
 
 // TestNothingIsListeningAtIsRefusedRatherThanAnswered is what makes the paragraph
