@@ -695,8 +695,12 @@ func VerifiedAgent(r *http.Request, trusted bool) (identity.Verified, bool)
 
 Both through `roles.Main`, like `cmd/surface`, `cmd/credprovider`, `cmd/mpp` and
 `cmd/merchant`. `cmd/agent` is the exception and stays one — it mints its emitter
-before it knows whether it will serve at all, so it calls `roles.Run` itself
-[TREE, `internal/roles/run.go`, the comment on `FlushGrace`].
+before it knows whether it will serve at all, so it binds and serves itself
+[TREE, `internal/roles/run.go`, the comment on `FlushGrace`]. Since issue #273
+that is `roles.Listen` and then `roles.Serve` rather than one call to
+`roles.Run`, because its boot watch signs two open mandates between the two and
+must not do so against a port this process turns out not to hold. Neither new
+binary has anything to do in between, so both stay on `roles.Main`.
 
 ```
 registry  -addr :8087
