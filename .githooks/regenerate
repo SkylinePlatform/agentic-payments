@@ -36,29 +36,122 @@ if ! command -v make >/dev/null 2>&1 || ! command -v go >/dev/null 2>&1; then
 	exit 0
 fi
 
+# **One line before make runs, so that a slow run is not silence.** Issue #268's
+# F11: the first checkout after `make clean`, or after a Go point release
+# invalidates the build cache, blocks for ten to fifteen seconds — measured at
+# 9.9s on eight cores — and prints nothing at all, because the time goes into
+# compiling the generators before any target emits a word. The instinct at
+# fifteen seconds of silence is Ctrl-C, which kills regeneration halfway into
+# exactly the half-package state doc.go anticipates.
+#
+# It is a real cost: eight words on every operation that moves the tree, against
+# a rare operation that would otherwise look hung. The trade is taken because
+# the rare one is the one that does damage. `[ -t 2 ]` keeps it off scripts and
+# GUI capture, where nobody is waiting to read it.
+#
+# Nothing tests this line, and the reason is the condition: asserting it needs a
+# pseudo-terminal, which is a dependency in a suite that has one — testify — and
+# whose whole subject is shell scripts. `[ -t 2 ]` is false everywhere a test can
+# read the output, so a test would be measuring the branch that stays silent.
+if [ -t 2 ]; then
+	echo "git hook: regenerating (slow on a cold build cache)" >&2
+fi
+
 # GOPROXY=off is what keeps a git operation off the network. Everything this
 # builds is in the module cache after one `make setup`; on a cache that is
 # genuinely cold, generation fails loudly below instead of fetching modules
 # inside a `git checkout`. Nothing tests this line — a test would have to
 # observe the absence of a network — and it is here because it costs nothing,
 # not because anything is proving it.
+#
+# The toolchain is in the same class and the sentence above used to leave it
+# out. A commit bumping the go directive in backend/go.mod arrives by `git pull`
+# — a hook-firing event — so the operation that lands it is the operation that
+# reports it cannot download the toolchain, until someone runs `make setup`.
+# That is the stated design rather than a gap, and here `make setup` is the
+# right remedy, which is not true of every arm below.
 if output=$(GOPROXY=off make generated 2>&1); then
 	exit 0
 fi
 
 printf '%s\n' "$output" >&2
-cat >&2 <<'EOF'
 
-git hook: could not regenerate. The operation itself succeeded — these hooks
-never fail one — but backend/internal/core/generated/ and the mocks_test.go
-beside each mocked interface are now whatever the previous tree left behind.
+# say emits one line. printf rather than the here-document this used to be, and
+# `cat` is the reason: it is /usr/bin/cat and not a shell builtin, so on the
+# PATH post-checkout's ${0%/*} exists for — a git client with no coreutils — the
+# one message written for that case was the one thing that could not be
+# delivered, leaving make's raw error as the whole explanation. Issue #268's F15.
+say() {
+	printf '%s\n' "$1" >&2
+}
 
-An editor reports that as undefined symbols in code that is fine, which is
-issue #265: "Describe undefined on MockWatcher" with nothing wrong in
-console.go. The error above is make's own.
+say ""
+say "git hook: could not regenerate. The operation itself succeeded — these hooks"
+say "never fail one. The error above is make's own."
+say ""
 
-  make setup                           a clone or a new worktree needs this once
-  make generated                       run it again and watch it fail
-  git config hooks.regenerate false    turn this off
-EOF
+# **Which failure this is, as far as anything here can tell**, and each arm says
+# what it means as well as what to type. Issue #268's F9 and F10: one block with
+# one set of remedies was printed for three different causes, and for two of them
+# the remedies were wrong or beside the point — while the framing above them
+# announced stale generated code to a reader whose tree has none.
+#
+# A tree with no `generated` target is a checkout that predates the hooks —
+# `git worktree add <a pre-#266 commit>` is the ordinary way to reach it, since
+# the hook is resolved from the main worktree and run in the new one. `make setup`
+# does not exist there, so printing it sends the reader to a command that cannot
+# help.
+#
+# The Makefile is read rather than asked. `make -n generated` was the obvious
+# spelling and answers the wrong question: it fails whenever make cannot run at
+# all, so a broken toolchain would be diagnosed as a tree that predates the
+# hooks — measured, in the suite's own lab, where the stub make refuses
+# everything. Reading the file is also the only spelling available on the PATH
+# this script is written for: `grep` is not a builtin, and F15 is what happens
+# when that is forgotten.
+has_generated_target() {
+	[ -f Makefile ] || return 1
+	while IFS= read -r line; do
+		case $line in
+		generated:*) return 0 ;;
+		esac
+	done < Makefile
+	return 1
+}
+
+if ! has_generated_target; then
+	say "This tree has no 'generated' target, so it predates these hooks. Nothing"
+	say "here is stale and there is nothing to run: the generated files are not part"
+	say "of that commit's build either."
+	say ""
+	say "  git config hooks.regenerate false    turn this off while you are here"
+	exit 0
+fi
+
+# Uncommitted work is the commonest cause and the one the old block blamed the
+# operation for. mockery loads every package to build its doubles, so a
+# hand-written file that does not compile stops generation — and carrying that
+# across a branch switch is what a mid-refactor checkout is.
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+	say "This tree has uncommitted changes. If they do not compile, that is the cause"
+	say "rather than the operation you just ran: generating the mocks loads every"
+	say "package, so one broken file stops all of it."
+	say ""
+	say "Until it does, backend/internal/core/generated/ and the mocks_test.go beside"
+	say "each mocked interface are whatever the previous tree left behind — which an"
+	say "editor reports as undefined symbols in code that is fine (issue #265)."
+	say ""
+	say "  make generated                       run it again and read the error above"
+	say "  git config hooks.regenerate false    turn this off"
+	exit 0
+fi
+
+say "backend/internal/core/generated/ and the mocks_test.go beside each mocked"
+say "interface are now whatever the previous tree left behind. An editor reports"
+say "that as undefined symbols in code that is fine, which is issue #265:"
+say "\"Describe undefined on MockWatcher\" with nothing wrong in console.go."
+say ""
+say "  make setup                           a clone or a new worktree needs this once"
+say "  make generated                       run it again and watch it fail"
+say "  git config hooks.regenerate false    turn this off"
 exit 0

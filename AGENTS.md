@@ -461,6 +461,20 @@ Where a git client's PATH has no Go on it they print one line naming issue #265
 rather than exiting silently, because stale output with no message is the failure
 being removed.
 
+**What they say when generation fails is three answers, not one** — issue #332.
+A tree with no `generated` target predates the hooks, which is what a
+`git worktree add` onto an old commit produces, and nothing there is stale; a
+tree with uncommitted changes is the commonest cause, because generating the
+mocks loads every package and one broken file stops all of it; anything else gets
+the original block. Each arm carries its own framing as well as its own remedy,
+since the old one announced stale generated code to readers who had none and
+offered `make setup` in a tree that has no such target. The block is emitted with
+`printf` rather than a `cat` here-document, because `cat` is not a builtin and
+the one message written for a PATH with no coreutils was the one thing that could
+not be delivered there. One line reaches stderr *before* make runs, so that the
+ten to fifteen seconds a cold build cache costs is not silence — the instinct at
+fifteen seconds of silence is Ctrl-C, which kills regeneration half way.
+
 | hook | fires on |
 |---|---|
 | `post-checkout` | `git checkout`, `git switch`, `git worktree add`, every step of a `git bisect` |

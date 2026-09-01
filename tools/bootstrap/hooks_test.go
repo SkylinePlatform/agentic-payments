@@ -72,6 +72,13 @@ func newLab(t *testing.T) *lab {
 	installHooks(t, root)
 	l.git("config", "core.hooksPath", ".githooks")
 
+	// A Makefile with the target the hooks ask for. The stub make on PATH ignores
+	// it — what reads it is regenerate's own check for whether this tree is one
+	// that predates the hooks, which reads the file rather than asking make,
+	// because asking make cannot tell a missing target from a make that will not
+	// run. A lab with no Makefile at all would put every arm here on the wrong
+	// side of that question.
+	l.write("Makefile", "generated:\n\t@true\n")
 	l.write("seed", "one")
 	l.git("add", "-A")
 	l.git("commit", "-qm", "seed")
@@ -386,4 +393,120 @@ func TestEveryEntryPointRunsWhatTheHooksRun(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTheFailureBlockIsDeliveredOnAPathWithNoCoreutils is issue #332, from
+// #268's F15.
+//
+// post-checkout uses `${0%/*}` rather than `dirname` because "a git client can
+// invoke a hook with a PATH that has no coreutils on it". `regenerate` then
+// emitted its twelve-line explanation with `cat >&2 <<'EOF'` — and `cat` is
+// /usr/bin/cat, not a shell builtin. On the one PATH that argument is written
+// for, the one message written for it was the one thing that could not be
+// delivered:
+//
+//	.githooks/regenerate: 50: cat: not found
+//
+// leaving make's raw error as the whole explanation. TestNoGoToolchainStopsAndSaysSo
+// is the only other test that runs under a restricted PATH, and it returns at the
+// `echo` branch — which is why this was reachable and unmeasured.
+//
+// The PATH here holds git, go and the stub make and nothing else, so the block is
+// reached and every external command it might want is absent.
+func TestTheFailureBlockIsDeliveredOnAPathWithNoCoreutils(t *testing.T) {
+	t.Parallel()
+	l := newLab(t)
+
+	for _, tool := range []string{"git", "go"} {
+		real, err := exec.LookPath(tool)
+		require.NoError(t, err, "the hook needs %s and this machine has none", tool)
+		require.NoError(t, os.Symlink(real, filepath.Join(l.bin, tool)))
+	}
+	l.setPath(l.bin)
+	l.env = append(l.env, "MAKE_FAILS=1")
+
+	l.git("checkout", "-q", "-b", "other")
+	l.write("seed", "two")
+	l.git("commit", "-qam", "two")
+	out := l.git("checkout", "-q", "main")
+
+	assert.Contains(t, out, "could not regenerate",
+		"the block is what a reader gets instead of make's raw error, and on a PATH with no "+
+			"coreutils it is the one thing that could not be printed")
+	assert.Contains(t, out, "hooks.regenerate false",
+		"and the way out has to survive with it — a block cut off half way is worse than the "+
+			"raw error, because it looks complete")
+	assert.NotContains(t, out, "not found",
+		"a shell reporting a missing command is this failure exactly: the message written for a "+
+			"PATH without coreutils, needing one")
+}
+
+// TestATreeThatPredatesTheHooksIsToldSo is issue #332, from #268's F10.
+//
+// `git worktree add <a pre-#266 commit>` resolves the hook from the main
+// worktree and runs it in the new one, whose Makefile has no `generated` target.
+// The block printed there announced stale generated code and offered `make
+// setup` — a command that does not exist in that tree — to a reader whose tree
+// has nothing stale in it, because the generated files are not part of that
+// commit's build either. This repository creates worktrees constantly.
+//
+// The lab reaches the same state by removing the Makefile, which is what a tree
+// from before the target existed looks like to the only check available on a
+// PATH with no coreutils: the file, read in shell.
+func TestATreeThatPredatesTheHooksIsToldSo(t *testing.T) {
+	t.Parallel()
+	l := newLab(t)
+	l.env = append(l.env, "MAKE_FAILS=1")
+
+	require.NoError(t, os.Remove(filepath.Join(l.root, "Makefile")))
+	l.git("add", "-A")
+	l.git("commit", "-qm", "before the target existed")
+
+	l.git("checkout", "-q", "-b", "other")
+	l.write("seed", "two")
+	l.git("commit", "-qam", "two")
+	out := l.git("checkout", "-q", "main")
+
+	assert.Contains(t, out, "predates these hooks",
+		"a tree with no target to run is not a tree with stale output, and telling its reader "+
+			"otherwise is three paragraphs about a problem they do not have")
+	assert.NotContains(t, out, "make setup",
+		"that command does not exist in this tree, so naming it sends the reader somewhere that "+
+			"cannot help — which is the half of #268's F10 that survived checking")
+	assert.NotContains(t, out, "issue #265",
+		"nothing here is stale: the generated files are not part of that commit's build")
+}
+
+// TestUncommittedWorkIsNamedAsTheLikelyCause is issue #332, from #268's F9.
+//
+// The commonest way regeneration fails is mid-refactor breakage carried across a
+// branch switch: mockery loads every package to build its doubles, so one
+// hand-written file that does not compile stops all of it. The block blamed the
+// operation — three paragraphs about the checkout having staled the generated
+// half — where the cause was in the reader's own uncommitted work.
+//
+// A dirty tree is what says so, and it is all this can say: the hook cannot know
+// whether those changes compile. So the wording is "if they do not compile, that
+// is the cause", and the assertion is that the reader is pointed at their own
+// tree rather than at the operation.
+func TestUncommittedWorkIsNamedAsTheLikelyCause(t *testing.T) {
+	t.Parallel()
+	l := newLab(t)
+	l.env = append(l.env, "MAKE_FAILS=1")
+
+	l.git("checkout", "-q", "-b", "other")
+	l.write("seed", "two")
+	l.git("commit", "-qam", "two")
+	l.write("uncommitted", "mid-refactor")
+
+	out := l.git("checkout", "-q", "main")
+
+	assert.Contains(t, out, "uncommitted changes",
+		"the reader has to be sent to their own tree; blaming the checkout is what sends them to "+
+			"debug the hooks instead of the file they are editing")
+	assert.Contains(t, out, "issue #265",
+		"and the symptom still has to be named, because the generated half is stale either way")
+	assert.NotContains(t, out, "make setup",
+		"this tree is set up — offering the setup command here is the generic block's remedy "+
+			"arriving for a cause it does not fit")
 }
