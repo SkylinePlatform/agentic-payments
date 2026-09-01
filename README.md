@@ -69,6 +69,13 @@ run shows the refusal depends on where the merchant's price schedule has got to
 when the agent takes its first quote; the sequence cycles, so a run that showed
 only the purchase will show the refusal on another.
 
+What is no longer luck is that the run **concludes**. The limit the buying screen
+suggests is the lowest price the offer's schedule ever reaches, so it can always
+be met — until issue #344, forty-one of the sixty-three offers opened on a
+suggestion no price of theirs could reach, and the watch refused correctly and
+settled nothing. The limit is still yours to change, and one no price meets now
+says so before you sign it.
+
 The part nobody expects is what the refusal does to the authorisation. It does
 not burn it.
 
@@ -216,7 +223,7 @@ flowchart LR
 
 ![The Mandate Inspector: three limits withheld from everybody sent the Payment Mandate](docs/images/inspector.png)
 
-The panel is worth reading closely, because it states the trap. **Withholding is
+That screen is worth reading closely, because it states the trap. **Withholding is
 not politeness.** A verifier shown a fact it cannot check treats that fact as
 unsatisfied and refuses every purchase under the mandate — so disclosing
 everything to everybody is not the safe default it looks like. It is a way of

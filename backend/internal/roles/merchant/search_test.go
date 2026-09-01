@@ -447,7 +447,7 @@ func everything(t *testing.T) []generated.Constraint {
 //
 // The expected order is the catalogue's own rather than a list written out here.
 // A written list was the right shape for four offers and is the wrong one for
-// sixty-four: it would be a second copy of the file, sorted by hand, and the
+// sixty-three: it would be a second copy of the file, sorted by hand, and the
 // failure it produced on the day somebody added a product would be a diff of
 // sixty strings that says nothing about ordering.
 //
