@@ -77,9 +77,12 @@ func main() {
 // caller the listener's own answer rather than the argument it was given. nil
 // means nobody is waiting, which is the case for main.
 //
-// It is called once, after the bind and before anything is accepted, on run's
-// own goroutine — so a caller may send it somewhere without a race and without
-// needing to be ready first.
+// It is called once, on run's own goroutine, after the bind and before the
+// server accepts anything — so a caller may send the address somewhere without a
+// race and without needing to be ready first. The socket is already listening by
+// then, which is the useful half: a caller can connect the moment it is told,
+// and the kernel holds the connection in the backlog until Serve gets to it.
+// That is what replaces the dial loop the old test needed.
 func run(ctx context.Context, args []string, stderr io.Writer, listening func(net.Addr)) error {
 	fs := flag.NewFlagSet("collector", flag.ContinueOnError)
 	fs.SetOutput(stderr)
