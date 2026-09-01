@@ -134,8 +134,12 @@ func Listen(role, addr string) (net.Listener, error) {
 	return ln, nil
 }
 
-// Serve serves h on ln until the process is asked to stop, then drains. It
-// closes ln on the way out, whichever way it leaves.
+// Serve serves h on ln until the process is asked to stop, then drains.
+//
+// ln is closed on the way out, by http.Server rather than by anything here:
+// Serve closes it when it returns and Shutdown closes it before draining, so
+// both paths out of this function have already let the port go. A caller that
+// reaches this function has nothing left to close.
 //
 // The drain matters more here than the line count suggests. A role that is
 // killed mid-request leaves a counterparty with no receipt for a mandate it

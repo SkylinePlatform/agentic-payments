@@ -161,6 +161,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -289,8 +290,9 @@ func run() error {
 	// decided. It used to deny it: a process that could not build its *emitter*
 	// returned before anything else happened, which inverts ADR 0003 — the event
 	// log is observability and never evidence, and the ADR's own consequence is
-	// that nothing about it may fail a mandate construction. roles.Events reports the defect and hands back a nil
-	// emitter that records nothing, so the branch is neither swallowed nor fatal.
+	// that nothing about it may fail a mandate construction. roles.Events reports
+	// the defect and hands back a nil emitter that records nothing, so the branch
+	// is neither swallowed nor fatal.
 	// It belongs with the flush below rather than with consoleFor's failures,
 	// which is the asymmetry #273 found: the flush already got this right.
 	events := roles.Events(clock.New(), "agent", *collector, os.Stderr)
@@ -722,20 +724,48 @@ func serveConsole(
 	// Nothing about the console's own failures moves. What moves is which of them
 	// can be reached at all: an address already taken is now found before the
 	// first signature rather than after the last.
+	//
+	// serveOn is the rest of this function, and its comment says why the split is
+	// not a tidy-up: -addr must not be reachable once there is a listener to ask
+	// instead.
 	ln, err := roles.Listen("agent", addr)
 	if err != nil {
 		return err
 	}
 
-	handler, err := consoleFor(ctx, e, events, addr, cfg, initial, os.Stderr)
+	return serveOn(ctx, e, events, ln, cfg, initial)
+}
+
+// serveOn is serveConsole once it has a port, and the split is what keeps every
+// address it reports honest.
+//
+// **-addr is not in scope here, deliberately.** The flag and the listener differ
+// wherever -addr does not fully determine a port: `-addr 127.0.0.1:0` asks the
+// kernel for whichever one is free, and a console that printed its argument would
+// hand the reader `http://127.0.0.1:0/watches` — a URL that looks like one that
+// works. cmd/collector's start-up line follows the same rule for issue #259.
+//
+// A comment saying "use the bound address" would be a rule a reader has to
+// notice. Not having the other string is not: nothing below can name the flag's
+// value, because nothing below was given it. The property is unassertable by a
+// test — roles.Serve blocks until a signal, so nothing can drive this function to
+// completion and read what it printed — so making the mistake inexpressible is
+// what replaces one, on joseVerifier's argument in AGENTS.md.
+func serveOn(
+	ctx context.Context, e agent.Endpoints, events *obs.Emitter,
+	ln net.Listener, cfg watching, initial bool,
+) error {
+	bound := ln.Addr().String()
+
+	handler, err := consoleFor(ctx, e, events, bound, cfg, initial, os.Stderr)
 	if err != nil {
-		// The listener is this function's until Serve takes it over, and this is
+		// The listener is serveConsole's until Serve takes it over, and this is
 		// the path where Serve is never reached.
 		_ = ln.Close()
 		return err
 	}
 
-	fmt.Printf("  console    http://%s/watches\n", addr)
+	fmt.Printf("  console    http://%s/watches\n", bound)
 	return roles.Serve("agent", ln, handler)
 }
 
@@ -754,9 +784,9 @@ func serveConsole(
 //
 // Split from serveConsole so that the decision above is assertable without a
 // process, which is the same reason flagsAgree and interpreterFor are functions:
-// roles.Serve blocks until a signal, so a test that had to go
-// through it could not ask the one question worth asking — whether there is a
-// handler to hand it at all. That question is this function's return value.
+// roles.Serve blocks until a signal, so a test that had to go through it could
+// not ask the one question worth asking — whether there is a handler to hand it
+// at all. That question is this function's return value.
 //
 // **The error it returns is never the boot watch's.** Everything it can fail on
 // is this process being unable to be a console: no key, no blinder, no routes.

@@ -144,6 +144,29 @@ func TestAnEmitterThatCannotBeBuiltIsSaidAndSurvived(t *testing.T) {
 	}, "a role that cannot record events still has to run, which is the whole of the decision")
 }
 
+// TestAReportlessCallerStillGetsTheDefectSaid is the nil arm of the same
+// decision, and it exists because nothing else runs that branch.
+//
+// Events documents that a nil report means os.Stderr — "so a caller that has
+// nowhere in particular to say it cannot accidentally make it silent" — and both
+// production call sites pass os.Stderr, so without this the branch that makes
+// that sentence true is never executed at all. A defaulting branch nobody runs is
+// a defaulting branch that can be wrong.
+//
+// Capturing os.Stderr would mean swapping a process-wide file descriptor from a
+// parallel test, which is a race with every other test in this binary. What is
+// asserted instead is the half that is checkable without one: a nil report is not
+// a panic and not a silent success, and the emitter still comes back nil.
+func TestAReportlessCallerStillGetsTheDefectSaid(t *testing.T) {
+	t.Parallel()
+
+	var emitter *obs.Emitter
+	assert.NotPanics(t, func() { emitter = roles.Events(nil, "agent", "", nil) },
+		"the nil arm is reached only when something has already gone wrong, so a panic here would "+
+			"replace a reported defect with a crash — the one outcome worse than either")
+	assert.Nil(t, emitter, "there was no emitter to build, whoever was or was not listening")
+}
+
 // TestEventsWithNoCollectorStillRecords is the control.
 //
 // The test above passes just as well against an Events that gave up on every

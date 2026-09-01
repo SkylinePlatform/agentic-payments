@@ -83,6 +83,10 @@ func Events(clk authz.Clock, role, collector string, report io.Writer) *obs.Emit
 	return emitter
 }
 
+// newEmitter is Events without the decision about what a failure means, so that
+// the branch above has something to fail on. Unexported because the decision is
+// the point: a second exported way in is a second way to reintroduce the return
+// Events exists not to have.
 func newEmitter(clk authz.Clock, role, collector string) (*obs.Emitter, error) {
 	if collector == "" {
 		return obs.NewEmitter(clk, role)
