@@ -86,6 +86,23 @@ func TestOrdinaryLinesAreForwardedUnchanged(t *testing.T) {
 			"died mid-sentence is the one worth reading")
 }
 
+// TestOnlyTheLineEndingIsTrimmed is the edge the obvious spelling gets wrong.
+//
+// bufio.ScanLines, which this loop replaced, drops one \n and then one \r.
+// bytes.TrimRight over the same two characters drops every trailing one of
+// either, so a role printing a bare carriage return as output — a progress line
+// that redraws itself is the ordinary way that happens — would have it eaten.
+// Nothing about #275 asks for that, and a replacement of working code that
+// changes something nobody mentioned is the worst kind of regression to find
+// later.
+func TestOnlyTheLineEndingIsTrimmed(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, []string{"merchant      | 50%\r"}, piping(t, "50%\r\r\n"),
+		"one \\r belongs to the line ending and the other belongs to the role; taking both is a "+
+			"change of behaviour this issue did not ask for")
+}
+
 // TestNothingPrintedSaysNothing is the other control, and it is here because the
 // loop now has an explicit end rather than a Scan that returns false.
 //

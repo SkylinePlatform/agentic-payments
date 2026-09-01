@@ -303,7 +303,13 @@ func (r *Runner) healthy(ctx context.Context, url string) bool {
 // short read is a wrong answer. This reads a log line: dropping the tail of one
 // costs a screenshot, and refusing would cost every line after it.
 const (
-	maxLine     = 1024 * 1024
+	maxLine = 1024 * 1024
+
+	// readerChunk is the Scanner's own starting buffer, kept because it is the
+	// size that was already working. It bounds nothing a reader has to reason
+	// about — a line longer than it arrives in several pieces and is joined —
+	// so the only thing it trades is one more copy against maxLine of resident
+	// memory per pipe, and there are two per process.
 	readerChunk = 64 * 1024
 )
 
@@ -346,6 +352,18 @@ func (r *Runner) pipe(p Process, from io.Reader) {
 	}
 }
 
+// withoutDelimiter drops the line ending, and exactly the line ending.
+//
+// bytes.TrimRight over "\r\n" is the obvious spelling and is not the same rule:
+// it would eat every trailing carriage return and newline, so a role printing
+// `done\r\r` would have both taken. bufio.ScanLines — what this loop replaced —
+// drops one \n and then one \r, and a change of behaviour nobody asked for is
+// exactly what a replacement of working code must not smuggle in.
+func withoutDelimiter(chunk []byte) []byte {
+	chunk = bytes.TrimSuffix(chunk, []byte("\n"))
+	return bytes.TrimSuffix(chunk, []byte("\r"))
+}
+
 // readLine reads one line, keeping at most maxLine bytes of it and reporting how
 // many it discarded.
 //
@@ -363,7 +381,7 @@ func readLine(reader *bufio.Reader) (line []byte, dropped int, err error) {
 		// honest, since the bytes it counts are the ones that did not fit.
 		done := !errors.Is(read, bufio.ErrBufferFull)
 		if done {
-			chunk = bytes.TrimRight(chunk, "\r\n")
+			chunk = withoutDelimiter(chunk)
 		}
 
 		switch room := maxLine - len(line); {
