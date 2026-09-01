@@ -97,11 +97,23 @@ function AttemptRow({ attempt }: { readonly attempt: Attempt }) {
       <div className="flex flex-wrap gap-4 text-xs">
         <span className="font-sans text-graphite">
           checkout mandate{" "}
-          <Status subdued word={checkout.label} pip={checkout.pip} ending={checkout.ending} raw={checkout.raw} />
+          <Status
+            subdued
+            word={checkout.label}
+            pip={checkout.pip}
+            ending={checkout.ending}
+            raw={checkout.raw}
+          />
         </span>
         <span className="font-sans text-graphite">
           payment mandate{" "}
-          <Status subdued word={payment.label} pip={payment.pip} ending={payment.ending} raw={payment.raw} />
+          <Status
+            subdued
+            word={payment.label}
+            pip={payment.pip}
+            ending={payment.ending}
+            raw={payment.raw}
+          />
         </span>
       </div>
       {/*
@@ -187,6 +199,19 @@ function RunRow({ run }: { readonly run: RunView }) {
 
 export function Tracker() {
   const { runs, error, refresh } = useTracker();
+  // **Closed to begin with**, and issue #344 is why. This lists every run with
+  // every attempt under it, and a watch on a price it never reaches runs to
+  // dozens — sixty-two, in the report that opened that issue — each with two
+  // mandate states and the verifier's message. On a screen that now draws the
+  // three lanes for the run a person is actually watching, an open tracker is
+  // the same story a second time and several screens longer.
+  //
+  // Kept rather than deleted, which was the other option on the table. It says
+  // two things the lanes do not: where *every* run stands, not just this one,
+  // and where each mandate in an attempt stands — `authz.MandateState`'s own
+  // words, which no lane draws. That is a real second view, and it is one a
+  // reader asks for rather than one that should arrive unasked.
+  const [open, setOpen] = useState(false);
 
   return (
     <section className="flex flex-col gap-3" aria-label="Mandate tracker">
@@ -196,38 +221,53 @@ export function Tracker() {
         </h2>
         <button
           type="button"
-          onClick={refresh}
+          aria-expanded={open}
+          onClick={() => setOpen((shown) => !shown)}
           className="font-sans text-xs text-graphite underline hover:text-ink"
+          data-testid="tracker-toggle"
         >
-          Reload
+          {open ? "Hide" : "Show"}
         </button>
+        {open && (
+          <button
+            type="button"
+            onClick={refresh}
+            className="font-sans text-xs text-graphite underline hover:text-ink"
+          >
+            Reload
+          </button>
+        )}
       </div>
 
-      {/*
+      {!open ? null : (
+        <>
+          {/*
         Four mutually exclusive bodies, flat rather than nested, because three
         of them are claims of different strengths and a nested ternary is where
         two of them ended up rendering together: "the read failed" and "nothing
         is being watched" are not the same sentence, and only one of them is
         ever true.
       */}
-      {error !== null && <p className="font-sans text-sm text-broken">{error}</p>}
+          {error !== null && <p className="font-sans text-sm text-broken">{error}</p>}
 
-      {runs === null && error === null && (
-        <p className="font-sans text-sm text-graphite">Reading the console…</p>
-      )}
+          {runs === null && error === null && (
+            <p className="font-sans text-sm text-graphite">Reading the console…</p>
+          )}
 
-      {runs !== null && runs.length === 0 && (
-        <p className="border border-graphite/40 bg-wash px-4 py-6 font-sans text-sm text-graphite">
-          No purchase is being watched.
-        </p>
-      )}
+          {runs !== null && runs.length === 0 && (
+            <p className="border border-graphite/40 bg-wash px-4 py-6 font-sans text-sm text-graphite">
+              No purchase is being watched.
+            </p>
+          )}
 
-      {runs !== null && runs.length > 0 && (
-        <ul className="flex flex-col gap-3">
-          {runs.map((run) => (
-            <RunRow key={run.id} run={run} />
-          ))}
-        </ul>
+          {runs !== null && runs.length > 0 && (
+            <ul className="flex flex-col gap-3">
+              {runs.map((run) => (
+                <RunRow key={run.id} run={run} />
+              ))}
+            </ul>
+          )}
+        </>
       )}
     </section>
   );

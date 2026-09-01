@@ -354,6 +354,39 @@ describe("the Buying screen", () => {
     ).toBeNull();
   });
 
+  it("offers the way back to the shop, and takes it", async () => {
+    // **Without this the screen is a dead end**, which is what one screen and no
+    // nav cost between #316 and #344: signing used to change address, so the nav
+    // was the way back, and when the lanes arrived in place and the nav went
+    // with the second screen there was nothing left to click. A person who had
+    // just bought something could not buy anything else without reloading.
+    stubStream();
+    stubFetch({
+      "/examples": { examples: [] },
+      "/interpret": { body: aReading() },
+      "/candidates": { body: aProposal() },
+      "/authorise/preview": { body: aPreview() },
+      "/authorise": { body: anAuthorised() },
+      "/watches": { status: 201, body: { id: "w1", correlation_id: "c-abc" } },
+    });
+    render(<Buying />, { wrapper: Router });
+
+    await reachTheSurface();
+    await userEvent.click(await screen.findByRole("button", { name: /sign/i }));
+    await screen.findByTestId("watching-region");
+
+    await userEvent.click(screen.getByTestId("back-to-shop"));
+
+    expect(
+      await screen.findByRole("textbox"),
+      "the shop is what a person came here for, and the console is how they reach it",
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("watching-region"),
+      "and the run they left is not still on screen under the shop they came back to",
+    ).toBeNull();
+  });
+
   it("does not put the Mandate Inspector on the screen that collects the signature", async () => {
     // The seam #316 predicted would not be needed. `Disclosure` is the Mandate
     // Inspector, which re-renders a signed mandate's constraints with the

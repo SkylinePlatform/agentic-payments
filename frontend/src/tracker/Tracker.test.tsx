@@ -4,6 +4,25 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Tracker } from "./Tracker";
 
+/**
+ * Renders the tracker and opens it.
+ *
+ * **It is closed by default since issue #344**, because it lists every run with
+ * every attempt under it and a watch on a price it never reaches runs to dozens
+ * — sixty-two in the report that opened that issue. On a screen that now draws
+ * the three lanes for the run a person is watching, an open tracker is the same
+ * story a second time and several screens longer.
+ *
+ * Every test below is about what it says once asked for, so every one of them
+ * asks. `TestTheTrackerStartsClosed` — the arm that would go red if it stopped
+ * being a disclosure — is the one that does not use this.
+ */
+async function showTracker() {
+  const rendered = render(<Tracker />);
+  await userEvent.click(screen.getByTestId("tracker-toggle"));
+  return rendered;
+}
+
 function stubFetch(routes: Record<string, { status?: number; body: unknown }>) {
   vi.stubGlobal("fetch", (url: string) => {
     const fixture = routes[url];
@@ -34,7 +53,7 @@ const attempt = (n: number, checkout: string, payment: string, settled: boolean,
 describe("the mandate tracker", () => {
   it("says nothing is being watched when the console holds no runs", async () => {
     stubFetch({ "/watches": { body: { watches: [] } } });
-    render(<Tracker />);
+    await showTracker();
 
     expect(await screen.findByText(/no purchase is being watched/i)).toBeTruthy();
   });
@@ -67,7 +86,7 @@ describe("the mandate tracker", () => {
       },
     });
 
-    render(<Tracker />);
+    await showTracker();
 
     const runA = await screen.findByTestId("run-run-a");
     const runB = await screen.findByTestId("run-run-b");
@@ -122,7 +141,7 @@ describe("the mandate tracker", () => {
       },
     });
 
-    render(<Tracker />);
+    await showTracker();
 
     const runA = await screen.findByTestId("run-run-a");
     const runB = await screen.findByTestId("run-run-b");
@@ -148,7 +167,7 @@ describe("the mandate tracker", () => {
     // nothing. Rendering both is how a tracker reports four live watches as
     // none.
     stubFetch({ "/watches": { status: 500, body: "console: the watch store is unavailable" } });
-    render(<Tracker />);
+    await showTracker();
 
     expect(await screen.findByText(/the watch store is unavailable/i)).toBeTruthy();
     expect(
@@ -180,7 +199,7 @@ describe("the mandate tracker", () => {
       },
     });
 
-    const { container } = render(<Tracker />);
+    const { container } = await showTracker();
     await screen.findByTestId("run-run-a");
 
     expect(
@@ -205,7 +224,7 @@ describe("the mandate tracker", () => {
       },
     });
 
-    const { container } = render(<Tracker />);
+    const { container } = await showTracker();
 
     expect(await screen.findByText(/not a status this build knows/i)).toBeTruthy();
     expect(
@@ -234,7 +253,7 @@ describe("the mandate tracker", () => {
       },
     });
 
-    render(<Tracker />);
+    await showTracker();
 
     expect(await screen.findByText(/not a status this build knows/i)).toBeTruthy();
     expect(screen.getByText("hibernating")).toBeTruthy();
@@ -250,7 +269,7 @@ describe("the mandate tracker", () => {
       return Promise.resolve(new Response("not stubbed", { status: 404 }));
     });
 
-    render(<Tracker />);
+    await showTracker();
     await screen.findByText(/no purchase is being watched/i);
     expect(calls).toBe(1);
 
@@ -296,7 +315,7 @@ describe("a purchase nobody typed a sentence for", () => {
 
   it("names the thing instead of quoting nothing", async () => {
     serve(chosen());
-    render(<Tracker />);
+    await showTracker();
 
     expect(await screen.findByTestId("named")).toBeTruthy();
     expect(screen.getByTestId("named").textContent).toBe("Vitesse Urbain 7");
@@ -311,7 +330,7 @@ describe("a purchase nobody typed a sentence for", () => {
     // a state that reaches this screen. The identifier is on the row already and
     // must not stand in — #242's rule.
     serve(chosen({ title: "" }));
-    render(<Tracker />);
+    await showTracker();
 
     await screen.findByTestId("run-run-c");
     expect(screen.queryByTestId("named")).toBeNull();
@@ -325,9 +344,73 @@ describe("a purchase nobody typed a sentence for", () => {
   it("still quotes a sentence when there was one", async () => {
     // The other half, so the branch above cannot pass by never drawing either.
     serve(chosen({ typed: "buy me this bicycle when it drops below $400" }));
-    render(<Tracker />);
+    await showTracker();
 
     expect((await screen.findByTestId("typed")).textContent).toContain("buy me this bicycle");
     expect(screen.queryByTestId("named")).toBeNull();
+  });
+});
+
+describe("the tracker is asked for rather than arriving", () => {
+  it("starts closed, and says what it is without listing anything", async () => {
+    // Issue #344. This lists every run with every attempt under it, two mandate
+    // states and a verifier's message apiece; a watch on a price it never
+    // reaches ran to sixty-two of them in the report that opened that issue, on
+    // a screen that now also draws the three lanes for the run being watched.
+    //
+    // Kept rather than deleted, which was the other option: it says where
+    // *every* run stands, not just this one, and where each mandate stands in
+    // `authz.MandateState`'s own words, which no lane draws. That is a second
+    // view worth having and one a reader should ask for.
+    stubFetch({
+      "/watches": {
+        body: {
+          watches: [
+            {
+              id: "run-a",
+              correlation_id: "c-a",
+              typed: "buy a flight",
+              item: "route:BEG-PMI",
+              quantity: 1,
+              expires_at: "2026-08-31T23:59:59Z",
+              state: "watching",
+              attempts: 1,
+            },
+          ],
+        },
+      },
+      "/watches/run-a": {
+        body: {
+          id: "run-a",
+          correlation_id: "c-a",
+          typed: "buy a flight",
+          signed: [],
+          item: "route:BEG-PMI",
+          quantity: 1,
+          expires_at: "2026-08-31T23:59:59Z",
+          state: "watching",
+          baseline: null,
+          attempts: [attempt(1, "ready", "ready", false)],
+          unminted: 0,
+          bought: null,
+        },
+      },
+    });
+    render(<Tracker />);
+
+    expect(
+      screen.getByRole("heading", { name: /mandate tracker/i }),
+      "a section that names itself is how a reader knows there is something to open",
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(/buy a flight/i),
+      "and nothing under it: the whole point is that a run's attempts do not arrive unasked",
+    ).toBeNull();
+
+    await userEvent.click(screen.getByTestId("tracker-toggle"));
+    expect(
+      await screen.findByText(/buy a flight/i),
+      "and the run is there once it is",
+    ).toBeTruthy();
   });
 });

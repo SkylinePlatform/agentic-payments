@@ -741,3 +741,47 @@ describe("paging the catalogue", () => {
     expect(rowTitles()).toHaveLength(3);
   });
 });
+
+describe("the columns line up", () => {
+  // **This is the test that was missing**, and issue #344's own screenshot is
+  // what it costs. The header gained a *Shelf* column and a filter under it and
+  // the rows were left at seven cells against eight headings, so every cell from
+  // Retailer rightwards drew one column to the left of the word naming it: the
+  // price sat under *Retailer*, the quantity box under *Price*, and Buy under
+  // *Your limit, in total*.
+  //
+  // Nothing failed. Every other test in this file asks for a cell by its content
+  // or its label, which is exactly what an offset cannot disturb — the value is
+  // still on the page, under the wrong heading. Counting is the only thing that
+  // sees it.
+  const cellsIn = (row: HTMLTableRowElement) => row.querySelectorAll("th, td").length;
+
+  it.each([
+    ["browsing the catalogue", true],
+    ["the candidates a sentence settled on", false],
+  ])("gives every row as many cells as the header has, %s", (_name, browsable) => {
+    render(
+      <Table
+        offers={aShop()}
+        stated
+        browsable={browsable}
+        onChoose={vi.fn()}
+        choosing={null}
+      />,
+    );
+
+    const table = screen.getByTestId("product-table");
+    const [header, ...rest] = [...table.querySelectorAll("tr")] as HTMLTableRowElement[];
+    const want = cellsIn(header);
+
+    expect(want, "a header of no cells would make every comparison below hold").toBeGreaterThan(4);
+    for (const row of rest) {
+      expect(
+        cellsIn(row),
+        "a row short of the header is not a narrow column, it is an offset: every cell after the " +
+          "gap draws under the wrong heading, and no test that asks for a cell by its content " +
+          "can see it",
+      ).toBe(want);
+    }
+  });
+});

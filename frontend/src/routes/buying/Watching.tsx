@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { EventLog } from "../../lanes/EventLog";
+import { verdictOf } from "../../lanes/model";
 import { useTransactions } from "../../lanes/useTransactions";
 import { Connection, Gaps, Pacing } from "../../lanes/Stream";
 import { RunLanes } from "../protocol/RunLanes";
@@ -43,10 +44,25 @@ import { RunLanes } from "../protocol/RunLanes";
 export function Watching({
   correlationId,
   name,
+  onDone,
 }: {
   readonly correlationId: string;
   /** What is being bought, off the proposal that was signed. */
   readonly name?: string;
+  /**
+   * The way back to the shop.
+   *
+   * **Without it this stage is a dead end**, which is what one screen and no nav
+   * cost between #316 and #344: signing used to change address, so the nav was
+   * the way back, and when the lanes arrived in place and the nav went with the
+   * second screen there was nothing left to click. A person who had just bought
+   * something could not buy anything else without reloading.
+   *
+   * It does not stop the watch. The agent holds the mandates and keeps going;
+   * this is a screen changing what it shows, and the tracker below still lists
+   * the run.
+   */
+  readonly onDone: () => void;
 }) {
   const { transactions, records, behind, showEverything, state, gaps, reconnect } =
     useTransactions();
@@ -57,12 +73,30 @@ export function Watching({
   const [logOpen, setLogOpen] = useState(false);
 
   const shown = transactions.find((t) => t.correlationId === correlationId);
+  // Whether anything here is still going to happen. The line below says the
+  // agent is watching, which stops being true the moment something settles —
+  // and the badge on the attempt says BOUGHT while the sentence above it says
+  // the price is being watched, which is the screen contradicting itself.
+  const watching =
+    shown === undefined || shown.attempts.every((a) => verdictOf(a).state !== "bought");
 
   return (
     <section className="flex flex-col gap-6" data-testid="watching-region">
-      <p className="max-w-2xl font-sans text-sm text-graphite">
-        Signed. The agent is watching the price against your limits.
-      </p>
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <p className="font-sans text-sm text-graphite">
+          {watching
+            ? "Signed. The agent is watching the price against your limits."
+            : "Bought. The signature and every verifier's reading of it are below."}
+        </p>
+        <button
+          type="button"
+          onClick={onDone}
+          className="border border-graphite/40 px-2 py-1 font-sans text-xs text-ink hover:border-ink"
+          data-testid="back-to-shop"
+        >
+          Buy something else
+        </button>
+      </div>
 
       {/* Only when they have something to say. A connection banner over a
           connection that is fine is furniture. */}

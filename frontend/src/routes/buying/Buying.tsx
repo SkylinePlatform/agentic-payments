@@ -125,7 +125,15 @@ export function Buying() {
       </header>
 
       {stage.kind === "watching" ? (
-        <Watching correlationId={stage.correlationId} name={stage.name} />
+        <Watching
+          correlationId={stage.correlationId}
+          name={stage.name}
+          onDone={() => {
+            // Back to the shop with nothing carried over — a refusal is what
+            // `refusal` is for, and this is a purchase that went through.
+            setStage({ kind: "browsing", refusal: null });
+          }}
+        />
       ) : stage.kind === "browsing" ? (
         <Party
           name="Shopping Agent"

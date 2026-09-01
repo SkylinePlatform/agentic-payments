@@ -261,6 +261,10 @@ export function Table({
               <td />
               <td />
               {stated && <td />}
+              {/* Buy. A filter row one cell short of its header is a row the
+                  browser stretches, which is half of what put every body cell
+                  under the wrong heading. */}
+              <td />
             </tr>
           )}
         </thead>
@@ -272,6 +276,7 @@ export function Table({
               busy={choosing === offer.id}
               blocked={choosing !== null && choosing !== offer.id}
               stated={stated}
+              showShelf={browsable === true}
               onBuy={(quantity, limit) => onChoose(offer.id, quantity, limit)}
             />
           ))}
@@ -377,6 +382,7 @@ function Row({
   busy,
   blocked,
   stated,
+  showShelf,
   onBuy,
 }: {
   readonly offer: Offer;
@@ -386,6 +392,8 @@ function Row({
   readonly blocked: boolean;
   /** Whether this row carries a limit box — see {@link Table}. */
   readonly stated: boolean;
+  /** Whether the header has a Shelf column for this row to fill. */
+  readonly showShelf: boolean;
   readonly onBuy: (quantity: number, limit: number | null) => void;
 }) {
   // The box's own text, not the parsed number: a controlled input that
@@ -466,6 +474,17 @@ function Row({
           <p className="font-sans text-xs text-graphite">may still change</p>
         )}
       </td>
+      {/*
+        The shelf, and it is here because the header has always been able to
+        name a column the body did not fill. Issue #344 added *Shelf* to the
+        header and a filter under it and left the rows at seven cells against
+        eight headings — so every cell from Retailer rightwards drew one column
+        to the left of the word naming it, and Buy sat under *Your limit*. A
+        header cell with no body cell is not a narrow column; it is an offset.
+      */}
+      {showShelf && (
+        <td className="py-3 pr-3 font-sans text-sm text-graphite">{offer.category}</td>
+      )}
       <td className="py-3 pr-3 font-sans text-graphite">{offer.retailer}</td>
       <td className="py-3 pr-3 font-sans text-ink">
         {formatAmount(offer.price)}
