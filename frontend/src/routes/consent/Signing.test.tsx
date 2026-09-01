@@ -13,19 +13,18 @@ import { Signing } from "./Signing";
  * because the array has to exist before `vi.mock`'s factory closes over it,
  * and `vi.mock` calls are hoisted above every import in this file.
  */
-const { navigations } = vi.hoisted(() => ({
-  navigations: [] as { to: string; state?: unknown }[],
-}));
-
-vi.mock("react-router-dom", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react-router-dom")>();
-  return {
-    ...actual,
-    useNavigate: () => (to: string, options?: { state?: unknown }) => {
-      navigations.push({ to, state: options?.state });
-    },
-  };
-});
+/**
+ * Where the watch's correlation id lands — issue #316.
+ *
+ * This used to be a `vi.mock` of `react-router-dom`, recording the address
+ * `Signing` navigated to on success. It navigates nowhere now: it reports the id
+ * upward and the screen that collected the signature draws the consequence in
+ * place, so what a test can observe is the callback rather than a route.
+ *
+ * A plain array, because the mock it replaces existed only to intercept a
+ * global. The prop is the seam, and nothing has to be hoisted to reach it.
+ */
+const watching: string[] = [];
 
 /**
  * A stubbed `fetch` keyed by path, returning every call it answered.
@@ -107,11 +106,19 @@ function anAuthorised(): Authorised {
 }
 
 function renderSigning(proposal: Proposal = aProposal(), previewed: Previewed = aPreviewed()) {
-  return render(<Signing proposal={proposal} previewed={previewed} />);
+  return render(
+    <Signing
+      proposal={proposal}
+      previewed={previewed}
+      onWatching={(correlationId) => {
+        watching.push(correlationId);
+      }}
+    />,
+  );
 }
 
 beforeEach(() => {
-  navigations.length = 0;
+  watching.length = 0;
 });
 
 afterEach(() => {
@@ -119,14 +126,17 @@ afterEach(() => {
 });
 
 describe("signing", () => {
-  it("signs, starts the watch, and goes to the protocol screen at that run", async () => {
+  // The name used to end "and goes to the protocol screen at that run". It goes
+  // nowhere now — issue #316 — and a name claiming a navigation this component
+  // no longer performs would outlive the behaviour it describes.
+  it("signs, starts the watch, and reports the run it started", async () => {
     const calls = stubFetch({
       "/authorise": { body: anAuthorised() },
       "/watches": { status: 201, body: { id: "w-1", correlation_id: "6f2a1c" } },
     });
     renderSigning();
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/protocol?run=6f2a1c" }]));
+    await waitFor(() => expect(watching).toEqual(["6f2a1c"]));
     expect(calls.map((c) => c.url)).toEqual(["/authorise", "/watches"]);
   });
 
@@ -140,7 +150,7 @@ describe("signing", () => {
     });
     renderSigning({ ...aProposal(), quantity: 2 });
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/protocol?run=c9" }]));
+    await waitFor(() => expect(watching).toEqual(["c9"]));
 
     const watchCall = calls.find((c) => c.url === "/watches");
     const body = JSON.parse(watchCall?.init?.body as string) as {
@@ -255,7 +265,7 @@ describe("signing", () => {
     expect(await screen.findByText(/signed, and the watch did not start/i)).toBeTruthy();
     expect(screen.getByText(/expire in 1 hour/i)).toBeTruthy();
     expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
-    expect(navigations).toEqual([]);
+    expect(watching).toEqual([]);
     // This is the state that tells a person something irreversible happened
     // — a signature exists, unattached to any running watch. `role="alert"`
     // is what makes a screen-reader user hear that the moment it renders,
@@ -280,7 +290,7 @@ describe("signing", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /try again/i }));
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/protocol?run=c" }]));
+    await waitFor(() => expect(watching).toEqual(["c"]));
 
     const watchCalls = calls.filter((c) => c.url === "/watches");
     expect(watchCalls).toHaveLength(2);
@@ -465,7 +475,7 @@ describe("signing", () => {
     expect(await screen.findByText(/the surface did not answer/)).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: /try again/i }));
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/protocol?run=c2" }]));
+    await waitFor(() => expect(watching).toEqual(["c2"]));
     expect(calls.filter((c) => c.url === "/authorise")).toHaveLength(2);
   });
 
@@ -498,7 +508,7 @@ describe("signing", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: /try again/i }));
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/protocol?run=c3" }]));
+    await waitFor(() => expect(watching).toEqual(["c3"]));
 
     const authoriseCalls = calls.filter((c) => c.url === "/authorise");
     expect(authoriseCalls).toHaveLength(2);
@@ -534,11 +544,17 @@ describe("signing", () => {
     });
     render(
       <StrictMode>
-        <Signing proposal={aProposal()} previewed={aPreviewed()} />
+        <Signing
+          proposal={aProposal()}
+          previewed={aPreviewed()}
+          onWatching={(correlationId) => {
+            watching.push(correlationId);
+          }}
+        />
       </StrictMode>,
     );
 
-    await waitFor(() => expect(navigations).toEqual([{ to: "/protocol?run=c5" }]));
+    await waitFor(() => expect(watching).toEqual(["c5"]));
 
     // Two calls here would mean the phantom, cancelled invocation of the
     // mount effect still reached the network before its cleanup could stop

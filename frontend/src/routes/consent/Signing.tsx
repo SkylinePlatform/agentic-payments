@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 
 import { Button } from "../../components/ui/button";
 import { authorise, RequestFailed, startWatch } from "../../consent/client";
@@ -186,11 +185,27 @@ const REFUSED_BEFORE_SIGNING = "request_malformed";
 export function Signing({
   proposal,
   previewed,
+  onWatching,
 }: {
   readonly proposal: Proposal;
   readonly previewed: Previewed;
+  /**
+   * The watch started, and this is its correlation id — issue #316.
+   *
+   * **A callback rather than a `navigate`.** This used to answer a `201` with
+   * `navigate("/protocol?run=" + correlation_id)`, so the moment the
+   * demonstration exists for was the moment the screen changed address: the
+   * consent zone the person was reading was replaced by a different route with
+   * a different heading, and the join between *I signed this* and *here is what
+   * my signature is doing* was a seam.
+   *
+   * Reporting upward instead lets the screen that collected the signature draw
+   * the consequence. Where that goes is `Buying`'s decision, not this
+   * component's — which is the same split every other callback here already
+   * makes.
+   */
+  readonly onWatching: (correlationId: string) => void;
 }) {
-  const navigate = useNavigate();
   const [state, setState] = useState<State>({ kind: "signing" });
 
   // One idempotency key for the whole decision to sign, minted once and
@@ -206,7 +221,7 @@ export function Signing({
 
   /**
    * Runs `starting`: hands `authorised` to the agent, and resolves to
-   * `navigate` on success or `stranded` on failure. Shared between `sign`
+   * `onWatching` on success or `stranded` on failure. Shared between `sign`
    * below, which reaches it once `authorise` succeeds, and `onTryAgain`'s
    * `stranded` branch, which reaches it again with the same `Authorised` and
    * nothing else — `startWatch` mints its own fresh idempotency key per
@@ -220,7 +235,7 @@ export function Signing({
       // model.ts. startWatch no longer takes a quantity of its own to fall
       // back to; there is no caller-supplied number left to prefer over it.
       const { correlation_id } = await startWatch(proposal, authorised);
-      navigate(`/protocol?run=${correlation_id}`);
+      onWatching(correlation_id);
     } catch {
       setState({ kind: "stranded", authorised });
     }

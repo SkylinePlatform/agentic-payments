@@ -120,6 +120,7 @@ import { Signing } from "./Signing";
 export function Consent({
   proposal,
   onRefused,
+  onWatching,
 }: {
   readonly proposal: Proposal;
   /**
@@ -127,6 +128,15 @@ export function Consent({
    * answered — never whether the refusal holds, which it always does.
    */
   readonly onRefused: (recorded: boolean) => void;
+  /**
+   * The person said yes, the surface signed, and the agent started a watch
+   * under this correlation id — issue #316.
+   *
+   * Passed through to `Signing` rather than handled here: this component owns
+   * the decision, and what the screen does once it is made belongs to the
+   * screen. It used to be a `navigate` two components down.
+   */
+  readonly onWatching: (correlationId: string) => void;
 }) {
   const [previewed, setPreviewed] = useState<Previewed | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -149,7 +159,7 @@ export function Consent({
   }, [proposal]);
 
   if (signing && previewed !== null) {
-    return <Signing proposal={proposal} previewed={previewed} />;
+    return <Signing proposal={proposal} previewed={previewed} onWatching={onWatching} />;
   }
 
   async function onRefuse() {

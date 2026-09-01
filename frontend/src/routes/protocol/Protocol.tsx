@@ -1,14 +1,13 @@
-import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { useConsole } from "../../inspector/useConsole";
 import type { Watch } from "../../inspector/useConsole";
 import { EventLog } from "../../lanes/EventLog";
-import { Lanes } from "../../lanes/Lanes";
 import { useTransactions } from "../../lanes/useTransactions";
 import type { Transaction } from "../../lanes/model";
 import type { ConnectionState, Gap } from "../../sse";
 import { Disclosure } from "./Disclosure";
+import { RunLanes } from "./RunLanes";
 
 /**
  * The protocol screen: three lanes, the event log, and — opened from an attempt
@@ -157,36 +156,6 @@ function Runs({
 }
 
 /**
- * What the agent's console calls the run a correlation id names — issue #242.
- *
- * # Why the screen has to go and ask
- *
- * The collector's stream carries no name and should not: ADR 0003 makes the
- * event log observability and never evidence, and a merchant's presentation copy
- * riding every frame of it would be that line crossed for a caption. `GET
- * /watches` is where the agent keeps its own record of what it went looking for
- * — `console.summary.title`, the merchant's words, asked for by
- * `agent.Client.Describe` at the moment the watch began.
- *
- * # Absent and empty are one answer
- *
- * A watch this build's agent could not name answers `""`, and an older agent, or
- * a console that has no record of this run at all, answers nothing. All of them
- * mean *no name*, and collapsing them here rather than in the component is what
- * lets `Lanes` take one optional string and have exactly two cases to draw.
- *
- * An empty string reaching the head would be the worst of the three: a heading
- * with a lone `(7aQx-3Kf)` in it, which reads as a name that failed to load
- * rather than as a run nobody named.
- */
-function nameOf(watches: readonly Watch[], correlationId: string | undefined): string | undefined {
-  if (correlationId === undefined) return undefined;
-  const watch = watches.find((candidate) => candidate.correlation_id === correlationId);
-  const title = watch?.title;
-  return title === undefined || title === "" ? undefined : title;
-}
-
-/**
  * What the screen has arrived and not yet drawn — issue #241.
  *
  * **This is the clause that makes pacing honest rather than a lie.** The screen
@@ -253,11 +222,6 @@ export function Protocol({
   // it where it matters, because there it explains an empty panel.
   const { watches } = useConsole();
 
-  // Which attempt's disclosure panel is open, and of which purchase. The
-  // correlation id is part of it rather than a bare index, so switching runs
-  // cannot leave attempt 2 of one purchase open under attempt 2 of another.
-  const [open, setOpen] = useState<{ run: string; attempt: number } | null>(null);
-
   const asked = params.get("run");
   const newest = transactions[0];
   const shown =
@@ -267,7 +231,6 @@ export function Protocol({
   const waiting = asked !== null && shown === undefined;
 
   const show = (correlationId: string) => {
-    setOpen(null);
     setParams({ run: correlationId });
   };
 
@@ -323,29 +286,20 @@ export function Protocol({
         </p>
       ) : (
         shown !== undefined && (
-          <Lanes
+          <RunLanes
+            key={shown.correlationId}
             transaction={shown}
             name={nameOf(watches, shown.correlationId)}
-            inspecting={{
-              open: open?.run === shown.correlationId ? open.attempt : null,
-              onToggle: (attempt) => {
-                setOpen((held) =>
-                  held?.run === shown.correlationId && held.attempt === attempt
-                    ? null
-                    : { run: shown.correlationId, attempt },
-                );
-              },
-              // Keyed on both, so moving between attempts remounts rather than
-              // re-using a panel that is still holding the previous attempt's
-              // decoded chains while the new ones are read.
-              panel: (
-                <Disclosure
-                  key={`${shown.correlationId}:${String(open?.attempt ?? 0)}`}
-                  correlationId={shown.correlationId}
-                  attempt={open?.attempt ?? 1}
-                />
-              ),
-            }}
+            // Keyed on the run and the attempt, so moving between attempts
+            // remounts rather than re-using a panel still holding the previous
+            // attempt's decoded chains while the new ones are read.
+            panelFor={(attempt) => (
+              <Disclosure
+                key={`${shown.correlationId}:${String(attempt)}`}
+                correlationId={shown.correlationId}
+                attempt={attempt}
+              />
+            )}
           />
         )
       )}
@@ -353,4 +307,34 @@ export function Protocol({
       <EventLog records={records} />
     </div>
   );
+}
+
+/**
+ * What the agent's console calls the run a correlation id names — issue #242.
+ *
+ * # Why the screen has to go and ask
+ *
+ * The collector's stream carries no name and should not: ADR 0003 makes the
+ * event log observability and never evidence, and a merchant's presentation copy
+ * riding every frame of it would be that line crossed for a caption. `GET
+ * /watches` is where the agent keeps its own record of what it went looking for
+ * — `console.summary.title`, the merchant's words, asked for by
+ * `agent.Client.Describe` at the moment the watch began.
+ *
+ * # Absent and empty are one answer
+ *
+ * A watch this build's agent could not name answers `""`, and an older agent, or
+ * a console that has no record of this run at all, answers nothing. All of them
+ * mean *no name*, and collapsing them here rather than in the component is what
+ * lets `Lanes` take one optional string and have exactly two cases to draw.
+ *
+ * An empty string reaching the head would be the worst of the three: a heading
+ * with a lone `(7aQx-3Kf)` in it, which reads as a name that failed to load
+ * rather than as a run nobody named.
+ */
+function nameOf(watches: readonly Watch[], correlationId: string | undefined): string | undefined {
+  if (correlationId === undefined) return undefined;
+  const watch = watches.find((candidate) => candidate.correlation_id === correlationId);
+  const title = watch?.title;
+  return title === undefined || title === "" ? undefined : title;
 }

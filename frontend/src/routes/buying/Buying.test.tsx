@@ -56,6 +56,17 @@ function stubFetch(routes: Record<string, unknown>) {
 
 const PROMPT = "find and buy telescopic ladders, cheapest";
 
+/** What the Trusted Surface answers with once it has signed. */
+function anAuthorised() {
+  return {
+    open_checkout_mandate: "checkout.jwt",
+    open_payment_mandate: "payment.jwt",
+    rendered: ["the item is gtin:05014477390221"],
+    expires_at: "2026-01-01T01:00:00Z",
+    payment_instrument: { id: "card-4242", type: "CARD", description: "Visa ending 4242" },
+  };
+}
+
 function aProposal(): Proposal {
   const offer = {
     id: "gtin:05014477390221",
@@ -93,9 +104,19 @@ function aReading(): Reading {
   };
 }
 
+/**
+ * What the Trusted Surface answers `POST /authorise/preview` with.
+ *
+ * **Two sentences for two constraints**, and the pairing is load-bearing rather
+ * than decorative: `canSign` compares the counts, so a preview short by one
+ * leaves the Sign button disabled with nothing on screen saying why. The
+ * proposal gains its second constraint on the way here — the table's Buy runs it
+ * through `withQuantity`, which is #314 — so a fixture mirroring only what
+ * `aProposal` declares is a fixture that cannot be signed.
+ */
 function aPreview(): Previewed {
   return {
-    rendered: ["at most 200.00 USD"],
+    rendered: ["at most 200.00 USD", "at most 1 of them"],
     constraints_digest: "d",
     payment_instrument: { id: "card-4242", type: "CARD", description: "Visa ending 4242" },
     open_mandate_lifetime_seconds: 3600,
@@ -208,6 +229,72 @@ describe("the Buying screen", () => {
 
     expect(screen.getByRole("region", { name: "Trusted Surface" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "Shopping Agent" })).toBeTruthy();
+  });
+
+  it("draws the three lanes in place once the surface has signed, with no route change", async () => {
+    // Issue #316. Signing used to answer its 201 with
+    // `navigate("/protocol?run=…")`, so the moment this screen exists for was
+    // the moment it stopped being this screen — *I signed this* and *here is
+    // what my signature is doing* ended up on two addresses, and the viewer
+    // arrived somewhere that looked like it had always been going to be there.
+    stubFetch({
+      "/examples": { examples: [] },
+      "/interpret": { body: aReading() },
+      "/candidates": { body: aProposal() },
+      "/authorise/preview": { body: aPreview() },
+      "/authorise": { body: anAuthorised() },
+      "/watches": { status: 201, body: { id: "w1", correlation_id: "c-abc" } },
+    });
+    render(<Buying />, { wrapper: Router });
+
+    await reachTheSurface();
+    await userEvent.click(await screen.findByRole("button", { name: /sign/i }));
+
+    const watching = await screen.findByTestId("watching-region");
+    expect(
+      watching,
+      "the consequence of the signature has to appear where the signature was collected",
+    ).toBeTruthy();
+    expect(
+      within(watching).getByText(/c-abc/),
+      "and it has to be *this* run: the correlation id the watch came back with, not whichever " +
+        "purchase the stream happens to be showing",
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("surface-region"),
+      "the surface has finished asking, so its zone goes the way the console's did",
+    ).toBeNull();
+  });
+
+  it("does not put the Mandate Inspector on the screen that collects the signature", async () => {
+    // The seam #316 predicted would not be needed. `Disclosure` is the Mandate
+    // Inspector, which re-renders a signed mandate's constraints with the
+    // browser's own renderer — legitimate there, and forbidden anywhere near a
+    // signature being collected, which is what
+    // `constraint/architecture.test.ts` holds over the import graph.
+    //
+    // That guard reads imports. This reads the screen, so the two fail for
+    // different reasons: a `RunLanes` that imported the panel and drew nothing
+    // fails there, and one that drew the control fails here.
+    stubFetch({
+      "/examples": { examples: [] },
+      "/interpret": { body: aReading() },
+      "/candidates": { body: aProposal() },
+      "/authorise/preview": { body: aPreview() },
+      "/authorise": { body: anAuthorised() },
+      "/watches": { status: 201, body: { id: "w1", correlation_id: "c-abc" } },
+    });
+    render(<Buying />, { wrapper: Router });
+
+    await reachTheSurface();
+    await userEvent.click(await screen.findByRole("button", { name: /sign/i }));
+    await screen.findByTestId("watching-region");
+
+    expect(
+      screen.queryByRole("button", { name: /what each reader saw/i }),
+      "the buying screen shows what is happening to what you signed for; what each party was " +
+        "allowed to read is the teaching screen's, at /protocol",
+    ).toBeNull();
   });
 
   it("comes back to the console on a refusal, with the acknowledgement and the prompt", async () => {

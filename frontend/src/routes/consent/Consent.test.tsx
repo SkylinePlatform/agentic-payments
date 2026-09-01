@@ -49,6 +49,9 @@ function renderConsent(proposal: Proposal) {
       onRefused={(recorded) => {
         refusals.push(recorded);
       }}
+      // Not this file's subject: Consent hands it straight to Signing, and
+      // Signing.test.tsx is where what it carries is asserted.
+      onWatching={() => undefined}
     />,
   );
 }
