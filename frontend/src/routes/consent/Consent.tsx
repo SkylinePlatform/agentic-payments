@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { preview, refuse } from "../../consent/client";
-import { canSign, whenItBuys, whyThisOffer } from "../../consent/model";
+import { canSign, statedCeiling, whenItBuys, whyThisOffer } from "../../consent/model";
 import type { Previewed, Proposal } from "../../consent/model";
 import type { Amount, PaymentInstrument } from "../../protocol";
 import { lifetime } from "./format";
@@ -212,6 +212,13 @@ export function Consent({
   // undefined when the sentence named no preference, which is what the zone below
   // renders nothing for. See whyThisOffer.
   const preference = whyThisOffer(proposal.rank, (proposal.offers ?? [proposal.offer]).length);
+  // The merchant's floor, when it published one and the proposal states a
+  // ceiling below it — issue #348. Null the moment anything is unclear:
+  // `statedCeiling` refuses every constraint shape but the one this agent emits,
+  // and a floor is only comparable against a ceiling in its own currency. A
+  // screen with no honest answer promises none, which is the rule `Console.tsx`
+  // applies to an unanswered `GET /examples`.
+  const outOfReach = unreachableFloor(proposal);
 
   if (previewError !== null) {
     return (
@@ -421,6 +428,26 @@ export function Consent({
         <p className="font-sans text-graphite">
           {proposal.offer.retailer} · {money(proposal.offer.price)} today
         </p>
+        {outOfReach !== null && (
+          // Issue #348, and #344's third done-when on the surface it named. The
+          // buying screen says this beside the box where the number is typed;
+          // this is the other path — free text, where the limit came out of a
+          // sentence and there was never a box to say it next to.
+          //
+          // **In the unsigned zone, and the placement is the argument.** It is
+          // the agent relaying the merchant's own word about its own shop, it
+          // changes nothing that is signed, and the verifier still enforces the
+          // buyer's number whatever this says. `NotSigned` two lines down
+          // covers it.
+          //
+          // It names the floor and not the limit. The limit is in the signed
+          // box above, rendered by the party that will sign it, and a second
+          // statement of it here would be the one thing this screen may not do.
+          <p className="font-sans text-broken" data-testid="out-of-reach">
+            This offer has not gone below {money(outOfReach)}. Your limit is under that, so the
+            agent will refuse each price and stop.
+          </p>
+        )}
         <p className="font-sans text-graphite">{proposal.offer.description}</p>
         <p className="font-sans text-sm text-graphite">
           The merchant&rsquo;s description of this offer. Not part of what you sign.
@@ -480,4 +507,31 @@ function NotSigned({ readFrom }: { readonly readFrom: string }) {
       The agent&rsquo;s reading of {readFrom}. Not part of what you sign.
     </p>
   );
+}
+
+/**
+ * The floor this offer never goes below, when the proposal's ceiling is under it.
+ *
+ * `null` otherwise, which covers four different absences on purpose and draws
+ * nothing for all of them: a merchant that published no floor, a merchant that
+ * published a zero one (which is the same absence arriving as a value — see
+ * `catalogue/Table.tsx`'s `usableFloor`), constraints this browser will not
+ * read, and a ceiling in another currency. Not one of them is a case where this
+ * screen knows the limit cannot be met, and inventing the sentence for any of
+ * them would be worse than the silence #344 complained about — a wrong claim at
+ * the moment of signing rather than a missing one.
+ */
+function unreachableFloor(proposal: Proposal): Amount | null {
+  const floor = proposal.offer.price_floor;
+  if (floor === undefined || floor.currency === "" || floor.amount <= 0) return null;
+
+  const ceiling = statedCeiling(proposal.constraints);
+  if (ceiling === null || ceiling.currency !== floor.currency) return null;
+
+  // Times the quantity, because the constraint bounds the line total and not the
+  // unit price — issue #298, and the same multiplication `openingLimit` makes on
+  // the row this sentence also appears on.
+  return ceiling.amount < floor.amount * proposal.quantity
+    ? { ...floor, amount: floor.amount * proposal.quantity }
+    : null;
 }

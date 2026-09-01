@@ -2,6 +2,7 @@ import { useId, useMemo, useState } from "react";
 
 import type { Offer } from "../consent/model";
 import { formatAmount, minorUnitDigits, toMajorUnits, toMinorUnits } from "../protocol";
+import type { Amount } from "../protocol";
 
 /**
  * How many rows a page holds.
@@ -338,10 +339,45 @@ function parsedQuantity(raw: string): number {
  * Falls back to the price when the merchant sent no floor, which is a response
  * that predates #344: an offer priced at what it costs is a limit that buys now,
  * and that is a better failure than a box that opens empty.
+ *
+ * **A floor of zero on a priced offer is that same absence wearing a value** —
+ * issue #348. `agent.Offer.Floor` is a non-pointer struct with no `omitempty`,
+ * so a merchant that never sets it sends `{"amount": 0, "currency": ""}`, and
+ * `??` does not fire on that: the box would open at one minor unit against an
+ * offer costing 380.00, which is the defect #344 fixed reproduced by a field
+ * that arrived rather than by one that did not. Unreachable in this tree, where
+ * every offer has a schedule and `Schedule.Floor` reads it — a guard against
+ * the next merchant rather than against this one.
+ *
+ * A genuinely free offer keeps the cent, and that is not a contradiction: the
+ * price is zero there too, so the fallback lands in the same place and
+ * `Math.max(1, …)` is what keeps the box off a value Buy would reject.
  */
 export function openingLimit(offer: Offer, quantity: number): number {
-  const floor = offer.price_floor ?? offer.price;
+  const floor = usableFloor(offer);
   return Math.max(1, floor.amount * Math.max(1, quantity));
+}
+
+/**
+ * The floor to reason from: the merchant's, or the price where it said nothing.
+ *
+ * One function because two call sites disagreeing about what counts as "no
+ * floor" is how the row comes to promise a wait for a limit the box opened
+ * below.
+ */
+function usableFloor(offer: Offer): Amount {
+  const floor = offer.price_floor;
+  if (floor === undefined) return offer.price;
+  if (floor.currency === "" && floor.amount === 0) return offer.price;
+  // A floor in some other currency is not a floor for this offer, and it is the
+  // sentence above rather than the box that makes this matter: the row prints
+  // the floor's *amount* against the price's currency, so a mismatch would put
+  // "has not gone below $13,000.00" on screen for a floor of ¥13,000. The
+  // consent screen refuses the same comparison for the same reason. Nothing in
+  // this tree can produce one — a schedule's prices and its floor come from the
+  // same list — which is why it falls back rather than reporting.
+  if (floor.currency !== offer.price.currency) return offer.price;
+  return floor;
 }
 
 /**
@@ -454,6 +490,24 @@ function Row({
   // says nothing rather than guessing, on the reasoning `totalIsExact` already
   // applies to the figure beside it.
   const buysNow = limit !== null && totalIsExact && limit >= total;
+  // Whether no price this offer reaches can meet the limit — issue #348, and
+  // #344's third done-when, which #347 left open while delivering the other
+  // three.
+  //
+  // **Against the floor and never against the price**, which is the whole
+  // difference between a disclosure and a lie. A limit between the two — under
+  // today's price, at or above the floor — is the *ordinary* case since #344
+  // prefilled the box at the floor: it refuses at the opening price and buys
+  // when the ladder comes back down. Comparing against `offer.price` would mark
+  // every one of those unreachable, on the run that Human Not Present exists to
+  // demonstrate.
+  //
+  // Silent where the merchant sent no floor. `openingLimit` falls back to the
+  // price for that case because a box has to open on something; a *claim* has no
+  // such obligation, and a screen that inferred a floor from a response which
+  // does not carry one would be reporting a fact nobody stated.
+  const unreachable =
+    limit !== null && totalIsExact && offer.price_floor !== undefined && limit < openingLimit(offer, quantity);
 
   return (
     <tr className="border-b border-graphite/40 align-top">
@@ -550,17 +604,38 @@ function Row({
             is clicked, and the price can move between now and then; what a
             verifier does with the mandate afterwards is its own. So this is
             worded as what the authorisation will *say*, not as what will happen.
+
+            **The unreachable arm is the exception, and it is entitled to be** —
+            issue #348. It is the one thing on this row the merchant has actually
+            stated about the future: `price_floor` is the lowest price the
+            schedule ever quotes, so a limit under it is one no price can meet,
+            and saying "waits until it comes to $130.00 or less" about it is a
+            promise the shop has already ruled out. That arm goes before the
+            others because it is true whether or not the limit also buys now —
+            it cannot be, arithmetically, but a reader should not have to check.
+
+            **It discloses and does not veto.** Buy stays enabled and the box
+            stays editable: #344 is explicit that typing an unreachable limit is
+            legitimate, and the whole point of the box is that the limit is the
+            buyer's. What changed since #344 is that the sentence's last clause
+            is now true — `agent.ErrLimitOutOfReach` ends such a watch after one
+            lap of the ladder, where before it refused correctly for an hour.
           */}
           <p className="mt-1 font-sans text-xs text-graphite" data-testid="limit-effect">
             {limit === null
               ? "Type what you are willing to pay."
               : !totalIsExact
                 ? "That many is more than a price can hold."
-                : buysNow
-                  ? `Buys now, at ${formatAmount({ ...offer.price, amount: total })}.`
-                  : `Waits until ${quantity > 1 ? `all ${quantity}` : "it"} come${
-                      quantity > 1 ? "" : "s"
-                    } to ${formatAmount({ ...offer.price, amount: limit })} or less.`}
+                : unreachable
+                  ? `This offer has not gone below ${formatAmount({
+                      ...offer.price,
+                      amount: openingLimit(offer, quantity),
+                    })}. Your limit is under that, so the agent will refuse each price and stop.`
+                  : buysNow
+                    ? `Buys now, at ${formatAmount({ ...offer.price, amount: total })}.`
+                    : `Waits until ${quantity > 1 ? `all ${quantity}` : "it"} come${
+                        quantity > 1 ? "" : "s"
+                      } to ${formatAmount({ ...offer.price, amount: limit })} or less.`}
           </p>
         </td>
       )}

@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  canSign,
-  RANK_DIRECTIONS,
-  RANK_FIELDS,
-  TRIGGERS,
-  whenItBuys,
-  whyThisOffer,
-} from "./model";
+import { RANK_DIRECTIONS, RANK_FIELDS, TRIGGERS, canSign, statedCeiling, whenItBuys, whyThisOffer } from "./model";
 import type { Previewed, Proposal } from "./model";
 
 const proposal = (n: number): Proposal => ({
@@ -251,5 +244,69 @@ describe("whyThisOffer", () => {
         expect(p?.sentence, `${by} ${direction} needs a sentence of its own`).toBeTruthy();
       }
     }
+  });
+});
+
+describe("the ceiling a proposal states", () => {
+  const usd = (amount: number) => ({ amount, currency: "USD" });
+
+  it("reads the one constraint this agent emits for a limit", () => {
+    // `agent.ProposeStated` writes `{op: "lte", field: "amount", value: Amount}`
+    // at the top level, beside the quantity. That shape and nothing else.
+    expect(
+      statedCeiling([
+        { op: "lte", field: "amount", value: usd(13000) },
+        { op: "lte", field: "quantity", value: 1 },
+      ]),
+    ).toEqual(usd(13000));
+  });
+
+  it("says nothing rather than choosing, when two constraints name the amount", () => {
+    // A shape this browser has not seen. Ranking them would be the first step
+    // towards evaluating a constraint, which belongs to the verifier — and the
+    // caller draws null as no claim at all, so the cost of not knowing is
+    // silence rather than a wrong sentence at the moment of signing.
+    expect(
+      statedCeiling([
+        { op: "lte", field: "amount", value: usd(13000) },
+        { op: "lte", field: "amount", value: usd(20000) },
+      ]),
+    ).toBeNull();
+  });
+
+  it("does not descend into a group", () => {
+    // `all`/`any` are readable to a verifier and not to this. Walking into one
+    // is evaluating, one step at a time.
+    expect(
+      statedCeiling([
+        { op: "all", of: [{ op: "lte", field: "amount", value: usd(13000) }] },
+      ]),
+    ).toBeNull();
+  });
+
+  it("refuses an operator that is not lte", () => {
+    // `lt` and `between` both bound an amount and neither is what this agent
+    // writes. Reading one as though it were `lte` would put a number on screen
+    // that is off by the smallest unit at best and wrong at worst.
+    expect(statedCeiling([{ op: "lt", field: "amount", value: usd(13000) }])).toBeNull();
+    expect(
+      statedCeiling([{ op: "between", field: "amount", value: { from: usd(1), to: usd(2) } }]),
+    ).toBeNull();
+  });
+
+  it("refuses a bare number, which carries no currency", () => {
+    // Older fixtures in this repository carry one. A number compared against a
+    // floor in some other currency is the class of error `formatAmount`'s own
+    // doc exists about — ¥189 against $1.89.
+    expect(statedCeiling([{ op: "lte", field: "amount", value: 13000 }])).toBeNull();
+    expect(statedCeiling([{ op: "lte", field: "amount", value: { amount: 13000 } }])).toBeNull();
+    expect(
+      statedCeiling([{ op: "lte", field: "amount", value: { amount: 13000, currency: "" } }]),
+    ).toBeNull();
+  });
+
+  it("says nothing when no constraint names the amount at all", () => {
+    expect(statedCeiling([{ op: "lte", field: "quantity", value: 2 }])).toBeNull();
+    expect(statedCeiling([])).toBeNull();
   });
 });
