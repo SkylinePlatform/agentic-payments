@@ -60,10 +60,17 @@ backend/**/mocks_test.go
 .generate-verify.*
 
 # The tree `make setup-verify` copies the tracked files into. The target removes
-# it; this entry is for the run that failed and left it — and it matters beyond
-# tidiness, because `make generate-verify` diffs `git status --porcelain` before
-# and after generation and would read a leftover as generation having touched
-# the tree.
+# it; this entry is for the run that failed and left it, which is a 540-file copy
+# of the whole tracked tree — and an un-ignored copy of the repository inside the
+# repository is what the next `git add -A` commits.
+#
+# It used to say this mattered because `make generate-verify` would read a
+# leftover as generation having touched the tree. That is not a failure this can
+# have (issue #334): generate-verify diffs `git status --porcelain` from before
+# generation against after, git collapses an untracked directory to a single
+# `?? .setup-verify/`, and that line is in both snapshots. For the diff to see it
+# the directory would have to be created *between* them, and the only thing
+# running in that window is `make generate` twice.
 .setup-verify/
 
 # Claude implementation plans. The spec is a repository artefact — it records
