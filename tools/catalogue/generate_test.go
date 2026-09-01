@@ -173,7 +173,10 @@ func TestEveryMarkIsDrawnInTheAccentItsIdentifierChose(t *testing.T) {
 	visible := 0
 	for _, o := range derived {
 		drawn, err := accentDrawn(mark(o.ID, o.Title))
-		if !assert.NoError(t, err, "%s could not be read back", o.ID) {
+		if !assert.NoError(t, err, "%s cannot be read back, which is the refusal rather than a "+
+			"failure to parse: the drawing now chooses a colour somewhere this guard does not "+
+			"look, so agreeing with accentOf would be a claim about an attribute nobody renders",
+			o.ID) {
 			continue
 		}
 		if len(drawn) == 0 {
