@@ -17,11 +17,17 @@ import { ThemeToggle } from "../theme/ThemeToggle";
  * `ThemeProvider`, which App wraps around every route. The shell renders the
  * control and knows nothing about what it resolved to.
  *
- * **There is no nav, because there is one screen** — issue #344. It went from
- * four routes to two (#216, which made each nav heading a screen) to one, and a
- * nav of a single item is a nav pretending to offer a choice. The list it was
- * built from is still in `surfaces.tsx`, still the same list App builds its
- * routes from; there is simply nothing left to choose between.
+ * **There is no nav, because there is nothing to choose between** — issue #344.
+ * It went from four routes to two (#216, which made each nav heading a screen)
+ * to one, and a nav of a single item is a nav pretending to offer a choice. The
+ * list it was built from is still in `surfaces.tsx`, still the same list App
+ * builds its routes from.
+ *
+ * `surfaces.tsx` has two entries again and this is still the answer, which is
+ * the distinction that file argues: `/inspector` is a *detail* of a purchase,
+ * reached from the attempt whose readers it is about and unable to answer
+ * without one. Listing it would offer a screen a person cannot usefully arrive
+ * at, which is the four-tab arrangement coming back through the side door.
  *
  * What survives from that argument is the reason there were never icons: the
  * palette is closed at seven colours with a type hierarchy that gives each face

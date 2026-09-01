@@ -119,6 +119,16 @@ var ErrAuthorisationExpired = errors.New("agent: the user's authorisation expire
 // a sentinel and a console state rather than anything a verifier sees. What
 // happened is fully recorded in the receipts of the refusals it is made of.
 //
+// That is also the bound on what the name is entitled to claim. The loop counts
+// steps, not reasons: what it establishes is that every price was attempted and
+// every attempt was refused, and *the limit* is the reason on the demonstration's
+// own schedules rather than a fact this branch checks. A pair carrying a
+// constraint no verifier can read would be refused at every step too and arrive
+// here wearing the same word. Deciding between them means reading the codes on
+// the receipts, which Watched carries and this sentinel deliberately does not
+// summarise — a second opinion about a refusal, formed by the party that was
+// refused, is exactly what the receipt exists to make unnecessary.
+//
 // # Unreachable on a one-shot schedule, and that is not a gap
 //
 // Such a schedule holds its last price for ever and reports Final, so
