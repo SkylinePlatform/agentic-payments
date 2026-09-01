@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -144,9 +148,16 @@ func TestEveryDerivedMarkIsTheOneCommittedBesideIt(t *testing.T) {
 // accentOf chose for that identifier.
 //
 // Eleven of the sixty draw no accented cell at all — the shape hash decides which
-// cells are accented and sometimes none of the filled ones are — which is why the
-// reading answers a second value rather than an empty string, and why the number
-// of marks that did draw one is checked before the tie is trusted.
+// cells are accented and sometimes none of the filled ones are — which is why an
+// empty reading is skipped rather than failed, and why the number of marks that
+// did draw one is checked before the tie is trusted.
+//
+// **The comparison is against the whole answer**, a slice of one, and issue #294
+// is why. accentDrawn used to return the first accent it found and its doc
+// asserted that a mark carries at most one as a fact, with nothing checking it:
+// painting every cell after the first in a different accent drew two colours in
+// forty-nine marks and left this green, because the cell it read was still
+// right.
 //
 // This used to also carry a distribution bound and a per-shelf claim, both of
 // which were about the sixty offers this snapshot yields rather than about the
@@ -161,15 +172,21 @@ func TestEveryMarkIsDrawnInTheAccentItsIdentifierChose(t *testing.T) {
 
 	visible := 0
 	for _, o := range derived {
-		drawn, found := accentDrawn(mark(o.ID, o.Title))
-		if !found {
+		drawn, err := accentDrawn(mark(o.ID, o.Title))
+		if !assert.NoError(t, err, "%s cannot be read back, which is the refusal rather than a "+
+			"failure to parse: the drawing now chooses a colour somewhere this guard does not "+
+			"look, so agreeing with accentOf would be a claim about an attribute nobody renders",
+			o.ID) {
+			continue
+		}
+		if len(drawn) == 0 {
 			continue
 		}
 		visible++
-		assert.Equal(t, accentOf(o.ID), drawn,
-			"%s is drawn in a colour accentOf did not choose, so that function is a helper the "+
-				"drawing does not consult and anything proved about it says nothing about the "+
-				"picture a reader sees", o.ID)
+		assert.Equal(t, []string{accentOf(o.ID)}, drawn,
+			"%s is drawn in a colour accentOf did not choose, or in more than one, so that "+
+				"function is a helper the drawing does not consult and anything proved about it "+
+				"says nothing about the picture a reader sees", o.ID)
 	}
 	require.Positive(t, visible, "no mark drew an accented cell at all, so the tie between "+
 		"accentOf and what is on the card was checked over nothing")
@@ -178,6 +195,11 @@ func TestEveryMarkIsDrawnInTheAccentItsIdentifierChose(t *testing.T) {
 // TestTheAccentSeedingSpreadsEvenlyOverTheFour is the distribution issue #236 was
 // opened over, and it is a claim about the seeding rather than about the sixty
 // identifiers this snapshot happens to yield.
+//
+// **Its name is not a claim about the palette's size.** It iterates `accents` and
+// compares each against `draws/len(accents)`, so it passes unchanged with five in
+// the palette; the byte comparison is what catches a fifth. Recorded by issue
+// #294 so the name is not read as something it checks.
 //
 // # Why not over the shop
 //
@@ -243,41 +265,281 @@ func TestTheAccentSeedingSpreadsEvenlyOverTheFour(t *testing.T) {
 	}
 }
 
-// accentDrawn is the colour a mark actually puts on the card, and whether it put
-// one there at all.
+// accentDrawn is every colour a mark paints that is neither the card's wash nor
+// the ink of an unaccented cell — the accents, in the order they first appear.
 //
-// A mark carries at most one: every accented cell takes the same colour, and the
-// only other fills are wash for the card and ink for the cells the shape hash
-// left unaccented. Eleven of the sixty accent nothing — the hash decides which
-// cells are accented and sometimes none of the filled ones are — which is what
-// the second value is for.
+// Eleven of the sixty accent nothing: the shape hash decides which cells are
+// accented and sometimes none of the filled ones are, so an empty answer is the
+// honest one and the caller skips rather than fails.
 //
-// Every fill is read and the two known ones are excluded, rather than the four
-// accents being searched for, and the difference is not stylistic. A reading
-// that looked for known accents would answer "not accented" for a mark drawn in
-// a colour that is not one of them, so the assertion beside it would be skipped
-// for precisely the mark it exists to catch. Dropping one accent from that
-// search left the test green; this way there is no list to drop it from.
+// # It decodes rather than lexes, and issue #294 is the third time that mattered
 //
-// **The pattern reads any fill and not a hex shape, which is the same argument
-// one level down.** It used to be `#[0-9a-f]{6}`, and a lexical shape is
-// droppable exactly as a list is: drawing every graphite mark in `#1F5FBF`
-// instead — the same colour, uppercase — left thirteen of the sixty drawn in a
-// colour accentOf did not choose with this test still green, because a fill it
-// cannot lex reads as no fill at all. Only the byte comparison in
-// TestEveryDerivedMarkIsTheOneCommittedBesideIt noticed. Issue #292 measured it;
-// matching to the quote and comparing against the two known colours means there
-// is no shape to fall outside of either, and an uppercase ink would now be
-// reported rather than skipped, which is itself a drift worth failing on.
-var fillPattern = regexp.MustCompile(`fill="([^"]*)"`)
+// This has been the defect three times. It searched for the four known accents,
+// and dropping one from that list left the test green. It matched `#[0-9a-f]{6}`,
+// and drawing every graphite mark in `#1F5FBF` — the same colour, uppercase —
+// left thirteen of the sixty drawn in a colour accentOf did not choose with the
+// test still green, because a fill it cannot lex reads as no fill at all. It then
+// matched `fill="([^"]*)"` on the argument that there was no shape left to fall
+// outside of, and there was: `fill='#1f5fbf'` is a browser-identical drawing that
+// falls outside it, and so does `fill = "#1f5fbf"` with the whitespace XML
+// permits. Both were measured; both left this test green and thirteen marks
+// wrong, with only the byte comparison noticing.
+//
+// Every one of those was a *narrower* pattern than the one before, and each was
+// argued for as the last one needed. encoding/xml ends the class instead of the
+// instance: quoting, whitespace, attribute order, entity escapes and a fill
+// hoisted onto a parent all become the decoder's business rather than something
+// written down here. It also reads no text, so a <title> containing the
+// characters `fill="#1f5fbf"` cannot be mistaken for a colour — which the pattern
+// would have done, and done *first*, since the title is written before the frame.
+//
+// # Four decisions, each answering a measured mutation
+//
+// **Every paint, not the first.** The doc used to assert "a mark carries at most
+// one: every accented cell takes the same colour" as a fact with nothing checking
+// it. Keeping accentOf's answer on the first accented cell and painting every
+// later one differently drew two colours in forty-nine marks, and returning on
+// the first fill read the mark off the cell that was still right. The caller
+// compares against the whole answer instead.
+//
+// **stroke alongside fill**, which costs nothing today — the only stroke in a
+// mark is the frame's, and that is ink — and reads a drawing that moved the
+// accent onto one.
+//
+// **An error rather than an answer** for a <style> element or a style or class
+// attribute. None is produced today. Those are the three ways a cell's colour can
+// be *chosen* somewhere other than the attribute this reads, and a guard whose
+// whole subject is a drawing that changed must not answer confidently about one
+// it cannot see.
+//
+// **The comparison against wash and ink is exact**, which is a property rather
+// than an oversight and was in the previous doc: an ink written `#0F1729` in one
+// case and `#0f1729` in another would be *reported* rather than skipped, so the
+// caller fails on it. A drawing whose two fixed colours drifted in spelling is
+// worth failing on, and a reader that normalised them away would be deciding for
+// the caller which drifts matter.
+//
+// **`none` is not a colour**, which is the one thing the shape of this reader had
+// to be told. `fill="none"` is how SVG says *do not paint this*, so a stroked path
+// that draws its accent on the outline carries it — and reporting it as a second
+// paint made that row of the reader's own test fail on the first run. wash and ink
+// are excluded because they are the two colours a mark draws that are not accents;
+// none is excluded because it is not a drawing at all.
+//
+// **No modelling of visibility, deliberately.** `fill-opacity="0"`, `opacity`,
+// `display` and `visibility` each leave a mark painted in the right colour
+// showing nothing, and this reader agrees with accentOf — measured, green. That
+// is a rendering question rather than a question about which colour was chosen;
+// answering it means writing a browser, and
+// TestEveryDerivedMarkIsTheOneCommittedBesideIt is what notices. Stated as a limit
+// rather than left for a sixth pass to find.
+// unpainted is every value of fill or stroke that is not an accent: the card's
+// wash, the ink of a cell the shape hash left unaccented, and none.
+var unpainted = map[string]bool{wash: true, ink: true, "none": true}
 
-func accentDrawn(svg []byte) (string, bool) {
-	for _, match := range fillPattern.FindAllSubmatch(svg, -1) {
-		if fill := string(match[1]); fill != wash && fill != ink {
-			return fill, true
+func accentDrawn(svg []byte) ([]string, error) {
+	var painted []string
+	seen := make(map[string]bool, 4)
+
+	decoder := xml.NewDecoder(bytes.NewReader(svg))
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("the mark is not well-formed XML, so no browser would draw it "+
+				"and no reading of it means anything: %w", err)
+		}
+
+		element, ok := token.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		if element.Name.Local == "style" {
+			return nil, errors.New("the mark carries a <style> element, so a cell's colour can be " +
+				"chosen in CSS where reading attributes would not see it")
+		}
+		for _, attribute := range element.Attr {
+			switch attribute.Name.Local {
+			case "style", "class":
+				return nil, fmt.Errorf("<%s> carries a %s attribute, so a cell's colour can be "+
+					"chosen somewhere this reader does not look", element.Name.Local,
+					attribute.Name.Local)
+			case "fill", "stroke":
+				if paint := attribute.Value; !unpainted[paint] && !seen[paint] {
+					seen[paint] = true
+					painted = append(painted, paint)
+				}
+			}
 		}
 	}
-	return "", false
+	return painted, nil
+}
+
+// TestTheAccentReaderReadsEveryWayAColourCanBeWritten is the test accentDrawn
+// never had, and issue #294 is what its absence cost three times.
+//
+// **The name is what it checks and no more.** It was
+// TestTheAccentReaderReadsWhatABrowserWouldDraw for one commit, which claims
+// something the reader deliberately does not do: `fill-opacity="0"` on every
+// accented cell leaves this reader agreeing with accentOf while a browser draws
+// nothing — measured, and the byte comparison is what catches it. The subject
+// here is how a colour is *written*, which is where all three defects were.
+//
+// Every version of that reader was exercised only through the sixty marks — a body
+// of input that by construction cannot contain the spelling the *next* drawing will
+// use. So each hole was found the same way: mutate the drawing, notice the guard
+// stayed green, narrow the pattern, argue that this time there was nothing left to
+// fall outside of. The rows below are those spellings written down as inputs, so
+// the next one is a row rather than a sixth issue.
+//
+// They are hand-written SVG rather than marks, deliberately. A row built by drawing
+// a real mark could only contain spellings this program already emits, which is the
+// input set that hid all three defects.
+func TestTheAccentReaderReadsEveryWayAColourCanBeWritten(t *testing.T) {
+	t.Parallel()
+
+	const accent = signal
+
+	for _, tc := range []struct {
+		name    string
+		svg     string
+		want    []string
+		refuses bool
+		why     string
+	}{
+		{
+			name: "a double-quoted fill",
+			svg:  `<svg><rect fill="` + accent + `"/></svg>`,
+			want: []string{accent},
+			why:  "the spelling this program emits, and the control every other row is read against",
+		},
+		{
+			name: "a single-quoted fill",
+			svg:  `<svg><rect fill='` + accent + `'/></svg>`,
+			want: []string{accent},
+			why: "a browser draws this identically, and the pattern this replaced could not see it " +
+				"at all — thirteen marks wrong with the guard green, which is issue #294",
+		},
+		{
+			name: "whitespace around the equals sign",
+			svg:  `<svg><rect fill = "` + accent + `"/></svg>`,
+			want: []string{accent},
+			why:  "XML permits it and the pattern did not, which is the same defect spelled differently",
+		},
+		{
+			name: "an uppercase colour",
+			svg:  `<svg><rect fill="#1F5FBF"/></svg>`,
+			want: []string{"#1F5FBF"},
+			why: "read and reported rather than skipped: the caller compares it against accentOf, " +
+				"so the same colour in another case is a drift worth failing on rather than one to " +
+				"normalise away here",
+		},
+		{
+			name: "a functional colour",
+			svg:  `<svg><rect fill="rgb(84,99,117)"/></svg>`,
+			want: []string{"rgb(84,99,117)"},
+			why: "the reader takes what is written and lets the caller judge it; a reader that " +
+				"understood colour spaces would be the browser this deliberately is not",
+		},
+		{
+			name: "the card's wash and an unaccented cell's ink",
+			svg:  `<svg><rect fill="` + wash + `" stroke="` + ink + `"/><circle fill="` + ink + `"/></svg>`,
+			want: nil,
+			why: "eleven of the sixty accent nothing, and the caller skips an empty answer — so " +
+				"these two have to read as no accent rather than as two",
+		},
+		{
+			name: "an accent on a stroke",
+			svg:  `<svg><path stroke="` + accent + `" fill="none"/></svg>`,
+			want: []string{accent},
+			why: "the only stroke a mark draws today is the frame's, which is ink; a drawing that " +
+				"moved the accent onto one would otherwise read as unaccented",
+		},
+		{
+			name: "two accents in one mark",
+			svg:  `<svg><rect fill="` + accent + `"/><circle fill="` + graphite + `"/></svg>`,
+			want: []string{accent, graphite},
+			why: "the old reader returned on the first and its doc asserted a mark carries at most " +
+				"one as a fact; painting every later cell differently left forty-nine wrong and the " +
+				"guard green",
+		},
+		{
+			name: "the same accent on many cells",
+			svg:  `<svg><rect fill="` + accent + `"/><rect fill="` + accent + `"/><circle fill="` + accent + `"/></svg>`,
+			want: []string{accent},
+			why: "which is what a real mark looks like: the answer is the distinct colours, so the " +
+				"caller compares against a slice of one rather than counting cells",
+		},
+		{
+			name: "a fill on a parent group",
+			svg:  `<svg><g fill="` + accent + `"><rect/></g></svg>`,
+			want: []string{accent},
+			why: "SVG inherits it, so a drawing that hoisted the colour onto a <g> is the same " +
+				"picture — and a reader that only looked at leaves would call it unaccented",
+		},
+		{
+			name: "an entity in the title",
+			svg:  `<svg><title>Ben &amp; Jerry&apos;s</title><rect fill="` + accent + `"/></svg>`,
+			want: []string{accent},
+			why:  "titles are escaped, and the decoder unescapes them without any of it reaching a colour",
+		},
+		{
+			name: "a title that spells a fill",
+			svg:  `<svg><title>fill="` + graphite + `"</title><rect fill="` + accent + `"/></svg>`,
+			want: []string{accent},
+			why: "the decoder reads no text at all. The pattern would have matched this, and matched " +
+				"it *first* — the title is written before the frame — so a product name could have " +
+				"decided what colour the guard thought it saw",
+		},
+		{
+			name: "a comment that spells a fill",
+			svg:  `<svg><!-- fill="` + graphite + `" --><rect fill="` + accent + `"/></svg>`,
+			want: []string{accent},
+			why:  "and every mark carries a comment, which is where the words `as literal hex` sit",
+		},
+		{
+			name:    "a style attribute",
+			svg:     `<svg><rect style="fill:` + accent + `"/></svg>`,
+			refuses: true,
+			why: "one of the three ways a colour can be chosen where this reader does not look. " +
+				"Nothing produces it today, and a guard whose whole subject is a drawing that " +
+				"changed must not answer confidently about one it cannot see",
+		},
+		{
+			name:    "a class attribute",
+			svg:     `<svg><rect class="accent"/></svg>`,
+			refuses: true,
+			why:     "the second way, and it needs no stylesheet in the file to be the answer",
+		},
+		{
+			name:    "a style element",
+			svg:     `<svg><style>rect{fill:` + accent + `}</style><rect/></svg>`,
+			refuses: true,
+			why:     "the third, and the one where the colour is in the file and still invisible here",
+		},
+		{
+			name:    "not well-formed",
+			svg:     `<svg><rect fill="` + accent + `"></svg>`,
+			refuses: true,
+			why: "no browser would draw it, so no reading of it means anything — and answering " +
+				"whatever was parsed before the error would be a guess the caller could not tell " +
+				"from a fact",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := accentDrawn([]byte(tc.svg))
+			if tc.refuses {
+				assert.Error(t, err, tc.why)
+				return
+			}
+			require.NoError(t, err, tc.why)
+			assert.Equal(t, tc.want, got, tc.why)
+		})
+	}
 }
 
 // TestTheDerivationIsAFunctionOfTheSnapshotAlone is determinism stated directly
