@@ -56,48 +56,47 @@ type HTTPSink struct {
 // survivable, but the goroutine would never come back, which is a leak in every
 // role that ever emits.
 //
-// # The transport is shared, deliberately, and issue #260 is the measurement
+// # The transport is this sink's own, and issue #341 is why it is not shared
 //
-// Transport is left nil, so this client uses http.DefaultTransport along with
-// every other client in the process that does the same — which here is all of
-// them. That is a decision and not an omission, so that the first change wanting
-// a connection-level knob does not arrive as a behaviour change nobody asked for.
+// It used to be nil, so every sink used http.DefaultTransport along with every
+// other client in the process. Issue #260 decided that deliberately, on a
+// measurement — 300 reused-connection sends and 300 fresh-server sends under
+// continuous httptest.Server.Close churn, zero failures, twice — and the concern
+// it was answering is ADR 0003's: observability must not affect the operation it
+// observes.
 //
-// **What sharing costs is bounded by the pool being per host.** The concern worth
-// having is ADR 0003's, and it is the one two comments below: observability must
-// not affect the operation it observes. A shared transport could do that by
-// evicting a role's protocol connections from the idle pool — except that
-// MaxIdleConnsPerHost applies to each host separately, the collector is not one
-// of the hosts any role transacts with, and MaxIdleConns is 100 against the six
-// addresses deploy/demo.json starts. There is no shelf here to run out of.
+// **The measurement was wrong, and a CI runner is what said so.** The test that
+// re-derived it under `make check` failed on the first four-core machine that ran
+// it, on send 75 of 200:
 //
-// **What it costs in a test binary was measured**, because there the coupling is
-// real and continuous: http.DefaultTransport.CloseIdleConnections() is called by
-// every httptest.Server.Close, so unrelated packages tear down this sink's idle
-// connections constantly. Driven at 300 reused-connection sends and 300
-// fresh-server sends under that churn, both while another goroutine created and
-// closed servers without pausing: **zero failures**, twice. This was #106's
-// reported cause and it is not what #106 was.
+//	obs: post events: Post "http://127.0.0.1:39639": net/http: HTTP/1.x
+//	transport connection broken: http: CloseIdleConnections called
 //
-// TestASinkSurvivesAnotherPackageClosingItsIdleConnections re-derives that
-// measurement under `make check` rather than leaving it as a number in a comment,
-// and what it establishes is the measurement and nothing more. The tempting
-// explanation — that CloseIdleConnections returns an idle connection to the
-// pool's owner, that a connection closed underneath a request is a
-// stale-connection error, and that Go's transport replays it because
-// http.NewRequestWithContext sets GetBody for the *bytes.Reader Send builds — is
-// almost certainly right and is **not** what that test shows. Making the body
-// unreplayable leaves it green, which was checked rather than assumed. So the
-// test is a regression detector for the decision, not a proof of its mechanism,
-// and this comment says so rather than borrowing the authority of one.
+// http.DefaultTransport.CloseIdleConnections() is called by every
+// httptest.Server.Close, so in a test binary packages that have never heard of
+// this one tear down its connections continuously — and the reason #260 gave for
+// that costing nothing, that Go's transport replays a request whose body can be
+// rewound, does not always hold. #260's own pull request declined to assert that
+// mechanism and said the retry story was an explanation rather than a finding.
+// It was right to, and not far enough: the explanation is also not reliable.
 //
-// The precedent for stating it at all is interpret.Gemini, which sets its own
-// timeout and says why. A sink making the opposite choice should say so as
-// plainly.
+// So the sink keeps its own pool, cloned from the default so that proxy settings,
+// dialer and timeouts are the ones everything else in the process uses. Nothing
+// outside this package can close a connection it is holding, which is ADR 0003
+// read the way it is written — the one component whose whole job is a side
+// channel is now the one component nothing else can drop a delivery from.
+//
+// The cost is one connection pool per sink. There is one sink per process here,
+// and MaxIdleConnsPerHost is set to the smallest thing that keeps a connection
+// alive between batches: the emitter sends in batches to one host, so anything
+// larger would be idle sockets nothing will reach for.
 func NewHTTPSink(url string) *HTTPSink {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = 1
+
 	return &HTTPSink{
 		url:    url,
-		client: &http.Client{Timeout: httpTimeout},
+		client: &http.Client{Timeout: httpTimeout, Transport: transport},
 	}
 }
 
