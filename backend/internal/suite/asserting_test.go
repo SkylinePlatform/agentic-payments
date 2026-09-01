@@ -80,9 +80,12 @@
 //     `t.Run(name, someFunc)` with a function value rather than a literal.
 //     `arms` reads `fn.Body`, and the parent still passes because `Run` counts.
 //     Neither shape exists in this module.
-//   - **Another module.** `moduleRoot` is `backend/`, so
-//     `tools/catalogue/generate_test.go` and
-//     `contracts/tools/disclosure/main_test.go` are not walked.
+//   - **A module nobody added to `walkedRoots`.** All four are walked since
+//     issue #333, and that list is the only thing saying so — a fifth module
+//     added and not listed is unread, exactly as `tools/bootstrap` was for the
+//     whole of #266. `TestTheWalkReadsThisModule` requires each root to hold at
+//     least one test, so a path that resolves to nothing is caught; a module
+//     that was never named cannot be.
 //   - **Its own vacuity.** `TestTheAllowListStillDescribesTheTree` asserts
 //     inside a loop over `mayAssertNothing`, so an empty allow-list makes it
 //     pass having checked nothing — and the rule below cannot say so, because
@@ -113,6 +116,28 @@ import (
 // moduleRoot is backend/, from this package.
 const moduleRoot = "../.."
 
+// walkedRoots is every module the rule below reads, and issue #333 is why it is
+// a list rather than one path.
+//
+// It used to be `moduleRoot` alone, and the scope comment above named the two
+// modules that were therefore not walked. #266 added a third —
+// `tools/bootstrap` — and did not add it to that list, so eleven test functions
+// went unread by the one rule this repository has about tests that assert
+// nothing. That matters more there than for the other two: the bootstrap arms
+// are exactly the *negative assertion over a derived list* shape the rule exists
+// for, since what they measure is how many times a hook fired.
+//
+// Widening it rather than naming a third exclusion, because all three were
+// already clean — measured, one root at a time, before the list was written.
+// A rule that reads one module out of four is an exclusion list that grows every
+// time somebody adds a module and remembers to write a paragraph.
+var walkedRoots = []string{
+	moduleRoot,
+	moduleRoot + "/../tools/bootstrap",
+	moduleRoot + "/../tools/catalogue",
+	moduleRoot + "/../contracts/tools",
+}
+
 // mayAssertNothing is every test allowed to contain no assertion.
 //
 // One entry, and it is not an exception being tolerated. The subject of
@@ -128,6 +153,23 @@ const moduleRoot = "../.."
 // assertion, are both a line that looks like a rule and enforces nothing.
 var mayAssertNothing = []finding{
 	{File: "internal/collector/hub_test.go", Name: "TestConcurrentSubscribeAndPublish"},
+}
+
+// silentEverywhere is the rule's subject: every test in every walked module that
+// contains nothing which can fail it.
+//
+// The allow-list is keyed on a path relative to its own root, so an entry naming
+// a file that exists under two of them would excuse both. None does, and the
+// alternative — a root qualifier on every entry — is ceremony for a one-entry
+// list whose own comment says adding to it is the decision.
+func silentEverywhere(t *testing.T) []finding {
+	t.Helper()
+
+	var found []finding
+	for _, root := range walkedRoots {
+		found = append(found, silent(t, root)...)
+	}
+	return found
 }
 
 // finding is one test or one subtest arm that contains no assertion.
@@ -154,7 +196,7 @@ func (f finding) String() string {
 func TestNoTestPassesWithoutAsserting(t *testing.T) {
 	t.Parallel()
 
-	for _, found := range silent(t, moduleRoot) {
+	for _, found := range silentEverywhere(t) {
 		assert.Contains(t, mayAssertNothing, finding{File: found.File, Name: found.Name},
 			"%s contains nothing that can fail it. Two arms in this repository have gone green"+
 				" with the collaborator they were about entirely detached, and neither was visible"+
@@ -172,7 +214,21 @@ func TestNoTestPassesWithoutAsserting(t *testing.T) {
 func TestTheWalkReadsThisModule(t *testing.T) {
 	t.Parallel()
 
-	tests, arms := counted(t, moduleRoot)
+	var tests, arms int
+	for _, root := range walkedRoots {
+		found, inArms := counted(t, root)
+
+		// Per root, before the union below. A total over four roots is met by
+		// three of them, so one path that resolves to nothing — a module moved,
+		// or a `..` counted wrong — is exactly the collapse this test exists to
+		// catch and exactly what a sum hides.
+		assert.Positive(t, found,
+			"%s holds no test functions at all, so whichever module that path was meant to name is "+
+				"not being read and the rule above says nothing about it", root)
+
+		tests += found
+		arms += inArms
+	}
 
 	// Both bounds are deliberately loose — well under what the tree holds. They
 	// are here to catch a subject set that collapsed, not to be a second
@@ -198,7 +254,7 @@ func TestTheWalkReadsThisModule(t *testing.T) {
 func TestTheAllowListStillDescribesTheTree(t *testing.T) {
 	t.Parallel()
 
-	found := silent(t, moduleRoot)
+	found := silentEverywhere(t)
 	for _, excused := range mayAssertNothing {
 		still := slices.ContainsFunc(found, func(f finding) bool {
 			return f.File == excused.File && f.Name == excused.Name

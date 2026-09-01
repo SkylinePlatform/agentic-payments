@@ -16,6 +16,9 @@ import (
 // the other paths in this suite are.
 const ciWorkflow = "../../.github/workflows/ci.yml"
 
+// ciWorkflowFile is the same path under the name flags_test.go reads it by.
+const ciWorkflowFile = ciWorkflow
+
 // TestTheLintGateRefusesAVersionCIDoesNotRun is issue #272.
 //
 // `make lint` failed on `main` with two staticcheck findings the *Lint* job never
