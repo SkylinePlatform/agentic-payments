@@ -1378,11 +1378,48 @@ describe("the head of the transaction", () => {
       "every attempt is headed by what is being bought, which is the whole of #315",
     ).toEqual(["Vitesse Urbain 7"]);
     expect(
+      named.map((element) => element.querySelector(".sr-only")),
+      "one attempt is not a sequence, so numbering it in the outline would invent one — the " +
+        "visible badge follows the same rule",
+    ).toEqual([null]);
+    expect(
       named.every((element) => element.tagName === "H3"),
       "an attempt sits inside the transaction, whose own head is the h2 — and the " +
         "digest below stays a span, because architecture.test.ts forbids a heading " +
         "carrying font-mono",
     ).toBe(true);
+  });
+
+  it("tells two attempts apart in the outline, where the visible badge cannot", () => {
+    // What issue #315 costs a screen reader, and the reason this is not just a
+    // heading with a name in it. A watch drew no headings per attempt before;
+    // it now draws one each, and a run of sixty draws sixty — identical ones,
+    // without this, which turns heading navigation into a list that cannot be
+    // moved through.
+    //
+    // The badge beside Outcome already says which attempt this is, in document
+    // order and visibly. What it does not reach is the outline, and the outline
+    // is what a heading is for.
+    showingNamed(
+      [
+        record({ kind: "mandate_rejected", role: "credprovider", digest: DIGEST }),
+        record({ kind: "mandate_verified", role: "merchant", digest: OTHER }),
+      ],
+      "Vitesse Urbain 7",
+    );
+
+    const named = screen.getAllByTestId("spine-name");
+    expect(named.length, "two digests are two attempts, which is what makes them ambiguous").toBe(2);
+    expect(
+      named.map((element) => element.textContent),
+      "the ordinal is inside the heading, so a reader moving by heading can tell them apart — " +
+        "and it is sr-only, so nothing about the visible page changes",
+    ).toEqual(["Attempt 1 of 2: Vitesse Urbain 7", "Attempt 2 of 2: Vitesse Urbain 7"]);
+    expect(
+      named.map((element) => element.querySelector(".sr-only")?.textContent?.trim()),
+      "invisible rather than drawn twice: the badge above is where a sighted reader already " +
+        "reads it",
+    ).toEqual(["Attempt 1 of 2:", "Attempt 2 of 2:"]);
   });
 
   it("heads no attempt when nothing knows what is being bought", () => {

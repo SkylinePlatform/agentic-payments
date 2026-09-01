@@ -430,7 +430,17 @@ function failed(verdict: Verdict): boolean {
   return verdict.state === "refused" && verdict.bindingFailed;
 }
 
-function SpineHead({ verdict, name }: { readonly verdict: Verdict; readonly name?: string }) {
+function SpineHead({
+  verdict,
+  name,
+  ordinal,
+  total,
+}: {
+  readonly verdict: Verdict;
+  readonly name?: string;
+  readonly ordinal: number;
+  readonly total: number;
+}) {
   if (verdict.state === "pending") return null;
   const digest = verdict.digest;
   if (digest === undefined) return null;
@@ -462,6 +472,25 @@ function SpineHead({ verdict, name }: { readonly verdict: Verdict; readonly name
           data-testid="spine-name"
           className="font-display text-xl leading-tight tracking-tight break-words text-ink sm:text-2xl"
         >
+          {/*
+            The ordinal is in the heading and invisible, and it is here because
+            of what this change does to the document outline. A watch of sixty
+            attempts drew no headings at all before; it now draws sixty, and
+            without this they are sixty *identical* ones — which turns heading
+            navigation, the way a screen reader user moves through a long page,
+            into a list that cannot be moved through. The badge beside Outcome
+            says the same thing to a reader in document order and stays visible;
+            this is that fact reaching the outline, where the badge is not.
+
+            Only where there is more than one, on the badge's own reasoning: a
+            Human Present purchase is a single attempt, and numbering it would
+            invent a sequence the content has none of.
+          */}
+          {total > 1 && (
+            <span className="sr-only">
+              Attempt {ordinal} of {total}:{" "}
+            </span>
+          )}
           {name}
         </h3>
       )}
@@ -713,7 +742,7 @@ function AttemptView({
       </div>
 
       <Thesis verdict={verdict} />
-      <SpineHead verdict={verdict} name={name} />
+      <SpineHead verdict={verdict} name={name} ordinal={ordinal} total={total} />
 
       {/*
         One column until there is room for three. Three columns of cards on a

@@ -126,7 +126,12 @@ nothing on it saying what was being bought — which is the complaint this secti
 was added to answer, one element down.
 
 So the name is drawn again at the head of every attempt, and the digest sits
-beneath it at a smaller size. **What the digest keeps is everything except that
+beneath it at a smaller size. **The attempt's ordinal goes into that heading,
+invisibly**, where a run of sixty would otherwise put sixty identical entries
+into the document outline and make heading navigation a list nobody can move
+through. The visible badge beside the outcome is unchanged and says the same
+thing in document order; this is that fact reaching the one place the badge is
+not. **What the digest keeps is everything except that
 size**: `signal`, the mono face, its place on the axis, its repetition on every
 card of the attempt, and `broken` when the binding does not hold. It is still
 the only value the layout hangs from; it is no longer the largest thing on the
