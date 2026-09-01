@@ -133,10 +133,14 @@ const moduleRoot = "../.."
 // time somebody adds a module and remembers to write a paragraph.
 var walkedRoots = []string{
 	moduleRoot,
-	moduleRoot + "/../tools/bootstrap",
-	moduleRoot + "/../tools/catalogue",
-	moduleRoot + "/../contracts/tools",
+	repoRoot + "/tools/bootstrap",
+	repoRoot + "/tools/catalogue",
+	repoRoot + "/contracts/tools",
 }
+
+// repoRoot is one above moduleRoot, spelled once so that the three paths below
+// read as the modules they name rather than as an exercise in counting dots.
+const repoRoot = moduleRoot + "/.."
 
 // mayAssertNothing is every test allowed to contain no assertion.
 //
