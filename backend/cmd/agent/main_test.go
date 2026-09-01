@@ -704,26 +704,64 @@ func TestAWatchWithNoConsoleStillStopsTheProcess(t *testing.T) {
 		"and the reason has to survive to the exit status's message, not be replaced by one about serving")
 }
 
-// nothingIsListeningAt is a base URL whose port the kernel handed out and nobody
-// holds, so a request to it is refused straight away rather than answered or hung.
+// nothingIsListeningAt is a base URL nothing can ever answer on, so a request to
+// it is refused straight away rather than answered or hung.
 //
-// A closed port rather than a server returning an error, and the difference is the
-// whole of what the two tests below are about: ready waits for a counterparty to be
-// *there*, and something listening that answers badly is a different fact from a
-// stack that is down. aMerchantThatSellsNothing above is the mirror image, for the
-// same reason one file along.
+// A refused port rather than a server returning an error, and the difference is
+// the whole of what the two tests below are about: ready waits for a counterparty
+// to be *there*, and something listening that answers badly is a different fact
+// from a stack that is down. aMerchantThatSellsNothing above is the mirror image,
+// for the same reason one file along.
 //
-// require rather than assert, on this file's own rule for helpers read carefully:
-// a port that was never handed out leaves nothing to build a URL from, so there is
-// no continuing, and nothing calls this from anywhere but a test goroutine.
-func nothingIsListeningAt(t *testing.T) string {
-	t.Helper()
+// # Port 1, and issue #325 is why it is not an ephemeral one
+//
+// This was a function that bound 127.0.0.1:0, read the address back and closed the
+// listener. That is a bet that the kernel does not hand the same port to the next
+// bind(0) before these tests run — which every httptest.NewServer in every test
+// binary `go test ./...` runs beside this one is asking for, constantly. Issue
+// #106 is that bet being lost in this repository already, and #259 removed the
+// same shape from cmd/collector.
+//
+// **What losing it costs here is the reasoning rather than the result**, which is
+// worth stating rather than overselling: a neighbouring server on that port would
+// answer roles.AwaitPeer's key-set request with a 404, so the polling still times
+// out, the tests still read `unreachable`, and they still pass. What is wrong is
+// that the fixture would then be exactly the case the paragraph above says it is
+// not, and both tests would pass through the other branch with nothing noticing.
+//
+// Port 1 cannot be drawn. The kernel allocates ephemeral ports from a range
+// starting far above it — net.ipv4.ip_local_port_range, 32768 by default — so no
+// bind(0) anywhere here can be given it, and binding it on purpose needs a
+// privilege no test has or wants. It is this module's existing spelling for the
+// same thing rather than a new invention: internal/platform/obs's absentCollector
+// and internal/demo's health-check fixtures both name it, with the measurement
+// that put it there.
+const nothingIsListeningAt = "http://127.0.0.1:1"
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err, "the kernel would not hand out a port to leave closed")
-	addr := listener.Addr().String()
-	require.NoError(t, listener.Close(), "a port still held is one something answers on")
-	return "http://" + addr
+// TestNothingIsListeningAtIsRefusedRatherThanAnswered is what makes the paragraph
+// above a check instead of a claim.
+//
+// Every test that uses the constant asserts on *which* failure came back, and each
+// of them would pass for the wrong reason if something answered there — ready would
+// still time out, because a stranger's server does not publish a key set this agent
+// can read. So the premise is the one thing none of them can notice, and it is the
+// one this asserts.
+//
+// A dial rather than an inspection of the number: what matters is that this machine
+// refuses it, not that it is below some range this test would have to name. A
+// firewall that drops the packet instead of refusing it fails here too, after the
+// timeout — which is the honest answer, since the tests below would then be waiting
+// rather than being refused.
+func TestNothingIsListeningAtIsRefusedRatherThanAnswered(t *testing.T) {
+	t.Parallel()
+
+	conn, err := net.DialTimeout("tcp", strings.TrimPrefix(nothingIsListeningAt, "http://"), 2*time.Second)
+	if err == nil {
+		_ = conn.Close()
+	}
+	require.Error(t, err,
+		"something answers on port 1 here, so every test using this fixture is measuring a "+
+			"counterparty that is up and answering badly while its comment says the stack is down")
 }
 
 // runWith drives run as the process would have been started with args, and hands
@@ -801,7 +839,7 @@ func runWith(t *testing.T, args ...string) error {
 // until the package timeout. 256.256.256.256:99999 is cmd/collector's own
 // unbindable address, for its own reason: there is no port 99999.
 func TestCounterpartiesDownDenyTheConsoleThatABootWatchDoesNot(t *testing.T) {
-	down := nothingIsListeningAt(t)
+	down := nothingIsListeningAt
 
 	err := runWith(t,
 		"-addr", "256.256.256.256:99999",
@@ -835,7 +873,7 @@ func TestCounterpartiesDownDenyTheConsoleThatABootWatchDoesNot(t *testing.T) {
 // with a dial error about the merchant — a purchase failing for a reason nobody
 // should have to debug.
 func TestCounterpartiesDownStopTheProcessBeforeItAttemptsAPurchase(t *testing.T) {
-	down := nothingIsListeningAt(t)
+	down := nothingIsListeningAt
 
 	err := runWith(t, "-buy",
 		"-surface", down, "-merchant", down, "-credprovider", down, "-mpp", down,
@@ -874,7 +912,7 @@ func TestAnInterpreterThatCannotBeBuiltDeniesTheConsole(t *testing.T) {
 	err := runWith(t,
 		"-addr", "256.256.256.256:99999",
 		"-interpreter", interpreterGemini,
-		"-surface", nothingIsListeningAt(t), "-wait", "50ms", "-collector", "")
+		"-surface", nothingIsListeningAt, "-wait", "50ms", "-collector", "")
 
 	require.Error(t, err,
 		"a console whose interpreter was asked for and could not be built would accept a sentence "+

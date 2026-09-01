@@ -123,8 +123,10 @@ func TestHTTPSinkSendsNothingForAnEmptyBatch(t *testing.T) {
 //
 // It is also already this module's spelling for an address nothing answers,
 // rather than a new invention to take on faith: internal/demo's manifest and
-// runner tests point a health check at http://127.0.0.1:1/healthz, and CI runs
-// every job on ubuntu-latest, where the range above is the kernel default.
+// runner tests point a health check at http://127.0.0.1:1/healthz, cmd/agent's
+// nothingIsListeningAt is the same address for the same reason since issue #325,
+// and CI runs every job on ubuntu-latest, where the range above is the kernel
+// default.
 const absentCollector = "http://127.0.0.1:1"
 
 // TestAnAbsentCollectorNeitherBlocksNorFails is the constraint ADR 0003 states
