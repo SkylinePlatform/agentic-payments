@@ -231,6 +231,17 @@ jobs:
       - name: Setup
         run: make setup NPM=npm-must-not-run
 
+      # `make setup` is three steps and only one of them was asserted anywhere —
+      # issue #331, from #268's F5. Dropping `hooks` from the target, or gutting
+      # the recipe, left this whole job green while core.hooksPath stayed unset,
+      # and the second mutation went on printing the success line. Two lines here
+      # are what the bootstrap suite cannot cover: it installs the hooks itself,
+      # by copying them, rather than by asking make to.
+      - name: Setup installed the hooks it says it did
+        run: |
+          test "$(git config --get core.hooksPath)" = .githooks
+          test -x .githooks/regenerate
+
       # vet rather than build: the mocks are _test.go, so `go build ./...` is
       # clean with every one of them missing and would pass the mutation this
       # job exists to catch. GOWORK=off because `make setup` wrote a go.work and
