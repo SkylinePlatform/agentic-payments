@@ -528,7 +528,7 @@ func TestABootWatchThatFindsNothingStillLeavesAConsoleServing(t *testing.T) {
 		true, &said)
 	require.NoError(t, err,
 		"a demonstration that could not find its offer must not deny a person the console they are about to use")
-	require.NotNil(t, handler, "there is nothing to hand roles.Run, which is the defect verbatim")
+	require.NotNil(t, handler, "there is nothing to hand roles.Serve, which is the defect verbatim")
 
 	console := httptest.NewServer(handler)
 	t.Cleanup(console.Close)
@@ -795,7 +795,7 @@ func runWith(t *testing.T, args ...string) error {
 //
 // run is called on the test goroutine and what discriminates is which error comes
 // back, not how long it takes. A version that reported ready's failure and carried
-// on would reach roles.Run, fail on the listener and answer about the address —
+// on would reach roles.Listen, fail to bind and answer about the address —
 // so the two assertions below go red immediately, where a bindable address would
 // have left run serving until a signal that never arrives and this test hanging
 // until the package timeout. 256.256.256.256:99999 is cmd/collector's own

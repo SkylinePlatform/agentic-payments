@@ -147,7 +147,7 @@
 // # Two signal handlers fire under -addr, and that is correct
 //
 // This process installs signal.NotifyContext for the context its flows run
-// under, and roles.Run installs its own so that a served handler drains rather
+// under, and roles.Serve installs its own so that a served handler drains rather
 // than being cut off mid-request. Both fire on one Ctrl-C, and neither is
 // redundant: the first ends the watch, which is what leaves that run reading
 // "stopped" on the console, and the second stops accepting and drains. Neither
@@ -282,11 +282,14 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// **This one does not deny the console, and that is issue #273.** It used to:
-	// a process that could not build its *emitter* returned before anything else
-	// happened, which inverts ADR 0003 — the event log is observability and never
-	// evidence, and the ADR's own consequence is that nothing about it may fail a
-	// mandate construction. roles.Events reports the defect and hands back a nil
+	// **This one does not deny the console, and that is issue #273.** It is the
+	// seventh site in the walk this file numbers — #252 found three, #257 two
+	// more, the review that closed #257 the interpreter above — and the only one
+	// answered by changing what the failure *does* rather than where it is
+	// decided. It used to deny it: a process that could not build its *emitter*
+	// returned before anything else happened, which inverts ADR 0003 — the event
+	// log is observability and never evidence, and the ADR's own consequence is
+	// that nothing about it may fail a mandate construction. roles.Events reports the defect and hands back a nil
 	// emitter that records nothing, so the branch is neither swallowed nor fatal.
 	// It belongs with the flush below rather than with consoleFor's failures,
 	// which is the asymmetry #273 found: the flush already got this right.
@@ -751,7 +754,7 @@ func serveConsole(
 //
 // Split from serveConsole so that the decision above is assertable without a
 // process, which is the same reason flagsAgree and interpreterFor are functions:
-// roles.Run binds a port and blocks until a signal, so a test that had to go
+// roles.Serve blocks until a signal, so a test that had to go
 // through it could not ask the one question worth asking — whether there is a
 // handler to hand it at all. That question is this function's return value.
 //
