@@ -2,6 +2,15 @@ GO             ?= go
 GIT            ?= git
 GOLANGCI_LINT  ?= golangci-lint
 BACKEND        := backend
+CI_WORKFLOW    := .github/workflows/ci.yml
+
+# The golangci-lint version the local gate has to be, taken from the workflow
+# that pins it rather than copied here — the same rule the Node floor follows in
+# contracts/codegen.mk, and for the same reason: a second copy of a version
+# number is free to drift, and the drift is invisible until somebody's gate
+# disagrees with CI.
+GOLANGCI_PIN    = $(shell awk '/golangci-lint-action/ { found = 1 } \
+                              found && $$1 == "version:" { print $$2; exit }' $(CI_WORKFLOW))
 
 # A developer may keep an untracked go.work at the repository root so that an
 # editor opened here — rather than on backend/ — resolves both modules. CI has
@@ -137,8 +146,48 @@ vectors: generated ## Conformance suite against the golden vectors
 	cd $(BACKEND) && $(GO) test ./internal/adapters/... ./internal/core/... ./pkg/... -run 'TestGolden' -v
 
 .PHONY: lint
-lint: generated ## golangci-lint, including the depguard architecture rules
+lint: generated lint-version ## golangci-lint, including the depguard architecture rules
 	cd $(BACKEND) && $(GOLANGCI_LINT) run
+
+# Refuse a golangci-lint that is not the one CI runs — issue #272.
+#
+# AGENTS.md says `make check` passing locally is necessary and not sufficient,
+# and the whole value of that sentence is that the local gate is the *weaker*
+# of the two. #272 is what it looks like when it is not: `make lint` failed on
+# main with two staticcheck findings the Lint job never reported, so the tree
+# was green in CI and red on the machine the rule says has to see it pass.
+#
+# Which version is stricter is not the point and is not knowable in advance.
+# A linter is a moving set of checks; two versions disagree in both directions,
+# and either disagreement costs the same thing — a gate that answers a different
+# question from the one the pull request has to pass.
+#
+# `make fmt` is deliberately not held to this. CI never runs it, so there is no
+# answer for it to agree with.
+.PHONY: lint-version
+lint-version: ## Refuse a golangci-lint that is not the version CI pins
+	@pin='$(GOLANGCI_PIN)'; pin="$${pin#v}"; \
+	if [ -z "$$pin" ]; then \
+		echo "make: no golangci-lint version found in $(CI_WORKFLOW)." >&2; \
+		echo "make: that file is where this rule reads the pin from, so a renamed action or a" >&2; \
+		echo "make: reshaped step leaves nothing holding \`make lint\` to what CI runs." >&2; \
+		exit 1; \
+	fi; \
+	have=$$($(GOLANGCI_LINT) version 2>/dev/null | awk '{ print $$4 }'); have="$${have#v}"; \
+	if [ -z "$$have" ]; then \
+		echo "make: no golangci-lint that reports a version — CI pins v$$pin." >&2; \
+		echo "make:   go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$$pin" >&2; \
+		exit 1; \
+	fi; \
+	if [ "$$have" != "$$pin" ]; then \
+		echo "make: golangci-lint here is v$$have and CI pins v$$pin, so this gate answers a" >&2; \
+		echo "make: different question from the one the pull request has to pass — in either" >&2; \
+		echo "make: direction. Issue #272 is the instance: two staticcheck findings locally," >&2; \
+		echo "make: none in CI, on a tree with nothing wrong in it." >&2; \
+		echo "make:   go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$$pin" >&2; \
+		echo "make: or point GOLANGCI_LINT= at a build of that version." >&2; \
+		exit 1; \
+	fi
 
 .PHONY: fmt
 fmt: ## Apply formatters
