@@ -64,16 +64,18 @@ export interface Box {
  * **The second half of "a resize is not a hop", found the same way — by looking
  * at it running.** {@link reflowed} catches the grid changing *width*; this
  * catches it changing *place*. Anything above the lanes that grows or shrinks
- * moves every card on the page down or up together: the *Pacing* notice
- * disappearing when the last step is drawn, the *Purchases in the log* row
- * arriving with a second transaction, the gap banner, an earlier attempt gaining
- * a card. Measured in viewport coordinates every one of those is a movement, so
- * every card flew at once — which is a hop asserted for all of them and taken by
- * none.
+ * moves every card on the page down or up together: the *Purchases in the log*
+ * row arriving with a second transaction, the gap banner, an earlier attempt
+ * gaining a card. Measured in viewport coordinates every one of those is a
+ * movement, so every card flew at once — which is a hop asserted for all of them
+ * and taken by none.
  *
- * The pacing notice is the case that made it unmissable, because it is not an
- * edge: it goes away at the end of *every* paced run, so the demonstration ended
- * with the whole board twitching. Seven cards, `dx=0 dy=38`, on a stopwatch.
+ * **The case that made it unmissable is one #344 has since deleted**, and it is
+ * worth keeping the account rather than the example: the *Pacing* notice
+ * disappeared when the last held step was drawn, which is not an edge — it
+ * happened at the end of *every* paced run, so the demonstration ended with the
+ * whole board twitching. Seven cards, `dx=0 dy=38`, on a stopwatch. The three
+ * above are still live, and the measurement below is what holds them.
  *
  * Subtracting the container's own origin is what makes the question the right
  * one. A hop moves a card *within* the grid and still reads as movement here; a

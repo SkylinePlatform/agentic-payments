@@ -14,7 +14,6 @@ import type { ConnectionState, EventRecord, Gap, StreamOptions } from "../sse";
 
 import { group } from "./model";
 import type { Transaction } from "./model";
-import { PACE_MS, nextRelease, releasedNow } from "./pace";
 
 /**
  * How many records are kept.
@@ -27,31 +26,24 @@ import { PACE_MS, nextRelease, releasedNow } from "./pace";
 const KEEP = 512;
 
 /**
- * What the view wants of the stream, plus how fast it may draw it.
+ * What the view wants of the stream.
  *
- * `pace` is milliseconds between steps and `0` means none — see `pace.ts` for
- * the ruling. It is an option rather than a constant so that a suite about
- * *what* is drawn can say it is not about *when*, and so that the route can
- * hold one number in one place rather than a component guessing at it.
+ * **There was a `pace` here and #344 removed it.** The screen used to hold
+ * records back and release one every 750 ms, so that a room could follow a
+ * purchase whose eleven steps land within a tenth of a second of each other.
+ * The idea was sound and the arithmetic was not: an attempt takes 8.25 seconds
+ * to draw at that rate, the merchant produces one every few seconds, and the
+ * count of what was still waiting never reached zero. What a viewer actually
+ * saw was a permanent notice reading *"10 steps have arrived and are still
+ * being drawn"*, which is precisely the thing the ruling's third clause exists
+ * to prevent — a screen you cannot tell from a stalled one.
+ *
+ * Legibility is worth buying but not at that price, and it is bought elsewhere
+ * anyway: the card flight between lanes is half a second of movement per step,
+ * and `-step`/`-step-max` in `deploy/demo.json` set how often anything happens
+ * at all. What this hook does now is show every record the moment it arrives.
  */
 export interface ViewOptions extends StreamOptions {
-  readonly pace?: number;
-  /**
-   * The purchase the caller is drawing, when it is drawing one.
-   *
-   * It scopes {@link StreamView.behind} and nothing else — the cut itself stays
-   * global, because a prefix of the whole sequence is what keeps every
-   * consumer's view a real sequence rather than one filtered per component.
-   * What it changes is which backlog the screen states out loud: a viewer
-   * following one purchase is told how far behind *that* purchase is, not how
-   * many records from five other watches are queued behind it. Those two
-   * numbers diverge badly once more than one watch is live, which is what made
-   * the notice permanent and unreadable.
-   *
-   * Absent means the caller draws everything, and `behind` is
-   * {@link StreamView.behindAll}.
-   */
-  readonly watching?: string;
 }
 
 export interface StreamView {
@@ -59,30 +51,6 @@ export interface StreamView {
   readonly transactions: readonly Transaction[];
   /** Every record the screen is drawing, oldest first, for the log beneath the lanes. */
   readonly records: readonly EventRecord[];
-  /**
-   * Records of the watched purchase that have arrived and are not on screen yet.
-   *
-   * Zero except while the pacing is behind *on that purchase*. The route says
-   * this out loud, which is the third clause of the ruling in `pace.ts`: a
-   * screen may be slower than the events were, and it may not be quietly
-   * slower.
-   *
-   * Every record when {@link ViewOptions.watching} is absent, which is the
-   * whole of what this used to be.
-   */
-  readonly behind: number;
-  /**
-   * The same number over every record, which is what the log below the lanes
-   * draws.
-   *
-   * Both are needed and neither will do on its own. The lanes draw one purchase
-   * and the log draws all of them, so one count cannot speak for both without
-   * either burying a viewer's own purchase in other people's records or leaving
-   * the log quietly short. Each is stated where its own records are.
-   */
-  readonly behindAll: number;
-  /** Draws everything that has arrived, now. */
-  readonly showEverything: () => void;
   /** Where the connection stands. */
   readonly state: ConnectionState;
   /**
@@ -103,7 +71,6 @@ export function useTransactions(options: ViewOptions = {}): StreamView {
   const [records, setRecords] = useState<readonly EventRecord[]>([]);
   const [state, setState] = useState<ConnectionState>("connecting");
   const [gaps, setGaps] = useState<readonly Gap[]>([]);
-  const [shown, setShown] = useState(0);
 
   // The stream is held in a ref rather than in state: reconnect() has to reach
   // the live one, and putting it in state would re-run the effect that made it.
@@ -114,7 +81,7 @@ export function useTransactions(options: ViewOptions = {}): StreamView {
   // depending on it directly would tear the connection down and open another on
   // each one — which under StrictMode is already two connections and would
   // become unbounded.
-  const { url, from, create, pace = PACE_MS, watching } = options;
+  const { url, from, create } = options;
 
   useEffect(() => {
     const opened = connect({ url, from, create });
@@ -157,52 +124,11 @@ export function useTransactions(options: ViewOptions = {}): StreamView {
     stream.current?.reconnect();
   }, []);
 
-  // Derived rather than stored, so the cap can move the screen forward without
-  // a render whose only job is to write the number down. `shown` is the count
-  // the ticks have released and this is what a reader may actually see, which
-  // differs whenever a reconnect has just replayed more than the cap allows.
-  const drawn = releasedNow(shown, records.length, pace);
-
-  useEffect(() => {
-    if (drawn >= records.length) return;
-    const tick = setTimeout(() => {
-      setShown(nextRelease(drawn, records.length, pace));
-    }, pace);
-    return () => {
-      clearTimeout(tick);
-    };
-  }, [drawn, records.length, pace]);
-
-  // Catches up, and does not turn the pacing off: whatever arrives next is
-  // paced again. Somebody who clicked it wanted the purchase on screen for a
-  // screenshot, not a different screen for the rest of the demonstration.
-  const total = records.length;
-  const showEverything = useCallback(() => {
-    setShown(total);
-  }, [total]);
-
-  const paced = useMemo(
-    () => (drawn >= records.length ? records : records.slice(0, drawn)),
-    [records, drawn],
-  );
-  const transactions = useMemo(() => group(paced), [paced]);
-
-  // The undrawn tail, counted for the purchase the caller is drawing. A record
-  // with no correlation id belongs to no purchase and is counted for none —
-  // `group` drops it for the same reason.
-  const behind = useMemo(() => {
-    if (drawn >= records.length) return 0;
-    const undrawn = records.slice(drawn);
-    if (watching === undefined) return undrawn.length;
-    return undrawn.filter((record) => record.event.correlation_id === watching).length;
-  }, [records, drawn, watching]);
+  const transactions = useMemo(() => group(records), [records]);
 
   return {
     transactions,
-    records: paced,
-    behind,
-    behindAll: records.length - drawn,
-    showEverything,
+    records,
     state,
     gaps,
     reconnect,

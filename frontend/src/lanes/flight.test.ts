@@ -110,11 +110,15 @@ describe("a page that moved under the grid is not a hop either", () => {
    * The same defect as *a resize is not a hop*, in the other axis, and found
    * the same way — by looking at a live `make demo` rather than at a suite.
    *
-   * The *Pacing* notice is removed from the header the moment the last held
-   * step is drawn, so the whole page rises by its height. That happens at the
-   * end of every paced run rather than in some edge case, and measured in
-   * viewport coordinates it moved seven cards across all three lanes by an
-   * identical `dy` — every one of them flying, none of them having hopped.
+   * The case it was found in is gone and the defect is not. The *Pacing* notice
+   * was removed from the header the moment the last held step was drawn, so the
+   * whole page rose by its height — at the end of every paced run rather than
+   * in some edge case, moving seven cards across all three lanes by an identical
+   * `dy`, every one of them flying and none of them having hopped. #344 deleted
+   * the pacing; the gap banner, a second transaction's row and an attempt
+   * gaining a card all still move the page the same way, which is what this
+   * measurement is really about. The height below is the notice's, kept because
+   * it is the one that was measured.
    */
   const ROSE_BY = 38;
 

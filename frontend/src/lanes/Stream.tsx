@@ -12,8 +12,15 @@ import type { ConnectionState, Gap } from "../sse";
  * time in three issues: an import is enough for the graph walk, whether or not
  * the thing imported is ever drawn.
  *
- * So the three of them sit beside the stream they describe. Nothing here reads a
- * mandate, and nothing here can.
+ * So they sit beside the stream they describe. Nothing here reads a mandate, and
+ * nothing here can.
+ *
+ * There were three. The third was *Pacing*, which said how many records had
+ * arrived and were still being drawn one at a time, and it went with the pacing
+ * itself — see `useTransactions.ts` for why the arithmetic never worked. What
+ * these two have that it did not is that they are only ever on screen when
+ * something is wrong: a connection that dropped, and records the stream failed
+ * to deliver.
  */
 
 /** How the connection reads to somebody who did not start the stack. */
@@ -72,40 +79,5 @@ export function Gaps({ gaps }: { readonly gaps: readonly Gap[] }) {
       The stream skipped {missing} {missing === 1 ? "record" : "records"}. What is below is not the
       whole transaction.
     </p>
-  );
-}
-
-/**
- * What the screen has arrived and not yet drawn — issue #241.
- *
- * **This is the clause that makes pacing honest rather than a lie.** The screen
- * is allowed to draw a step later than it arrived, because the demo's own steps
- * land milliseconds apart and a faithful rendering is a flicker. What it is not
- * allowed to do is be quietly behind: a viewer who cannot tell a paced screen
- * from a stalled one, or from a stack that has stopped emitting, is being told
- * something false about the run. So the count is stated, and the control that
- * ends the wait is beside it.
- *
- * `src/lanes/pace.ts` carries the ruling and the two properties that go with it
- * — the screen shows a prefix of the real sequence, and never a permutation of
- * one.
- */
-export function Pacing({ behind, onShowAll }: { readonly behind: number; readonly onShowAll: () => void }) {
-  if (behind === 0) return null;
-
-  return (
-    <div className="flex flex-wrap items-center gap-3" data-testid="pacing">
-      <span className="font-sans text-xs text-graphite">
-        {behind} {behind === 1 ? "step has" : "steps have"} arrived and{" "}
-        {behind === 1 ? "is" : "are"} still being drawn, one at a time.
-      </span>
-      <button
-        type="button"
-        onClick={onShowAll}
-        className="border border-graphite/40 px-2 py-1 font-sans text-xs text-graphite hover:border-ink hover:text-ink"
-      >
-        Draw them all now
-      </button>
-    </div>
   );
 }

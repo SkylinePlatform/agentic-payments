@@ -3,7 +3,7 @@ import { useState } from "react";
 import { EventLog } from "../../lanes/EventLog";
 import { verdictOf } from "../../lanes/model";
 import { useTransactions } from "../../lanes/useTransactions";
-import { Connection, Gaps, Pacing } from "../../lanes/Stream";
+import { Connection, Gaps } from "../../lanes/Stream";
 import { RunLanes } from "../protocol/RunLanes";
 
 /**
@@ -64,13 +64,7 @@ export function Watching({
    */
   readonly onDone: () => void;
 }) {
-  // `watching` scopes the backlog notice to this purchase. The cut stays global
-  // — see `lanes/pace.ts` — but what a viewer is told is how far behind *their*
-  // purchase is, not how many records from every other live watch are queued
-  // behind it. With several watches running, the second number never reaches
-  // zero and the notice was permanent furniture reading like a stall.
-  const { transactions, records, behind, behindAll, showEverything, state, gaps, reconnect } =
-    useTransactions({ watching: correlationId });
+  const { transactions, records, state, gaps, reconnect } = useTransactions();
   // Closed to begin with. The log is what every role emitted, which is the
   // teaching material rather than the answer — a viewer watching their own
   // purchase wants the lanes, and a hundred rows of JSON under them is the
@@ -106,7 +100,6 @@ export function Watching({
       {/* Only when they have something to say. A connection banner over a
           connection that is fine is furniture. */}
       <Connection state={state} onRetry={reconnect} />
-      <Pacing behind={behind} onShowAll={showEverything} />
       <Gaps gaps={gaps} />
 
       {shown === undefined ? (
@@ -131,16 +124,7 @@ export function Watching({
         >
           {logOpen ? "Hide what the roles emitted" : "What the roles emitted"}
         </button>
-        {logOpen && (
-          <>
-            {/* The log's own backlog, stated where the log is. `behind` above
-                speaks for this purchase and would leave the rows of every other
-                watch quietly missing here — which is the one thing `pace.ts`'s
-                third clause does not allow, whichever records are in view. */}
-            <Pacing behind={behindAll} onShowAll={showEverything} />
-            <EventLog records={records} />
-          </>
-        )}
+        {logOpen && <EventLog records={records} />}
       </div>
     </section>
   );

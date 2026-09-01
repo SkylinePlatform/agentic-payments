@@ -1147,13 +1147,14 @@ running; jsdom computes no layout and no test could have caught it.
 
 **Neither is the page moving underneath it, which is the same defect in the
 other axis and was found the same way.** Anything above the lanes that grows or
-shrinks moves every card together: the *Pacing* notice being removed when the
-last held step is drawn, the *Purchases in the log* row arriving with a second
-transaction, the gap banner, an earlier attempt gaining a card. The pacing
-notice is the one that made it unmissable, because it is not an edge — it goes
-away at the end of *every* paced run, so the demonstration ended with the whole
-board twitching: seven cards across all three lanes, `dx=0 dy=38`, none of which
-had hopped. The fix is to measure each card **inside its own grid** rather than
+shrinks moves every card together: the *Purchases in the log* row arriving with
+a second transaction, the gap banner, an earlier attempt gaining a card. The one
+that made it unmissable is one #344 has since deleted, and the account is worth
+keeping even though the example is gone — the *Pacing* notice was removed when
+the last held step was drawn, which is not an edge but the end of *every* paced
+run, so the demonstration finished with the whole board twitching: seven cards
+across all three lanes, `dx=0 dy=38`, none of which had hopped. The three above
+are still live. The fix is to measure each card **inside its own grid** rather than
 inside the viewport, so a shift that moves the origin and the card by the same
 amount reads as nothing. That is the right answer rather than a suppression: the
 browser has already redrawn the header, the prose and the log instantly at their
@@ -1175,46 +1176,45 @@ So: *Nothing yet.* where nothing has reached this party, and **Nothing here
 now.** where it has moved past them. Two words apart, and where the steps went is
 on the cards, each of which names every party that held it.
 
-### Pace
+### Pace, and why there is none
 
 The demonstration's own steps land within a tenth of a second of each other —
 measured on `make demo` — so a faithful rendering of one purchase is a flicker on
-a screen whose one job is to teach. The ruling, and it is a ruling rather than a
-preference:
+a screen whose one job is to teach. This section used to answer that with a
+ruling:
 
 > **The screen may draw a step later than it arrived. It may never draw one that
 > has not arrived, never draw them out of order, and never leave one undrawn
 > without saying so.**
 
-A presentation choosing to be legible is not a presentation telling a lie,
-*provided the order is the real order and the screen admits it is behind*. Both
-clauses are mechanical:
+The reasoning still reads well and the implementation was faithful to it: a
+count and a prefix, so reordering was not expressible; 750ms between steps,
+longer than the 520ms card flight so a card finished arriving before the next
+step started; a cap of 16 so a reconnect's 512-record replay landed at once
+rather than replaying an hour of history at presentation speed; and a notice
+saying how far behind the screen was, with a control that ended the wait.
 
-- **It is a count and a prefix, so reordering is not expressible.** `pace.ts`
-  returns how many records may be on screen and the caller shows
-  `records.slice(0, count)`. A prefix of a sequence is a sequence: there is no
-  arrangement of one that permutes, inserts or invents anything. The count is
-  monotone, so a step already read cannot come off the screen either.
-- **The route says how far behind it is**, with a control that ends the wait.
-  A viewer who cannot tell a paced screen from a stalled one, or from a stack
-  that has stopped emitting, is being told something false about the run.
+**Issue #344 removed all of it, and the arithmetic is why.** Eleven steps at
+750ms is 8.25 seconds of drawing per attempt, and the merchant produces an
+attempt every few seconds — so the backlog never emptied. What a viewer met was
+a permanent notice reading *"10 steps have arrived and are still being drawn"*,
+which is the third clause satisfied to the letter and defeated in substance: a
+notice that is always there is indistinguishable from a stalled screen, and it
+is the *permanence* that says so, not the wording. Widening `-step` to outrun
+the drawing was tried first and abandoned, because slowing the demonstration
+down to protect a screen behaviour is the tail wagging the dog.
 
-Two numbers, both in `pace.ts` with their reasoning: 750ms between steps, which
-draws one purchase over about eight seconds and is longer than the 520ms card
-flight so that a card finishes arriving before the next step starts; and a cap of
-16, above the eleven one purchase emits, so a reconnect's 512-record replay lands
-at once and only the live edge is ever paced. Replaying an hour of history at
-presentation speed is theatre rather than legibility.
+So the lanes draw every record the moment it arrives. The three clauses do not
+need keeping because they are no longer expressible: with no state between the
+stream and the screen, nothing can be held back, reordered or lost.
+`frontend/src/lanes/useTransactions.test.tsx` is where that is pinned, and the
+`records` a component receives are the stream's own, in the stream's own order.
 
-**The event log is paced with the lanes rather than against them**, from one
-count, so the whole screen is always showing one consistent prefix. The
-timestamps are untouched: every card and every log row prints the event's own
-`at`, which is the emitting party's clock and not this screen's.
-
-**`prefers-reduced-motion` does not turn pacing off**, and that is deliberate.
-Pacing is timing rather than movement, and a screen that answered a request for
-less motion by dumping eleven cards at once would be *less* legible, not more.
-What that reader loses is the flight; what they keep is the one-at-a-time.
+**What legibility is bought with instead** is the half-second card flight —
+which is movement rather than timing, and which `prefers-reduced-motion` does
+turn off — and the merchant's `-step`/`-step-max`, which set how often anything
+happens at all. The timestamps were never this screen's to set: every card and
+every log row prints the event's own `at`, the emitting party's clock.
 
 ## Where the data comes from
 
