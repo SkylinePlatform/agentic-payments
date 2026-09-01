@@ -371,13 +371,42 @@ hooks: ## Point git at the tracked hooks in .githooks
 # tools/bootstrap is listed on that same criterion — a _test.go is Go source
 # somebody opens — and, like the catalogue generator, it requires nothing but
 # testify.
+# **An existing go.work is repaired rather than left alone**, and issue #331 is
+# what that sentence used to cost. This refused to touch a file that was already
+# there — so that a local replace survived — and printed "leaving it alone". Every
+# time the module list grew, everyone who had run this before was left with a
+# workspace naming fewer modules than the tree has: `make setup` exits 0, prints
+# a line that sounds like a decision, and `go test ./...` inside the new module
+# answers `directory prefix . does not contain modules listed in go.work`.
+#
+# `make` exports GOWORK=off, so `make check` and CI never saw it. The population
+# it bit was precisely the people who never had #265 — long-standing contributors
+# with a workspace already written.
+#
+# `go work use` is what fixes it without giving the property back: it appends the
+# modules that are missing and keeps everything else in the file, replace
+# directives included. It is idempotent, so all four are named unconditionally
+# and the file itself says whether anything changed — which is what the line
+# printed afterwards reports, rather than a guess.
+#
+# GOWORK is named on that one command because this Makefile exports GOWORK=off
+# for everything — `go work use` then cannot find the file it is being asked to
+# edit, and says so. `go work init` is unaffected: it writes ./go.work whatever
+# GOWORK says.
 .PHONY: workspace
-workspace: ## Write the untracked go.work an editor opened at the root needs
-	@if [ -e go.work ]; then \
-		echo "go.work already exists — leaving it alone"; \
-	else \
+workspace: ## Write or repair the untracked go.work an editor opened at the root needs
+	@if [ ! -e go.work ]; then \
 		$(GO) work init ./$(BACKEND) ./$(CONTRACT_TOOLS) ./$(CATALOGUE_TOOL) ./$(BOOTSTRAP_TOOL) && \
 		echo "wrote go.work — untracked on purpose, see AGENTS.md"; \
+	else \
+		before=$$(cat go.work); \
+		GOWORK="$$PWD/go.work" $(GO) work use \
+			./$(BACKEND) ./$(CONTRACT_TOOLS) ./$(CATALOGUE_TOOL) ./$(BOOTSTRAP_TOOL) || exit 1; \
+		if [ "$$before" = "$$(cat go.work)" ]; then \
+			echo "go.work already lists every module — unchanged, replace directives and all"; \
+		else \
+			echo "go.work did not list every module — added the missing ones and kept the rest"; \
+		fi; \
 	fi
 
 # The one command a fresh clone needs, and the only place its three steps are
@@ -416,12 +445,38 @@ setup: generated hooks workspace ## Prepare a fresh clone: generate, install the
 # A failing run leaves the copy on disk to be looked at. The next run removes it.
 SETUP_VERIFY := $(abspath .setup-verify)
 
+# Three things in the recipe below are guards rather than steps, and they are
+# named here because two of them are asserted and one is not.
+#
+# **NPM= and the stub PATH are the Node guard**, and issue #331 is why there are
+# two. NPM= is a make variable override, which covers the one spelling
+# contracts/codegen.mk uses and not the literal `npm` the Makefile writes
+# elsewhere — so a Node step added to `setup` in the house style ran happily and
+# this target still printed "with no npm on the path". The stubs shadow npm, npx
+# and node outright, which is what makes that sentence true rather than nearly
+# true.
+#
+# **GIT=true is the sandbox, and it is the one guard here that nothing asserts.**
+# The copy has no .git, so a real `git config` inside it walks up and writes to
+# the *enclosing* repository — on this checkout, over an absolute core.hooksPath.
+# #331 records it as unasserted by design rather than leaving it out of the
+# inventory: a test would have to let the mutation happen once to see it, in the
+# developer's own configuration.
 .PHONY: setup-verify
 setup-verify: ## Prove `make setup` leaves a tree the toolchain can load, from nothing and with no npm
 	@rm -rf $(SETUP_VERIFY)
 	@mkdir -p $(SETUP_VERIFY)
 	@$(GIT) ls-files -z | tar --null -T - -cf - | tar -xf - -C $(SETUP_VERIFY)
-	@$(MAKE) --no-print-directory -C $(SETUP_VERIFY) setup NPM=npm-must-not-run GIT=true
+	@mkdir -p $(SETUP_VERIFY)/.no-node
+	@for tool in npm npx node; do \
+		echo '#!/bin/sh' > $(SETUP_VERIFY)/.no-node/$$tool; \
+		echo 'echo "setup-verify: this tree reached a Node toolchain; make setup is Go-only" >&2' \
+			>> $(SETUP_VERIFY)/.no-node/$$tool; \
+		echo 'exit 127' >> $(SETUP_VERIFY)/.no-node/$$tool; \
+		chmod +x $(SETUP_VERIFY)/.no-node/$$tool; \
+	done
+	@PATH="$(SETUP_VERIFY)/.no-node:$$PATH" \
+		$(MAKE) --no-print-directory -C $(SETUP_VERIFY) setup NPM=npm-must-not-run GIT=true
 	@cd $(SETUP_VERIFY)/$(BACKEND) && GOWORK=off $(GO) vet ./...
 	@rm -rf $(SETUP_VERIFY)
 	@echo "setup-verify: a tree with nothing generated in it loads after \`make setup\`, with no npm on the path"

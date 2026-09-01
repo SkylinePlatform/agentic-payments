@@ -372,9 +372,16 @@ The nesting that makes the import path longer also breaks the language server.
 import as `cannot find package … in GOROOT or GOPATH`, along with a cascade of
 errors from the wrong standard library.
 
-Run `make workspace`. It writes an untracked `go.work` at the root listing both
-modules — `.gitignore` already covers the file — and declines to overwrite one
-that is already there, so a local `replace` directive survives.
+Run `make workspace`. It writes an untracked `go.work` at the root listing every
+module — `.gitignore` already covers the file — and **repairs one that is already
+there** rather than leaving it alone, which is issue #331. It used to refuse to
+touch an existing file so that a local `replace` directive survived, and printed
+"leaving it alone"; every time the module list grew, everyone who had run it
+before was left with a workspace naming fewer modules than the tree has, `go test
+./...` inside the new one answering `directory prefix . does not contain modules
+listed in go.work`, and `make setup` exiting 0 throughout. `go work use` is what
+closes it: the missing modules are appended and everything else in the file,
+`replace` included, is kept.
 
 Or run `make setup`, which is that plus the generated code the file does not
 contain — the next section is why the file on its own is half the job.
@@ -429,11 +436,19 @@ name the rest hangs on.
   out: the gate needs only Go, and a git hook that reached for npm would put a
   Node toolchain in front of a checkout.
 - `make setup` is `generated`, `hooks` and `workspace`, in that order, and it
-  is the only place those three are written down together.
+  is the only place those three are written down together. Since #331 the
+  *Fresh clone* job asserts the middle one — `core.hooksPath` and an executable
+  `regenerate` — because dropping `hooks` from the target left every job green
+  while nothing in `.githooks/` could run, and gutting the recipe went on
+  printing the success line.
 - `make setup-verify` is what keeps `setup`'s claim true rather than tidy. It
   copies the tracked files as they are on disk into `.setup-verify/`, runs
-  `make setup` there with `NPM` pointed at a command that does not exist, and
-  then runs `go vet ./...`. Vet rather than build, because the mocks are
+  `make setup` there with **`npm`, `npx` and `node` shadowed by stubs that exit
+  127**, and then runs `go vet ./...`. The stubs are issue #331: `NPM=` alone is
+  a make variable override covering the one spelling `contracts/codegen.mk` uses,
+  so a Node step added to `setup` in the literal spelling the Makefile writes
+  elsewhere ran happily while this target went on printing "with no npm on the
+  path". Vet rather than build, because the mocks are
   `_test.go` and a build is clean without them. It copies the working tree
   rather than adding a detached worktree on purpose: a worktree verifies the
   *committed* Makefile, which is green exactly while you are editing the target.
