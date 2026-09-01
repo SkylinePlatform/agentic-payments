@@ -110,7 +110,11 @@ say ""
 # this script is written for: `grep` is not a builtin, and F15 is what happens
 # when that is forgotten.
 has_generated_target() {
-	[ -f Makefile ] || return 1
+	# -r rather than -f: a Makefile that exists and cannot be read would make the
+	# redirect below fail, and under `set -e` that ends the hook rather than the
+	# function — which would print make's raw error and nothing else, on the one
+	# path whose whole job is to add an explanation to it.
+	[ -r Makefile ] || return 1
 	while IFS= read -r line; do
 		case $line in
 		generated:*) return 0 ;;
