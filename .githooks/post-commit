@@ -1,0 +1,28 @@
+#!/bin/sh
+#
+# Regenerate after a commit that finished a merge git could not finish itself.
+#
+# post-merge fires only when `git merge` completes the merge on its own. When it
+# stops on a conflict, the `git commit` that resolves it fires nothing — and
+# post-index-change cannot help, because resolving writes the files by hand and
+# the commit itself moves nothing. So `git pull` with two people in the same file
+# was the one case post-merge's own comment named and the one it could not cover.
+# Issue #268's F3.
+#
+# This is not a hook on every commit. An ordinary commit has one parent, a
+# replayed commit during a rebase has one, and the first commit in a repository
+# has none; a merge is the only thing here with two, so the guard below is the
+# whole of what stops a quarter of a second landing on the operation people run
+# most.
+
+set -eu
+
+# `git rev-list --parents -n 1 HEAD` prints the commit and then its parents, so
+# three words or more is a merge. Word splitting rather than `wc -w`, because a
+# git client can invoke a hook with a PATH that has no coreutils on it —
+# post-checkout's ${0%/*} is the same rule one file along.
+# shellcheck disable=SC2046 # the splitting is the point
+set -- $(git rev-list --parents -n 1 HEAD 2>/dev/null)
+[ "$#" -ge 3 ] || exit 0
+
+exec "${0%/*}/regenerate"

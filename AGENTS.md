@@ -438,18 +438,49 @@ name the rest hangs on.
   rather than adding a detached worktree on purpose: a worktree verifies the
   *committed* Makefile, which is green exactly while you are editing the target.
 
-**The hooks cover the entry points make does not own.** `.githooks/` gains
-`post-checkout`, `post-merge` and `post-rewrite`, each a few lines over a shared
-`regenerate`, and between them they fire on `git checkout`, `git switch`,
-`git worktree add`, every step of a `git bisect`, `git merge`, `git pull` and
-the end of a rebase. `post-rewrite` is not redundant with `post-checkout`: a
-rebase fires post-checkout on the way to the commit it is about to replay onto,
-so the only tree post-checkout ever sees during one is the tree the rebase does
-not leave behind. They never fail an operation — a hook that could fail a
-checkout is one people uninstall — they never reach the network, and
-`git config hooks.regenerate false` turns them off. Where a git client's PATH
-has no Go on it they print one line naming this issue rather than exiting
-silently, because stale output with no message is the failure being removed.
+**The hooks cover the entry points make does not own.** `.githooks/` gains five
+of them, each a few lines over a shared `regenerate`. They never fail an
+operation — a hook that could fail a checkout is one people uninstall — they
+never reach the network, and `git config hooks.regenerate false` turns them off.
+Where a git client's PATH has no Go on it they print one line naming issue #265
+rather than exiting silently, because stale output with no message is the failure
+being removed.
+
+| hook | fires on |
+|---|---|
+| `post-checkout` | `git checkout`, `git switch`, `git worktree add`, every step of a `git bisect` |
+| `post-merge` | a merge `git merge` completed itself, which is most of `git pull` |
+| `post-rewrite` | the end of a rebase |
+| `post-index-change` | anything else that wrote the working tree: `git reset --hard`, `git stash` push and pop, `git rebase --abort` |
+| `post-commit` | the commit that finishes a merge git could not finish itself |
+
+`post-rewrite` is not redundant with `post-checkout`: a rebase fires
+post-checkout on the way to the commit it is about to replay onto, so the only
+tree post-checkout ever sees during one is the tree the rebase does not leave
+behind.
+
+**The last two are issue #330**, from the adversarial pass in #268, and they close
+the gap between "a git operation moved the tree" and what the first three
+actually cover. `git fetch && git reset --hard origin/main` is the standard way
+to take upstream and it fired nothing at all — #265's symptom exactly, with
+`git status` clean throughout. `post-index-change` is git's own hook for it: it
+fires whenever the index is written, and its first argument says whether the
+working directory was written too, which is the condition the others
+approximate. An ordinary `git commit` and a `git add` arrive as *not* a tree
+change and stop there.
+
+**It costs a second `make generated` on every checkout**, because git tells
+post-checkout and post-index-change about the same move and neither can know the
+other has it. About a quarter of a second, measured, on the operation people run
+most, in exchange for three operations that were invisible.
+`TestCheckoutRegenerates` is where that number is asserted rather than left to be
+discovered.
+
+`post-commit` is not a hook on every commit: it stands down unless HEAD has two
+parents. Only a merge does, which is the one case `post-merge` names in its own
+comment and cannot reach — when `git merge` stops on a conflict, the `git commit`
+that resolves it completes the merge, and resolving writes the files by hand so
+nothing else notices.
 
 **What no hook can cover is the clone itself**, and one hand-written file covers
 what it can of that. git does not clone config, so `core.hooksPath` is unset in
@@ -461,18 +492,27 @@ so that an ungenerated package fails *in that file*, whose comment is the
 command to run, instead of failing at module resolution in a hand-written file
 that is not at fault.
 
-**Two cases stay unfixed and are named rather than hidden.** Editing a mocked
+**Three cases stay unfixed and are named rather than hidden.** Editing a mocked
 interface yourself involves no git operation, so no hook fires and the mock is
 stale until something runs `make check` — the developer working *on* the
-interface gets nothing from any of this. And the frontend's `index.ts` needs
-npm, so a clone still fails `npm run typecheck` until `make generate` is run;
-`generate-disclosure` is a `go run` and does write its half.
+interface gets nothing from any of this. The frontend's `index.ts` needs npm, so
+a clone still fails `npm run typecheck` until `make generate` is run;
+`generate-disclosure` is a `go run` and does write its half. And `git apply` and
+`git clean -fd` write the working tree without an index change git tells a hook
+about, so neither regenerates — `TestTheOperationsNothingCoversAreTheOnesNamed`
+drives both and would go red if a git release started firing one, which is the
+moment this list should shrink rather than years later.
 
 `tools/bootstrap` is the suite that holds all of it, and it was built by
 breaking it: deleting `post-merge` turns `TestMergeRegenerates` red, deleting
 `post-rewrite` turns `TestRebaseRegeneratesAgainstTheTreeItLeaves` red, deleting
+`post-index-change` turns four red including `TestCheckoutRegenerates`, deleting
+`post-commit` turns `TestThePostMergeClaimIsTheOneItCanKeep` red, and deleting
 `doc.go`'s declaration turns `TestAnUngeneratedModelFailsInTheFileThatSaysWhy`
-red. It runs with `-count=1`, because `go test` reported `(cached)` after a hook
+red. `TestWhatEachTreeMovingOperationCosts` is one table over the operations
+themselves with a bound on each side: an operation that stops regenerating is
+#265 again, and one that starts regenerating six times over is a rebase paying
+for a guardrail. It runs with `-count=1`, because `go test` reported `(cached)` after a hook
 had been deleted from the tree, and a suite that cannot see its own subject
 change is the thing it exists to prevent. It stubs `make`: what it proves is
 when the hooks fire, in which worktree and what they ask for, and that

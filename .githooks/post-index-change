@@ -1,0 +1,53 @@
+#!/bin/sh
+#
+# Regenerate after git has moved the working tree without a hook of its own.
+#
+# post-checkout, post-merge and post-rewrite cover the operations git happens to
+# have hooks named for. That is a smaller set than "a git operation moved the
+# tree", and issue #268's F1 is the gap: `git reset --hard origin/main` — the
+# standard way to discard local work and take upstream — fired nothing at all, so
+# the generated half stayed built from the tree before it, `git status` stayed
+# clean, and an editor reported undefined symbols in code that is fine. That is
+# issue #265 verbatim, through a route the hooks had not covered.
+#
+# git does have a hook for it. post-index-change fires whenever the index is
+# written, and its first argument says whether the working directory was updated
+# too — which is exactly the condition every one of these hooks is an
+# approximation of. `git reset --hard`, `git stash push`, `git stash pop` and
+# `git rebase --abort` all arrive here and nowhere else.
+
+set -eu
+
+# 1 means git updated the working directory; the second argument means it wrote
+# the index. An ordinary `git commit` and a `git add` write the index and leave
+# the tree alone, so they arrive as 0 and stop here — regenerating on every
+# commit would put a quarter of a second on the operation people run most, for a
+# tree that did not move.
+[ "${1:-0}" = 1 ] || exit 0
+
+# Operations another hook already owns the end of. Each of these fires here once
+# per step — a rebase replaying five commits arrives six times — so without this
+# the cheap guardrail becomes the expensive one, and the tree it would regenerate
+# against half way through a rebase is not the tree that rebase leaves behind.
+# post-rewrite's comment is that argument at length.
+#
+# A `git bisect` step is here for the opposite reason: post-checkout covers it
+# already, so this would only be a second regeneration for one move.
+dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+for busy in rebase-merge rebase-apply BISECT_LOG MERGE_HEAD; do
+	if [ -e "$dir/$busy" ]; then
+		exit 0
+	fi
+done
+
+# A conflicted merge writes the working tree — markers and all — *before* git
+# writes MERGE_HEAD, so the loop above does not see it and this fires with
+# `<<<<<<<` sitting in whatever the merge touched. Generating from that fails,
+# and the failure is the twelve-line block on an operation whose next step is
+# resolving the conflict anyway. Unmerged index entries are what say so at the
+# moment it happens; the resolution is picked up by post-commit instead.
+if [ -n "$(git ls-files --unmerged)" ]; then
+	exit 0
+fi
+
+exec "${0%/*}/regenerate"
