@@ -152,27 +152,79 @@ func (l *lab) calls() []call {
 
 func (l *lab) head() string { return strings.TrimSpace(l.git("rev-parse", "HEAD")) }
 
+// TestCheckoutRegenerates is the control the whole suite rests on, and since
+// issue #330 it is also where that issue's price is written down.
+//
+// **A branch checkout regenerates twice.** post-checkout has always covered it,
+// and post-index-change — added so that `git reset --hard` stops being invisible
+// — is told the same move by git without any way to know another hook has it.
+// Two runs of `make generated` is about a quarter of a second of extra work on
+// the operation people run most, in exchange for `git reset --hard`, `git stash`
+// push and pop and `git rebase --abort`, none of which fired anything at all.
+//
+// The number is asserted rather than bounded on purpose: three would mean a
+// fourth hook nobody meant to add, and one would mean a hook has stopped firing.
+//
+// **Only the last is required to see the new HEAD**, and that is a measurement
+// rather than a hedge: git writes the working tree and the index before it moves
+// HEAD, so post-index-change runs with the new files on disk and `rev-parse HEAD`
+// still naming the commit being left. Generation reads the files, so both runs
+// produce the same correct output — but a test that required the sha of both
+// would be asserting an ordering git does not promise, and the property anyone
+// depends on is that the tree is right when the last one finishes. It is what
+// TestRebaseRegeneratesAgainstTheTreeItLeaves pins one operation along.
 func TestCheckoutRegenerates(t *testing.T) {
 	t.Parallel()
 	l := newLab(t)
 	l.git("checkout", "-q", "-b", "other")
 	l.write("seed", "two")
 	l.git("commit", "-qam", "two")
+
+	before := len(l.calls())
 	l.git("checkout", "-q", "main")
 
-	c := l.calls()
-	require.Len(t, c, 1, "one branch checkout, one regeneration")
-	assert.Equal(t, target, c[0].args, "the hooks and the gate have to name the same target")
-	assert.Equal(t, l.head(), c[0].head)
+	c := l.calls()[before:]
+	require.Len(t, c, 2, "one branch checkout reaches post-checkout and post-index-change, and "+
+		"nothing else — a third would be a hook nobody meant to add")
+	for i, got := range c {
+		assert.Equal(t, target, got.args,
+			"regeneration %d: the hooks and the gate have to name the same target", i)
+	}
+	assert.Equal(t, l.head(), c[len(c)-1].head,
+		"the last regeneration ran against a tree the checkout did not leave, which is the "+
+			"staleness all of this exists for")
 }
 
-func TestBranchCreationAndFileCheckoutDoNot(t *testing.T) {
+// TestBranchCreationCostsOneAndAFileCheckoutNothing is what
+// TestBranchCreationAndFileCheckoutDoNot became when issue #330 added a hook that
+// fires on the working tree rather than on HEAD.
+//
+// Its two halves are answered differently now, and the difference is worth the
+// rename. **A file checkout still costs nothing** — measured, not assumed: git
+// does not rewrite the index for one when the index already agrees, so
+// post-index-change never hears about it. **A branch creation costs one**, and
+// that is the price #330 records: post-index-change is told the working directory
+// was written and has no argument saying whether anything in it differs, which
+// post-checkout's old==new guard does have.
+//
+// So that guard is still load-bearing and this is still the test that breaks when
+// it goes: without it `git checkout -b` costs two regenerations rather than one.
+func TestBranchCreationCostsOneAndAFileCheckoutNothing(t *testing.T) {
 	t.Parallel()
 	l := newLab(t)
+
 	l.git("checkout", "-q", "-b", "topic") // old == new
+	assert.Len(t, l.calls(), 1,
+		"post-checkout and post-index-change both see this and nothing moved: the old==new guard "+
+			"is what keeps a branch that costs nothing from costing two regenerations")
+
+	before := len(l.calls())
 	l.write("seed", "dirty")
-	l.git("checkout", "-q", "--", "seed") // file checkout: flag 0, old == new
-	assert.Empty(t, l.calls(), "neither moved HEAD, so neither can have staled anything")
+	l.git("checkout", "-q", "--", "seed") // flag 0, old == new, and the index is untouched
+	assert.Len(t, l.calls(), before,
+		"restoring a file the index already agrees with writes no index, so the hook that fires on "+
+			"one is not reached — which is the honest reason, where the old comment gave a reason "+
+			"about HEAD that would not have survived the new hook")
 }
 
 func TestMergeRegenerates(t *testing.T) {
@@ -219,14 +271,17 @@ func TestWorktreeAddRegeneratesInsideTheNewWorktree(t *testing.T) {
 	l.git("worktree", "add", "-q", "-b", "wtbranch", wt)
 
 	c := l.calls()
-	require.Len(t, c, 1)
+	require.Len(t, c, 2, "post-checkout and post-index-change both see this, which is the price "+
+		"issue #330 records — TestCheckoutRegenerates is where it is argued")
 	want, err := filepath.EvalSymlinks(wt)
 	require.NoError(t, err)
-	got, err := filepath.EvalSymlinks(c[0].dir)
-	require.NoError(t, err)
-	assert.Equal(t, want, got,
-		"generating into the main checkout would leave the worktree exactly as broken "+
-			"as it was, and .claude/worktrees/ makes that the common case")
+	for i, ran := range c {
+		got, err := filepath.EvalSymlinks(ran.dir)
+		require.NoError(t, err)
+		assert.Equal(t, want, got,
+			"regeneration %d went to the main checkout, which would leave the worktree exactly as "+
+				"broken as it was — and .claude/worktrees/ makes that the common case", i)
+	}
 }
 
 func TestTheKnobTurnsItOff(t *testing.T) {

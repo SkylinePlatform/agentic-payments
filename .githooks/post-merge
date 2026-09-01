@@ -5,6 +5,12 @@
 # post-checkout does not fire for a merge, fast-forward included, so without
 # this the commonest way a mocked interface changes under you — pulling main —
 # is the one case the hooks would miss. It is the case issue #265 reported.
+#
+# **It covers the merges git completes itself, and only those.** When a merge
+# stops on a conflict, the `git commit` that resolves it fires nothing here — so
+# `git pull` with two people in the same file was the half of this comment's own
+# claim that was not true. post-commit is what covers that, since issue #330;
+# this sentence used to say `git pull` unqualified.
 
 set -eu
 

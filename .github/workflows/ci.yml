@@ -171,9 +171,15 @@ jobs:
       # repository can fire on a runner. That is exactly why the suite has to be
       # here: nothing else on the way to a merge exercises them.
       #
-      # -count=1 because the subject is four shell scripts and one Go file
-      # outside the module, and `go test` reported (cached) after one of the
-      # hooks had been deleted from the tree.
+      # -count=1 because the subject is the shell scripts in .githooks/ and the
+      # tracked sentinel in the generated package — files outside this module,
+      # which `go test` has no reason to hash — and it reported (cached) after
+      # one of the hooks had been deleted from the tree.
+      #
+      # It used to say "four shell scripts and one Go file". Issue #268's F20
+      # found that wrong before issue #330 made it wronger, and a number that has
+      # to be revised every time a hook is added is one nobody will revise; the
+      # directory is the subject, whatever is in it.
       - name: Test bootstrap machinery
         working-directory: tools/bootstrap
         run: go test -count=1 ./...
