@@ -258,9 +258,11 @@ describe("the consent path renders nothing of its own", () => {
     expect(
       SCREEN_ROOTS,
       `no screen was found in ${ROUTE_TABLE}; every rule below is asserted over what it routes to`,
-    ).toEqual(
-      expect.arrayContaining(["routes/buying/Buying.tsx", "routes/protocol/Protocol.tsx"]),
-    );
+    // One screen since issue #344, where `routes/protocol/Protocol.tsx` — the
+    // other name that stood here — was folded into it. A list naming a file that
+    // no longer exists is a guard that fails for the wrong reason; a list naming
+    // only what is there is the guard.
+    ).toEqual(expect.arrayContaining(["routes/buying/Buying.tsx"]));
   });
 
   it("knows which of those screens collects a signature", () => {

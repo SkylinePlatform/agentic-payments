@@ -531,15 +531,13 @@ function Thesis({ verdict }: { readonly verdict: Verdict }) {
     case "pending":
       return (
         <p className="font-sans text-sm text-graphite">
-          Nobody has confirmed a checkout yet. The axis is drawn once a party
-          verifies a mandate that names one.
+          Nobody has confirmed a checkout yet.
         </p>
       );
     case "bound":
       return (
         <p className="font-sans text-sm text-ink">
-          Every party that has named a checkout named this one, and nobody has
-          refused. The payment has not been answered yet.
+          Every party so far named this checkout. The payment is unanswered.
         </p>
       );
     case "bought":
@@ -554,9 +552,8 @@ function Thesis({ verdict }: { readonly verdict: Verdict }) {
       if (verdict.bindingFailed) {
         return (
           <p className="font-sans text-sm text-broken">
-            The binding did not hold. <span className="font-semibold">{who}</span>{" "}
-            refused because what it was sent does not belong to this checkout, so
-            nothing here proves the parties were talking about the same purchase.
+            The binding did not hold: <span className="font-semibold">{who}</span> was sent
+            something that belongs to another checkout.
           </p>
         );
       }
@@ -565,15 +562,15 @@ function Thesis({ verdict }: { readonly verdict: Verdict }) {
         // held" here would be claiming something nothing established.
         return (
           <p className="font-sans text-sm text-ink">
-            <span className="text-broken">{who}</span> refused before any party
-            had confirmed a checkout, so there is no binding to have held.
+            <span className="text-broken">{who}</span> refused before any checkout was
+            confirmed — there is no binding to have held.
           </p>
         );
       }
       return (
         <p className="font-sans text-sm text-ink">
-          The binding held, and <span className="text-broken">{who}</span> refused
-          the purchase anyway. That is a verifier enforcing a limit the user set.
+          The binding held. <span className="text-broken">{who}</span> refused anyway —
+          a verifier enforcing a limit you set.
         </p>
       );
     }
@@ -884,9 +881,8 @@ function TransactionHead({
         className="max-w-2xl font-sans text-xs text-graphite"
         data-testid="name-provenance"
       >
-        The name is the Shopping Agent&rsquo;s record of what it went looking for, in the
-        merchant&rsquo;s own words. Nothing signed it. The digest under each attempt below is the
-        value every party computed for itself, and that one is checkable.
+        The Shopping Agent&rsquo;s record of the merchant&rsquo;s words. Nothing signed it —
+        the digest below each attempt is what every party computed, and that one is checkable.
       </p>
     </header>
   );
@@ -918,19 +914,35 @@ export function Lanes({
       <TransactionHead correlationId={transaction.correlationId} name={name} />
 
       {/*
-        In the order they happened. The watch's story is a refusal followed by a
-        purchase, and reversing it would put the ending first.
+        **Newest first**, and this comment used to say the opposite: "in the
+        order they happened — the watch's story is a refusal followed by a
+        purchase, and reversing it would put the ending first."
+
+        That is true of a two-attempt run and false of the ones this screen
+        actually shows. A watch waiting on a price the schedule has not reached
+        yet runs to dozens of attempts, and chronological order puts the one
+        thing a viewer is here for — what is happening *now* — below all of
+        them, further down with every tick. The ending being first is only a
+        spoiler when there is an ending; while it is still running, the top of
+        the list is the live edge.
+
+        `index` stays the attempt's own number, so *Attempt 1 of 62* is still the
+        first one that happened. Only the order they are drawn in reverses:
+        `.map` then `.reverse` rather than reversing the attempts, because the
+        index has to be counted forwards to be true.
       */}
-      {transaction.attempts.map((attempt, index) => (
-        <AttemptView
-          key={attempt.steps[0].seq}
-          attempt={attempt}
-          index={index}
-          total={transaction.attempts.length}
-          name={name}
-          inspecting={inspecting}
-        />
-      ))}
+      {transaction.attempts
+        .map((attempt, index) => (
+          <AttemptView
+            key={attempt.steps[0].seq}
+            attempt={attempt}
+            index={index}
+            total={transaction.attempts.length}
+            name={name}
+            inspecting={inspecting}
+          />
+        ))
+        .reverse()}
 
       {transaction.unplaced.length > 0 && (
         // A role no column claims still gets shown. registry and proxy arrive

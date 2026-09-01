@@ -430,6 +430,41 @@ func (s *Schedule) at(t time.Time) (generated.Amount, int, bool) {
 // Steps reports how many prices the schedule moves through.
 func (s *Schedule) Steps() int { return len(s.prices) }
 
+// Floor is the lowest price this schedule ever quotes.
+//
+// # Why a merchant publishes it at all
+//
+// Because a limit is the buyer's to set and nothing told them what it would have
+// to be. Issue #344: the catalogue screen suggested one derived from the price in
+// front of it, the schedules move about a tenth, and forty-one of the sixty-three
+// offers shipped a suggestion **no price they reach could ever meet** — a watch
+// that refuses correctly, forever, and settles nothing.
+//
+// The floor is the smallest number a limit can be and still buy. It is also a
+// fact about this shop rather than about anybody's intentions, which is what
+// makes it the merchant's to say — unlike CatalogueEntry.Scenario's cap, which is
+// a claim about the demonstration, validated when the file is read and never
+// served to anyone. See CatalogueEntry for why that type is deliberately not an
+// Offer.
+//
+// # The lowest and not the last
+//
+// They coincide for every ladder deploy/catalogue.json ships, which is exactly
+// why the distinction is worth writing down: a schedule is a sequence of prices
+// and nothing requires it to descend. Taking the last would answer correctly for
+// the shipped file and wrongly for the first offer that ends above where it dips,
+// and it would do it silently — the caller would suggest a limit that offer's own
+// lowest price already meets.
+func (s *Schedule) Floor() generated.Amount {
+	lowest := s.prices[0]
+	for _, p := range s.prices[1:] {
+		if p.Amount < lowest.Amount {
+			lowest = p
+		}
+	}
+	return lowest
+}
+
 // Inventory is what the mocked Merchant sells.
 //
 // It is safe to read concurrently because it is immutable after construction —

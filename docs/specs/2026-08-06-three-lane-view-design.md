@@ -1,7 +1,8 @@
 # Three-lane view: the digest as spine
 
 **Date:** 2026-08-06
-**Status:** the screen is built. `/protocol` draws the three columns, the digest
+**Status:** the screen is built. It is `/` since #344 — `/protocol` redirects
+there, carrying `?run=` — and draws the three columns, the digest
 spine and the event log beneath them — `/lanes` until #216, which also folded the
 Mandate Inspector into it as a panel an attempt opens, and made the screen honour
 `?run=`; the *Tokens* revision landed with #159.
@@ -174,6 +175,15 @@ where the two compete is not disturbed by any of them.
   inside the bound is still several times the column, and an `<h2>` that
   overflows takes the whole document into a horizontal scroll, three-lane grid
   included.
+
+**Attempts are drawn newest first**, revised 2026-09-01 (#344). This said *in
+the order they happened — the watch's story is a refusal followed by a purchase,
+and reversing it would put the ending first*, which is true of a two-attempt run
+and false of the ones this screen shows: a watch waiting on a price the schedule
+has not reached runs to dozens of attempts, and chronological order puts what is
+happening *now* below all of them, further down with every tick. The ending is
+only a spoiler when there is an ending. The numbering still counts the order they
+happened in, so *Attempt 1 of 62* is still the first.
 
 **The repetition on the cards stays.** It is redundant *within* one attempt by
 construction — `split` in `lanes/model.ts` cuts a new attempt precisely when a
@@ -720,6 +730,16 @@ correction they exist to state. *A card is a document*, below, is where the
 element itself is specified.
 
 ### Two voices, one brand: what may differ
+
+*Revised 2026-09-01 (#344): the two voices are on one screen now.* They were on
+two routes — #216 made each nav heading a screen on this section's own argument —
+and routing turned out to be the wrong way to keep them apart. A person following
+one purchase changed address at the moment it started, and again to see what the
+roles emitted, losing their place both times; the two screens were never looking
+at different things, only at the same watch with different amounts of it visible.
+The event log is a disclosure on the buying screen now, and the voices stay apart
+by being separately titled. Everything below is unchanged and is what keeps them
+apart.
 
 The lanes teach a protocol; the console serves a buyer. **Density may differ.**
 The lanes draw a pair for every attempt and repeat the digest on every card,

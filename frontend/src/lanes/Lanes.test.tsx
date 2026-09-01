@@ -364,8 +364,10 @@ describe("an attempt's outcome", () => {
       marks(container),
       "both pips are `full` and the endings differ — which is the whole of what " +
         "a reader has to take in to see that one watch tried twice and got two " +
-        "answers",
-    ).toEqual(["full", "cross", "check", "cross", "full", "check", "check", "check"]);
+        "answers. The bought attempt's marks come first because attempts are " +
+        "drawn newest first since #344: a watch runs to dozens of them, and the " +
+        "live edge belongs at the top rather than below everything that led to it",
+    ).toEqual(["full", "check", "check", "check", "full", "cross", "check", "cross"]);
   });
 
   it("labels an attempt nobody has confirmed a checkout for, rather than showing nothing", () => {
@@ -773,10 +775,16 @@ describe("opening what each reader saw", () => {
         "list instead of from what is in front of them",
     ).toHaveLength(2);
 
-    await userEvent.click(controls[1]);
+    // The *first* control on screen, which since #344 belongs to the *last*
+    // attempt: they are drawn newest first. That is the assertion — a control
+    // that asked for the attempt at its own position in the list rather than
+    // for the attempt it sits under would open the wrong panel, and reversing
+    // the order is exactly what would make that possible.
+    await userEvent.click(controls[0]);
     expect(
       asked,
-      "counted from 1, the way the agent's console counts its own attempts",
+      "counted from 1, the way the agent's console counts its own attempts — so the topmost "+
+        "control asks for 2 and not for 1",
     ).toEqual([2]);
   });
 
@@ -1413,13 +1421,14 @@ describe("the head of the transaction", () => {
     expect(
       named.map((element) => element.textContent),
       "the ordinal is inside the heading, so a reader moving by heading can tell them apart — " +
-        "and it is sr-only, so nothing about the visible page changes",
-    ).toEqual(["Attempt 1 of 2: Vitesse Urbain 7", "Attempt 2 of 2: Vitesse Urbain 7"]);
+        "and it is sr-only, so nothing about the visible page changes. Newest first since #344, " +
+        "so 2 is above 1 while the numbering still counts the order they happened in",
+    ).toEqual(["Attempt 2 of 2: Vitesse Urbain 7", "Attempt 1 of 2: Vitesse Urbain 7"]);
     expect(
       named.map((element) => element.querySelector(".sr-only")?.textContent?.trim()),
       "invisible rather than drawn twice: the badge above is where a sighted reader already " +
         "reads it",
-    ).toEqual(["Attempt 1 of 2:", "Attempt 2 of 2:"]);
+    ).toEqual(["Attempt 2 of 2:", "Attempt 1 of 2:"]);
   });
 
   it("heads no attempt when nothing knows what is being bought", () => {

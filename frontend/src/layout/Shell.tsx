@@ -1,7 +1,5 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { Outlet } from "react-router-dom";
 
-import { cn } from "../lib/utils";
-import { hrefOf, SURFACES } from "../surfaces";
 import { ThemeToggle } from "../theme/ThemeToggle";
 
 /**
@@ -19,23 +17,17 @@ import { ThemeToggle } from "../theme/ThemeToggle";
  * `ThemeProvider`, which App wraps around every route. The shell renders the
  * control and knows nothing about what it resolved to.
  *
- * The nav is built from the same list App builds its routes from, so a link
- * here cannot point at a route that does not exist.
+ * **There is no nav, because there is one screen** — issue #344. It went from
+ * four routes to two (#216, which made each nav heading a screen) to one, and a
+ * nav of a single item is a nav pretending to offer a choice. The list it was
+ * built from is still in `surfaces.tsx`, still the same list App builds its
+ * routes from; there is simply nothing left to choose between.
  *
- * **No headings over the list any more, because the headings became the
- * screens.** *Buying* and *The protocol* used to be `<h2>`s with two links
- * under each; #216 made each of them a screen, and a heading with exactly one
- * item beneath it sorts nothing. What went with them is `useId` — there is no
- * group to label a list by — and the list is now named by the `<nav>` itself.
- *
- * **No icons, and no line under either label.** Two labelled screens are
- * already distinguishable by the thing a reader is actually reading, and the
+ * What survives from that argument is the reason there were never icons: the
  * palette is closed at seven colours with a type hierarchy that gives each face
- * a job — a pair of glyphs would be two more shapes nobody approved, carrying
- * no information the label does not. An icon set is also appearance by
- * definition, and appearance is the half of shadcn this project declined. Who
- * each screen is *for* is a sentence, and it belongs on the screen a person
- * lands on rather than in a sidebar they read once.
+ * a job, and a glyph would be a shape nobody approved carrying no information a
+ * label does not. Who the screen is *for* is a sentence, and it belongs on the
+ * screen rather than in a sidebar somebody reads once.
  */
 export function Shell() {
   return (
@@ -50,30 +42,6 @@ export function Shell() {
           </span>
         </div>
 
-        <nav aria-label="Screens">
-          <ul className="flex flex-col gap-0.5">
-            {SURFACES.map((surface) => (
-              <li key={surface.path}>
-                <NavLink
-                  to={hrefOf(surface)}
-                  // Without this the index route stays highlighted everywhere,
-                  // because "/" is a prefix of every other path.
-                  end={surface.path === ""}
-                  className={({ isActive }) =>
-                    cn(
-                      "block rounded-sm px-2.5 py-1.5 font-sans text-sm no-underline transition-colors",
-                      isActive
-                        ? "bg-paper text-ink"
-                        : "text-graphite hover:bg-paper/60 hover:text-ink",
-                    )
-                  }
-                >
-                  {surface.label}
-                </NavLink>
-              </li>
-            ))}
-          </ul>
-        </nav>
 
         {/*
           Pushed to the bottom of the sidebar on a wide screen and left in flow

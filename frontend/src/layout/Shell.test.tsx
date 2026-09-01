@@ -1,39 +1,9 @@
-import { render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
-import { App } from "../App";
-import { SURFACES } from "../surfaces";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import { Shell } from "./Shell";
-
-/**
- * The nav as a reader of the app would describe it: what each link says, where
- * it goes, and in what order.
- *
- * Written out rather than derived from SURFACES, which is the whole difference
- * between a test and a tautology. A version that mapped SURFACES through
- * `hrefOf` would agree with the list by construction — rename a path and both
- * sides move together — and the only thing left under test would be that
- * `Array.prototype.map` works. These two rows are the routes as README.md
- * states them and as every link into this app assumes them, so a path that
- * changes without a decision fails here.
- *
- * **Two rows where there were four**, which is #216. The sidebar's two headings
- * — *Buying* and *The protocol* — used to sit above two links each while the
- * routes underneath did not honour them; each heading is a screen now, so the
- * headings are gone and the links carry their words. `Buying` is `/` because it
- * is where a buyer starts, and it is the one route in this app that anything
- * outside it links to.
- */
-const NAV = [
-  { label: "Buying", href: "/" },
-  { label: "The protocol", href: "/protocol" },
-];
-
-/** NotFound's heading — the thing a nav link must never reach. */
-const NOT_FOUND_HEADING = "Nothing here";
 
 function renderShell() {
   return render(
@@ -46,70 +16,30 @@ function renderShell() {
 }
 
 describe("Shell", () => {
-  it("renders one nav link per surface, each pointing where its label says", () => {
+  // **Three tests used to stand here**, and issue #344 took their subject away
+  // rather than their claims being wrong. They drove a nav: one link per
+  // surface, in one column with no heading over it, and none of them landing on
+  // the not-found route. There is one screen now, so there is no nav — a nav of
+  // a single item is a nav pretending to offer a choice — and a test asserting
+  // "one link per surface" over a list of one would pass against a sidebar with
+  // a link to nowhere in it.
+  //
+  // What replaces them is below: the shell still has to be a shell, and the one
+  // route still has to resolve. `constraint/architecture.test.ts` is what holds
+  // the route list itself.
+
+  it("frames the one screen without offering a choice of screens", () => {
     renderShell();
 
-    const links = within(screen.getByRole("navigation")).getAllByRole("link");
-    const nav = links.map((link) => ({
-      label: link.textContent,
-      href: link.getAttribute("href"),
-    }));
-
     expect(
-      nav,
-      "surfaces.tsx is one list because it used to be two, and the failure it " +
-        "was made one to prevent — a nav link that 404s, or a route nobody can " +
-        "reach — does not announce itself in the browser",
-    ).toEqual(NAV.map(({ label, href }) => ({ label, href })));
-  });
-
-  it("lists the screens in one column, with no heading left over them", () => {
-    renderShell();
-    const nav = within(screen.getByRole("navigation", { name: "Screens" }));
-
+      screen.queryByRole("navigation"),
+      "a nav over a single destination is chrome that reads as a choice; the screen it would " +
+        "point at is the one already on screen",
+    ).toBeNull();
     expect(
-      nav.getAllByRole("list"),
-      "two headings with one link under each would be a sidebar sorting " +
-        "nothing; #216 turned each heading into the screen it named",
-    ).toHaveLength(1);
-    expect(
-      nav.queryAllByRole("heading"),
-      "a heading here would be a third thing to name a screen, beside the " +
-        "link and the h1 on the screen itself",
-    ).toEqual([]);
-  });
-
-  it("has no nav link that lands on the not-found route", async () => {
-    const user = userEvent.setup();
-    render(
-      // Start somewhere that genuinely is not a route, so the sentinel below
-      // is proved live before it is used as a negative. Without this the test
-      // passes the moment NotFound's heading changes wording: every query for
-      // a heading nobody renders comes back null, which is what it is looking
-      // for. A never-matching query is the quietest way to lose a test.
-      <MemoryRouter initialEntries={["/definitely-not-a-surface"]}>
-        <App />
-      </MemoryRouter>,
-    );
-
-    expect(
-      screen.queryByRole("heading", { name: NOT_FOUND_HEADING }),
-      "the catch-all route no longer renders this heading, so the assertions below would pass without checking anything",
-    ).not.toBeNull();
-
-    // Driven from SURFACES on purpose, unlike the assertion above: this asks
-    // the question of every link the nav actually shows, and answers it from
-    // what rendered rather than from the list. Shell's doc comment claims a
-    // link here cannot point at a route that does not exist; this is that
-    // sentence, run.
-    for (const surface of SURFACES) {
-      await user.click(screen.getByRole("link", { name: surface.label }));
-
-      expect(
-        screen.queryByRole("heading", { name: NOT_FOUND_HEADING }),
-        `the "${surface.label}" nav link reached the catch-all route: its href and the route table disagree`,
-      ).toBeNull();
-    }
+      screen.getByText(/agentic payments/i),
+      "the shell still says what this is — that was never the nav's job",
+    ).toBeTruthy();
   });
 
   it("carries the theme control, and nothing else that holds state", () => {

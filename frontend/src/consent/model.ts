@@ -37,6 +37,22 @@ export interface Offer {
   readonly retailer: string;
   readonly price: Amount;
   /**
+   * The lowest price this offer's schedule ever quotes — `agent.Offer.Floor`,
+   * relayed from the merchant.
+   *
+   * **The one number here that is not about the moment it was read**, and the
+   * one a buying screen needs before it can suggest a limit that could ever be
+   * met. Until issue #344 the limit box opened on a value derived from the price
+   * in front of it, and forty-one of the sixty-three offers shipped opened on
+   * one no price they reach could meet — so a watch refused correctly, forever,
+   * and settled nothing.
+   *
+   * Optional for `step` and `final`'s reason below: this interface is shared
+   * with the consent screen, whose offer card may hold an object decoded from a
+   * response that predates the field.
+   */
+  readonly price_floor?: Amount;
+  /**
    * The price schedule position, and whether it has run out of moves —
    * `agent.Offer.Step` / `.Final`. Optional because they are #109's own
    * addition to the wire shape and this interface is shared with the consent

@@ -335,10 +335,18 @@ export function Consent({
           // be a debugging aid with nothing in it.
           <p className="font-mono text-sm text-broken">{buying.raw}</p>
         )}
-        <p className="font-sans text-sm text-graphite">
-          The agent&rsquo;s reading of {readFrom}, and not part of what you sign. Whenever it buys,
-          it is still held to the limits above.
-        </p>
+        {/*
+          One line, three times, and the same one — issue #344 cut it to that.
+          Each of these zones used to end with its own variation: *Whenever it
+          buys, it is still held to the limits above*, *Whatever it puts in the
+          basket…*, *Whichever offer it preferred…*. Three sentences saying the
+          thing the reader needs once, in a column where the *only* difference
+          between them was the noun.
+
+          What each says that is worth saying is which side of the signature it
+          is on, and the words for that are the same words every time.
+        */}
+        <NotSigned readFrom={readFrom} />
       </section>
 
       {/*
@@ -357,10 +365,7 @@ export function Consent({
           How many the agent will buy
         </h3>
         <p className="font-sans text-ink">Quantity {proposal.quantity}</p>
-        <p className="font-sans text-sm text-graphite">
-          The agent&rsquo;s reading of {readFrom}, and not part of what you sign. Whatever it puts
-          in the basket is still held to the limits above.
-        </p>
+        <NotSigned readFrom={readFrom} />
       </section>
 
       {/*
@@ -398,10 +403,7 @@ export function Consent({
             // the signed box above is what makes that safe.
             <p className="font-mono text-sm text-broken">{preference.raw}</p>
           )}
-          <p className="font-sans text-sm text-graphite">
-            The agent&rsquo;s reading of {readFrom}, and not part of what you sign. Whichever offer
-            it preferred, the one it settled on is named in the limits above.
-          </p>
+          <NotSigned readFrom={readFrom} />
         </section>
       )}
 
@@ -462,4 +464,20 @@ function money(amount: Amount): string {
 /** What a person reads for an instrument: its description, or its bare id when the Credential Provider gave none. */
 function instrumentName(instrument: PaymentInstrument): string {
   return instrument.description ?? instrument.id;
+}
+
+/**
+ * The one caveat the three unsigned zones share.
+ *
+ * They each carried their own wording until issue #344 — the same fact with a
+ * different second clause per zone — which is three sentences where a reader
+ * needs one, stacked in a column that differed only by a noun. The fact is which
+ * side of the signature the zone is on, and that does not change per zone.
+ */
+function NotSigned({ readFrom }: { readonly readFrom: string }) {
+  return (
+    <p className="font-sans text-sm text-graphite">
+      The agent&rsquo;s reading of {readFrom}. Not part of what you sign.
+    </p>
+  );
 }

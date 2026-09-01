@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import type { ReactNode } from "react";
 
 import type { Proposal } from "../../consent/model";
@@ -99,7 +100,20 @@ type Stage =
     };
 
 export function Buying() {
-  const [stage, setStage] = useState<Stage>({ kind: "browsing", refusal: null });
+  // `?run=` is a link to a purchase already under way — the address `/protocol`
+  // used to answer, redirected here now that there is one screen. Read once, as
+  // the opening stage: a person who then buys something else has moved on, and a
+  // query parameter that kept pulling them back would be the URL overruling what
+  // they just did.
+  const [params] = useSearchParams();
+  const [stage, setStage] = useState<Stage>(() => {
+    const asked = params.get("run");
+    return asked === null
+      ? { kind: "browsing", refusal: null }
+      : // No name: nothing on this screen knows what an older run was for, and
+        // inventing one is what #242 forbids. The lanes draw no heading for it.
+        { kind: "watching", correlationId: asked, name: "" };
+  });
 
   return (
     <section className="flex flex-col gap-8">

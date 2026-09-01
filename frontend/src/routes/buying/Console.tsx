@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 
-import { Shelf } from "../../catalogue/Shelf";
 import { Table } from "../../catalogue/Table";
 import { withQuantity } from "../../catalogue/quantity";
 import {
@@ -570,8 +569,7 @@ export function Console({
                 <p className="font-sans text-sm text-ink">{preference.sentence}</p>
               )}
               <p className="font-sans text-xs text-graphite">
-                None of this is signed. The limits it read are worded by the Trusted Surface, and
-                you read them there before you sign anything.
+                Not signed. The Trusted Surface words the limits, and you read them there.
               </p>
             </div>
           )}
@@ -597,9 +595,10 @@ export function Console({
 
         Without one — every purchase under `make demo` — the rows are the whole
         catalogue and the ceiling is the person's own. That is what `stated`
-        carries into {@link Table}, and it is why `Shelf` owns the filters:
+        carries into {@link Table}, and it is why only one of them is `browsable`:
         sixty-three rows need finding in, and three rows a sentence settled on do
-        not.
+        not. The filters used to live in a `Shelf` wrapper above the table; they
+        are in its header now, so the wrapper had nothing left to be.
 
         The proposal's table wins while there is one, rather than sitting beside
         the catalogue, because a screen showing both would be offering two ways to
@@ -626,11 +625,30 @@ export function Console({
             </p>
           )}
           {catalogue !== null && (
-            <Shelf
-              offers={catalogue}
-              onChoose={(offerID, quantity, limit) => void chooseStated(offerID, quantity, limit)}
-              choosing={choosing}
-            />
+            <div className="flex flex-col gap-2" data-testid="shelf">
+              <h2 className="font-display text-sm font-medium uppercase tracking-widest text-ink">
+                What the merchant sells
+              </h2>
+              {/*
+                The one sentence that stops the prices being read as an offer
+                being made: under `make demo` there is no interpreter worth the
+                name and no sentence to type, so the limits a mandate carries are
+                entirely this person's and nothing else on the page says so.
+              */}
+              <p className="font-sans text-sm text-graphite" data-testid="shop-window">
+                Today&rsquo;s prices. What the agent may pay is yours to set, on the row you
+                choose.
+              </p>
+              <Table
+                offers={catalogue}
+                stated
+                browsable
+                onChoose={(offerID, quantity, limit) =>
+                  void chooseStated(offerID, quantity, limit)
+                }
+                choosing={choosing}
+              />
+            </div>
           )}
         </>
       )}

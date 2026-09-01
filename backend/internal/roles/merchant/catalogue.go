@@ -118,6 +118,22 @@ type PricedOffer struct {
 	Price generated.Amount `json:"price"`
 	Step  int              `json:"step"`
 	Final bool             `json:"final"`
+
+	// Floor is the lowest price this offer's schedule ever quotes, and it is
+	// the one field here that is not about this instant — issue #344.
+	//
+	// **It is what a limit has to reach to buy anything**, and until #344 the
+	// only party that knew it was the merchant, silently. A buying screen with
+	// a price in front of it can suggest a limit under that price and be wrong
+	// about whether the offer will ever come down to it; forty-one of the
+	// sixty-three offers shipped were, so a watch refused correctly and settled
+	// nothing.
+	//
+	// A fact about the shop, which is what makes it the merchant's to publish.
+	// See Schedule.Floor for why it is the lowest price and not the last, and
+	// for why CatalogueEntry.Scenario's cap — a claim about the demonstration
+	// rather than about the goods — stays where it is.
+	Floor generated.Amount `json:"price_floor"`
 }
 
 // QuotedOffer is a priced offer together with how many of it are being bought
@@ -358,7 +374,17 @@ func (c *Catalogue) Quote(id string, quantity int) (QuotedOffer, error) {
 // a single instant — see Search.
 func (c *Catalogue) priced(o Offer, at time.Time) PricedOffer {
 	price, step, final := o.Schedule.at(at)
-	return PricedOffer{Offer: o.copy(), Price: price, Step: step, Final: final}
+	return PricedOffer{
+		Offer: o.copy(),
+		Price: price,
+		Step:  step,
+		Final: final,
+		// Not a function of `at`, unlike everything above it: the floor is the
+		// same whenever this offer is read. It rides here rather than on Offer
+		// because Offer is what a catalogue file states and a schedule is not —
+		// see Offer.Schedule's own `json:"-"`.
+		Floor: o.Schedule.Floor(),
+	}
 }
 
 // Subject describes buying quantity of o at price, in the vocabulary the

@@ -137,8 +137,18 @@ func allEmitting(t *testing.T, sink obs.Sink) emitters {
 // it moves every deadline in the world at once, exactly as wall time would.
 func newWorld(t *testing.T) *world { return newWorldEmitting(t, emitters{}) }
 
+// cycling makes the merchant's schedules wrap back to the opening price instead
+// of holding the last one for ever, which is what deploy/demo.json runs and what
+// issue #177 made it run.
+//
+// StepMax equal to Step rather than wider: NewCyclingJitteredSchedule draws each
+// hold from [min, max], so an equal pair is a cyclic schedule whose steps are
+// still exactly DefaultStep — every helper that advances the clock by one step
+// keeps working, and nothing here has to reason about a drawn width.
+func cycling(o *merchant.DemoOptions) { o.StepMax = o.Step }
+
 // newWorldEmitting is newWorld with the roles recording what they do.
-func newWorldEmitting(t *testing.T, events emitters) *world {
+func newWorldEmitting(t *testing.T, events emitters, opts ...func(*merchant.DemoOptions)) *world {
 	t.Helper()
 
 	clk := clock.NewFake(base)
@@ -244,18 +254,30 @@ func newWorldEmitting(t *testing.T, events emitters) *world {
 			},
 			Events: events.merchant,
 		},
-		merchant.DemoOptions{
-			ID:        merchantID,
-			Catalogue: listing,
-			User:      w.user.verifier,
-			Processor: &merchant.HTTPProcessor{Base: w.endpoints.MPP},
-			Step:      merchant.DefaultStep,
-		})
+		demoOptions(w, listing, opts))
 	require.NoError(t, err, "standing up the merchant the demonstration runs")
 	w.endpoints.Merchant = serve(t, merchantSvc.Handler)
 
 	w.agentEvents = events.agent
 	return w
+}
+
+// demoOptions is what the merchant is built with, after every caller's option
+// has had its say.
+func demoOptions(
+	w *world, listing *merchant.CatalogueFile, opts []func(*merchant.DemoOptions),
+) merchant.DemoOptions {
+	o := merchant.DemoOptions{
+		ID:        merchantID,
+		Catalogue: listing,
+		User:      w.user.verifier,
+		Processor: &merchant.HTTPProcessor{Base: w.endpoints.MPP},
+		Step:      merchant.DefaultStep,
+	}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
 }
 
 func (w *world) client() *agent.Client {

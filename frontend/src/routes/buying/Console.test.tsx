@@ -995,3 +995,25 @@ describe("the shopping console", () => {
     ).toBeNull();
   });
 });
+
+describe("the shop window", () => {
+  it("says the prices are today's and the limits are the buyer's", async () => {
+    // The sentence this whole screen turns on. A table of prices with no such
+    // line reads as an offer being made, and under `make demo` there is no
+    // interpreter worth the name and no sentence anywhere else on the page to
+    // say otherwise.
+    //
+    // Asserted here since #344, where the `Shelf` wrapper it used to live in was
+    // folded into this component — the filters moved into the table's own header
+    // and the wrapper had nothing left to be. A claim whose test went with the
+    // file it was deleted from is a claim nothing holds.
+    stubFetch({ "/examples": { examples: [] } });
+    renderConsole();
+
+    const said = (await screen.findByTestId("shop-window")).textContent ?? "";
+    expect(said).toMatch(/prices/i);
+    expect(said, "the buyer setting the terms is the half a price list cannot state").toMatch(
+      /yours to set/i,
+    );
+  });
+});

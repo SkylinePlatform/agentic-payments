@@ -7,7 +7,9 @@ route #22 closed with, and it is now a *zone* of the Buying screen at `/` —
 frame naming the Trusted Surface as a separate party, with the shopping console
 unmounted while it asks. Everything below about what the zone shows, what the
 signature covers and what may not reach it still holds; where it says `/consent`,
-read *the surface's zone*, and where it says `/lanes`, read `/protocol`. #193 was
+read *the surface's zone*, and where it says `/lanes`, read `/protocol` — which
+is `/` since #344, with `/protocol` redirecting to it and the signature no longer
+changing address at all (#316). #193 was
 the gap left on it: the decision axis was carried by a heading where the
 indicator vocabulary says enclosure.
 **Issues:** #22. First slice of #109. Follows #15, #16, #17, #20, #21.

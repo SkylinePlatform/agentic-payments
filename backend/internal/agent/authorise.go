@@ -403,6 +403,16 @@ type Offer struct {
 	Price       generated.Amount `json:"price"`
 	Step        int              `json:"step"`
 	Final       bool             `json:"final"`
+
+	// Floor is the lowest price this offer's schedule ever quotes, relayed from
+	// the merchant — issue #344.
+	//
+	// The one number on this type that is not about the moment it was read, and
+	// the one a buying screen needs before it can suggest a limit that could
+	// ever be met. Forty-one of the sixty-three offers shipped opened on a
+	// suggestion no price they reach could meet, so a watch refused correctly
+	// and settled nothing. See merchant.PricedOffer.Floor.
+	Floor generated.Amount `json:"price_floor"`
 }
 
 // Proposal is what the agent puts in front of a person: the limits it read out
@@ -1066,6 +1076,9 @@ type candidate struct {
 	// has started watching yet.
 	Step  int  `json:"step"`
 	Final bool `json:"final"`
+	// Floor is the same, and is what a buying screen suggests a limit from.
+	// Issue #344 — see Offer.Floor.
+	Floor generated.Amount `json:"price_floor"`
 }
 
 // Catalogue asks the merchant for everything it sells, priced together.

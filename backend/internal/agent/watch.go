@@ -88,6 +88,46 @@ var ErrScheduleExhausted = errors.New("agent: the merchant has no further price 
 // is "does a wait that has not yet begun have anything left to wait for".
 var ErrAuthorisationExpired = errors.New("agent: the user's authorisation expired before any attempt bought")
 
+// ErrLimitOutOfReach means every price this offer's schedule moves through has
+// been attempted and none of them met the user's limit.
+//
+// # What it is a statement about, which is not what the other three are
+//
+// The limit. Not the merchant, and not this agent. ErrScheduleExhausted says the
+// shop has committed to its last price and there is nowhere further to move;
+// this says the shop went right round its ladder and the buyer's number was
+// under all of it. A console drawing both as "exhausted" would tell somebody the
+// shop had run out when what happened is that they asked for less than it ever
+// charges. ErrAuthorisationExpired says the pair ran out of time, which is a
+// different sentence again and the one this replaces on the demonstration's own
+// schedules — an hour of correct refusals ending in a message about a clock,
+// where the fact available after twelve seconds was about the price.
+// ErrPurchaseRefused is the instruction path, where there was never anything to
+// wait for at all.
+//
+// # How the loop knows, using only what it has seen
+//
+// The step index, which every quote already carries and which the loop already
+// reads to decide when to mint. Steps advance 0…n−1 and wrap, and Run attempts
+// exactly once per step change, so a quote whose Step has already been attempted
+// and refused in this run means the schedule completed a lap with every price on
+// it tried. Nothing here asks the merchant how many prices it has, or what they
+// are: a merchant that answered either would be publishing its own future, and
+// the agent would be believing it.
+//
+// **It is the agent's own bookkeeping and never evidence**, which is why this is
+// a sentinel and a console state rather than anything a verifier sees. What
+// happened is fully recorded in the receipts of the refusals it is made of.
+//
+// # Unreachable on a one-shot schedule, and that is not a gap
+//
+// Such a schedule holds its last price for ever and reports Final, so
+// ErrScheduleExhausted arrives first and says the more precise thing. This is for
+// the cyclic case, which is what deploy/demo.json runs and what issue #177 made
+// it run — see ErrScheduleExhausted for why that left the branch below with
+// nothing to end it.
+var ErrLimitOutOfReach = errors.New("agent: every price this offer moves through was attempted and none met the limit")
+
 // ErrPurchaseRefused means the one attempt an instruction licensed was refused
 // by a verifier, and the sentence gave nothing to wait for.
 //
@@ -584,6 +624,12 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 	// the attempt itself. A re-delivery updates its own row instead of adding
 	// one, which is what makes len(out.Attempts) a count of attempts.
 	recorded := make(map[string]int)
+	// Which steps have been attempted and refused, for ErrLimitOutOfReach. A
+	// step, not a price: the loop already reads the index to decide when to
+	// mint, and two laps of a cyclic schedule are the same prices at the same
+	// indices — so a repeat is the lap, without this ever comparing money or
+	// asking the merchant how long its ladder is.
+	refused := make(map[int]bool)
 
 	// instruction is the sentence that carried no condition, and opening is its
 	// first pass through the loop below — the one that neither waits for a tick
@@ -642,6 +688,14 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 				// what it wants then is to buy at whatever is in force now.
 				if !instruction && q.Step == last {
 					continue
+				}
+				// Every price on this ladder has now been attempted and refused,
+				// and it has come round to one of them again. Checked here, where
+				// the loop is about to mint, for ErrAuthorisationExpired's reason
+				// one branch up: a round trip spent on an attempt whose answer is
+				// already known is a round trip spent.
+				if refused[q.Step] {
+					return out, ErrLimitOutOfReach
 				}
 			}
 
@@ -727,6 +781,7 @@ func (w *Watch) Run(ctx context.Context) (Watched, error) {
 		if instruction {
 			return out, ErrPurchaseRefused
 		}
+		refused[quoted.Step] = true
 
 		// The last price holds for ever, so against a final offer there is no
 		// next step to wait for and every tick from here would poll a price that
