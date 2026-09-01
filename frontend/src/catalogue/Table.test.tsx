@@ -700,6 +700,19 @@ describe("the limit a row opens on", () => {
     expect(openingLimit(offer, 2)).toBe(90000);
   });
 
+  it("ignores a floor in another currency", () => {
+    // The row prints the floor's amount against the price's currency, so a
+    // mismatch would read "has not gone below $13,000.00" for a floor of
+    // ¥13,000 — the class of error `formatAmount`'s own doc exists about, on the
+    // one sentence that tells somebody their limit will never be met.
+    const mixed = anOffer({
+      price: { amount: 45000, currency: "USD" },
+      price_floor: { amount: 13000, currency: "JPY" },
+    });
+
+    expect(openingLimit(mixed, 1), "the price, not a number from another currency").toBe(45000);
+  });
+
   it("never opens below one minor unit", () => {
     const free = anOffer({
       price: { amount: 0, currency: "USD" },

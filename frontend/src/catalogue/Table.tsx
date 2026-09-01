@@ -369,6 +369,14 @@ function usableFloor(offer: Offer): Amount {
   const floor = offer.price_floor;
   if (floor === undefined) return offer.price;
   if (floor.currency === "" && floor.amount === 0) return offer.price;
+  // A floor in some other currency is not a floor for this offer, and it is the
+  // sentence above rather than the box that makes this matter: the row prints
+  // the floor's *amount* against the price's currency, so a mismatch would put
+  // "has not gone below $13,000.00" on screen for a floor of ¥13,000. The
+  // consent screen refuses the same comparison for the same reason. Nothing in
+  // this tree can produce one — a schedule's prices and its floor come from the
+  // same list — which is why it falls back rather than reporting.
+  if (floor.currency !== offer.price.currency) return offer.price;
   return floor;
 }
 
