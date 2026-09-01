@@ -2,10 +2,13 @@ package demo
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -284,12 +287,119 @@ func (r *Runner) healthy(ctx context.Context, url string) bool {
 	return resp.StatusCode < http.StatusBadRequest
 }
 
+// How much of one line the runner forwards, and how much of the pipe it reads at
+// a time.
+//
+// maxLine is inherited from the bufio.Scanner this loop replaced, so nothing that
+// was forwarded before is truncated now. It is not a measured worst case in
+// #251's sense and cannot be: no line any binary here emits comes near it — the
+// widest is a start-up banner at about eighty columns — so what the number bounds
+// is a role that has gone wrong, not one that is working. It stays generous for
+// that reason: the point of forwarding a broken role's output is to be able to
+// read what it said.
+//
+// **This one truncates where #251's caps refuse**, and that is the difference the
+// issue turns on. Those five read a document a verdict is reached on, where a
+// short read is a wrong answer. This reads a log line: dropping the tail of one
+// costs a screenshot, and refusing would cost every line after it.
+const (
+	maxLine = 1024 * 1024
+
+	// readerChunk is the Scanner's own starting buffer, kept because it is the
+	// size that was already working. It bounds nothing a reader has to reason
+	// about — a line longer than it arrives in several pieces and is joined —
+	// so the only thing it trades is one more copy against maxLine of resident
+	// memory per pipe, and there are two per process.
+	readerChunk = 64 * 1024
+)
+
 // pipe copies a process's output, one prefixed line at a time.
+//
+// # An over-long line no longer ends the process's output
+//
+// Issue #275. This was a bufio.Scanner, whose Err was never read: a line past the
+// token limit made Scan return false, the loop exited, and **that role's output
+// stopped for the rest of the run** with nothing said. `make demo` kept going and
+// the pane simply went quiet — which is the worst thing a runner can do, because
+// the role looks idle rather than broken.
+//
+// A Scanner cannot be resumed after bufio.ErrTooLong, so this reads the pipe
+// itself: it forwards the first maxLine bytes of a long line, says how much it
+// dropped and which role produced it, and then carries on with the next line.
 func (r *Runner) pipe(p Process, from io.Reader) {
-	scanner := bufio.NewScanner(from)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		r.logf(p, "%s", scanner.Text())
+	reader := bufio.NewReaderSize(from, readerChunk)
+	for {
+		line, dropped, err := readLine(reader)
+
+		switch {
+		case dropped > 0:
+			r.logf(p, "%s… [%d more bytes on this line were dropped; the runner forwards %d per line]",
+				line, dropped, maxLine)
+		case len(line) > 0:
+			r.logf(p, "%s", line)
+		}
+
+		if err != nil {
+			// EOF is the process finishing. A closed pipe is cmd.Wait having got
+			// there first, which is what a Ctrl-C looks like once WaitDelay
+			// expires — neither is worth a line, and saying so on every shutdown
+			// would train a reader to ignore this message.
+			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
+				r.logf(p, "the runner stopped forwarding this process's output: %v", err)
+			}
+			return
+		}
+	}
+}
+
+// withoutDelimiter drops the line ending, and exactly the line ending.
+//
+// bytes.TrimRight over "\r\n" is the obvious spelling and is not the same rule:
+// it would eat every trailing carriage return and newline, so a role printing
+// `done\r\r` would have both taken. bufio.ScanLines — what this loop replaced —
+// drops one \n and then one \r, and a change of behaviour nobody asked for is
+// exactly what a replacement of working code must not smuggle in.
+func withoutDelimiter(chunk []byte) []byte {
+	chunk = bytes.TrimSuffix(chunk, []byte("\n"))
+	return bytes.TrimSuffix(chunk, []byte("\r"))
+}
+
+// readLine reads one line, keeping at most maxLine bytes of it and reporting how
+// many it discarded.
+//
+// The discarded bytes are consumed rather than left in the reader, which is what
+// makes the next call the *next line* instead of the middle of this one.
+func readLine(reader *bufio.Reader) (line []byte, dropped int, err error) {
+	for {
+		// ReadSlice's answer is only valid until the next read, so every branch
+		// below copies out of it.
+		chunk, read := reader.ReadSlice('\n')
+
+		// The delimiter is not part of the line, and counting it would make the
+		// runner report one more dropped byte than a role actually printed.
+		// Trimming here rather than on the way out is what keeps that number
+		// honest, since the bytes it counts are the ones that did not fit.
+		done := !errors.Is(read, bufio.ErrBufferFull)
+		if done {
+			chunk = withoutDelimiter(chunk)
+		}
+
+		switch room := maxLine - len(line); {
+		case room >= len(chunk):
+			line = append(line, chunk...)
+		case room > 0:
+			line = append(line, chunk[:room]...)
+			dropped += len(chunk) - room
+		default:
+			dropped += len(chunk)
+		}
+
+		// ErrBufferFull is the only error worth going round again for: it means
+		// this line is longer than the reader's buffer, not that the pipe is
+		// finished.
+		if done {
+			return line, dropped, read
+		}
 	}
 }
 
