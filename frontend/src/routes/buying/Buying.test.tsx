@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -56,6 +56,85 @@ function stubFetch(routes: Record<string, unknown>) {
 
 const PROMPT = "find and buy telescopic ladders, cheapest";
 
+/**
+ * A stand-in for the browser's `EventSource`, in `routes/protocol/Protocol.test.tsx`'s
+ * shape and for its reason: jsdom has none, and the client takes a factory so a
+ * test can hand it one.
+ *
+ * Only what the watching stage needs — open, and one framed event. The protocol
+ * screen's own copy is the fuller one, and duplicating a third of it here beats
+ * exporting a harness out of a `_test` file, which nothing in this suite does.
+ */
+class FakeSource {
+  readyState = 0;
+
+  private readonly listeners = new Map<string, ((frame: MessageEvent<string>) => void)[]>();
+
+  constructor(readonly url: string) {}
+
+  addEventListener(type: string, listener: (frame: MessageEvent<string>) => void): void {
+    const existing = this.listeners.get(type) ?? [];
+    existing.push(listener);
+    this.listeners.set(type, existing);
+  }
+
+  close(): void {
+    this.readyState = 2;
+  }
+
+  open(): void {
+    this.readyState = 1;
+    this.deliver("open", "", "");
+  }
+
+  emit(kind: string, seq: number, event: Record<string, unknown>): void {
+    this.deliver(
+      kind,
+      String(seq),
+      JSON.stringify({
+        seq,
+        event: { kind, role: "merchant", at: "2026-08-11T09:00:00Z", ...event },
+      }),
+    );
+  }
+
+  private deliver(type: string, lastEventId: string, data: string): void {
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(new MessageEvent<string>(type, { data, lastEventId }));
+    }
+  }
+}
+
+const sources: FakeSource[] = [];
+
+function stubStream() {
+  sources.length = 0;
+  vi.stubGlobal(
+    "EventSource",
+    class extends FakeSource {
+      constructor(url: string) {
+        super(url);
+        sources.push(this);
+      }
+    },
+  );
+}
+
+/** The digest the purchase below is bound to, and the twelve characters it shows. */
+const DIGEST = "DDDD2222eeeeFFFF";
+const SHOWN = "DDDD2222eeee";
+
+/** What the Trusted Surface answers with once it has signed. */
+function anAuthorised() {
+  return {
+    open_checkout_mandate: "checkout.jwt",
+    open_payment_mandate: "payment.jwt",
+    rendered: ["the item is gtin:05014477390221"],
+    expires_at: "2026-01-01T01:00:00Z",
+    payment_instrument: { id: "card-4242", type: "CARD", description: "Visa ending 4242" },
+  };
+}
+
 function aProposal(): Proposal {
   const offer = {
     id: "gtin:05014477390221",
@@ -93,9 +172,19 @@ function aReading(): Reading {
   };
 }
 
+/**
+ * What the Trusted Surface answers `POST /authorise/preview` with.
+ *
+ * **Two sentences for two constraints**, and the pairing is load-bearing rather
+ * than decorative: `canSign` compares the counts, so a preview short by one
+ * leaves the Sign button disabled with nothing on screen saying why. The
+ * proposal gains its second constraint on the way here — the table's Buy runs it
+ * through `withQuantity`, which is #314 — so a fixture mirroring only what
+ * `aProposal` declares is a fixture that cannot be signed.
+ */
 function aPreview(): Previewed {
   return {
-    rendered: ["at most 200.00 USD"],
+    rendered: ["at most 200.00 USD", "at most 1 of them"],
     constraints_digest: "d",
     payment_instrument: { id: "card-4242", type: "CARD", description: "Visa ending 4242" },
     open_mandate_lifetime_seconds: 3600,
@@ -208,6 +297,99 @@ describe("the Buying screen", () => {
 
     expect(screen.getByRole("region", { name: "Trusted Surface" })).toBeTruthy();
     expect(screen.getByRole("region", { name: "Shopping Agent" })).toBeTruthy();
+  });
+
+  it("draws the three lanes in place once the surface has signed, with no route change", async () => {
+    // Issue #316. Signing used to answer its 201 with
+    // `navigate("/protocol?run=…")`, so the moment this screen exists for was
+    // the moment it stopped being this screen — *I signed this* and *here is
+    // what my signature is doing* ended up on two addresses, and the viewer
+    // arrived somewhere that looked like it had always been going to be there.
+    //
+    // **The stream is driven, and that is what makes this a test of the lanes.**
+    // The first version stopped at the region appearing and asserted the
+    // correlation id — which the *waiting* branch also renders, so it passed on a
+    // screen that had drawn no lanes at all, under a name saying it had. What
+    // proves they are here is a verifier's digest on the axis.
+    stubStream();
+    stubFetch({
+      "/examples": { examples: [] },
+      "/interpret": { body: aReading() },
+      "/candidates": { body: aProposal() },
+      "/authorise/preview": { body: aPreview() },
+      "/authorise": { body: anAuthorised() },
+      "/watches": { status: 201, body: { id: "w1", correlation_id: "c-abc" } },
+    });
+    render(<Buying />, { wrapper: Router });
+
+    await reachTheSurface();
+    await userEvent.click(await screen.findByRole("button", { name: /sign/i }));
+
+    const watching = await screen.findByTestId("watching-region");
+    expect(
+      within(watching).getByTestId("watching-waiting"),
+      "the agent authorises before it emits, so the stage opens on a wait rather than on an " +
+        "empty screen that looks like nothing happened",
+    ).toBeTruthy();
+
+    act(() => {
+      sources[0].open();
+      sources[0].emit("mandate_verified", 1, { correlation_id: "c-abc", digest: DIGEST });
+    });
+
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("watching-region")).getByTestId("spine").textContent,
+        "the consequence of the signature has to appear where the signature was collected, and " +
+          "the spine is what says the lanes are drawn rather than still waiting",
+      ).toBe(SHOWN);
+    });
+    expect(
+      screen.queryByTestId("watching-waiting"),
+      "and the wait is over, rather than sitting above the lanes it was waiting for",
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("surface-region"),
+      "the surface has finished asking, so its zone goes the way the console's did",
+    ).toBeNull();
+  });
+
+  it("does not put the Mandate Inspector on the screen that collects the signature", async () => {
+    // The seam #316 predicted would not be needed. `Disclosure` is the Mandate
+    // Inspector, which re-renders a signed mandate's constraints with the
+    // browser's own renderer — legitimate there, and forbidden anywhere near a
+    // signature being collected, which is what
+    // `constraint/architecture.test.ts` holds over the import graph.
+    //
+    // That guard reads imports. This reads the screen, so the two fail for
+    // different reasons: a `RunLanes` that imported the panel and drew nothing
+    // fails there, and one that drew the control fails here.
+    stubStream();
+    stubFetch({
+      "/examples": { examples: [] },
+      "/interpret": { body: aReading() },
+      "/candidates": { body: aProposal() },
+      "/authorise/preview": { body: aPreview() },
+      "/authorise": { body: anAuthorised() },
+      "/watches": { status: 201, body: { id: "w1", correlation_id: "c-abc" } },
+    });
+    render(<Buying />, { wrapper: Router });
+
+    await reachTheSurface();
+    await userEvent.click(await screen.findByRole("button", { name: /sign/i }));
+    await screen.findByTestId("watching-region");
+
+    act(() => {
+      sources[0].open();
+      sources[0].emit("mandate_verified", 1, { correlation_id: "c-abc", digest: DIGEST });
+    });
+    await screen.findByTestId("spine");
+
+    expect(
+      screen.queryByRole("button", { name: /what each reader saw/i }),
+      "the buying screen shows what is happening to what you signed for; what each party was " +
+        "allowed to read is the teaching screen's, at /protocol",
+    ).toBeNull();
   });
 
   it("comes back to the console on a refusal, with the acknowledgement and the prompt", async () => {

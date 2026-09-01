@@ -5,6 +5,7 @@ import type { Proposal } from "../../consent/model";
 import { cn } from "../../lib/utils";
 import { Consent } from "../consent/Consent";
 import { Console } from "./Console";
+import { Watching } from "./Watching";
 import type { Refusal } from "./Console";
 
 /**
@@ -71,7 +72,31 @@ type Stage =
   /** The agent's half: prompt, proposal, offers, tracker. `refusal` is set on a return. */
   | { readonly kind: "browsing"; readonly refusal: Refusal | null }
   /** The surface's half. The console is not mounted, and the proposal is what it is asking about. */
-  | { readonly kind: "consent"; readonly proposal: Proposal };
+  | { readonly kind: "consent"; readonly proposal: Proposal }
+  /**
+   * Signed, and the watch is running — issue #316.
+   *
+   * The third stage, and the one that removes a route change from the middle of
+   * the demonstration. Signing used to answer its `201` by navigating to
+   * `/protocol?run=…`, so the moment this screen exists for was the moment it
+   * stopped being this screen: the consent zone was replaced by a different
+   * route with a different heading, and *I signed this* and *here is what my
+   * signature is doing* ended up on two addresses.
+   */
+  | {
+      readonly kind: "watching";
+      readonly correlationId: string;
+      /**
+       * What is being bought, carried from the proposal rather than asked for.
+       *
+       * `Watching` draws the lanes, whose head names the purchase, and the
+       * screen that already knows it is this one — the person has just read it
+       * on the consent zone. Asking `GET /watches` for it instead is what
+       * `constraint/architecture.test.ts` refuses, since the hook that answers
+       * reaches the constraint renderer and this screen collects a signature.
+       */
+      readonly name: string;
+    };
 
 export function Buying() {
   const [stage, setStage] = useState<Stage>({ kind: "browsing", refusal: null });
@@ -85,7 +110,9 @@ export function Buying() {
         </p>
       </header>
 
-      {stage.kind === "browsing" ? (
+      {stage.kind === "watching" ? (
+        <Watching correlationId={stage.correlationId} name={stage.name} />
+      ) : stage.kind === "browsing" ? (
         <Party
           name="Shopping Agent"
           testid="agent-region"
@@ -113,6 +140,13 @@ export function Buying() {
           >
             <Consent
               proposal={stage.proposal}
+              onWatching={(correlationId) => {
+                setStage({
+                  kind: "watching",
+                  correlationId,
+                  name: stage.proposal.offer.title,
+                });
+              }}
               onRefused={(recorded) => {
                 // The prompt goes back into the box it came from, read off the
                 // proposal this component has been holding all along rather
