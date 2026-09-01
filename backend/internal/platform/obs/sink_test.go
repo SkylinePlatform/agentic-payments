@@ -224,6 +224,7 @@ func TestASinkSurvivesAnotherPackageClosingItsIdleConnections(t *testing.T) {
 	})
 
 	sink := obs.NewHTTPSink(collector.URL)
+	before := torn.Load()
 	for i := range sends {
 		require.NoError(t, sink.Send(context.Background(), []obs.Event{sample("under churn")}),
 			"send %d failed: the shared transport is costing deliveries, which is the decision "+
@@ -236,8 +237,16 @@ func TestASinkSurvivesAnotherPackageClosingItsIdleConnections(t *testing.T) {
 	// Without this the test above is a sink sending to a server, which passes
 	// whatever the transport does: a churn goroutine that never got scheduled
 	// leaves every assertion true and the subject untouched.
-	assert.Positive(t, torn.Load(),
-		"nothing closed an idle connection during those sends, so this measured the quiet case")
+	//
+	// **Measured across the send loop rather than over the whole test**, and the
+	// difference is the churn cap. A goroutine that reached churnCap before the
+	// first send would leave torn at its maximum and every send in the quiet case
+	// — the vacuous run reading as the strongest possible pass. What the property
+	// needs is connections being torn down *while* the sink is using them, so
+	// that is what is counted.
+	assert.Greater(t, torn.Load(), before,
+		"nothing closed an idle connection between the first send and the last, so this measured "+
+			"the quiet case and reported it as the hostile one")
 
 	assert.Equal(t, int64(sends), delivered.Load(),
 		"every send reported success, so every one of them has to have arrived — a retry that "+
