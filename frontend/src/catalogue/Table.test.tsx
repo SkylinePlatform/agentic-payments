@@ -490,6 +490,27 @@ describe("the limit is a ceiling on the purchase, not on one of the thing", () =
   }
 
   it("waits when the limit clears one of them and not three", async () => {
+    // $1,200.00 against three at $450.00 authorises nothing today — "buys now"
+    // here would be a mandate signed straight into a refusal — and it clears
+    // three at the floor of $380.00, which is $1,140.00, so the wait is one that
+    // can end. Both halves matter: this is the arm the unreachable sentence must
+    // not steal, and a version comparing the limit against the *price* rather
+    // than the floor would steal exactly this.
+    render(<Table stated browsable offers={[anOffer()]} onChoose={vi.fn()} choosing={null} />);
+
+    await withQuantity("3");
+    const limit = screen.getByLabelText(/most you will pay/i);
+    await userEvent.clear(limit);
+    await userEvent.type(limit, "1200.00");
+
+    expect(screen.getByTestId("limit-effect").textContent).toMatch(/waits until all 3 come to/i);
+  });
+
+  it("says a limit no price can reach cannot be reached, rather than promising a wait", async () => {
+    // Issue #348, and #344's third done-when. This was the case above until the
+    // arm existed: three at a floor of $380.00 is $1,140.00, so a ceiling of
+    // $460.00 is a wait that can never end — and the screen said "waits until
+    // all 3 come to $460.00", which is a promise the shop has already ruled out.
     render(<Table stated browsable offers={[anOffer()]} onChoose={vi.fn()} choosing={null} />);
 
     await withQuantity("3");
@@ -497,11 +518,48 @@ describe("the limit is a ceiling on the purchase, not on one of the thing", () =
     await userEvent.clear(limit);
     await userEvent.type(limit, "460.00");
 
+    const said = screen.getByTestId("limit-effect").textContent ?? "";
+    expect(said, "the number it names is what three of them would have to cost at the floor").toMatch(
+      /has not gone below \$1,140\.00/,
+    );
+    expect(said, "and it does not also promise a wait").not.toMatch(/waits until/i);
+  });
+
+  it("keeps Buy enabled and the box editable when the limit cannot be reached", async () => {
+    // #344 is explicit that typing an unreachable limit is legitimate, and the
+    // whole point of the box is that the limit is the buyer's. This discloses
+    // and does not veto — a version that disabled Buy would be the screen
+    // overruling the person it exists to serve.
+    render(<Table stated browsable offers={[anOffer()]} onChoose={vi.fn()} choosing={null} />);
+
+    const limit = screen.getByLabelText(/most you will pay/i);
+    await userEvent.clear(limit);
+    await userEvent.type(limit, "1.00");
+
+    expect(screen.getByTestId("limit-effect").textContent).toMatch(/has not gone below/);
+    expect(
+      (screen.getByRole("button", { name: /^buy$/i }) as HTMLButtonElement).disabled,
+      "the agent will refuse and stop, which is a thing a person is allowed to ask for",
+    ).toBe(false);
+    expect((limit as HTMLInputElement).readOnly).toBe(false);
+  });
+
+  it("makes no claim at all when the merchant sent no floor", async () => {
+    // A response that predates #344 carries no floor, and a screen that inferred
+    // one would be reporting a fact nobody stated. The box still has to open on
+    // something — `openingLimit` falls back to the price for that — but a
+    // *claim* has no such obligation.
+    const noFloor: Offer = { ...anOffer(), price_floor: undefined };
+    render(<Table stated browsable offers={[noFloor]} onChoose={vi.fn()} choosing={null} />);
+
+    const limit = screen.getByLabelText(/most you will pay/i);
+    await userEvent.clear(limit);
+    await userEvent.type(limit, "1.00");
+
     expect(
       screen.getByTestId("limit-effect").textContent,
-      "three at $450.00 come to $1,350.00, so a ceiling of $460.00 authorises nothing today — " +
-        "'buys now' here is a mandate signed straight into a refusal",
-    ).toMatch(/waits until all 3 come to/i);
+      "no floor was published, so nothing here knows the limit is out of reach",
+    ).not.toMatch(/has not gone below/);
   });
 
   it("buys now once the limit clears all of them, and says the total it buys at", async () => {

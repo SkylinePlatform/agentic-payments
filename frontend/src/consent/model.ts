@@ -516,3 +516,60 @@ export function canSign(proposal: Proposal, previewed: Previewed): boolean {
     whenItBuys(proposal.trigger).raw === undefined
   );
 }
+
+/**
+ * The ceiling this proposal states, when exactly one constraint states one —
+ * issue #348.
+ *
+ * # What it is for, and what it must never become
+ *
+ * One thing: comparing the buyer's number against `Offer.price_floor`, so the
+ * consent screen can say a limit no price reaches will not be reached. #344's
+ * third done-when, on the surface it named.
+ *
+ * **It is not a renderer and may never become one.** The sentences a person
+ * signs come from the Trusted Surface's own `Render()` through
+ * `/authorise/preview`, and `constraint/architecture.test.ts` holds that as a
+ * property of the import graph — a second renderer on this screen would mean
+ * the sentence read is not the one the signature covers. Reading a *number* to
+ * compare it against a merchant's published floor is a different act: nothing
+ * here is shown as a constraint, and the disclosure it feeds names the shop's
+ * floor rather than the buyer's limit.
+ *
+ * # It fails closed, and that is the whole of its safety
+ *
+ * A second parse of the signed facts can disagree with the first. This one is
+ * built so that a disagreement can only ever produce **silence**: every
+ * condition below has to hold, and anything else answers `null`, which the
+ * caller draws as no claim at all.
+ *
+ * - exactly one top-level leaf naming `amount` — two would be a shape this
+ *   browser has not seen and cannot rank
+ * - `lte`, the operator `agent.ProposeStated` emits; `lt`, `between` or a group
+ *   are all readable to a verifier and not to this
+ * - a value shaped like an `Amount`, not the bare number older fixtures carry —
+ *   a number has no currency, and comparing one against a floor in another is
+ *   the class of error `formatAmount`'s own doc is about
+ * - the same currency as the floor it will be compared with, which the caller
+ *   checks because only the caller holds the offer
+ *
+ * A nested `all`/`any` is therefore silence rather than a walk. That is
+ * deliberate: descending into groups is the first step towards evaluating a
+ * constraint, which AGENTS.md puts squarely with the verifier.
+ */
+export function statedCeiling(constraints: readonly Constraint[]): Amount | null {
+  const leaves = constraints.filter((c) => c.field === "amount");
+  if (leaves.length !== 1) return null;
+
+  const only = leaves[0];
+  if (only.op !== "lte") return null;
+
+  const value = only.value;
+  if (typeof value !== "object" || value === null) return null;
+
+  const { amount, currency } = value as Partial<Amount>;
+  if (typeof amount !== "number" || !Number.isFinite(amount)) return null;
+  if (typeof currency !== "string" || currency === "") return null;
+
+  return { amount, currency };
+}

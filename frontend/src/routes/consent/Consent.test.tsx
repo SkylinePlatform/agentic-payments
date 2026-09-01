@@ -558,3 +558,118 @@ describe("the consent screen", () => {
     });
   });
 });
+
+describe("a limit no price of this offer can reach", () => {
+  /** The fixture, with the merchant's floor published and a ceiling under it. */
+  function unreachable(): Proposal {
+    const base = aProposal();
+    return {
+      ...base,
+      // 130.00 stated, against an offer that has never gone below 135.00.
+      constraints: base.constraints.map((c) =>
+        c.field === "amount" ? { ...c, value: { amount: 13000, currency: "USD" } } : c,
+      ),
+      offer: { ...base.offer, price_floor: { amount: 13500, currency: "USD" } },
+    };
+  }
+
+  it("says so on the offer card, at the moment of signing", async () => {
+    // Issue #348, and #344's third done-when on the surface it named. The buying
+    // screen says this beside the box; this is the path where the limit came out
+    // of a sentence and there was never a box — `make demo-live`.
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent(unreachable());
+
+    const said = (await screen.findByTestId("out-of-reach")).textContent ?? "";
+    // `135.00 USD` and not `$135.00`: this screen renders money the way the
+    // party that signs renders it, which is the same reason its own offer card
+    // reads "240.00 USD today". The buying row uses `formatAmount` and prints
+    // `$135.00`, and the two spellings are a decision rather than drift — a
+    // sentence inches from a signed box has to look like the signed box.
+    expect(said, "the merchant's own floor, which is the fact that decides").toMatch(
+      /has not gone below 135\.00 USD/,
+    );
+  });
+
+  it("says nothing about a limit between the floor and today's price", async () => {
+    // The mutation this is written against, and the one an eye cannot catch:
+    // comparing against `price` rather than `price_floor` marks the *ordinary*
+    // run unreachable. Since #344 the box opens at the floor, so a limit here
+    // refuses at 240.00 and buys when the ladder comes back down — which is the
+    // run Human Not Present exists to demonstrate.
+    const base = unreachable();
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent({
+      ...base,
+      constraints: base.constraints.map((c) =>
+        c.field === "amount" ? { ...c, value: { amount: 14000, currency: "USD" } } : c,
+      ),
+    });
+
+    await screen.findByTestId("offer-card");
+    expect(screen.queryByTestId("out-of-reach")).toBeNull();
+  });
+
+  it("says nothing when the merchant published no floor", async () => {
+    // A response that predates #344. A screen that inferred a floor would be
+    // reporting a fact nobody stated, at the moment somebody signs.
+    const base = unreachable();
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent({ ...base, offer: { ...base.offer, price_floor: undefined } });
+
+    await screen.findByTestId("offer-card");
+    expect(screen.queryByTestId("out-of-reach")).toBeNull();
+  });
+
+  it("says nothing when the ceiling and the floor are in different currencies", async () => {
+    // ¥13,000 against a floor of $135.00 compares to "unreachable" on the
+    // numbers and to nothing at all in fact. `formatAmount`'s own doc is about
+    // this class of error one exponent along; here it would put a sentence about
+    // a shop's prices on screen at the moment somebody signs, derived from two
+    // numbers that were never comparable.
+    const base = unreachable();
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent({
+      ...base,
+      constraints: base.constraints.map((c) =>
+        c.field === "amount" ? { ...c, value: { amount: 13000, currency: "JPY" } } : c,
+      ),
+    });
+
+    await screen.findByTestId("offer-card");
+    expect(screen.queryByTestId("out-of-reach")).toBeNull();
+  });
+
+  it("says nothing when the constraints are a shape it will not read", async () => {
+    // `statedCeiling` fails closed, and this is that reaching the screen: a
+    // second parse of the signed facts can disagree with the surface's, and the
+    // only thing a disagreement may produce is silence.
+    const base = unreachable();
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent({
+      ...base,
+      constraints: [
+        ...base.constraints,
+        { op: "lte", field: "amount", value: { amount: 1, currency: "USD" } },
+      ],
+    });
+
+    await screen.findByTestId("offer-card");
+    expect(screen.queryByTestId("out-of-reach")).toBeNull();
+  });
+
+  it("leaves Sign exactly as it was", async () => {
+    // A disclosure and not a veto. #344 is explicit that typing an unreachable
+    // limit is legitimate, and the surface's own rule is that what may be signed
+    // is decided by `canSign` — a sentence on the offer card is not a party to
+    // that.
+    stubFetch({ "/authorise/preview": { body: aPreview() } });
+    renderConsent(unreachable());
+
+    await screen.findByTestId("out-of-reach");
+    expect(
+      (screen.getByRole("button", { name: /^sign$/i }) as HTMLButtonElement).disabled,
+      "the agent will refuse and stop, which is a thing a person is allowed to ask for",
+    ).toBe(false);
+  });
+});
