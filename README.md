@@ -58,9 +58,10 @@ Both halves matter. A system where the agent decides whether its own purchase
 was allowed has no guarantees in it at all; and a refusal nobody can prove
 afterwards is a refusal you have to take somebody's word for.
 
-![Three lanes: attempt 1 refused above the cap with a signed receipt, attempt 2 bought below it](docs/images/lanes-refusal.png)
+![Three lanes: attempt 2 bought at 189.00 above, attempt 1 refused at 210.00 below it with a signed receipt](docs/images/lanes-refusal.png)
 
-*One run of `make demo`, on 13 August 2026. The amounts are whatever the
+*One run of `make demo`, on 1 September 2026. Attempts are newest first, so the
+purchase is above the refusal that preceded it. The amounts are whatever the
 catalogue held that day; the shape is the point.*
 
 `make demo` opens on an empty screen and the catalogue — nothing is bought until
@@ -195,9 +196,11 @@ be non-agentic — renders the constraints as sentences and takes the signature 
 
 ![The Trusted Surface's zone: what you chose, and beneath it what you are signing](docs/images/consent.png)
 
-*Two of a $450.00 bicycle under a limit of $700.00. The screen says it will wait,
-because 2 × 450 does not fit inside 700 — the cap bounds what will be charged,
-not what one of the thing costs.*
+*Two of a $450.00 bicycle under a limit of $800.00. The screen says it will wait,
+because 2 × 450 does not fit inside 800 — the cap bounds what will be charged,
+not what one of the thing costs. The limit had to clear $760.00 to be a limit at
+all: that is two at the lowest price this offer's schedule ever reaches, and a
+number under it would have said so instead.*
 
 Note what the screen says about itself. The agent "has proposed, and it is
 finished"; the surface is "a different party", talking to your browser directly;
@@ -221,7 +224,7 @@ flowchart LR
     P -.- X
 ```
 
-![The Mandate Inspector: three limits withheld from everybody sent the Payment Mandate](docs/images/inspector.png)
+![The Mandate Inspector at /inspector: two limits withheld from everybody sent the Payment Mandate](docs/images/inspector.png)
 
 That screen is worth reading closely, because it states the trap. **Withholding is
 not politeness.** A verifier shown a fact it cannot check treats that fact as
