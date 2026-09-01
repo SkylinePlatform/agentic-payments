@@ -167,9 +167,16 @@ jobs:
 
       # The suite over .githooks/ and over the tracked sentinel in the generated
       # package. CI never runs the hooks themselves — actions/checkout clones,
-      # config is not cloned, so core.hooksPath is unset and no hook in this
-      # repository can fire on a runner. That is exactly why the suite has to be
-      # here: nothing else on the way to a merge exercises them.
+      # config is not cloned, so core.hooksPath is unset in this job and no hook
+      # can fire in it. That is exactly why the suite has to be here: nothing else
+      # on the way to a merge exercises them.
+      #
+      # **In this job**, and issue #334 is why that qualifier is now on the
+      # sentence. The Fresh clone job runs `make setup`, which sets
+      # core.hooksPath on the runner — so the unqualified claim has been wrong
+      # since #266, and it is the sentence a contributor would rely on before
+      # adding a git step to that job. Nothing fires there today because no later
+      # step performs a git operation that writes the index.
       #
       # -count=1 because the subject is the shell scripts in .githooks/ and the
       # tracked sentinel in the generated package — files outside this module,

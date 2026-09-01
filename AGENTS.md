@@ -431,8 +431,12 @@ name the rest hangs on.
 - `make generated` is the three generators a Go toolchain alone can run —
   `generate-go`, `generate-disclosure`, `generate-mocks`. `check`, `build`,
   `test`, `lint` and `vectors` all declare it, so no entry point make owns can
-  be reached with generated output older than the tree it sits in. Three of
-  those five declared no generation at all before #265. `generate-ts` stays
+  be reached with generated output older than the tree it sits in. **Four** of
+  those five declared no generation at all before #265 — only `check` did, and
+  what that commit changed for it was the spelling of a list it already had.
+  This said three until issue #334; read the wrong way it implies one of
+  `build`, `test`, `vectors` and `lint` already regenerated before the fix, which
+  costs a reader looking for the blast radius one `git show`. `generate-ts` stays
   out: the gate needs only Go, and a git hook that reached for npm would put a
   Node toolchain in front of a checkout.
 - `make setup` is `generated`, `hooks` and `workspace`, in that order, and it
