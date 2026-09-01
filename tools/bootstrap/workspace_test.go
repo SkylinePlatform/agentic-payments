@@ -199,10 +199,10 @@ func workspaceLab(t *testing.T) string {
 	return root
 }
 
-func runMake(t *testing.T, root string, target string) (string, error) {
+func runMake(t *testing.T, root, target string, args ...string) (string, error) {
 	t.Helper()
 
-	cmd := exec.Command("make", target)
+	cmd := exec.Command("make", append([]string{target}, args...)...)
 	cmd.Dir = root
 	// MAKEFLAGS dropped for runInstall's reason: an inherited jobserver or -n from
 	// the `make test` that started this would make the child do something other

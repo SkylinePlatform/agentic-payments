@@ -539,6 +539,15 @@ about, so neither regenerates — `TestTheOperationsNothingCoversAreTheOnesNamed
 drives both and would go red if a git release started firing one, which is the
 moment this list should shrink rather than years later.
 
+**Four guards in this machinery had a comment and nothing that went red**, which
+issue #333 closed. `-count=1` is load-bearing in both places that run this suite
+and neither could lose it noticeably; `make clean` deletes by `find … ! -name
+doc.go` and no CI job runs `make clean`; `generate-mocks: generate-go
+generate-disclosure` is what stops `make -j` starting mockery before the model
+exists, and `make -n` is byte-identical without it because a prerequisite edge
+produces no recipe — so the assertion reads make's own dependency database
+instead. The fourth is the walk widened one paragraph above.
+
 `tools/bootstrap` is the suite that holds all of it, and it was built by
 breaking it: deleting `post-merge` turns `TestMergeRegenerates` red, deleting
 `post-rewrite` turns `TestRebaseRegeneratesAgainstTheTreeItLeaves` red, deleting
@@ -900,6 +909,15 @@ reconcile against the code for no benefit.
   |---|---|
   | A test that asserts nothing passes | `frontend/src/test/vacuity.ts`, from `setup.ts`, fails any passing test whose `expect` count is zero. Go has no assertion counter, so `internal/suite` reads the source: no `Test*` function and no `t.Run` arm may contain a testify call, a `t.Fatal`/`t.Error`/`t.Skip`, or a call to a helper that makes one |
   | A rule over a derived list can scan nothing | `it.each([])` registers no tests and reports the file **green** — one run showed 108 passing where 156 should have. `guardTables` in `setup.ts` makes an empty table throw, for every `.each` and `.for` on `it` and `describe` |
+
+  The Go half of the first shape reads all four modules since issue #333, not
+  only `backend/`. `internal/suite`'s `walkedRoots` is the list, and
+  `TestTheWalkReadsThisModule` requires each root to hold at least one test — a
+  total over four is met by three, so a path that resolves to nothing is exactly
+  the collapse a sum hides. `tools/bootstrap` went unwalked for the whole of
+  #266, which mattered more than the other two exclusions did: its arms are the
+  *negative assertion over a derived list* shape the rule exists for, since what
+  they measure is how many times a hook fired.
 
   Both guards are themselves negative assertions, so both are run against the
   instance they were built for: `frontend/src/test/vacuity.test.ts` and
