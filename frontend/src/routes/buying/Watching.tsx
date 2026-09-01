@@ -59,8 +59,8 @@ export function Watching({
    * something could not buy anything else without reloading.
    *
    * It does not stop the watch. The agent holds the mandates and keeps going;
-   * this is a screen changing what it shows, and the tracker below still lists
-   * the run.
+   * this is a screen changing what it shows, and `runs/Earlier` on the shop it
+   * returns to is what offers the run back.
    */
   readonly onDone: () => void;
 }) {

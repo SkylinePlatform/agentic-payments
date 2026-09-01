@@ -674,8 +674,8 @@ describe("paging the catalogue", () => {
   }
 
   it("draws a page at a time and says how many there are", async () => {
-    // The catalogue is sixty-three rows. Drawing all of them put the tracker and
-    // everything under it two screens down, so a person looking for what their
+    // The catalogue is sixty-three rows. Drawing all of them put everything
+    // under the table two screens down, so a person looking for what their
     // signature is doing had to scroll past a shop to find it.
     render(<Table stated browsable offers={manyOffers(23)} onChoose={vi.fn()} choosing={null} />);
 

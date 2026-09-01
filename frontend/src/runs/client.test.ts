@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchRun, fetchRuns } from "./client";
+import { fetchRuns } from "./client";
 
 function stubFetch(routes: Record<string, { status?: number; body: unknown }>) {
   vi.stubGlobal("fetch", (url: string) => {
@@ -28,17 +28,14 @@ describe("fetchRuns", () => {
     stubFetch({ "/watches": { status: 500, body: "console: something went wrong" } });
     await expect(fetchRuns()).rejects.toThrow("console: something went wrong");
   });
-});
 
-describe("fetchRun", () => {
-  it("reads one watch by id off GET /watches/{id}", async () => {
-    stubFetch({ "/watches/abc": { body: { id: "abc", attempts: [] } } });
-    const run = await fetchRun("abc");
-    expect(run).toEqual({ id: "abc", attempts: [] });
-  });
-
-  it("throws the console's own 404 sentence rather than a bare status code", async () => {
-    stubFetch({ "/watches/gone": { status: 404, body: "console: no watch by that name" } });
-    await expect(fetchRun("gone")).rejects.toThrow("console: no watch by that name");
+  it("answers an empty list for a 2xx body with no watches array in it", async () => {
+    // A cast is a claim, not a check. This body is exactly what `POST /watches`
+    // answers, and one URL serving both methods is how it reached this function
+    // in the first place — but an agent that answered anything else would land
+    // the same way: `undefined.length`, thrown inside whichever component
+    // rendered the result and named nowhere near this call.
+    stubFetch({ "/watches": { body: { id: "w1", correlation_id: "c-abc" } } });
+    await expect(fetchRuns()).resolves.toEqual([]);
   });
 });

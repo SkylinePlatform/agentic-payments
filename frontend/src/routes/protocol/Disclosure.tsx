@@ -6,15 +6,27 @@ import { useConsole } from "../../inspector/useConsole";
 /**
  * The Mandate Inspector for one attempt, opened from that attempt in the lanes.
  *
- * # Why it is a panel and no longer a screen
+ * # It was a screen, then a panel, and it is a screen again
  *
  * It used to be `/inspector`, with a list of watches and a row of *attempt n*
  * buttons of its own — a second way of naming a purchase, beside the lanes,
  * on a screen a reader had to switch to. The relationship between the two was
  * something a person reconstructed by remembering a correlation id across a
  * tab change. #216 is where that stopped: an attempt in the lanes has mandates,
- * and this is what each verifier was allowed to read of them, drawn underneath
- * the steps that presented them.
+ * and this is what each verifier was allowed to read of them.
+ *
+ * #344 put it back at an address, and **the paragraph above is why that is not
+ * a revert**: what was wrong was the naming, not the address. This component is
+ * unchanged either way — it takes the purchase and the attempt as props and has
+ * never known where they came from — and `routes/inspector/Inspecting.tsx` is
+ * the screen that reads them off a URL the lanes wrote. There is still no list
+ * and still no second way of naming a purchase.
+ *
+ * The panel form is what could not survive: `Buying` collects a signature, this
+ * module reaches `constraint/render`, and `constraint/architecture.test.ts`
+ * forbids the two on one screen. #316 injected the panel to keep the import out
+ * of that closure; #344 deleted the only screen that passed one, and the
+ * Inspector was unreachable until an attempt started linking here instead.
  *
  * # The join, and how a reader checks it rather than trusting it
  *

@@ -1,5 +1,4 @@
 import { render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AuthorisationRef, EventRecord, ProtocolEvent } from "../sse";
@@ -730,16 +729,19 @@ describe("a digest a reader wants to compare or copy", () => {
 });
 
 /**
- * Issue #216: the Mandate Inspector stopped being a tab and became a panel an
- * attempt opens.
+ * Issue #216, in the shape #344 left it: the Mandate Inspector stopped being a
+ * tab, became a panel an attempt opened, and is a screen an attempt links to.
  *
- * `Lanes` learns nothing about a console here — the panel arrives as a node and
- * the screen above decides what is in it, which is the same split that already
- * lets this file drive a transaction instead of a connection. What is asserted
- * is the two things the split leaves this component responsible for: which
- * attempt asked, and where the answer is drawn.
+ * `Lanes` learns nothing about a console here or about an address — the control
+ * arrives as a node and the screen above decides what it is, which is the same
+ * split that already lets this file drive a transaction instead of a connection.
+ * What is asserted is the one thing the split leaves this component responsible
+ * for: **which attempt each control belongs to**. That was the interesting half
+ * before too. The panel is gone because a panel could not be drawn on the buying
+ * screen at all — see `routes/protocol/RunLanes.tsx` — so what a control does
+ * when it is used is now the linked screen's business and not this file's.
  */
-describe("opening what each reader saw", () => {
+describe("offering what each reader saw", () => {
   /** The demo's own shape: one watch, two attempts at two checkouts. */
   function twoAttempts() {
     seq = 0;
@@ -751,23 +753,19 @@ describe("opening what each reader saw", () => {
     ];
   }
 
-  function showingWith(open: number | null, onToggle: (attempt: number) => void = () => {}) {
+  it("offers every attempt a control, built for the attempt it sits under", () => {
+    seq = 0;
     const [transaction] = group(twoAttempts());
-    return render(
+    render(
       <Lanes
         transaction={transaction}
-        inspecting={{ open, onToggle, panel: <p data-testid="panel">what each reader saw</p> }}
+        inspecting={(attempt) => (
+          <a href={`/inspector?attempt=${String(attempt)}`}>what each reader saw</a>
+        )}
       />,
     );
-  }
 
-  it("offers every attempt a control, and asks for the one that was clicked", async () => {
-    const asked: number[] = [];
-    showingWith(null, (attempt) => {
-      asked.push(attempt);
-    });
-
-    const controls = screen.getAllByRole("button", { name: /what each reader saw/i });
+    const controls = screen.getAllByRole("link", { name: /what each reader saw/i });
     expect(
       controls,
       "one per attempt: a reader compares two attempts by opening each, and a " +
@@ -777,52 +775,43 @@ describe("opening what each reader saw", () => {
 
     // The *first* control on screen, which since #344 belongs to the *last*
     // attempt: they are drawn newest first. That is the assertion — a control
-    // that asked for the attempt at its own position in the list rather than
-    // for the attempt it sits under would open the wrong panel, and reversing
-    // the order is exactly what would make that possible.
-    await userEvent.click(controls[0]);
+    // built for the attempt at its own position in the list rather than for the
+    // attempt it sits under would open the wrong one, and reversing the order is
+    // exactly what would make that possible.
     expect(
-      asked,
-      "counted from 1, the way the agent's console counts its own attempts — so the topmost "+
-        "control asks for 2 and not for 1",
-    ).toEqual([2]);
+      controls.map((control) => control.getAttribute("href")),
+      "counted from 1, the way the agent's console counts its own attempts — so the topmost " +
+        "control names 2 and not 1",
+    ).toEqual(["/inspector?attempt=2", "/inspector?attempt=1"]);
   });
 
-  it("draws the panel beneath the attempt that opened it, and nowhere else", () => {
-    showingWith(2);
+  it("draws each control inside the attempt it belongs to, not loose on the page", () => {
+    seq = 0;
+    const [transaction] = group(twoAttempts());
+    render(
+      <Lanes
+        transaction={transaction}
+        inspecting={(attempt) => <a href={`/inspector?attempt=${String(attempt)}`}>reader {attempt}</a>}
+      />,
+    );
 
-    const panel = screen.getByTestId("panel");
-    const attempt = panel.closest("section");
-    expect(attempt, "the panel is inside an attempt rather than loose on the page").not.toBeNull();
+    const second = screen.getByRole("link", { name: "reader 2" }).closest("section");
+    expect(second, "a control is inside an attempt rather than loose on the page").not.toBeNull();
     expect(
-      within(attempt as HTMLElement).getByText("Attempt 2 of 2"),
-      "beneath the attempt whose steps it explains — the only place the digest " +
-        "it names can be checked against the spine head above it",
+      within(second as HTMLElement).getByText("Attempt 2 of 2"),
+      "beside the attempt whose readers it is about — the only place the digest " +
+        "the linked screen names can be checked against a spine head",
     ).toBeTruthy();
-    expect(screen.getAllByTestId("panel"), "one panel, not one per attempt").toHaveLength(1);
   });
 
-  it("draws no panel while none is open, and says so on the control", () => {
-    showingWith(null);
-
-    expect(screen.queryByTestId("panel")).toBeNull();
-    const controls = screen.getAllByRole("button", { name: /what each reader saw/i });
-    // `aria-expanded` rather than a mark: `src/status/` owns every `<svg>` in
-    // this application, and this is a control rather than a state anyway.
-    expect(controls.map((control) => control.getAttribute("aria-expanded"))).toEqual([
-      "false",
-      "false",
-    ]);
-  });
-
-  it("draws nothing new when no caller offers a panel", () => {
+  it("draws nothing new when no caller offers a control", () => {
     seq = 0;
     const [transaction] = group(twoAttempts());
     render(<Lanes transaction={transaction} />);
 
     expect(
-      screen.queryByRole("button", { name: /what each reader saw/i }),
-      "the prop is optional, and a caller with nothing to open gets the screen as it was",
+      screen.queryByRole("link", { name: /what each reader saw/i }),
+      "the prop is optional, and a caller with nothing to offer gets the screen as it was",
     ).toBeNull();
   });
 });

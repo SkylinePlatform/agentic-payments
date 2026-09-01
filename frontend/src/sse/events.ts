@@ -90,19 +90,20 @@ export type MandateType = (typeof MANDATE_TYPES)[number];
  * always receive closed mandates in both modes, which is why every verifier's
  * step on this screen says closed and only the Trusted Surface ever says open.
  *
- * **`tracker/model.ts` exports a different `MANDATE_STATES`, and the two must
- * not be confused.** That one is `authz.MandateState` — ready,
- * awaiting_receipt, spent — where an *open* mandate stands in the
- * rejection-receipt rule, and it is the console's axis. This one is AP2's
- * binding distinction and is the lanes' axis. They are not about the same
- * artefact: a closed mandate has no state on that axis at all, so a step
- * reading `closed` here sits alongside an open mandate that is
- * `awaiting_receipt` there. Neither module imports the other, so a file wanting
- * both has to alias one and `tsc` is what says so; the trap is a reader's, and
- * this is the paragraph that closes it.
+ * **`runs/model.ts` exported a different `MANDATE_STATES` until #344**, and
+ * the note survives its deletion because the collision is with the *agent*, not
+ * with that file. That one was `authz.MandateState` — ready, awaiting_receipt,
+ * spent — where an *open* mandate stands in the rejection-receipt rule, and it
+ * is the console's axis; it left this frontend when the mandate tracker did,
+ * and `GET /watches/{id}` still answers with it. This one is AP2's binding
+ * distinction and is the lanes' axis. They are not about the same artefact: a
+ * closed mandate has no state on that axis at all, so a step reading `closed`
+ * here sits alongside an open mandate that is `awaiting_receipt` there. The
+ * trap is a reader's — the next person to draw the console's axis will reach
+ * for this name — and this is the paragraph that closes it.
  *
- * Beware one further overlap in that module: its pip vocabulary also has a
- * member called `open`, meaning *at its beginning*. It is a shape on a
+ * Beware one further overlap, in `status/model.ts`: its pip vocabulary also has
+ * a member called `open`, meaning *at its beginning*. It is a shape on a
  * progression axis and has nothing to do with an unbound mandate.
  */
 export const MANDATE_STATES = ["open", "closed"] as const;

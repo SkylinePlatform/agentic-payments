@@ -13,7 +13,6 @@ import {
 } from "../../consent/client";
 import type { Offer, Proposal, Reading } from "../../consent/model";
 import { whatItPrefers, whenItBuys } from "../../consent/model";
-import { Tracker } from "../../tracker/Tracker";
 
 /**
  * What `Consent`'s `onRefused` hands back — see that file's own comment on why
@@ -63,10 +62,19 @@ const HAPPENING: Record<Phase, string> = {
  * a row per offer the agent's search found, a quantity to type into it, and a
  * *Buy* that appends `quantity lte n` and *then* calls {@link Console.onBuy} —
  * the click ends this component's part and hands the proposal to the surface,
- * never a live "watching" screen kept open here. The mandate tracker
- * (`../../tracker/Tracker`) is independent of the table: it reads whatever
- * this console has already started, so it is worth showing regardless of
- * whether a proposal is on screen.
+ * never a live "watching" screen kept open here.
+ *
+ * **The mandate tracker used to sit at the foot of this component and is gone.**
+ * It listed every run with every attempt under it, two mandate states and a
+ * verifier's message apiece — measured against a running agent: six runs, 2626
+ * attempts, about 7900 rows — on a screen whose subject is one purchase. The two
+ * things it was kept for did not survive being looked at: its rows were not
+ * links, so "where every run stands" was a list nobody could act on, and its
+ * `ready`/`awaiting_receipt`/`spent` is a second spelling of what the lanes show
+ * as presented-then-verified. `../../runs/Earlier` is what replaced the half
+ * that was real — one line per run, and clicking one opens it — and it belongs
+ * to `Buying` rather than here, because opening a run is a move between that
+ * component's stages and this one draws only the stage before it.
  *
  * # Discovery is two calls, and the screen is built around the gap — issue #299
  *
@@ -652,8 +660,6 @@ export function Console({
           )}
         </>
       )}
-
-      <Tracker />
     </section>
   );
 }

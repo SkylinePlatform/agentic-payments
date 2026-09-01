@@ -32,8 +32,8 @@ function Router({ children }: { readonly children: ReactNode }) {
 /**
  * A stubbed `fetch` keyed by path — the shape both halves' own suites use.
  *
- * `/watches` defaults to an empty list because `Tracker` mounts beside the
- * prompt box and reads it on every render of the console stage.
+ * `/watches` defaults to an empty list because `Earlier` mounts beneath the
+ * console and reads it on every render of the browsing stage.
  */
 function stubFetch(routes: Record<string, unknown>) {
   const calls: string[] = [];
@@ -387,16 +387,22 @@ describe("the Buying screen", () => {
     ).toBeNull();
   });
 
-  it("does not put the Mandate Inspector on the screen that collects the signature", async () => {
+  it("links to the Mandate Inspector rather than drawing it beside the signature", async () => {
     // The seam #316 predicted would not be needed. `Disclosure` is the Mandate
     // Inspector, which re-renders a signed mandate's constraints with the
-    // browser's own renderer — legitimate there, and forbidden anywhere near a
-    // signature being collected, which is what
+    // browser's own renderer — legitimate on a screen of its own, and forbidden
+    // anywhere near a signature being collected, which is what
     // `constraint/architecture.test.ts` holds over the import graph.
     //
+    // #316 answered that by injecting the panel, which left the Inspector
+    // reachable only from the second screen; #344 deleted that screen and the
+    // Inspector went with it, silently. **A link is what composes**: the rule is
+    // about the import graph and a link is not an import, so the control can be
+    // here while the panel cannot.
+    //
     // That guard reads imports. This reads the screen, so the two fail for
-    // different reasons: a `RunLanes` that imported the panel and drew nothing
-    // fails there, and one that drew the control fails here.
+    // different reasons: a `RunLanes` that imported the panel fails there, and
+    // one that drew the tables here rather than linking to them fails here.
     stubStream();
     stubFetch({
       "/examples": { examples: [] },
@@ -419,10 +425,54 @@ describe("the Buying screen", () => {
     await screen.findByTestId("spine");
 
     expect(
-      screen.queryByRole("button", { name: /what each reader saw/i }),
-      "the buying screen shows what is happening to what you signed for; what each party was " +
-        "allowed to read is the teaching screen's, at /protocol",
+      screen.getByRole("link", { name: /what each reader saw/i }).getAttribute("href"),
+      "both halves of the question in the address — which purchase, and which attempt of it — " +
+        "because the screen it opens has no list to pick from",
+    ).toBe("/inspector?run=c-abc&attempt=1");
+    expect(
+      screen.queryByTestId("disclosure"),
+      "the tables themselves stay off this screen: they are what reaches the constraint " +
+        "renderer, and this is where a signature is collected",
     ).toBeNull();
+  });
+
+  it("offers an earlier purchase, and opens the one that was chosen", async () => {
+    // What replaced the mandate tracker. It listed every run with every attempt
+    // under it — six runs and 2626 attempts on the agent #344 was measured
+    // against — and none of its rows could be opened, which is what made "it
+    // says where every run stands" a list nobody could act on.
+    stubStream();
+    stubFetch({
+      "/examples": { examples: [] },
+      "/watches": {
+        watches: [
+          { id: "w1", correlation_id: "c-older", title: "Telescopic ladder", state: "expired" },
+          { id: "w2", correlation_id: "c-newer", title: "Vitesse Urbain 7", state: "bought" },
+        ],
+      },
+    });
+    render(<Buying />, { wrapper: Router });
+
+    await userEvent.click(await screen.findByRole("button", { name: /Telescopic ladder/ }));
+
+    const watching = await screen.findByTestId("watching-region");
+    act(() => {
+      sources[0].open();
+      sources[0].emit("mandate_verified", 1, { correlation_id: "c-older", digest: DIGEST });
+    });
+
+    await waitFor(() => {
+      expect(
+        within(screen.getByTestId("watching-region")).getByTestId("spine").textContent,
+        "the run that was chosen is the one whose steps arrive — a screen that opened the " +
+          "newest instead would draw a convincing set of lanes for somebody else's purchase",
+      ).toBe(SHOWN);
+    });
+    expect(
+      within(watching).getAllByText("Telescopic ladder").length,
+      "and it is named, off the merchant's own word on the row that was pressed — " +
+        "the lanes' own heading and every attempt's spine head",
+    ).toBeGreaterThan(0);
   });
 
   it("comes back to the console on a refusal, with the acknowledgement and the prompt", async () => {

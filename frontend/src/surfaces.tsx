@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 
 import { Buying } from "./routes/buying/Buying";
+import { Inspecting } from "./routes/inspector/Inspecting";
 
 /**
  * One screen of the app: where it lives, what it is called, and what renders.
@@ -24,6 +25,15 @@ import { Buying } from "./routes/buying/Buying";
  * `/protocol` still resolves and redirects here, carrying `?run=` with it,
  * because links to it exist.
  *
+ * **There are two entries again and there is still no nav**, which is the
+ * distinction #344 had to get right on the way back. `/inspector` is a *detail*
+ * of a purchase — which attempt of which run is in its address, and the only way
+ * to it is the control on that attempt — not a peer a person chooses between.
+ * Listing it would offer a screen that cannot answer without a purchase named,
+ * which is the four-tab arrangement returning by the back door. `label` is
+ * therefore what a reader would call the screen if something ever did list it,
+ * and nothing does; `Shell` draws no nav either way.
+ *
  * **What merging must not merge is the trust boundary**, and that is
  * `routes/buying/Buying.tsx`'s job rather than this file's: the Trusted Surface
  * is a separate party the browser talks to, and a screen that blurred it into
@@ -45,11 +55,17 @@ export interface Surface {
  * forgetting one gave you either a nav link that 404s or a route nobody can
  * reach. Neither failure announces itself.
  *
- * App turns this into routes and Shell turns it into links.
+ * App turns this into routes. Shell turned it into links until #344 and does
+ * not any more — see above — so this is the route table plus the answer to
+ * "what screens does this app have", which is the question
+ * `constraint/architecture.test.ts` asks it.
  */
-export const SURFACES: readonly Surface[] = [{ path: "", label: "Buying", element: <Buying /> }];
-
-/** The href a nav link needs for a surface. */
-export function hrefOf(surface: Surface): string {
-  return surface.path === "" ? "/" : `/${surface.path}`;
-}
+export const SURFACES: readonly Surface[] = [
+  { path: "", label: "Buying", element: <Buying /> },
+  // In this list rather than straight into App's route table, and that is a
+  // rule rather than tidiness: `constraint/architecture.test.ts` derives the
+  // screens it governs by reading this file, so a route registered only with the
+  // router would be a screen outside every rule about what a screen may draw. A
+  // hole, not a shortcut.
+  { path: "inspector", label: "What each reader saw", element: <Inspecting /> },
+];

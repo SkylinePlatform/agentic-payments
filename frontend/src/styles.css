@@ -8,7 +8,7 @@
  * components, on a branch of its own separate from the one that moved the
  * colours — the face declarations below were never the part that had to
  * change; which content reaches for which face is decided at each call site
- * under `src/lanes`, `src/inspector`, `src/tracker` and `src/routes/consent`.
+ * under `src/lanes`, `src/inspector`, `src/runs` and `src/routes/consent`.
  * This file is where the colours become something a machine can check: every
  * colour the app is allowed to use is declared once, in one block, and
  * `src/architecture.test.ts` reads that block back out — the same file also
@@ -158,7 +158,7 @@
    * revised: mono is a utility voice again and the sans is no longer support.
    * The declarations themselves are unchanged — which content asks for which
    * face is a `className` on a component, and every call site under
-   * `src/lanes`, `src/inspector`, `src/tracker` and `src/routes/consent` now
+   * `src/lanes`, `src/inspector`, `src/runs` and `src/routes/consent` now
    * agrees with what is written here.
    */
   --font-*: initial;

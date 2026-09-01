@@ -23,8 +23,8 @@ import { codeOf, stringLiterals } from "../test/source";
  *    be green.
  * 3. **Every non-ASCII character the app prints is in the font it ships.** This
  *    is #190, and it is the argument for drawing marks rather than typing them:
- *    the tracker's status glyphs were served by whatever fallback face the
- *    reader's machine happened to have, and a screenshot is this project's
+ *    the mandate tracker's status glyphs were served by whatever fallback face
+ *    the reader's machine happened to have, and a screenshot is this project's
  *    deliverable.
  *
  * A separate file from `src/architecture.test.ts` rather than an addition to it,
@@ -162,7 +162,7 @@ function ships(codepoint: number): boolean {
  * carry.
  *
  * Over `codeOf`, so a comment may name a character the app must not print —
- * which the tracker's own module doc and `status/Status.tsx` both do, on
+ * which `runs/model.ts` and `status/Status.tsx` both do, on
  * purpose, because the argument for drawing marks has to be able to show the
  * glyphs it replaced. What is left is string literals, JSX text and
  * identifiers, which is everything the source *does*.
@@ -267,7 +267,7 @@ describe("the indicator vocabulary is one vocabulary", () => {
         "status/Status.tsx",
         "status/model.ts",
         "lanes/Lanes.tsx",
-        "tracker/Tracker.tsx",
+        "runs/Earlier.tsx",
         "components/ui/dialog.tsx",
       ]),
     );
@@ -416,12 +416,12 @@ describe("the indicator vocabulary is one vocabulary", () => {
       expect(RANGES.length, "the script declares a list, not one range").toBeGreaterThan(10);
       expect(ships(0x2014), "the em dash, which this documentation uses everywhere").toBe(true);
       expect(ships(0x2026), "the ellipsis").toBe(true);
-      expect(ships(0x00b7), "the middle dot the tracker separates a row with").toBe(true);
+      expect(ships(0x00b7), "the middle dot three screens separate a line with").toBe(true);
       expect(
         ships(0x25d0),
-        "and the half-filled circle the tracker used to print, which is the " +
-          "whole of #190: Geometric Shapes is in neither the latin range nor " +
-          "either of the two additions",
+        "and the half-filled circle the mandate tracker used to print, which is " +
+          "the whole of #190: Geometric Shapes is in neither the latin range " +
+          "nor either of the two additions",
       ).toBe(false);
       expect(ships(0x2713), "nor the dingbat check").toBe(false);
       expect(ships(0x23f1), "nor the stopwatch #188 added").toBe(false);
@@ -475,7 +475,7 @@ describe("the indicator vocabulary is one vocabulary", () => {
         "⏱ U+23F1",
       ]);
       expect(
-        unshipped(`// the tracker used to print ◐ and ✓\nconst x = 1;`),
+        unshipped(`// the mandate tracker used to print ◐ and ✓\nconst x = 1;`),
         "a comment may name the glyphs it replaced — this file and two modules " +
           "do exactly that, and a rule that forbade it would delete its own " +
           "argument",

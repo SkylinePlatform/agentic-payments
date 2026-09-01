@@ -657,26 +657,31 @@ function PriceBadge({ attempt }: { readonly attempt: Attempt }) {
 }
 
 /**
- * How an attempt offers its own disclosure panel — issue #216.
+ * How an attempt offers a way to what each reader could see — issue #216, in
+ * the shape #344 left it.
  *
- * **A prop rather than something this module fetches**, and the split is the
- * one that already lets this component be tested against a transaction instead
- * of a connection: the lanes know which attempt a reader picked and where the
- * panel goes, and the screen above knows how to get it. `Lanes` never learns
- * that a console exists.
+ * **A builder rather than something this module fetches or names**, and the
+ * split is the one that already lets this component be tested against a
+ * transaction instead of a connection: the lanes know which attempt a reader is
+ * looking at and where a control belongs, and the screen above knows what that
+ * control should be. `Lanes` never learns that a console exists.
  *
- * Optional, so a caller drawing lanes with nothing to open — the only one
- * today is this file's own suite — passes nothing and gets the screen as it
- * was.
+ * **It used to build the panel and this builds the control**, which is a
+ * smaller job than it sounds and is the whole of why the Mandate Inspector
+ * could come back. The panel opened in place, under the attempt; the buying
+ * screen may not draw it at all, because `Disclosure` reaches
+ * `constraint/render` and `constraint/architecture.test.ts` forbids that on a
+ * screen collecting a signature. Injecting it kept the import out of the graph
+ * and left the panel undrawable there anyway. A control that *links* to a
+ * screen of its own is drawable on both: the rule is about the import graph, and
+ * a link is not an import.
+ *
+ * Optional, so a caller drawing lanes with nothing to offer — this file's own
+ * suite is one — passes nothing and the control is not drawn.
+ *
+ * @param attempt the ordinal, counting from 1 the way the console does.
  */
-export interface Inspecting {
-  /** Which attempt's panel is open, counting from 1 as the console does; null for none. */
-  readonly open: number | null;
-  /** Asks for that attempt's panel, or for the open one to close. */
-  readonly onToggle: (attempt: number) => void;
-  /** Drawn directly beneath the open attempt's lanes, never beside them. */
-  readonly panel: ReactNode;
-}
+export type Inspecting = (attempt: number) => ReactNode;
 
 function AttemptView({
   attempt,
@@ -705,7 +710,6 @@ function AttemptView({
   // `routes/protocol/Disclosure.tsx` carries the note on why the two countings
   // are checked by eye against the digest rather than assumed to agree.
   const ordinal = index + 1;
-  const isOpen = inspecting !== undefined && inspecting.open === ordinal;
 
   return (
     <section className="flex flex-col gap-4">
@@ -720,22 +724,7 @@ function AttemptView({
         )}
         <Outcome verdict={verdict} />
         <PriceBadge attempt={attempt} />
-        {inspecting !== undefined && (
-          // No mark: `src/status/` owns every `<svg>` in this application, and
-          // this is a control rather than a state anyway. `aria-expanded` is
-          // what says which of the two it is in, which is also the one thing a
-          // reader needs that the label alone would repeat.
-          <button
-            type="button"
-            aria-expanded={isOpen}
-            onClick={() => {
-              inspecting.onToggle(ordinal);
-            }}
-            className="border border-graphite/40 px-2 py-1 font-sans text-xs text-graphite hover:border-ink hover:text-ink"
-          >
-            {isOpen ? "Hide what each reader saw" : "What each reader saw"}
-          </button>
-        )}
+        {inspecting?.(ordinal)}
       </div>
 
       <Thesis verdict={verdict} />
@@ -760,14 +749,6 @@ function AttemptView({
         ))}
       </div>
 
-      {/*
-        Beneath the steps it explains, and inside this attempt's own section —
-        not at the foot of the page, and not in a second column. What the panel
-        answers is "of the mandates those cards presented, what could each
-        reader read", and the answer is only checkable against the spine head
-        two elements up.
-      */}
-      {isOpen && inspecting.panel}
     </section>
   );
 }

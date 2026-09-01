@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ATTEMPT_META, STEP_META } from "../lanes/model";
-import { MANDATE_STATE_META, RUN_STATE_META } from "../tracker/model";
+import { RUN_STATE_META } from "../runs/model";
 import { Status } from "./Status";
 import { MARKS, UNREADABLE, totalStatus } from "./model";
 import type { StatusMeta } from "./model";
@@ -190,23 +190,12 @@ describe("a status this build cannot read", () => {
 });
 
 describe("the per-state table, pinned to the specification", () => {
-  it("draws the mandate axis with pips and no ending at all", () => {
-    expect(
-      table(MANDATE_STATE_META),
-      "`authz.MandateState` answers whether a mandate can still be used, which " +
-        "is not a verdict — and two mandates reaching `spent` on one acceptance " +
-        "would state it twice more",
-    ).toEqual({
-      ready: ["open", null],
-      awaiting_receipt: ["half", null],
-      spent: ["full", null],
-    });
-    expect(words(MANDATE_STATE_META), "spelled as authz.MandateState.String() spells them").toEqual({
-      ready: "ready",
-      awaiting_receipt: "awaiting receipt",
-      spent: "spent",
-    });
-  });
+  // There were four axes here until #344. `authz.MandateState` — ready,
+  // awaiting_receipt, spent — was drawn by the mandate tracker and by nothing
+  // else, so deleting that screen took the axis off every surface this
+  // application has. The table it was pinned against went with it; what its row
+  // said about the vocabulary did not, and lives on in `status/model.ts`'s
+  // argument for why an ending is a verdict and a pip is not.
 
   it("draws the watch axis with a full pair, and two of its endings are verdicts", () => {
     expect(table(RUN_STATE_META)).toEqual({
@@ -290,7 +279,14 @@ describe("the per-state table, pinned to the specification", () => {
     // entry, which is a reviewed change, and it is what would catch the update
     // that invented a seventh shape rather than moving between the six.
     const known = new Set<string>(MARKS);
-    for (const meta of [MANDATE_STATE_META, RUN_STATE_META, ATTEMPT_META, STEP_META]) {
+    const axes = [RUN_STATE_META, ATTEMPT_META, STEP_META];
+    expect(
+      axes.length,
+      "one per table pinned above — an axis deleted on purpose and an axis " +
+        "dropped out of this list by accident both make the sweep smaller, and " +
+        "a sweep over fewer tables passes either way",
+    ).toBe(3);
+    for (const meta of axes) {
       for (const [state, entry] of Object.entries(meta)) {
         if (entry.pip !== null) expect(known, `${state}'s pip`).toContain(entry.pip);
         if (entry.ending !== null) expect(known, `${state}'s ending`).toContain(entry.ending);

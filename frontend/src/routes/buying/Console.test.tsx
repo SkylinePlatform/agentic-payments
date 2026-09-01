@@ -49,11 +49,13 @@ function renderConsole(refusal: Refusal | null = null) {
  * plain-text error body rather than a JSON-quoted string, which is the shape
  * `messageOf` in `../consent/client.ts` actually has to parse in production.
  *
- * `/watches` defaults to an empty list unless a test overrides it: `Tracker`
- * mounts unconditionally beside the prompt box, so every test in this file
- * exercises it whether it is the thing under test or not, and a suite that
- * had to spell an empty tracker out at every call site would bury the ones
- * that actually mean something.
+ * `/watches` defaults to an empty list unless a test overrides it. The mandate
+ * tracker used to mount beside the prompt box and read it on every render;
+ * `Earlier` took its place beneath this component and is `Buying`'s rather than
+ * this one's, so nothing in *this* file asks for it any more. The default stays
+ * because the alternative is a 404 whenever a test renders the pair, and a
+ * suite that had to spell an empty list out at every call site would bury the
+ * calls that actually mean something.
  */
 function stubFetch(routes: Record<string, unknown>) {
   const withDefaults: Record<string, unknown> = {

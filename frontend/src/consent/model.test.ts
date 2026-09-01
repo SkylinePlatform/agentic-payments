@@ -88,8 +88,9 @@ describe("whenItBuys", () => {
     expect(immediate.sentence).not.toEqual(conditional.sentence);
     // A sentence rather than a respelling: `immediate` is a word about the
     // agent's behaviour, and the person deciding needs the answer to "what
-    // happens to my money", which is what the sentence carries. The tracker's
-    // tables do the opposite for the opposite reason — see tracker/model.ts.
+    // happens to my money", which is what the sentence carries. The run
+    // switcher's status table does the opposite for the opposite reason — see
+    // runs/model.ts.
     expect(immediate.sentence).not.toEqual("immediate");
     expect(conditional.sentence).not.toEqual("conditional");
 

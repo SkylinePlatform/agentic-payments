@@ -8,9 +8,8 @@ import { formatAmount, minorUnitDigits, toMajorUnits, toMinorUnits } from "../pr
  *
  * Ten, which is what fits a laptop screen beside the consent zone without the
  * table becoming the whole page. The catalogue is sixty-three rows; drawing all
- * of them put the tracker and everything under it two screens down, so a person
- * looking for what their signature is doing had to scroll past a shop to find
- * it.
+ * of them put everything under the table two screens down, so a person looking
+ * for what their signature is doing had to scroll past a shop to find it.
  *
  * Not configurable. A control for it would be a fourth thing to set on a screen
  * whose subject is the three that are already there.

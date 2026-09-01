@@ -938,7 +938,7 @@ describe("the frontend's architecture", () => {
       ).toEqual(
         expect.arrayContaining([
           "./lanes/Lanes.tsx",
-          "./tracker/Tracker.tsx",
+          "./lanes/EventLog.tsx",
           "./catalogue/Table.tsx",
         ]),
       );

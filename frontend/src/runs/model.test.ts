@@ -1,14 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { UNREADABLE } from "../status/model";
-import {
-  MANDATE_STATE_META,
-  MANDATE_STATES,
-  mandateStatus,
-  RUN_STATE_META,
-  RUN_STATES,
-  runStatus,
-} from "./model";
+import { RUN_STATE_META, RUN_STATES, runStatus } from "./model";
 
 describe("run status", () => {
   it.each(RUN_STATES)("recognises %s", (state) => {
@@ -50,22 +43,5 @@ describe("run status", () => {
 
   it("is genuinely exhaustive — every declared state has a table entry, not just the ones somebody remembered", () => {
     expect(Object.keys(RUN_STATE_META).sort()).toEqual([...RUN_STATES].sort());
-  });
-});
-
-describe("mandate status", () => {
-  it.each(MANDATE_STATES)("recognises %s, spelled exactly as authz.MandateState.String() spells it", (state) => {
-    expect(mandateStatus(state)).toEqual(MANDATE_STATE_META[state]);
-  });
-
-  it("never renders an unknown mandate state as blank", () => {
-    const status = mandateStatus("revoked");
-    expect(status.raw).toBe("revoked");
-    expect(status.label).toBe(UNREADABLE);
-    expect(status.ending, "a state this build cannot read reached no verdict").toBeNull();
-  });
-
-  it("is genuinely exhaustive", () => {
-    expect(Object.keys(MANDATE_STATE_META).sort()).toEqual([...MANDATE_STATES].sort());
   });
 });

@@ -66,7 +66,7 @@ export interface Offer {
 /**
  * `interpret.Trigger`'s two spellings, as the agent writes them.
  *
- * The machine's own words, on the rule `tracker/model.ts` states for
+ * The machine's own words, on the rule `runs/model.ts` states for
  * `RUN_STATES`: there is no second table, so nothing here paraphrases
  * `immediate` into a word of its own. What the screen shows a person is a
  * *sentence about* the trigger — {@link whenItBuys} — which is a different
@@ -165,7 +165,7 @@ export interface Proposal {
    * does.
    *
    * Typed as `string` rather than as {@link Trigger}, on the rule
-   * `tracker/model.ts` states for a run's state: TypeScript cannot narrow a
+   * `runs/model.ts` states for a run's state: TypeScript cannot narrow a
    * value that arrived as JSON, so the closed set is applied at the read —
    * {@link whenItBuys} — and never asserted over the wire.
    */
@@ -269,8 +269,8 @@ export interface Authorised {
  * What the screen says about when the agent will buy, for one wire value.
  *
  * A **sentence** rather than the word, and that is the difference between this
- * and `tracker/model.ts`'s status tables. There the machine's own spelling is
- * what a reader sees, because the tracker is showing where something stands.
+ * and `runs/model.ts`'s status tables. There the machine's own spelling is
+ * what a reader sees, because that table is showing where something already stands.
  * Here the person has to decide, before signing, whether they meant this — and
  * `immediate` is a word about the agent's behaviour, not an answer to *what
  * will happen to my money*. The sentence is that answer.
