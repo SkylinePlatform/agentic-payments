@@ -705,6 +705,79 @@ describe("paging the catalogue", () => {
     expect((screen.getByRole("button", { name: /next/i }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("goes to the page somebody typed, on Enter", async () => {
+    // Previous and Next are six presses from one end of a sixty-three-row
+    // catalogue to the other, and a demonstration is exactly where somebody
+    // wants row forty *now*.
+    render(<Table stated browsable offers={manyOffers(63)} onChoose={vi.fn()} choosing={null} />);
+
+    // Pressing *Go* rather than Enter: jsdom does not implement implicit form
+    // submission, so Enter reaches nothing here. Both paths are the one submit
+    // handler, which is why the button exists — see `Paging`'s own note.
+    await userEvent.type(screen.getByLabelText(/go to page/i), "4");
+    await userEvent.click(screen.getByRole("button", { name: /^go$/i }));
+
+    expect(screen.getByTestId("paging").textContent, "the fourth page, not the fourth row").toMatch(
+      /31–40 of 63/,
+    );
+    expect(rowTitles()[0]).toBe("Offer 30");
+  });
+
+  it("clears the box once it has been used", async () => {
+    // A number left sitting in the box after the table has moved reads as where
+    // you are — which the sentence to its left already says, and which would
+    // contradict it the moment Next was pressed.
+    render(<Table stated browsable offers={manyOffers(63)} onChoose={vi.fn()} choosing={null} />);
+
+    const box = screen.getByLabelText(/go to page/i) as HTMLInputElement;
+    await userEvent.type(box, "4");
+    await userEvent.click(screen.getByRole("button", { name: /^go$/i }));
+
+    expect(box.value).toBe("");
+  });
+
+  it("reads a page past the end as the end, rather than refusing it", async () => {
+    // Somebody typing 99 into a seven-page catalogue has said *the end*. An
+    // error message about a bound they can read two elements to the right would
+    // be the screen scolding them for a typo it understood perfectly well.
+    render(<Table stated browsable offers={manyOffers(63)} onChoose={vi.fn()} choosing={null} />);
+
+    await userEvent.type(screen.getByLabelText(/go to page/i), "99");
+    await userEvent.click(screen.getByRole("button", { name: /^go$/i }));
+
+    expect(screen.getByTestId("paging").textContent, "the last page, whatever is left of it").toMatch(
+      /61–63 of 63/,
+    );
+  });
+
+  it("stays where it is when the box holds no number at all", async () => {
+    // An empty box is not a request, and moving the table would be inventing
+    // one. `type="number"` is a hint to the browser rather than a guarantee —
+    // implementations disagree about what they let through — so the parse is
+    // what decides, not the input type.
+    render(<Table stated browsable offers={manyOffers(63)} onChoose={vi.fn()} choosing={null} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /next/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^go$/i }));
+
+    expect(
+      screen.getByTestId("paging").textContent,
+      "still on page two, where the reader put themselves",
+    ).toMatch(/11–20 of 63/);
+  });
+
+  it("offers no box at all when there is one page to be on", async () => {
+    // A control whose every value is the page you are already on. The same
+    // argument as the nav of one item that `surfaces.tsx` does not draw.
+    render(<Table stated browsable offers={manyOffers(6)} onChoose={vi.fn()} choosing={null} />);
+
+    expect(screen.queryByLabelText(/go to page/i)).toBeNull();
+    expect(
+      screen.getByTestId("paging").textContent,
+      "the count is still stated, because that is what says the shop has six things and not ten",
+    ).toMatch(/1–6 of 6/);
+  });
+
   it("returns to the first page when a filter changes the list under it", async () => {
     // **The filtered list is still two pages long**, and that is what makes this
     // a test of the reset rather than of the clamp. `current` is clamped to the

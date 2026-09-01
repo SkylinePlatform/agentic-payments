@@ -1153,8 +1153,9 @@ that made it unmissable is one #344 has since deleted, and the account is worth
 keeping even though the example is gone — the *Pacing* notice was removed when
 the last held step was drawn, which is not an edge but the end of *every* paced
 run, so the demonstration finished with the whole board twitching: seven cards
-across all three lanes, `dx=0 dy=38`, none of which had hopped. The three above
-are still live. The fix is to measure each card **inside its own grid** rather than
+across all three lanes, `dx=0 dy=38`, none of which had hopped. What went is the
+notice rather than the pacing, which is bounded now and has nothing to announce.
+The three above are still live. The fix is to measure each card **inside its own grid** rather than
 inside the viewport, so a shift that moves the origin and the card by the same
 amount reads as nothing. That is the right answer rather than a suppression: the
 browser has already redrawn the header, the prose and the log instantly at their
@@ -1176,45 +1177,71 @@ So: *Nothing yet.* where nothing has reached this party, and **Nothing here
 now.** where it has moved past them. Two words apart, and where the steps went is
 on the cards, each of which names every party that held it.
 
-### Pace, and why there is none
+### Pace
 
 The demonstration's own steps land within a tenth of a second of each other —
 measured on `make demo` — so a faithful rendering of one purchase is a flicker on
 a screen whose one job is to teach. This section used to answer that with a
-ruling:
+ruling in three clauses:
 
 > **The screen may draw a step later than it arrived. It may never draw one that
 > has not arrived, never draw them out of order, and never leave one undrawn
 > without saying so.**
 
-The reasoning still reads well and the implementation was faithful to it: a
-count and a prefix, so reordering was not expressible; 750ms between steps,
-longer than the 520ms card flight so a card finished arriving before the next
-step started; a cap of 16 so a reconnect's 512-record replay landed at once
-rather than replaying an hour of history at presentation speed; and a notice
-saying how far behind the screen was, with a control that ended the wait.
+Two of those were mechanical and still are: `pace.ts` returns a **count** and the
+caller draws `records.slice(0, count)`, so reordering is not expressible — a
+prefix of a sequence is a sequence — and the count only moves forward, so a step
+already read cannot come off the screen.
 
-**Issue #344 removed all of it, and the arithmetic is why.** Eleven steps at
-750ms is 8.25 seconds of drawing per attempt, and the merchant produces an
-attempt every few seconds — so the backlog never emptied. What a viewer met was
-a permanent notice reading *"10 steps have arrived and are still being drawn"*,
-which is the third clause satisfied to the letter and defeated in substance: a
-notice that is always there is indistinguishable from a stalled screen, and it
-is the *permanence* that says so, not the wording. Widening `-step` to outrun
-the drawing was tried first and abandoned, because slowing the demonstration
-down to protect a screen behaviour is the tail wagging the dog.
+**The third clause is where it went wrong, and issue #344 is the correction.**
+The gap was a constant, 750ms per step whatever was waiting. Eleven steps at that
+rate is 8.25 seconds of drawing, the merchant produces an attempt every three to
+six seconds, and so the queue grew without bound. The notice that made the third
+clause true — *"10 steps have arrived and are still being drawn"*, with a control
+to end the wait — became permanent, which is the clause satisfied to the letter
+and defeated in substance: a notice that is always on screen is indistinguishable
+from a stalled one, and it is the *permanence* that says so rather than the
+wording. Eleven steps collapsed into a number is also the opposite of what pacing
+is for. The reader was handed a count instead of the steps.
 
-So the lanes draw every record the moment it arrives. The three clauses do not
-need keeping because they are no longer expressible: with no state between the
-stream and the screen, nothing can be held back, reordered or lost.
-`frontend/src/lanes/useTransactions.test.tsx` is where that is pinned, and the
-`records` a component receives are the stream's own, in the stream's own order.
+Two answers were tried and abandoned before the third. Widening `-step` to outrun
+the drawing slows the demonstration to protect a screen behaviour, which is the
+tail wagging the dog. Deleting the pacing outright makes every step honest and
+the burst unreadable — a flicker again, which is where this section started.
 
-**What legibility is bought with instead** is the half-second card flight —
-which is movement rather than timing, and which `prefers-reduced-motion` does
-turn off — and the merchant's `-step`/`-step-max`, which set how often anything
-happens at all. The timestamps were never this screen's to set: every card and
-every log row prints the event's own `at`, the emitting party's clock.
+**What replaced the notice is a bound.** The rule now:
+
+> **Whatever has arrived is on screen within `DRAIN_MS` of arriving.**
+
+The gap is what is left of that window divided by what is left to draw, so a lone
+step appears at once, a burst of eleven is spread about 180ms apart, and either
+way the queue is empty before the next attempt begins. Dividing the *remaining*
+window rather than a constant is what makes the gap flat across a drain instead
+of growing as the divisor falls — the obvious version takes 3.99 seconds over
+eleven steps while satisfying its bound at every individual call, and
+`pace.test.ts` simulates a whole drain rather than one gap for exactly that
+reason.
+
+The bound is the better instrument for the job the notice had. A screen that is
+never more than two seconds behind cannot be mistaken for a stalled one, because
+two seconds of nothing *is* nothing happening — and unlike a sentence somebody
+has to read, a bound is a property a test can hold.
+
+Two numbers beside it, both in `pace.ts` with their reasoning: a longest gap of
+600ms, so a screen with nothing queued does not dawdle; and a cap of 12 — one
+attempt's eleven and one — so a reconnect's 512-record replay lands at once and
+only the live edge is ever paced. Replaying an hour of history at presentation
+speed is theatre rather than legibility.
+
+**The event log is paced with the lanes rather than against them**, from one
+count, so the whole screen is always showing one consistent prefix. The
+timestamps are untouched: every card and every log row prints the event's own
+`at`, which is the emitting party's clock and not this screen's.
+
+**`prefers-reduced-motion` does not turn pacing off**, and that is deliberate.
+Pacing is timing rather than movement, and a screen that answered a request for
+less motion by dumping eleven cards at once would be *less* legible, not more.
+What that reader loses is the flight; what they keep is the one-at-a-time.
 
 ## Where the data comes from
 

@@ -10,6 +10,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { connect } from "../sse";
+
+import { DRAIN_MS, atLeast, gapFor } from "./pace";
 import type { ConnectionState, EventRecord, Gap, StreamOptions } from "../sse";
 
 import { group } from "./model";
@@ -26,24 +28,15 @@ import type { Transaction } from "./model";
 const KEEP = 512;
 
 /**
- * What the view wants of the stream.
+ * What the view wants of the stream, plus how fast it may draw it.
  *
- * **There was a `pace` here and #344 removed it.** The screen used to hold
- * records back and release one every 750 ms, so that a room could follow a
- * purchase whose eleven steps land within a tenth of a second of each other.
- * The idea was sound and the arithmetic was not: an attempt takes 8.25 seconds
- * to draw at that rate, the merchant produces one every few seconds, and the
- * count of what was still waiting never reached zero. What a viewer actually
- * saw was a permanent notice reading *"10 steps have arrived and are still
- * being drawn"*, which is precisely the thing the ruling's third clause exists
- * to prevent — a screen you cannot tell from a stalled one.
- *
- * Legibility is worth buying but not at that price, and it is bought elsewhere
- * anyway: the card flight between lanes is half a second of movement per step,
- * and `-step`/`-step-max` in `deploy/demo.json` set how often anything happens
- * at all. What this hook does now is show every record the moment it arrives.
+ * `pace` is the drain window in milliseconds — everything waiting is on screen
+ * within it — and `0` means no pacing at all, which is what a suite about
+ * *what* is drawn says to be clear it is not about *when*. See `pace.ts` for
+ * the rule and for the two shapes this went through before it worked.
  */
 export interface ViewOptions extends StreamOptions {
+  readonly pace?: number;
 }
 
 export interface StreamView {
@@ -71,6 +64,7 @@ export function useTransactions(options: ViewOptions = {}): StreamView {
   const [records, setRecords] = useState<readonly EventRecord[]>([]);
   const [state, setState] = useState<ConnectionState>("connecting");
   const [gaps, setGaps] = useState<readonly Gap[]>([]);
+  const [shown, setShown] = useState(0);
 
   // The stream is held in a ref rather than in state: reconnect() has to reach
   // the live one, and putting it in state would re-run the effect that made it.
@@ -81,7 +75,7 @@ export function useTransactions(options: ViewOptions = {}): StreamView {
   // depending on it directly would tear the connection down and open another on
   // each one — which under StrictMode is already two connections and would
   // become unbounded.
-  const { url, from, create } = options;
+  const { url, from, create, pace = DRAIN_MS } = options;
 
   useEffect(() => {
     const opened = connect({ url, from, create });
@@ -124,11 +118,60 @@ export function useTransactions(options: ViewOptions = {}): StreamView {
     stream.current?.reconnect();
   }, []);
 
-  const transactions = useMemo(() => group(records), [records]);
+  // When the last step was let through, so a screen that has caught up draws the
+  // next arrival at once instead of making it serve a gap nothing is queued
+  // behind. A ref rather than state: writing it must not cause the render it is
+  // read in.
+  const lastRelease = useRef(0);
+  // When the queue that is currently draining has to be empty by. Set when a
+  // queue forms and cleared when it empties, which is what makes the gap
+  // constant across a drain rather than growing as the divisor falls — see
+  // `pace.ts` for the arithmetic and for what the obvious version does instead.
+  const emptyBy = useRef(0);
+
+  // Everything past the cap is already on screen — a reconnect's replay lands
+  // rather than queueing. Derived rather than stored, so the cap can move the
+  // screen forward without a render whose only job is to write the number down.
+  const drawn = pace <= 0 ? records.length : atLeast(shown, records.length);
+  const waiting = records.length - drawn;
+
+  useEffect(() => {
+    if (waiting <= 0) {
+      emptyBy.current = 0;
+      return;
+    }
+    // `Date.now` and not the injected clock: this is a browser's own animation
+    // timing, not a protocol timestamp, and nothing here is signed, compared or
+    // shown. Every card and every log row still prints the event's own `at`,
+    // which is the emitting party's clock.
+    const now = Date.now();
+    if (emptyBy.current === 0) emptyBy.current = now + pace;
+    const gap = gapFor(emptyBy.current - now, waiting);
+    // A screen that has caught up draws the next arrival at once: the gap is
+    // there to separate steps from each other, and there is nothing to separate
+    // this one from.
+    const since = now - lastRelease.current;
+    const tick = setTimeout(
+      () => {
+        lastRelease.current = Date.now();
+        setShown(drawn + 1);
+      },
+      Math.max(0, gap - since),
+    );
+    return () => {
+      clearTimeout(tick);
+    };
+  }, [drawn, waiting, pace]);
+
+  const paced = useMemo(
+    () => (drawn >= records.length ? records : records.slice(0, drawn)),
+    [records, drawn],
+  );
+  const transactions = useMemo(() => group(paced), [paced]);
 
   return {
     transactions,
-    records,
+    records: paced,
     state,
     gaps,
     reconnect,

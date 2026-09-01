@@ -74,8 +74,10 @@ export interface Box {
  * worth keeping the account rather than the example: the *Pacing* notice
  * disappeared when the last held step was drawn, which is not an edge — it
  * happened at the end of *every* paced run, so the demonstration ended with the
- * whole board twitching. Seven cards, `dx=0 dy=38`, on a stopwatch. The three
- * above are still live, and the measurement below is what holds them.
+ * whole board twitching. Seven cards, `dx=0 dy=38`, on a stopwatch. The notice
+ * is gone (the pacing it announced is not; it is bounded now, so there is
+ * nothing to announce), the three above are still live, and the measurement
+ * below is what holds them.
  *
  * Subtracting the container's own origin is what makes the question the right
  * one. A hop moves a card *within* the grid and still reads as movement here; a

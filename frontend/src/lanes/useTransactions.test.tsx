@@ -1,35 +1,26 @@
 import { act, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ProtocolEvent } from "../sse";
 import type { EventSourceFactory, EventSourceLike } from "../sse/stream";
+import { DRAIN_MS, MAX_BEHIND, MAX_GAP_MS } from "./pace";
 import { useTransactions } from "./useTransactions";
 
 /**
- * A record on the wire is a record on the screen — issue #344.
+ * The pacing, driven end to end — issue #241, as #344 rewrote it.
  *
- * # What this replaced
+ * `pace.test.ts` holds the arithmetic: whatever is waiting is drawn inside
+ * `DRAIN_MS`, the gap shrinks as the queue grows, a replay lands rather than
+ * queues. This file is the half a suite over two pure functions cannot reach —
+ * that the hook actually spends those gaps, catches up, and never leaves the
+ * screen behind once the stream goes quiet.
  *
- * `pace.ts` used to hold records back and release one every 750 ms, under a
- * ruling with three clauses: the screen may draw a step later than it arrived,
- * may never draw one that has not arrived, may never draw them out of order,
- * and may never leave one undrawn without saying so. The reason was real — one
- * purchase's eleven steps land within a tenth of a second of each other, and a
- * faithful rendering is a flicker on a screen whose job is to teach.
- *
- * The arithmetic never worked. Eleven steps at 750 ms is 8.25 seconds of
- * drawing per attempt, the merchant produces an attempt every few seconds, and
- * the count of what was still waiting therefore never reached zero. The notice
- * that made the third clause true — *"10 steps have arrived and are still being
- * drawn"* — became permanent furniture, and a permanent notice saying the
- * screen is behind is indistinguishable from a stalled one, which is the exact
- * failure the clause exists to prevent.
- *
- * So the pacing is gone and this file holds what took its place. It is a
- * simpler property and a stronger one: **there is no state between arrival and
- * being drawn**, so nothing can be held back, reordered or lost by this hook —
- * the first two clauses are unbreakable rather than tested, and there is no
- * third to keep.
+ * **The property that matters is the one the fixed 750 ms gap lacked**: the
+ * queue reaches zero. That failure is what a viewer met as a permanent notice
+ * reading *"10 steps have arrived and are still being drawn"*, eleven steps
+ * collapsed into a count — the opposite of what pacing is for. The last test
+ * here drives it: a burst of eleven, then the clock advanced by the window, and
+ * every one of them on screen.
  *
  * # Why it is asserted through a component
  *
@@ -37,6 +28,13 @@ import { useTransactions } from "./useTransactions";
  * step is *on the screen*, and a hook that answered correctly while its caller
  * drew something else would pass a test of the return value. So the count comes
  * off the DOM.
+ *
+ * # Why the timers are fake
+ *
+ * A test that waited two real seconds for one assertion would be a suite nobody
+ * runs. `vi.useFakeTimers` also makes the gaps *readable*: advancing by an exact
+ * number of milliseconds is how a test says which gap it is asserting, where a
+ * `waitFor` would only say "eventually".
  */
 
 const CONNECTING = 0;
@@ -90,10 +88,15 @@ const factory: EventSourceFactory = (url) => {
   return source;
 };
 
-/** Every record's sequence number, in the order the screen would draw them. */
+/** Every record's sequence number, in the order the screen draws them. */
 function Screen() {
   const { records } = useTransactions({ create: factory });
   return <p data-testid="drawn">{records.map((record) => record.seq).join(",")}</p>;
+}
+
+function drawnCount(): number {
+  const text = screen.getByTestId("drawn").textContent ?? "";
+  return text === "" ? 0 : text.split(",").length;
 }
 
 function drawn(): string {
@@ -108,43 +111,142 @@ function connected() {
   });
 }
 
-describe("what the screen is drawing", () => {
-  it("draws a record in the same tick it arrived, with nothing held back", () => {
-    // The mutation this is written against is the behaviour it replaced: a hook
-    // that shows a prefix and releases the rest on a timer. Every assertion here
-    // is made with no timer having been allowed to fire, so a screen that needed
-    // one would be short.
+/**
+ * Lets `ms` of pacing pass, with React's own work flushed as it goes.
+ *
+ * In slices rather than one jump, and the reason is worth knowing before
+ * copying this: each release schedules the *next* one from an effect, and an
+ * effect does not run until React has flushed. A single
+ * `advanceTimersByTime(2000)` therefore fires exactly one timer — the only one
+ * that existed when it started — and the test reads one step drawn where it
+ * should read eleven. Slicing gives `act` a flush between each, which is what
+ * lets the chain advance the way it does in a browser.
+ */
+function after(ms: number) {
+  const slice = 20;
+  for (let elapsed = 0; elapsed < ms; elapsed += slice) {
+    act(() => {
+      vi.advanceTimersByTime(slice);
+    });
+  }
+}
+
+/** One attempt's worth, arriving the way one actually does: all at once. */
+function burst(count: number, correlationId = "c-abc") {
+  act(() => {
+    for (let seq = 1; seq <= count; seq++) sources[0].emit(seq, correlationId);
+  });
+}
+
+beforeEach(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("the pacing, as a screen experiences it", () => {
+  it("empties the queue inside the drain window, however big the burst", () => {
+    // The property the fixed gap did not have, and the whole of why #344
+    // rewrote this. Eleven steps at 750ms apiece is 8.25 seconds; the merchant
+    // produces an attempt every three to six, so the queue grew for ever and
+    // the screen reported a count instead of drawing the steps.
+    //
+    // Mutation: a constant gap. At 750ms this leaves three of the eleven
+    // undrawn when the window closes, and the gap between attempts is what the
+    // window is sized against.
     connected();
+    burst(11);
 
-    act(() => {
-      sources[0].emit(1, "c-abc");
-    });
-    expect(drawn(), "the first record is on screen, not queued behind a tick").toBe("1");
+    after(DRAIN_MS);
 
-    act(() => {
-      sources[0].emit(2, "c-abc");
-    });
-    expect(drawn(), "and so is the second").toBe("1,2");
+    expect(
+      drawnCount(),
+      "everything that had arrived is on screen when the window closes — a " +
+        "queue that outlives it is a screen permanently behind the stack",
+    ).toBe(11);
   });
 
-  it("draws a burst whole, which is what one attempt actually is", () => {
-    // Eleven steps landing within a tenth of a second is not the edge case, it
-    // is the ordinary case: it is what one purchase attempt emits. The pacing
-    // this replaced would have shown one of these and a notice about the other
-    // ten.
+  it("spends the gaps rather than drawing the burst at once", () => {
+    // The other half, and the reason any of this exists: eleven steps landing
+    // within a tenth of a second of each other is a flicker, and a screen whose
+    // job is to teach has to put air between them.
+    //
+    // Mutation: no pacing at all, which is what the commit before this one
+    // shipped. Then all eleven are on screen at 100ms and this reads 11.
     connected();
+    burst(11);
 
-    act(() => {
-      for (let seq = 1; seq <= 11; seq++) sources[0].emit(seq, "c-abc");
-    });
+    after(100);
 
-    expect(drawn().split(",")).toHaveLength(11);
+    const early = drawnCount();
+    expect(early, "a tenth of a second in, the burst is not all on screen").toBeLessThan(11);
+    expect(early, "and it has not stopped either — the first steps are drawn").toBeGreaterThan(0);
   });
 
-  it("draws them in the order they arrived", () => {
+  it("draws a step that arrives on a quiet screen at once", () => {
+    // A screen that has caught up and then waited draws the next arrival
+    // immediately. Without this the pacing would tax a quiet stream, where
+    // there is nothing to be legible about, and every isolated event would sit
+    // in a gap separating it from nothing.
+    //
+    // The quiet is what earns it, and the assertion below is why it is spelled
+    // out rather than assumed: a step arriving *while* the last one is still
+    // fresh does serve its gap, because there the gap is doing its job.
+    connected();
+    burst(11);
+    after(DRAIN_MS);
+    after(MAX_GAP_MS);
+
+    act(() => {
+      sources[0].emit(12, "c-abc");
+    });
+    after(1);
+
+    expect(drawnCount(), "it goes on screen immediately, not a gap later").toBe(12);
+  });
+
+  it("still separates a step that arrives while the last one is fresh", () => {
+    // The other side of the shortcut above, and the mutation it guards: a hook
+    // that drew every arrival immediately whenever the queue was empty would
+    // draw a whole attempt at once, since each of its eleven steps arrives to
+    // an empty queue a fraction of a millisecond after the last.
+    connected();
+    burst(11);
+    after(DRAIN_MS);
+
+    act(() => {
+      sources[0].emit(12, "c-abc");
+    });
+    after(1);
+
+    expect(
+      drawnCount(),
+      "the drain ended a moment ago, so this one waits its gap like the rest",
+    ).toBe(11);
+  });
+
+  it("lands a replay at once and paces only the live edge", () => {
+    // A tab reconnecting is replayed up to 512 records. Pacing those would be a
+    // replay of history at presentation speed. Only the cap's worth — one
+    // attempt — is ever drawn one at a time.
+    connected();
+    burst(200);
+
+    after(1);
+
+    expect(
+      drawnCount(),
+      "everything past the cap is already on screen before a single gap is spent",
+    ).toBeGreaterThanOrEqual(200 - MAX_BEHIND);
+  });
+
+  it("draws them in the order they arrived, across purchases", () => {
     // Free rather than defended, and worth an assertion for exactly that
-    // reason: there is no reordering step left to get wrong, because there is no
-    // step at all between the stream and the screen.
+    // reason: the pacing is a count and the caller slices a prefix, so there is
+    // no arrangement of one that reorders anything — and the hook filters no
+    // purchase out, because the log below the lanes draws every record.
     connected();
 
     act(() => {
@@ -152,21 +254,8 @@ describe("what the screen is drawing", () => {
       sources[0].emit(2, "c-other");
       sources[0].emit(3, "c-abc");
     });
+    after(DRAIN_MS);
 
     expect(drawn()).toBe("1,2,3");
-  });
-
-  it("keeps drawing every purchase, not only the newest", () => {
-    // The lanes pick one transaction and the log draws all of them, so the hook
-    // filters neither. A hook that dropped a correlation id would take rows out
-    // of the log with nothing saying so.
-    connected();
-
-    act(() => {
-      sources[0].emit(1, "c-abc");
-      sources[0].emit(2, "c-other");
-    });
-
-    expect(drawn()).toBe("1,2");
   });
 });

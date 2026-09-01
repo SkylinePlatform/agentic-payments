@@ -263,15 +263,15 @@
  * back where it was; the duration and the curve are here, beside the palette,
  * because a design token is a design token whether it is a colour or a time.
  *
- * Half a second, and since #344 it is the only thing between a step and the eye
- * following it. There used to be a second number — `PACE_MS`, 750ms held
- * between steps — and this duration was chosen to fit inside it so that a card
- * finished arriving before the next one started. That pacing is gone (its
- * arithmetic never worked; `lanes/useTransactions.ts` records why), so what
- * "slowly enough to follow in a room" now asks for is asked of the demo's own
- * cadence — `-step` in `deploy/demo.json` — and of this half second. The ease is
- * fast out and slow in, so the eye is caught by the departure and led to the
- * destination.
+ * Half a second, and it is now the longer of the two numbers rather than the
+ * shorter. It used to sit inside a fixed 750ms between steps, so a card
+ * finished arriving before the next one started; #344 replaced that with a
+ * bounded drain (`lanes/pace.ts` has the arithmetic and why the fixed gap
+ * failed), where a burst of eleven comes out about 180ms apart. A card is
+ * therefore still in flight when the next one leaves, which is a deliberate
+ * trade rather than an oversight: the alternative was a queue that never
+ * emptied. The ease is fast out and slow in, so the eye is caught by the
+ * departure and led to the destination.
  *
  * Nothing on screen depends on it. Every fact this animation carries is written
  * on the card in words — the party that has the document, the parties that had

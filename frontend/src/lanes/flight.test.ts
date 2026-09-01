@@ -115,9 +115,10 @@ describe("a page that moved under the grid is not a hop either", () => {
    * whole page rose by its height — at the end of every paced run rather than
    * in some edge case, moving seven cards across all three lanes by an identical
    * `dy`, every one of them flying and none of them having hopped. #344 deleted
-   * the pacing; the gap banner, a second transaction's row and an attempt
-   * gaining a card all still move the page the same way, which is what this
-   * measurement is really about. The height below is the notice's, kept because
+   * that notice — the pacing it announced is still there and now guarantees the
+   * queue empties, so there is nothing left to announce; the gap banner, a
+   * second transaction's row and an attempt gaining a card all still move the
+   * page the same way, which is what this measurement is really about. The height below is the notice's, kept because
    * it is the one that was measured.
    */
   const ROSE_BY = 38;

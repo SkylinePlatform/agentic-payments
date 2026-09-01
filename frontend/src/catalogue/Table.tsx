@@ -734,6 +734,42 @@ function ShelfFilter({
  * ten of sixty-three with no number on it reads as a shop with ten things in
  * it — which is the same failure the empty-result sentence beside it exists to
  * prevent, one state along.
+ *
+ * # A page can be typed as well as stepped to
+ *
+ * *Previous* and *Next* are six presses from one end of the catalogue to the
+ * other, and a demonstration is exactly where somebody wants row forty now. The
+ * box takes a page number and goes there.
+ *
+ * **It is a `number` input in a `form`**, which is two decisions rather than
+ * one. The form is what makes Enter submit — the key anybody typing a number in
+ * a box will press — without this component listening for a keystroke and
+ * deciding what it meant. The number type is what asks a phone for a numeric
+ * keypad, and it is deliberately not trusted to *validate*: browsers disagree
+ * about what they let through, so {@link jumped} parses and clamps whatever
+ * arrives.
+ *
+ * **The *Go* button is not decoration and not only for the mouse.** A form
+ * submits on Enter by itself only where the browser implements implicit
+ * submission, and jsdom does not — so without a submit button the keyboard path
+ * is one no test in this repository can drive, and a control that cannot be
+ * tested is a control nobody notices breaking. It also makes the box's purpose
+ * legible: a lone number field beside two buttons is a thing whose effect you
+ * have to guess at.
+ *
+ * **There is no `min` or `max` on the box, and that is the clamp's doing.**
+ * Constraint validation blocks a form from submitting at all while a value is
+ * out of range, so a `max` here would mean typing 99 into a seven-page
+ * catalogue produced a browser tooltip and no movement — and {@link jumped}'s
+ * clamp, which reads 99 as *the end*, would be code that never runs. Two
+ * answers to one question, with the worse one winning silently. The bound is
+ * stated to a reader as *of 7* beside the box instead.
+ *
+ * **The box is uncontrolled between submissions.** A controlled input would
+ * make every keystroke a state change in the table above, and mid-typing a
+ * value is not a page anybody asked for — typing `12` past a nine-page
+ * catalogue would jump to page 1 on the way. So it holds its own text and the
+ * table learns nothing until the form is submitted.
  */
 function Paging({
   first,
@@ -755,7 +791,7 @@ function Paging({
     "disabled:border-graphite/20 disabled:text-graphite/40 disabled:hover:bg-transparent";
 
   return (
-    <div className="flex items-center gap-3" data-testid="paging">
+    <div className="flex flex-wrap items-center gap-3" data-testid="paging">
       <p className="font-sans text-xs text-graphite">
         {first}–{last} of {total}
       </p>
@@ -770,6 +806,65 @@ function Paging({
       >
         Next
       </button>
+      {pages > 1 && (
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(submitted) => {
+            submitted.preventDefault();
+            const box = submitted.currentTarget.elements.namedItem("page");
+            if (!(box instanceof HTMLInputElement)) return;
+            const asked = jumped(box.value, pages);
+            if (asked !== null) onPage(asked);
+            // Cleared either way. The box says where to go, and a number left
+            // sitting in it after the table has moved says where you are —
+            // which the sentence to its left already says, and would contradict
+            // the moment *Next* was pressed.
+            box.value = "";
+          }}
+        >
+          <label
+            htmlFor="page-jump"
+            className="font-sans text-xs whitespace-nowrap text-graphite"
+          >
+            Go to page
+          </label>
+          <input
+            id="page-jump"
+            name="page"
+            type="number"
+            // The page a reader is on, as a hint rather than a value — see the
+            // note above on why the box is uncontrolled.
+            placeholder={String(page + 1)}
+            aria-describedby="page-of"
+            className="w-16 border border-graphite/40 bg-paper px-2 py-1 font-sans text-xs text-ink"
+          />
+          <span id="page-of" className="font-sans text-xs whitespace-nowrap text-graphite">
+            of {pages}
+          </span>
+          <button type="submit" className={step}>
+            Go
+          </button>
+        </form>
+      )}
     </div>
   );
+}
+
+/**
+ * The page a typed string means, counting from zero, or `null` for nothing to do.
+ *
+ * Clamped rather than refused. Somebody who types 99 into a nine-page catalogue
+ * has said *the end*, and an error message about a bound they can read two
+ * elements to the right would be the screen scolding them for a typo it
+ * understood. Zero and negatives mean the beginning by the same argument.
+ *
+ * `null` is only for input with no number in it at all — an empty box, or the
+ * text a browser that ignores `type="number"` let through. There the honest
+ * answer is that nothing was asked for, and moving the table would be inventing
+ * a request.
+ */
+function jumped(typed: string, pages: number): number | null {
+  const asked = Number.parseInt(typed.trim(), 10);
+  if (!Number.isFinite(asked)) return null;
+  return Math.min(pages - 1, Math.max(0, asked - 1));
 }
