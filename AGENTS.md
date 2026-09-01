@@ -297,10 +297,11 @@ tools/
                         snapshot. A third tool-only module; `make catalogue`,
                         run by a person and by nothing in CI or `make demo`
   bootstrap/            the suite over .githooks/, over the tracked sentinel in
-                        backend/internal/core/generated/ and over the Node floor
-                        contracts/codegen.mk refuses below. A fourth tool-only
-                        module and the one that generates nothing. No Go source
-                        that is not a test
+                        backend/internal/core/generated/, over the Node floor
+                        contracts/codegen.mk refuses below and over the
+                        golangci-lint version `make lint` refuses beside. A
+                        fourth tool-only module and the one that generates
+                        nothing. No Go source that is not a test
 backend/                ⬅ the Go module root. go.mod lives here, not at the top
   cmd/                  agent, merchant, credprovider, mpp, surface, registry, proxy
                         collector — an eighth binary, and NOT an AP2 role
@@ -549,8 +550,9 @@ builds against.
 The other three are kept out of `backend/go.mod` because a generator is not a
 dependency of the thing it generates; this one is kept out because its *subject*
 is the repository rather than the module — the hooks in `.githooks/`, the
-tracked sentinel in `backend/internal/core/generated/` and the Node floor
-`contracts/codegen.mk` refuses below — and a suite that drives `git checkout` or
+tracked sentinel in `backend/internal/core/generated/`, the Node floor
+`contracts/codegen.mk` refuses below and the golangci-lint version `make lint`
+refuses beside — and a suite that drives `git checkout` or
 `make` in a temporary directory has no business in the build list of
 the thing that gets imported. It holds no non-test Go source, exactly as
 `internal/suite` holds none, and it is not `internal/suite`: that package's own
@@ -855,6 +857,7 @@ make check            # generate Go types, then lint + test — the gate before 
 make build            # build every binary under backend/cmd
 make test             # unit tests, with -race
 make lint             # golangci-lint including the depguard architecture rules
+                      # refuses a golangci-lint that is not the version CI pins
 make fmt              # apply formatters
 make workspace        # write the untracked go.work an editor at the root needs
 make vectors          # conformance suite against golden vectors
@@ -956,6 +959,20 @@ generation is not reproducible or if it touched a tracked file. That is where
 the TypeScript half and any cross-language drift are caught. `make check`
 passing locally is necessary, not sufficient — which is why the bar below
 counts green jobs on the PR separately.
+
+**And necessary means the same linter.** `make lint` reads the golangci-lint
+version out of the `golangci-lint-action` step in `ci.yml` and refuses to run a
+different one, on the Node floor's rule from `contracts/codegen.mk`: the pin is
+read rather than copied, so it cannot name a version CI does not run. Issue #272
+is why it is a refusal rather than a note — `make lint` failed on `main` with two
+staticcheck findings the *Lint* job never reported, which is the sentence above
+inverted, since its whole value is that the local gate is the weaker of the two.
+Which build is stricter is not knowable in advance and is not the point: two
+versions disagree in both directions, and either disagreement is a gate answering
+a question nobody has to pass. `go install
+github.com/golangci/golangci-lint/v2/cmd/golangci-lint@<the pin>` is what the
+refusal prints. `make fmt` is deliberately not held to it — CI never runs it, so
+there is no answer for it to agree with.
 
 A second workflow, `.github/workflows/docs.yml`, builds `docs/` into the site
 published at <https://skylineplatform.github.io/agentic-payments> and deploys
