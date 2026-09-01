@@ -197,7 +197,7 @@ describe("the per-state table, pinned to the specification", () => {
   // said about the vocabulary did not, and lives on in `status/model.ts`'s
   // argument for why an ending is a verdict and a pip is not.
 
-  it("draws the watch axis with a full pair, and two of its endings are verdicts", () => {
+  it("draws the watch axis with a full pair, and three of its endings are verdicts", () => {
     expect(table(RUN_STATE_META)).toEqual({
       watching: ["half", null],
       bought: ["full", "check"],
@@ -214,6 +214,14 @@ describe("the per-state table, pinned to the specification", () => {
       // run ended with no verifier in it, which is what `exhausted`,
       // `expired`, `stopped` and `failed` say and this one does not.
       refused: ["full", "cross"],
+      // Issue #344's eighth, and the third `cross` here. It is made *of*
+      // verifier refusals — one per price the schedule moves through, each with
+      // a signed receipt — where the four `bar` rows above end with no verifier
+      // anywhere in them. The rule that a cross is a verifier's verdict and
+      // nothing else is what puts it here, read in the direction that is easy to
+      // miss: a run whose whole content is verdicts may not wear the mark that
+      // means nobody decided.
+      "out-of-reach": ["full", "cross"],
     });
     expect(
       words(RUN_STATE_META),
@@ -232,6 +240,9 @@ describe("the per-state table, pinned to the specification", () => {
       // for; `refused` says it on its own, and a tail here would be padding
       // rather than the loosening the rule permits.
       refused: "refused",
+      // No gloss either, and for `refused`'s reason rather than `exhausted`'s: a
+      // limit that was never met says on its own that nothing was bought.
+      "out-of-reach": "out-of-reach",
     });
   });
 

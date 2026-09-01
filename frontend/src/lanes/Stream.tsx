@@ -16,11 +16,14 @@ import type { ConnectionState, Gap } from "../sse";
  * nothing here can.
  *
  * There were three. The third was *Pacing*, which said how many records had
- * arrived and were still being drawn one at a time, and it went with the pacing
- * itself — see `useTransactions.ts` for why the arithmetic never worked. What
- * these two have that it did not is that they are only ever on screen when
- * something is wrong: a connection that dropped, and records the stream failed
- * to deliver.
+ * arrived and were still being drawn one at a time — and it is gone while the
+ * pacing it announced is not. `lanes/pace.ts` has the argument: the gap between
+ * steps is bounded now, so whatever is waiting is drawn within two seconds and
+ * there is nothing left to announce. What these two have that it did not is
+ * that they are only ever on screen when something is **wrong** — a connection
+ * that dropped, records the stream failed to deliver — where that one was on
+ * screen whenever the demonstration was working, which is how it came to be
+ * permanent furniture.
  */
 
 /** How the connection reads to somebody who did not start the stack. */

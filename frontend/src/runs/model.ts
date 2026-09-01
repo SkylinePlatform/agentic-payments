@@ -63,7 +63,18 @@ import type { StatusMeta } from "../status/model";
 
 // --- the run's own axis: internal/agent/console's runState -----------------
 
-/** `runState.String()`'s seven spellings, in `internal/agent/console/run.go`'s own order. */
+/**
+ * `runState.String()`'s eight spellings, in `internal/agent/console/run.go`'s own
+ * order.
+ *
+ * **`tools/bootstrap` holds this list against that one**, and it is there rather
+ * than here because its subject is two languages rather than one module.
+ * `out-of-reach` is why the guard exists: #344 added it to the agent and to this
+ * frontend in the same branch, and the frontend half was forgotten until a
+ * review found it. Nothing went red — the machinery below draws a state it
+ * cannot read as a named unknown, which is the right answer to a *bundle* built
+ * before the agent grew a state, and the wrong answer to one shipped beside it.
+ */
 export const RUN_STATES = [
   "watching",
   "bought",
@@ -72,6 +83,7 @@ export const RUN_STATES = [
   "stopped",
   "failed",
   "refused",
+  "out-of-reach",
 ] as const;
 export type RunState = (typeof RUN_STATES)[number];
 
@@ -116,6 +128,18 @@ export const RUN_STATE_META: Record<RunState, StatusMeta> = {
   stopped: { label: "stopped", pip: "full", ending: "bar" },
   failed: { label: "failed", pip: "full", ending: "bar" },
   refused: { label: "refused", pip: "full", ending: "cross" },
+  // Issue #344's eighth, and the second on this axis a verifier decided — which
+  // is what puts a `cross` on it rather than the `bar` its neighbours take.
+  // `exhausted`, `expired`, `stopped` and `failed` all end with no verifier
+  // anywhere in them; this one is made *of* verifier refusals, one per price the
+  // schedule moves through, each with a signed receipt. The rule that the cross
+  // is a verifier's verdict and nothing else cuts both ways, and this is the
+  // side of it that is easy to miss.
+  //
+  // No gloss, on `refused`'s reasoning rather than `exhausted`'s: those two earn
+  // `— never bought` because neither word says whether the buyer got what they
+  // asked for, and a limit that was never met says it on its own.
+  "out-of-reach": { label: "out-of-reach", pip: "full", ending: "cross" },
 };
 
 export function runStatus(raw: string): StatusMeta {

@@ -30,9 +30,10 @@ import { Inspecting } from "./routes/inspector/Inspecting";
  * of a purchase — which attempt of which run is in its address, and the only way
  * to it is the control on that attempt — not a peer a person chooses between.
  * Listing it would offer a screen that cannot answer without a purchase named,
- * which is the four-tab arrangement returning by the back door. `label` is
- * therefore what a reader would call the screen if something ever did list it,
- * and nothing does; `Shell` draws no nav either way.
+ * which is the four-tab arrangement returning by the back door. `Shell` draws no
+ * nav either way, which is also why {@link Surface} no longer carries a `label`:
+ * nothing read it once the nav went, and a field kept for a reader nobody has is
+ * the same dead weight as the `hrefOf` this issue deleted beside it.
  *
  * **What merging must not merge is the trust boundary**, and that is
  * `routes/buying/Buying.tsx`'s job rather than this file's: the Trusted Surface
@@ -42,8 +43,6 @@ import { Inspecting } from "./routes/inspector/Inspecting";
 export interface Surface {
   /** Route path. "" is the index route. */
   path: string;
-  /** What the nav calls it. */
-  label: string;
   element: ReactElement;
 }
 
@@ -61,11 +60,11 @@ export interface Surface {
  * `constraint/architecture.test.ts` asks it.
  */
 export const SURFACES: readonly Surface[] = [
-  { path: "", label: "Buying", element: <Buying /> },
+  { path: "", element: <Buying /> },
   // In this list rather than straight into App's route table, and that is a
   // rule rather than tidiness: `constraint/architecture.test.ts` derives the
   // screens it governs by reading this file, so a route registered only with the
   // router would be a screen outside every rule about what a screen may draw. A
   // hole, not a shortcut.
-  { path: "inspector", label: "What each reader saw", element: <Inspecting /> },
+  { path: "inspector", element: <Inspecting /> },
 ];
