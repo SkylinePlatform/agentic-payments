@@ -806,6 +806,10 @@ func TestAnInterpreterThatCannotBeBuiltDeniesTheConsole(t *testing.T) {
 	assert.Contains(t, err.Error(), geminiKeyVar,
 		"the refusal has to name what is missing, or the operator is left with a console that "+
 			"came up and a flag that did nothing")
+	// Since issue #280 this line constrains interpreterFor's own message. It used
+	// not to: interpret.NewGemini's refusal named the variable as well, %w carried
+	// it here, and the wrapper this test is written about could stop naming
+	// anything while the whole package stayed green.
 	assert.NotContains(t, err.Error(), "unreachable",
 		"this must fail before anything is dialled — a refusal arriving after thirty seconds of "+
 			"waiting for four counterparties reports the wrong cause")

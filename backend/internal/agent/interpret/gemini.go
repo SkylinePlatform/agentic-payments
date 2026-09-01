@@ -105,10 +105,19 @@ type Gemini struct {
 // key must not quietly become the scripted table: an agent asked for a model and
 // handed a fixed table produces a screenshot nobody can attribute, and the
 // failure would show up as a demo that works suspiciously well.
+//
+// **The refusal names no environment variable**, and issue #280 is why. It used
+// to name GEMINI_API_KEY, which is cmd/agent's to read and cmd/agent's to name —
+// and the copy was load-bearing in the wrong place: an assertion in cmd/agent
+// looking for that string passed on this package's half of it, so the wrapper it
+// was written about could stop naming the variable and nothing went red. A
+// package that does not read the environment should not be the one that says
+// which variable to set, and TestTheRefusalNamesNoEnvironmentVariable is what
+// keeps that from drifting back.
 func NewGemini(apiKey, model string) (*Gemini, error) {
 	if strings.TrimSpace(apiKey) == "" {
-		return nil, errors.New("interpret: a Gemini model needs an API key; " +
-			"cmd/agent reads GEMINI_API_KEY and there is no default")
+		return nil, errors.New("interpret: a Gemini model needs an API key; there is no default, " +
+			"and this package does not read one from the environment — its caller passes it")
 	}
 	if strings.TrimSpace(model) == "" {
 		model = DefaultGeminiModel

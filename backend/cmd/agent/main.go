@@ -416,10 +416,19 @@ func flagsAgree(addr string, once, buy bool) error {
 // The three names -interpreter takes, and the environment variable two of them
 // read — gemini requires it, auto lets it decide.
 //
-// The variable is named here rather than in internal/agent/interpret because
-// this is the process that reads it. A library package reaching into the
-// environment behaves differently depending on who imported it, and turns every
-// test that touches it into one that depends on the order the others ran in.
+// The variable is read here and nowhere else in this module. A library package
+// reaching into the environment behaves differently depending on who imported it,
+// and turns every test that touches it into one that depends on the order the
+// others ran in.
+//
+// **It is named in one refusal too — this file's — and issue #280 is why that is
+// worth stating separately.** interpret.NewGemini's refusal used to name it as
+// well, which made TestAnInterpreterThatCannotBeBuiltDeniesTheConsole pass on a
+// string contributed one package away: interpreterFor's wrapper could stop naming
+// the variable entirely and the whole cmd/agent package stayed green, because the
+// wrapped error still carried it. Two messages constraining each other's union is
+// no constraint on either. gemini.go still explains in prose where the key comes
+// from, which is not the same hazard — no assertion reads a comment.
 const (
 	interpreterScripted = "scripted"
 	interpreterGemini   = "gemini"
