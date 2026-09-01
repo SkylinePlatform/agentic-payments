@@ -10,7 +10,10 @@ import { MAX_BEHIND, PACE_MS, nextRelease, releasedNow } from "./pace";
  * > undrawn without saying so.
  *
  * The first two clauses are what this file holds. The third is a sentence and a
- * button on the route, and `Protocol.test.tsx` is where it is asserted.
+ * button, and `useTransactions.test.tsx` is where it is asserted — over the
+ * count the notice states and over which records that count is taken from,
+ * which #344 narrowed to the purchase being watched. It used to say
+ * `Protocol.test.tsx`, deleted with the second screen.
  *
  * **What makes the reordering clause free rather than tested here** is that
  * these functions return a *count* and the caller slices a prefix. A prefix of
