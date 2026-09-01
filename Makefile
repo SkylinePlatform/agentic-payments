@@ -371,6 +371,7 @@ hooks: ## Point git at the tracked hooks in .githooks
 # tools/bootstrap is listed on that same criterion — a _test.go is Go source
 # somebody opens — and, like the catalogue generator, it requires nothing but
 # testify.
+#
 # **An existing go.work is repaired rather than left alone**, and issue #331 is
 # what that sentence used to cost. This refused to touch a file that was already
 # there — so that a local replace survived — and printed "leaving it alone". Every
@@ -405,7 +406,7 @@ workspace: ## Write or repair the untracked go.work an editor opened at the root
 		if [ "$$before" = "$$(cat go.work)" ]; then \
 			echo "go.work already lists every module — unchanged, replace directives and all"; \
 		else \
-			echo "go.work did not list every module — added the missing ones and kept the rest"; \
+			echo "go.work brought up to date — every module the Makefile names is in it now, and everything else was kept"; \
 		fi; \
 	fi
 
@@ -454,7 +455,9 @@ SETUP_VERIFY := $(abspath .setup-verify)
 # elsewhere — so a Node step added to `setup` in the house style ran happily and
 # this target still printed "with no npm on the path". The stubs shadow npm, npx
 # and node outright, which is what makes that sentence true rather than nearly
-# true.
+# true. They live inside the copy so that one `rm -rf` clears them, and they are
+# a PATH entry rather than tree content — nothing under test reads the directory,
+# and `go vet ./...` never sees it.
 #
 # **GIT=true is the sandbox, and it is the one guard here that nothing asserts.**
 # The copy has no .git, so a real `git config` inside it walks up and writes to

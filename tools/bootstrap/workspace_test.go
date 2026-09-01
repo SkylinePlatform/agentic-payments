@@ -119,6 +119,33 @@ func TestAWorkspaceThatIsAlreadyRightIsNotRewritten(t *testing.T) {
 			"defect this issue is about read in the other direction")
 }
 
+// TestACompleteWorkspaceIsNotToldItGainedAModule is the honesty of the line
+// printed, which is the half of this issue that was never about behaviour.
+//
+// `go work use` normalises formatting as well as appending, so a file that names
+// every module in a spelling somebody wrote by hand comes back changed with
+// nothing added. The old target's failure was a sentence that sounded like a
+// decision — "leaving it alone" — on a run where the file was wrong, and a
+// replacement that said "added the missing ones" on a run where none were
+// missing would be the same failure pointing the other way.
+func TestACompleteWorkspaceIsNotToldItGainedAModule(t *testing.T) {
+	t.Parallel()
+
+	root := workspaceLab(t)
+	writeInto(t, filepath.Join(root, "go.work"),
+		"go 1.26.0\n\nuse ./backend\nuse ./contracts/tools\nuse ./tools/catalogue\nuse ./tools/bootstrap\n",
+		0o644)
+
+	out, err := runMake(t, root, "workspace")
+	require.NoError(t, err, "%s", out)
+
+	assert.NotContains(t, out, "missing",
+		"nothing was missing — every module was already named, in a spelling `go work use` happens "+
+			"to rewrite — and a line claiming otherwise is the old lie with the sign flipped")
+	assert.Contains(t, readFile(t, filepath.Join(root, "go.work")), "./tools/bootstrap",
+		"and the rewrite has to have kept what was there, whatever it did to the whitespace")
+}
+
 // TestTheWorkspaceNamesEveryModuleTheMakefileDoes is the vacuity guard on both
 // tests above, and on the target itself.
 //
