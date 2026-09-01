@@ -448,7 +448,8 @@ four offers in `deploy/catalogue.json` and five scripted sentences in
 `interpret.Scenarios()` — the flight carries two wordings of one intent, declared
 as two entries rather than matched fuzzily.
 
-**#160 has since widened the shop to sixty-four**, and the four below are the
+**#160 has since widened the shop to sixty-four**, and #246 took it to
+sixty-three by showing each thing once. The four below are the
 only ones that did not move: they are carried through the generator as raw JSON,
 so their prices, caps and `scenario` blocks are byte for byte what this table
 says. The other sixty are derived and no scripted sentence goes looking for one.
@@ -484,7 +485,7 @@ something a reader has to find in a Go file.
 **Four was not enough and that was #160**, not this issue — and #160 has landed.
 Every scripted sentence still narrows to exactly one offer; what changed is what
 it narrows *from*, which was the whole point. Over four offers "this prompt
-matches exactly one" was a claim about the shop being empty; over sixty-four it
+matches exactly one" was a claim about the shop being empty; over sixty-three it
 is a claim about the sentence, and `TestEveryScriptedPromptFindsOneCandidate`
 measures it through the real query rather than off the file.
 
@@ -567,6 +568,13 @@ admissible.
 #109 replaces this box with search results, a quantity per row and the tracker.
 The seam is exactly here: everything between the proposal and the consent screen
 is #109's, and nothing built now has to move for it.
+
+**#109 landed all three and #344 deleted the third.** The mandate tracker listed
+every run with every attempt nested under it; measured against a running agent it
+drew six runs and 2,626 attempts, beside three lanes telling the same story about
+the one purchase the screen is for. `frontend/src/runs/Earlier.tsx` is what
+replaced the half of it that was real — one line per run, and clicking one opens
+it. The seam held: nothing in this section moved for any of it.
 
 ### The Trusted Surface's zone — `/consent` when this was written, a zone of `/` since #216
 
@@ -839,12 +847,14 @@ Gates: `make check` and `make frontend-check`.
 - **No Human Present consent.** `/approve` is untouched. #20's spec argues why
   that flow has no screen worth building and nothing here disagrees.
 - **No catalogue, no quantity, no tracker.** Those are #109, and the seam is the
-  proposal.
+  proposal. All three landed; #344 has since deleted the tracker and replaced it
+  with a list of runs a reader can open. The seam is what this bullet was a claim
+  about, and it held through both.
 
 - **No wider catalogue.** #160, and it has since landed. Four offers is what
   these screens were built against and what they were honest about; the claim
   that nothing here would have to change when it grew is the one thing this
-  bullet can now be checked against, and it held — the shop is sixty-four offers
+  bullet can now be checked against, and it held — the shop is sixty-three offers
   and not a line of these screens moved for it.
 
 - **No fix for the concert prompt's quantity, and the screen will make it

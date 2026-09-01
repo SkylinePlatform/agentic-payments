@@ -325,11 +325,17 @@ function parsedQuantity(raw: string): number {
  * leading-digit round cuts nearly a third. A watch opened that way refuses
  * correctly, forever, and settles nothing.
  *
- * At the floor every offer reads the same way: refused at the opening price,
- * bought when the schedule comes back down to it. That is the case Human Not
- * Present exists for, and it is now the ordinary first run rather than a lucky
- * one — while an unreachable limit stays a thing a person can *type*, which is
- * the point of the box.
+ * At the floor every offer **settles**, which is what was actually broken. It
+ * buys at once where the ladder's next step is already the floor, and refuses
+ * once and then buys where it is not — the shipped catalogue is sixty-two
+ * two-price ladders and one of three, so which of the two a person sees still
+ * depends on where the schedule had got to when they clicked. That much was
+ * always true and is not what #344 changed: what it changed is the third
+ * outcome, where the suggestion was under every price the offer reaches and the
+ * watch refused correctly forever.
+ *
+ * An unreachable limit stays a thing a person can *type* — that is the point of
+ * the box — and since #348 the row says so before they sign it.
  *
  * **Times the quantity**, because the constraint bounds the line total and not
  * the unit price — issue #298, and the same reason `total` is computed two cells

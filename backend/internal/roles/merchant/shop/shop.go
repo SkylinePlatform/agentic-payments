@@ -3,7 +3,7 @@
 //
 // # Why this exists
 //
-// deploy/catalogue.json is sixty-four offers and every one of them is in the
+// deploy/catalogue.json is sixty-three offers and every one of them is in the
 // repository, so the five scripted sentences were written against stock their
 // author could read. A model-backed interpreter proves nothing against a shop
 // like that — a lookup table would do as well. The interpreter only starts
