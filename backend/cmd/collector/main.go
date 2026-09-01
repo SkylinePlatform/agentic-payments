@@ -28,6 +28,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -50,7 +51,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, os.Args[1:], os.Stderr); err != nil {
+	// nil: nothing here has to dial this process, and the line run writes to
+	// stderr is how a person finds the port. See run's own comment.
+	if err := run(ctx, os.Args[1:], os.Stderr, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "collector: %v\n", err)
 		os.Exit(1)
 	}
@@ -58,7 +61,26 @@ func main() {
 
 // run is main with its edges as parameters, so the wiring can be tested without
 // a process. It returns when ctx is cancelled or the server fails.
-func run(ctx context.Context, args []string, stderr io.Writer) error {
+//
+// # listening is where it bound, and it exists because of issue #259
+//
+// A caller that has to *dial* this process cannot be told the port by the -addr
+// it passed: the useful value there is `127.0.0.1:0`, which asks the kernel for
+// whichever port is free and is not an address anything can connect to. The
+// obvious way round it is to bind :0 separately, read the address back, close
+// the listener and hand over the number — and that is a bet that the kernel does
+// not give the same port to the next bind(0), which every httptest.NewServer in
+// every test binary running beside this one is asking for constantly. Issue #106
+// is that bet being lost in this repository already.
+//
+// So the port is never let go of. run binds before it serves, and tells the
+// caller the listener's own answer rather than the argument it was given. nil
+// means nobody is waiting, which is the case for main.
+//
+// It is called once, after the bind and before anything is accepted, on run's
+// own goroutine — so a caller may send it somewhere without a race and without
+// needing to be ready first.
+func run(ctx context.Context, args []string, stderr io.Writer, listening func(net.Addr)) error {
 	fs := flag.NewFlagSet("collector", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	addr := fs.String("addr", ":8085", "address to listen on")
@@ -70,18 +92,28 @@ func run(ctx context.Context, args []string, stderr io.Writer) error {
 		return fmt.Errorf("history must not be negative, got %d", *history)
 	}
 
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		return err
+	}
+
 	hub := collector.NewHub(collector.WithHistory(*history))
 	srv := &http.Server{
-		Addr:              *addr,
 		Handler:           collector.Handler(hub),
 		ReadHeaderTimeout: readHeaderTimeout,
 	}
 
+	// The listener's answer and not *addr, for the same reason listening exists:
+	// `-addr :0` prints the port it got, and `-addr :8085` prints the interfaces
+	// it is actually on. A startup line that only echoes its own argument is one
+	// a reader cannot use to reach the process.
+	_, _ = fmt.Fprintf(stderr, "collector: listening on %s — demo infrastructure, not an AP2 role\n", ln.Addr())
+	if listening != nil {
+		listening(ln.Addr())
+	}
+
 	errs := make(chan error, 1)
-	go func() {
-		_, _ = fmt.Fprintf(stderr, "collector: listening on %s — demo infrastructure, not an AP2 role\n", *addr)
-		errs <- srv.ListenAndServe()
-	}()
+	go func() { errs <- srv.Serve(ln) }()
 
 	select {
 	case err := <-errs:
