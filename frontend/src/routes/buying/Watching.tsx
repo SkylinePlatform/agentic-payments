@@ -5,6 +5,9 @@ import { verdictOf } from "../../lanes/model";
 import { useTransactions } from "../../lanes/useTransactions";
 import { Connection, Gaps } from "../../lanes/Stream";
 import { RunLanes } from "../protocol/RunLanes";
+import { runStatus } from "../../runs/model";
+import { useRuns } from "../../runs/useRuns";
+import { Status } from "../../status/Status";
 
 /**
  * What the signature is doing, on the screen the signature was collected on —
@@ -78,14 +81,51 @@ export function Watching({
   // the price is being watched, which is the screen contradicting itself.
   const watching =
     shown === undefined || shown.attempts.every((a) => verdictOf(a).state !== "bought");
+  // How the *run* ended, which the stream cannot say — issue #349.
+  //
+  // The collector carries what happened and never a verdict about the watch, so
+  // a run that ended as `out-of-reach`, `expired`, `stopped`, `failed` or
+  // `refused` produces no event this screen could read: nothing bought, so
+  // `watching` above stays true and the line said the agent was watching a price
+  // for a run it had already given up on. That is the sentence #344 added
+  // `ErrLimitOutOfReach` to remove, arriving one screen later.
+  //
+  // `GET /watches` is where the ending lives, and `runs/useRuns` is what asks.
+  const runs = useRuns();
+  const ending = runStatus(
+    runs.find((run) => run.correlation_id === correlationId)?.state ?? "",
+  );
+  // An ending mark is the vocabulary's own word for *this finished*, so nothing
+  // here compares a state to a literal — `runs/model.ts` is explicit that the
+  // machine's spellings are read through `runStatus` and never matched against.
+  // A run this build cannot read carries no ending and falls through to the
+  // stream, which is the same honest silence a status it cannot name gets.
+  //
+  // Paired with `watching` rather than trusted alone: `bought` ends too, and the
+  // stream knows about a purchase seconds before a three-second poll does. So
+  // the console answers only the question the stream cannot.
+  const gaveUp = watching && ending.ending !== null;
 
   return (
     <section className="flex flex-col gap-6" data-testid="watching-region">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <p className="font-sans text-sm text-graphite">
-          {watching
-            ? "Signed. The agent is watching the price against your limits."
-            : "Bought. The signature and every verifier's reading of it are below."}
+        <p className="font-sans text-sm text-graphite" data-testid="watching-verdict">
+          {gaveUp ? (
+            <>
+              <Status
+                word={ending.label}
+                pip={ending.pip}
+                ending={ending.ending}
+                raw={ending.raw}
+              />{" "}
+              The agent has stopped. Nothing further will happen on this authorisation, and every
+              attempt it made is below.
+            </>
+          ) : watching ? (
+            "Signed. The agent is watching the price against your limits."
+          ) : (
+            "Bought. The signature and every verifier's reading of it are below."
+          )}
         </p>
         <button
           type="button"
