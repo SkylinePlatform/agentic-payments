@@ -482,6 +482,13 @@ comment and cannot reach — when `git merge` stops on a conflict, the `git comm
 that resolves it completes the merge, and resolving writes the files by hand so
 nothing else notices.
 
+**`post-index-change` needs git 2.22 or newer**, and that is a bound rather than
+a guard. A git without it runs nothing and says nothing, which is what every
+version did before #330 — so an old git loses the coverage that issue adds and
+keeps everything else. It is stated here rather than checked because June 2019 is
+the release and the check would be for a population that does not exist;
+`TestTheNewHookIsInstalledAndThisGitRunsIt` is what names it if one turns up.
+
 **What no hook can cover is the clone itself**, and one hand-written file covers
 what it can of that. git does not clone config, so `core.hooksPath` is unset in
 a fresh checkout and nothing in `.githooks/` runs until a person has typed

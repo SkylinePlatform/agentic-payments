@@ -17,6 +17,7 @@ package bootstrap
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -157,22 +158,43 @@ func TestWhatEachTreeMovingOperationCosts(t *testing.T) {
 	}
 }
 
-// TestTheNewHookIsInstalledLikeTheOthers is the vacuity guard on the table.
+// TestTheNewHookIsInstalledAndThisGitRunsIt is the vacuity guard on the table,
+// and the one place its precondition is named.
 //
 // Every row above is measured through newLab, which installs whatever is in
-// .githooks/. A hook that was written and never installed — or one installed
-// without the executable bit — would leave the zero rows passing and the others
-// failing for a reason nobody would read as "it is not there". This says it
-// first.
-func TestTheNewHookIsInstalledLikeTheOthers(t *testing.T) {
+// .githooks/. A hook that was written and never installed — or installed without
+// the executable bit — would leave the zero rows passing and the rest failing for
+// a reason nobody would read as "it is not there".
+//
+// **And post-index-change is not a hook every git has.** It arrived in git 2.22,
+// June 2019, and a git without it runs nothing and says nothing — which would
+// leave every non-zero row above red with a message about regeneration counts and
+// none about the cause. So this drives the one operation that reaches the new
+// hook and nothing else, and says what it means when it does not fire.
+func TestTheNewHookIsInstalledAndThisGitRunsIt(t *testing.T) {
 	t.Parallel()
 
 	l := newLab(t)
 	info, err := os.Stat(filepath.Join(l.root, ".githooks", "post-index-change"))
 	require.NoError(t, err, "the hook the table above measures is not in the lab, so every row is "+
 		"measuring the hooks that were already there")
-	assert.NotZero(t, info.Mode()&0o111, "git will not run a hook it cannot execute, and it says nothing "+
-		"when it declines to")
+	require.NotZero(t, info.Mode()&0o111, "git will not run a hook it cannot execute, and it says "+
+		"nothing when it declines to")
+
+	l.git("checkout", "-q", "-b", "other")
+	l.write("other", "other")
+	l.git("add", "-A")
+	l.git("commit", "-qm", "other")
+	l.git("checkout", "-q", "main")
+
+	before := len(l.calls())
+	l.git("reset", "--hard", "-q", "other")
+
+	assert.Greater(t, len(l.calls()), before,
+		"`git reset --hard` reaches post-index-change and no other hook, so nothing firing here "+
+			"means this git does not run that hook at all — it arrived in 2.22, and %s is what is "+
+			"installed. Every other failure in this file follows from that one",
+		strings.TrimSpace(l.git("--version")))
 }
 
 // TestThePostMergeClaimIsTheOneItCanKeep is #268's F3, which was a false
