@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -84,9 +85,10 @@ func NewIdentity(role string) (Identity, error) {
 type Role struct {
 	Identity
 
-	// Events is where the six moments in ADR 0003 Decision 2 go. Never nil
-	// here — Main always builds one — but a Service field holding it may be,
-	// and a nil *obs.Emitter records nothing rather than panicking.
+	// Events is where the six moments in ADR 0003 Decision 2 go. Nil only where
+	// building one failed, which Events reports and carries past rather than
+	// denying the role — a nil *obs.Emitter records nothing rather than
+	// panicking, and a Service field holding it may be nil for the same reason.
 	Events *obs.Emitter
 }
 
@@ -102,32 +104,56 @@ type Role struct {
 // Exported because cmd/agent does not go through Main and still has to answer
 // the same question. It mints its emitter before it knows whether it will serve
 // at all — -buy and -watch run against counterparties before anything listens,
-// and -addr is what decides whether there is a handler afterwards — so it calls
-// Run itself rather than being built by Main. One budget, one place: two constants of the
-// same value in two files are free to drift, and the drift would show up as a
-// demonstration whose last events arrive from four processes and not the fifth.
+// and -addr is what decides whether there is a handler afterwards — so it binds
+// and serves itself rather than being built by Main. One budget, one place: two
+// constants of the same value in two files are free to drift, and the drift
+// would show up as a demonstration whose last events arrive from four processes
+// and not the fifth.
 const FlushGrace = 2 * time.Second
 
-// Run serves h until the process is asked to stop, then drains.
+// Listen binds addr for role, and does nothing else.
+//
+// Split out of Run by issue #273, for the one caller that has work to do
+// between having a port and serving on it. cmd/agent's -watch -addr signs two
+// open mandates on the way up, and while Run was the only entry point, that
+// signing necessarily happened *before* anything bound: an address something
+// else already held produced a full authorisation — an interpretation, a call
+// to the Trusted Surface, two mandates endorsing a key minted in this process
+// — and then a failure to listen, and then exit. The person had been asked to
+// approve a purchase for a process that was never able to exist, and nothing
+// was left holding those mandates, because that key dies with it.
+//
+// The listener is the caller's until it reaches Serve, which takes it over. A
+// caller that fails in between has to close it — no defer here can, because
+// the successful path is precisely the one that keeps it open.
+func Listen(role, addr string) (net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", role, err)
+	}
+	return ln, nil
+}
+
+// Serve serves h on ln until the process is asked to stop, then drains. It
+// closes ln on the way out, whichever way it leaves.
 //
 // The drain matters more here than the line count suggests. A role that is
 // killed mid-request leaves a counterparty with no receipt for a mandate it
 // presented — which is the one outcome AP2 does not allow, and the one a demo
 // stopped with Ctrl-C would produce constantly.
-func Run(role, addr string, h http.Handler) error {
+func Serve(role string, ln net.Listener, h http.Handler) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	server := &http.Server{
-		Addr:              addr,
 		Handler:           h,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	failed := make(chan error, 1)
 	go func() {
-		slog.Info("listening", "role", role, "addr", addr)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		slog.Info("listening", "role", role, "addr", ln.Addr().String())
+		if err := server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			failed <- err
 		}
 		close(failed)
@@ -149,6 +175,19 @@ func Run(role, addr string, h http.Handler) error {
 		return fmt.Errorf("%s: draining: %w", role, err)
 	}
 	return nil
+}
+
+// Run binds addr and serves h on it, for a role with nothing to do in between.
+//
+// Which is every role but the agent: a mock role's main builds a handler out of
+// values it already holds, so there is no moment where having the port and not
+// having it are different. Where there is one, call Listen and Serve.
+func Run(role, addr string, h http.Handler) error {
+	ln, err := Listen(role, addr)
+	if err != nil {
+		return err
+	}
+	return Serve(role, ln, h)
 }
 
 // Main is the whole of a role binary: build the handler, serve it, report.
@@ -176,10 +215,11 @@ func start(role, addr, collector string, build func(Role) (http.Handler, error))
 		return err
 	}
 
-	events, err := Events(identity.Clock, role, collector)
-	if err != nil {
-		return err
-	}
+	// Not an error to return: the event log is observability and never evidence,
+	// so a role that cannot build an emitter says so and serves anyway. Events
+	// carries the argument; issue #273 is where it was noticed that every caller
+	// here did the opposite.
+	events := Events(identity.Clock, role, collector, os.Stderr)
 	defer func() {
 		flush, cancel := context.WithTimeout(context.Background(), FlushGrace)
 		defer cancel()

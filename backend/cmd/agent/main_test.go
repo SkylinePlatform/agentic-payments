@@ -513,8 +513,7 @@ func aMerchantThatSellsNothing(t *testing.T) string {
 func TestABootWatchThatFindsNothingStillLeavesAConsoleServing(t *testing.T) {
 	t.Parallel()
 
-	events, err := roles.Events(clock.New(), "agent", "")
-	require.NoError(t, err)
+	events := roles.Events(clock.New(), "agent", "", io.Discard)
 
 	// The address from the live report. Nothing binds it — consoleFor builds a
 	// handler and never listens — so it is here as the text the third line below
@@ -565,6 +564,84 @@ func TestABootWatchThatFindsNothingStillLeavesAConsoleServing(t *testing.T) {
 			"something the reader has to take on trust")
 }
 
+// TestAConsoleThatCannotBindSignsNothing is issue #273.
+//
+// `bin/agent -watch -addr 127.0.0.1:8086` against an address something else
+// already holds used to run the entire Human Not Present authorisation first —
+// the interpretation, the quote, `POST /authorise` to the Trusted Surface, two
+// open mandates signed — and only then fail on the listener and exit. A person
+// had been asked to approve a purchase, in this demonstration's mocked form, for
+// a process that was never able to exist; and nothing was left holding those
+// mandates either, because the key they endorse is minted per process and dies
+// with it.
+//
+// The fix is one of ordering and nothing else: roles.Listen answers the question
+// before consoleFor is called at all. So the property is not that the failure is
+// reported — it always was — but that **it is reached before anything is asked
+// of anybody**. The merchant is what the boot watch talks to first, so a
+// merchant that was asked anything at all is an authorisation that started.
+//
+// # Why this drives serveConsole and not run
+//
+// Everything ahead of serveConsole in run is unchanged and gated by ready, which
+// needs four counterparties publishing readable key sets before it returns —
+// TestCounterpartiesDownDenyTheConsoleThatABootWatchDoesNot is the test that
+// drives that decision, from the other side. Standing four of them up here would
+// put the reproduction behind a fixture larger than the thing being reproduced,
+// and would not narrow what a failure means: serveConsole is where the ordering
+// is, and it is the whole of what this issue moved.
+//
+// **`make demo` never reached this**, which is worth stating rather than
+// discovering: demo.Runner.Start refuses to start a process whose health URL is
+// already answering. The invocation is reachable by hand, which is the one
+// cmd/agent's package doc documents as supported.
+func TestAConsoleThatCannotBindSignsNothing(t *testing.T) {
+	t.Parallel()
+
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err, "an ephemeral port nothing holds, which this test then holds")
+	t.Cleanup(func() { _ = held.Close() })
+
+	asked := make(chan string, 8)
+	merchant := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A channel rather than a counter with a mutex: what makes the failure
+		// actionable is *which* route was asked, and the test goroutine is the
+		// only reader.
+		select {
+		case asked <- r.URL.Path:
+		default:
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"categories":[],"offers":[]}`))
+	}))
+	t.Cleanup(merchant.Close)
+
+	err = serveConsole(t.Context(),
+		agent.Endpoints{Merchant: merchant.URL}, roles.Events(clock.New(), "agent", "", io.Discard),
+		held.Addr().String(),
+		watching{prompt: defaultPrompt, interpreter: interpret.Demo(), quantity: 1},
+		true)
+
+	require.Error(t, err, "the address is held for the whole test, so there is no console to serve")
+	assert.Contains(t, err.Error(), held.Addr().String(),
+		"the address is the fix — a reader told only that something is in use has to guess which port")
+
+	close(asked)
+	require.Empty(t, collected(asked),
+		"the boot watch's first act is to ask the merchant what it sells, so anything asked here means "+
+			"the authorisation ran: a person approved a purchase for a process that could not exist, "+
+			"against a key that died with it")
+}
+
+// collected drains ch, which is closed by the time it is called.
+func collected(ch <-chan string) []string {
+	var seen []string
+	for path := range ch {
+		seen = append(seen, path)
+	}
+	return seen
+}
+
 // TestABootWatchNobodyAskedForIsNotReported is the control on the test above.
 //
 // `bin/agent -addr …` with no -watch is a console asked to serve and asked for no
@@ -575,8 +652,7 @@ func TestABootWatchThatFindsNothingStillLeavesAConsoleServing(t *testing.T) {
 func TestABootWatchNobodyAskedForIsNotReported(t *testing.T) {
 	t.Parallel()
 
-	events, err := roles.Events(clock.New(), "agent", "")
-	require.NoError(t, err)
+	events := roles.Events(clock.New(), "agent", "", io.Discard)
 
 	var said strings.Builder
 	// No merchant at all: with no boot watch asked for, nothing here reaches one.

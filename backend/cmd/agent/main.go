@@ -129,6 +129,13 @@
 // and every watch opens with one interpretation, so a console without one accepts
 // a sentence and fails it. The argument is at interpreterFor's call site.
 //
+// **What does not stop it is a failed emitter**, which is issue #273 and ADR
+// 0003 rather than a judgement call: the event log is observability and never
+// evidence, so the one thing whose whole job is a side channel must not be able
+// to deny the console. roles.Events reports the defect and hands back an emitter
+// that records nothing. The port is bound before any of this signs anything, for
+// the same issue's other reason — serveConsole is where that ordering is.
+//
 // -once with -addr is refused at parse time, and so is -buy with -addr. Each
 // pair asks for opposite things: a server that exits after its first watch is a
 // server nobody can use, and a server that runs one Human Present purchase first
@@ -275,10 +282,15 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	events, err := roles.Events(clock.New(), "agent", *collector)
-	if err != nil {
-		return err
-	}
+	// **This one does not deny the console, and that is issue #273.** It used to:
+	// a process that could not build its *emitter* returned before anything else
+	// happened, which inverts ADR 0003 — the event log is observability and never
+	// evidence, and the ADR's own consequence is that nothing about it may fail a
+	// mandate construction. roles.Events reports the defect and hands back a nil
+	// emitter that records nothing, so the branch is neither swallowed nor fatal.
+	// It belongs with the flush below rather than with consoleFor's failures,
+	// which is the asymmetry #273 found: the flush already got this right.
+	events := roles.Events(clock.New(), "agent", *collector, os.Stderr)
 	defer func() {
 		flush, cancel := context.WithTimeout(context.Background(), roles.FlushGrace)
 		defer cancel()
@@ -627,6 +639,13 @@ func afterWatch(out io.Writer, err error, once bool) error {
 // serveConsole runs the agent as a server: the console API, and optionally one
 // watch started on the way up.
 //
+// # The port is bound before that watch runs, not after
+//
+// Issue #273, and the argument is at the call to roles.Listen below rather than
+// here, because that is the line that would have to move to undo it. In one
+// sentence: the boot watch signs, and a process must not ask anybody to approve
+// a purchase before it knows it can exist.
+//
 // # Why the startup watch goes through the console rather than beside it
 //
 // A second watch running outside the registry would be invisible to every route
@@ -688,13 +707,33 @@ func serveConsole(
 	ctx context.Context, e agent.Endpoints, events *obs.Emitter,
 	addr string, cfg watching, initial bool,
 ) error {
-	handler, err := consoleFor(ctx, e, events, addr, cfg, initial, os.Stderr)
+	// **The port is bound first, and issue #273 is why.** consoleFor starts the
+	// boot watch, which is the whole Human Not Present authorisation: an
+	// interpretation, a call to the Trusted Surface, and two open mandates signed
+	// against a key this process minted. With roles.Run doing the binding, all of
+	// that happened and *then* the process discovered it had no address —
+	// `bin/agent -watch -addr 127.0.0.1:8086` against a held port asked a person
+	// to approve a purchase for a process that was never able to exist, and left
+	// nothing holding those mandates, because the key dies with it.
+	//
+	// Nothing about the console's own failures moves. What moves is which of them
+	// can be reached at all: an address already taken is now found before the
+	// first signature rather than after the last.
+	ln, err := roles.Listen("agent", addr)
 	if err != nil {
 		return err
 	}
 
+	handler, err := consoleFor(ctx, e, events, addr, cfg, initial, os.Stderr)
+	if err != nil {
+		// The listener is this function's until Serve takes it over, and this is
+		// the path where Serve is never reached.
+		_ = ln.Close()
+		return err
+	}
+
 	fmt.Printf("  console    http://%s/watches\n", addr)
-	return roles.Run("agent", addr, handler)
+	return roles.Serve("agent", ln, handler)
 }
 
 // consoleFor builds the console this process serves and starts the watch it was
