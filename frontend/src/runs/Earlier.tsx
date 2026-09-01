@@ -41,37 +41,20 @@
  * invents a name for a purchase.
  */
 
-import { useEffect, useState } from "react";
-
 import { Status } from "../status/Status";
-import { fetchRuns } from "./client";
 import { runStatus } from "./model";
 import type { RunSummary } from "./model";
+import { useRuns } from "./useRuns";
 
 export function Earlier({
   onOpen,
 }: {
   readonly onOpen: (run: RunSummary) => void;
 }) {
-  const [runs, setRuns] = useState<readonly RunSummary[]>([]);
-
-  useEffect(() => {
-    let live = true;
-    // A failure is silence. This is a way back to something the person can
-    // reach anyway — by buying again, or by the address the lanes wrote — so an
-    // error banner here would report a console being unreachable on a screen
-    // whose own console call has its own place to say so.
-    fetchRuns()
-      .then((found) => {
-        if (live) setRuns(found);
-      })
-      .catch(() => {
-        if (live) setRuns([]);
-      });
-    return () => {
-      live = false;
-    };
-  }, []);
+  // Refreshed rather than read once — issue #349. This used to fetch on mount
+  // and stop, so a run that concluded while somebody was looking at the shop
+  // kept its old state on the row until they navigated away and back.
+  const runs = useRuns();
 
   if (runs.length < 2) return null;
 
