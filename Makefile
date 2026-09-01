@@ -9,6 +9,9 @@ CI_WORKFLOW    := .github/workflows/ci.yml
 # contracts/codegen.mk, and for the same reason: a second copy of a version
 # number is free to drift, and the drift is invisible until somebody's gate
 # disagrees with CI.
+#
+# Recursive rather than `:=`, so the awk runs when lint-version asks and not on
+# every `make help`.
 GOLANGCI_PIN    = $(shell awk '/golangci-lint-action/ { found = 1 } \
                               found && $$1 == "version:" { print $$2; exit }' $(CI_WORKFLOW))
 
@@ -162,8 +165,14 @@ lint: generated lint-version ## golangci-lint, including the depguard architectu
 # and either disagreement costs the same thing — a gate that answers a different
 # question from the one the pull request has to pass.
 #
-# `make fmt` is deliberately not held to this. CI never runs it, so there is no
-# answer for it to agree with.
+# **CI does not run this target at all** — its *Lint* job uses
+# golangci-lint-action, which is why the version lives in the workflow and is
+# read from there rather than declared here and duplicated into it. Nothing
+# below therefore runs on a runner, and no CI job needs a golangci-lint on PATH.
+#
+# `make fmt` is deliberately not held to this. CI never runs it either, and
+# unlike `run` there is no answer for it to agree with — a formatter whose output
+# differs is caught by the pinned `run` on the next line anyway.
 .PHONY: lint-version
 lint-version: ## Refuse a golangci-lint that is not the version CI pins
 	@pin='$(GOLANGCI_PIN)'; pin="$${pin#v}"; \
