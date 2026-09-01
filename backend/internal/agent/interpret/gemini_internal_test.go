@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -174,6 +175,38 @@ func TestNewGeminiRefusesToStartWithoutAKey(t *testing.T) {
 		_, err := NewGemini(key, "")
 		assert.Error(t, err, "a model-backed interpreter with no key must not fall back to a fixed table")
 	}
+}
+
+// TestTheRefusalNamesNoEnvironmentVariable is issue #280, held at the end that
+// can drift.
+//
+// The refusal above used to say "cmd/agent reads GEMINI_API_KEY and there is no
+// default", which reads as helpfulness and was a defect twice over. This package
+// does not read the environment — the field comment on Gemini.key is the whole
+// argument for that — so naming a variable it never looks at is a claim about a
+// caller it should not be making, and would be wrong for the second caller.
+//
+// The half that actually cost something: cmd/agent asserts that *its* refusal
+// names the variable, and %w carried this copy into that string. So the wrapper
+// the assertion was written about could stop naming it and the whole package
+// stayed green. Two messages constraining each other's union constrain neither.
+//
+// A rule about "no environment variable" cannot be written as a list of names, so
+// this is the shape it takes: SCREAMING_SNAKE_CASE is what an environment
+// variable looks like in a sentence, and nothing else in this refusal is spelled
+// that way.
+func TestTheRefusalNamesNoEnvironmentVariable(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewGemini("", "")
+	require.Error(t, err, "with no error there is no message, and the assertion below would pass on nothing")
+
+	shouting := regexp.MustCompile(`\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b`)
+	assert.NotRegexp(t, shouting, err.Error(),
+		"this package does not read the environment, so it must not be the one telling an operator "+
+			"which variable to set — and cmd/agent's own assertion that its refusal names GEMINI_API_KEY "+
+			"passes on this string when it is here, which leaves the message it was written about free "+
+			"to stop naming anything")
 }
 
 // TestTheDefaultModelIsARollingAlias is the measurement in DefaultGeminiModel's
