@@ -430,13 +430,41 @@ function failed(verdict: Verdict): boolean {
   return verdict.state === "refused" && verdict.bindingFailed;
 }
 
-function SpineHead({ verdict }: { readonly verdict: Verdict }) {
+function SpineHead({ verdict, name }: { readonly verdict: Verdict; readonly name?: string }) {
   if (verdict.state === "pending") return null;
   const digest = verdict.digest;
   if (digest === undefined) return null;
 
   return (
-    <div className="flex justify-center">
+    <div className="flex flex-col items-center gap-1">
+      {/*
+        **No name draws no heading**, rather than the word *Transaction* a second
+        time. TransactionHead already says exactly that above, and the
+        vocabulary's rule is that a reader meets an idea once — a placeholder
+        here would be the same word twice on one screen, competing with the head
+        that means it. It is #242's own rule read one element down: "no name
+        means no headline claiming one, rather than a placeholder or the
+        identifier wearing a name's clothes". The item identifier is never drawn
+        here, which is the half of that rule this must not break.
+
+        `break-words` for TransactionHead's reason, which applies here for the
+        first time in a centred column: a name is the one string on this screen a
+        counterparty writes, and one long word inside `maxTitle` still overflows
+        its box and takes the whole document into a horizontal scroll.
+
+        An `<h3>` and not an `<h2>`: the transaction's own head is the `<h2>`
+        above, and an attempt sits inside it. The digest below stays a `<span>` —
+        `architecture.test.ts` forbids a heading carrying `font-mono`, which is
+        what keeps the mono face out of the document outline.
+      */}
+      {name !== undefined && name !== "" && (
+        <h3
+          data-testid="spine-name"
+          className="font-display text-xl leading-tight tracking-tight break-words text-ink sm:text-2xl"
+        >
+          {name}
+        </h3>
+      )}
       <span
         data-testid="spine"
         // Concatenation rather than a template literal, matching
@@ -449,7 +477,7 @@ function SpineHead({ verdict }: { readonly verdict: Verdict }) {
         // this stays concatenated because the sibling components already do,
         // not because the guard requires it.
         className={
-          "font-mono text-xl font-semibold tracking-tight sm:text-2xl " +
+          "font-mono text-sm font-semibold tracking-tight sm:text-base " +
           (failed(verdict) ? "text-broken" : "text-signal")
         }
         title={digest}
@@ -628,11 +656,14 @@ function AttemptView({
   attempt,
   index,
   total,
+  name,
   inspecting,
 }: {
   readonly attempt: Attempt;
   readonly index: number;
   readonly total: number;
+  /** What is being bought, when anything knows. Passed down for {@link SpineHead}. */
+  readonly name?: string;
   readonly inspecting?: Inspecting;
 }) {
   const verdict = verdictOf(attempt);
@@ -682,7 +713,7 @@ function AttemptView({
       </div>
 
       <Thesis verdict={verdict} />
-      <SpineHead verdict={verdict} />
+      <SpineHead verdict={verdict} name={name} />
 
       {/*
         One column until there is room for three. Three columns of cards on a
@@ -867,6 +898,7 @@ export function Lanes({
           attempt={attempt}
           index={index}
           total={transaction.attempts.length}
+          name={name}
           inspecting={inspecting}
         />
       ))}

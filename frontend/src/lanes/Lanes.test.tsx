@@ -1328,7 +1328,7 @@ describe("the head of the transaction", () => {
     ).toMatch(/\bbreak-words\b/);
   });
 
-  it("keeps the digest at the size it had, one section down and still repeated", () => {
+  it("heads each attempt with the name and keeps the digest beneath it, still repeated", () => {
     const { container } = showingNamed(
       [
         record({ kind: "mandate_verified", role: "merchant", digest: DIGEST }),
@@ -1345,17 +1345,63 @@ describe("the head of the transaction", () => {
         "same twelve characters, and #242 is explicit that it stays",
     ).toBeGreaterThan(2);
 
-    // The spine head keeps the type scale the design reserves for it. Asserted
-    // on the class rather than on a computed style because jsdom computes none,
-    // and this is the one number the issue promised would not move.
+    // **This assertion used to say the opposite**, and issue #315 is the
+    // revision. #242 moved the name onto the transaction head and held the
+    // spine at the size it was, on the reasoning that the two do not compete.
+    // On a two-attempt run they do: the transaction head is drawn once and
+    // scrolls away, and every attempt below it was headed by twelve characters
+    // of base64url with nothing saying what was being bought.
+    //
+    // So the digest is demoted, deliberately, and what it keeps is everything
+    // else — `signal`, the mono face, its place on the axis and its repetition
+    // on every card that has one. What it loses is being the largest thing on
+    // the page.
+    //
+    // Asserted on the class rather than on a computed style because jsdom
+    // computes none.
     const spine = [...container.querySelectorAll("span")].filter(
-      (element) => element.textContent === SHOWN && /text-xl/.test(element.className),
+      (element) => element.textContent === SHOWN && /text-signal/.test(element.className),
     );
     expect(
-      spine.map((element) => /sm:text-2xl/.test(element.className)),
-      "the digest was not demoted to buy the name its place; it is one section " +
-        "further down at exactly the size it was",
+      spine.map((element) => /\btext-(xl|2xl)\b/.test(element.className)),
+      "the digest is still the largest thing on the attempt, so the name above it is " +
+        "competing with it rather than heading it",
+    ).toEqual([false]);
+    expect(
+      spine.map((element) => /font-mono/.test(element.className)),
+      "and it is still mono and still signal: the demotion is of size alone",
     ).toEqual([true]);
+
+    const named = screen.getAllByTestId("spine-name");
+    expect(
+      named.map((element) => element.textContent),
+      "every attempt is headed by what is being bought, which is the whole of #315",
+    ).toEqual(["Vitesse Urbain 7"]);
+    expect(
+      named.every((element) => element.tagName === "H3"),
+      "an attempt sits inside the transaction, whose own head is the h2 — and the " +
+        "digest below stays a span, because architecture.test.ts forbids a heading " +
+        "carrying font-mono",
+    ).toBe(true);
+  });
+
+  it("heads no attempt when nothing knows what is being bought", () => {
+    // The other half of #315, and it is #242's rule read one element down: "no
+    // name means no headline claiming one, rather than a placeholder or the
+    // identifier wearing a name's clothes". Drawing the word *Transaction* here
+    // would be the second copy of it on one screen, competing with the head that
+    // means it — the vocabulary's rule is that a reader meets an idea once.
+    showing([record({ kind: "mandate_verified", role: "merchant", digest: DIGEST })]);
+
+    expect(
+      screen.queryByTestId("spine-name"),
+      "a placeholder here would repeat the transaction head's own word one section " +
+        "below it, and the item identifier is what must never appear",
+    ).toBeNull();
+    expect(
+      screen.getByTestId("spine").textContent,
+      "and the digest is still drawn: what is missing is a name for it, not the axis",
+    ).toBe(SHOWN);
   });
 
   it("draws the header it always drew when the console has no name for the run", () => {
