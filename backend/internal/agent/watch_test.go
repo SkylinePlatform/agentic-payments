@@ -2128,3 +2128,117 @@ func TestAnAuthorisationWithNoReadableInstantStillDrawsAndNamesNoClock(t *testin
 				"Trusted Surface when the user signed", i, e.Kind)
 	}
 }
+
+// belowTheFloor is a limit under every price the ladders ever quote — 130.00
+// against a schedule that moves between 139.00 and 135.00.
+//
+// A local scenario rather than a sixth demo sentence, on twoLadders' reasoning
+// a few declarations up: interpret.Demo() scripts what the demonstration
+// offers, and this is a case a person reaches by typing a number, not one the
+// console suggests.
+var belowTheFloor = mustLocalScript(interpret.Script{
+	Prompt: "one telescopic ladder, up to $130",
+	Constraints: fmt.Sprintf(`[
+		{"op":"eq","field":"item.id","value":%q},
+		{"op":"lte","field":"quantity","value":1},
+		{"op":"lte","field":"amount","value":{"amount":13000,"currency":"USD"}}
+	]`, merchant.DemoLadderID),
+	Quantity: 1,
+	Trigger:  interpret.TriggerConditional,
+})
+
+// atTheFloor is the control: the same ladder at exactly the lowest price its
+// schedule reaches, which is what the catalogue screen suggests since issue
+// #344.
+var atTheFloor = mustLocalScript(interpret.Script{
+	Prompt: "one telescopic ladder, up to $135",
+	Constraints: fmt.Sprintf(`[
+		{"op":"eq","field":"item.id","value":%q},
+		{"op":"lte","field":"quantity","value":1},
+		{"op":"lte","field":"amount","value":{"amount":13500,"currency":"USD"}}
+	]`, merchant.DemoLadderID),
+	Quantity: 1,
+	Trigger:  interpret.TriggerConditional,
+})
+
+// TestTheWatchStopsWhenEveryPriceHasBeenRefused is ErrLimitOutOfReach, issue
+// #344, and it is the ending the demonstration's own schedules had nothing to
+// reach.
+//
+// A cycling schedule never reports Final, so ErrScheduleExhausted cannot arrive
+// — its own doc says so — and what was left was the open mandate pair running
+// out an hour later. A viewer watched sixty-two correct refusals and was told
+// about a clock.
+//
+// The loop concludes from what it has seen: the ladder's two steps were both
+// attempted and refused, and the next quote is one of them again, so the
+// schedule has come round with every price on it tried.
+func TestTheWatchStopsWhenEveryPriceHasBeenRefused(t *testing.T) {
+	t.Parallel()
+
+	w := newWorldEmitting(t, emitters{}, cycling)
+	a := authoriseWith(t, w, belowTheFloor.Prompts()[0], belowTheFloor)
+
+	wait, _ := a.running(t, a.watch(t))
+	a.quoted() // the baseline
+
+	a.step() // the other price
+	a.quoted()
+	a.attempted()
+
+	a.step() // back round to the first, which is where the wrap makes this endless
+	a.quoted()
+	a.attempted()
+
+	a.step() // and round again — the step that has already been refused
+	a.quoted()
+
+	watched, err := wait()
+	require.ErrorIs(t, err, agent.ErrLimitOutOfReach,
+		"the ladder came round with every price on it refused, and a watch that carried on would "+
+			"poll until the pair expired an hour later")
+	assert.NotErrorIs(t, err, agent.ErrScheduleExhausted,
+		"that is a claim about the merchant having no further price, and this shop has plenty — "+
+			"drawing them alike tells somebody the shop ran out when they asked for less than it charges")
+	assert.Nil(t, watched.Bought)
+
+	require.Len(t, watched.Attempts, 2,
+		"one attempt per price, and no third: the point is that it stopped rather than trying the "+
+			"same refused price again")
+	for i, attempt := range watched.Attempts {
+		assert.ErrorIsf(t, attempt.Err, agent.ErrRefused, "attempt %d", i+1)
+	}
+}
+
+// TestAWatchAtTheFloorStillBuys is the control on the test above, and it is the
+// whole of what issue #344 changed on the catalogue screen.
+//
+// Giving up has to be a claim about the limit rather than about the ladder
+// coming round: the same schedule, the same two steps, one number higher, and
+// it settles. Without this, an agent that concluded on the first wrap whatever
+// the limit was would pass the test above and buy nothing ever again.
+func TestAWatchAtTheFloorStillBuys(t *testing.T) {
+	t.Parallel()
+
+	w := newWorldEmitting(t, emitters{}, cycling)
+	a := authoriseWith(t, w, atTheFloor.Prompts()[0], atTheFloor)
+
+	wait, _ := a.running(t, a.watch(t))
+	a.quoted()
+
+	a.step()
+	a.quoted()
+	a.attempted()
+
+	a.step()
+	a.quoted()
+	a.attempted()
+
+	watched, err := wait()
+	require.NoError(t, err,
+		"a limit at the lowest price the schedule reaches is met the first time the price is there, "+
+			"which is what the buying screen now opens on")
+	require.NotNil(t, watched.Bought)
+	assert.LessOrEqual(t, watched.Bought.Price.Amount, 13500,
+		"and it bought at a price the limit covers, not at whichever one came round")
+}

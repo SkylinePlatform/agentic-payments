@@ -258,8 +258,16 @@ describe("the consent path renders nothing of its own", () => {
     expect(
       SCREEN_ROOTS,
       `no screen was found in ${ROUTE_TABLE}; every rule below is asserted over what it routes to`,
+    // Two screens. `routes/protocol/Protocol.tsx` — the other name that stood
+    // here — was folded into the first by #344, and the second is the Mandate
+    // Inspector, which the same issue put back at an address of its own. Both
+    // are named because both are governed: the rule below is what says the
+    // buying screen may not reach the renderer, and the derivation is what says
+    // the Inspector may, being a screen where nothing is signed. A list naming
+    // a file that no longer exists is a guard that fails for the wrong reason;
+    // a list naming only what is there is the guard.
     ).toEqual(
-      expect.arrayContaining(["routes/buying/Buying.tsx", "routes/protocol/Protocol.tsx"]),
+      expect.arrayContaining(["routes/buying/Buying.tsx", "routes/inspector/Inspecting.tsx"]),
     );
   });
 

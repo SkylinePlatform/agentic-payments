@@ -1,82 +1,121 @@
 import { describe, expect, it } from "vitest";
 
-import { MAX_BEHIND, PACE_MS, nextRelease, releasedNow } from "./pace";
+import { DRAIN_MS, MAX_BEHIND, MAX_GAP_MS, MIN_GAP_MS, atLeast, gapFor } from "./pace";
 
 /**
- * The ruling on pace, as properties — issue #241.
+ * The rule on pace, as properties — issue #241, rewritten by #344.
  *
- * > The screen may draw a step later than it arrived. It may never draw one
- * > that has not arrived, never draw them out of order, and never leave one
- * > undrawn without saying so.
+ * > **Whatever has arrived is on screen within `DRAIN_MS`.**
  *
- * The first two clauses are what this file holds. The third is a sentence and a
- * button on the route, and `Protocol.test.tsx` is where it is asserted.
+ * That is the whole of it, and the first test is the one that matters: it is
+ * the property the fixed 750 ms gap this replaced did **not** have, and its
+ * absence is what produced a permanent *"10 steps have arrived and are still
+ * being drawn"* — a queue growing faster than a polite constant rate could
+ * drain it.
  *
- * **What makes the reordering clause free rather than tested here** is that
- * these functions return a *count* and the caller slices a prefix. A prefix of
- * a sequence is a sequence: there is no arrangement of one that permutes,
- * inserts or invents anything. Writing a test for it would be writing a test
- * for `Array.prototype.slice`, and the property that is actually at risk — that
- * the count only ever goes forward — is the first assertion below.
+ * **What is deliberately not tested here** is that the order is the real order.
+ * These functions return a *count* and the caller slices a prefix; a prefix of a
+ * sequence is a sequence, so there is no arrangement of one that permutes,
+ * inserts or invents anything. A test for it would be a test for
+ * `Array.prototype.slice`. What is genuinely at risk is that the count only ever
+ * moves forward, which is asserted below.
  */
-describe("how fast the screen may draw what has arrived", () => {
-  it("never runs ahead of the stream", () => {
+describe("how fast the screen draws what has arrived", () => {
+  /** Runs a drain of `waiting` steps and returns every gap it spent, in order. */
+  function drainOf(waiting: number, window = DRAIN_MS): number[] {
+    const gaps: number[] = [];
+    let remaining = window;
+    for (let left = waiting; left > 0; left--) {
+      const gap = gapFor(remaining, left);
+      gaps.push(gap);
+      remaining -= gap;
+    }
+    return gaps;
+  }
+
+  it("empties any queue the cap allows inside the drain window", () => {
+    // The property, and the one the fixed gap this replaced did not have. It is
+    // asserted over a simulated drain rather than over one call, because the
+    // failure it is written against lives in the *sum*: dividing a constant
+    // window by a falling queue length satisfies the bound at every individual
+    // call and still takes 3.99 seconds over eleven steps, because the gap grows
+    // as the divisor falls — 181, 200, 222, 250, 285, 333, 400, 500, 600, 600.
+    // Dividing what is left of the window is what makes the sum come out.
+    for (let waiting = 1; waiting <= MAX_BEHIND; waiting++) {
+      const spent = drainOf(waiting).reduce((total, gap) => total + gap, 0);
+      expect(
+        spent,
+        `${String(waiting)} steps waiting must be drawn within the drain window, or the ` +
+          `queue outlives the gap between attempts and the screen is permanently behind`,
+      ).toBeLessThanOrEqual(DRAIN_MS);
+    }
+  });
+
+  it("spends one gap of about the same length throughout a drain", () => {
+    // Not exactly the same: `floor` discards a fraction per step, so the gap
+    // creeps up by a millisecond or two over eleven. What matters is that it
+    // does not *grow* in the way the constant-window version does, where the
+    // last gap is more than three times the first — the burst decelerating to a
+    // crawl exactly when a reader has learnt its rhythm.
+    const gaps = drainOf(11);
+    const slowest = Math.max(...gaps);
+    const quickest = Math.min(...gaps);
     expect(
-      releasedNow(9, 3),
+      slowest - quickest,
+      "a drain whose last steps are noticeably slower than its first is the " +
+        "constant-window bug wearing a bound that holds",
+    ).toBeLessThanOrEqual(5);
+  });
+
+  it("draws faster the further behind it is", () => {
+    // The mechanism behind the property above, and the difference from a
+    // constant stated on its own: a burst is spread thinner than a trickle.
+    expect(gapFor(DRAIN_MS, 11)).toBeLessThan(gapFor(DRAIN_MS, 4));
+    expect(gapFor(DRAIN_MS, 4)).toBeLessThan(gapFor(DRAIN_MS, 1));
+  });
+
+  it("never dawdles over a step nothing is queued behind", () => {
+    expect(
+      gapFor(DRAIN_MS, 1),
+      "a lone step waits the longest gap and no more — a screen taking longer " +
+        "than that over one step reads as a screen that has stopped",
+    ).toBe(MAX_GAP_MS);
+    expect(gapFor(DRAIN_MS, 0), "and a queue of nothing asks for nothing more than that either").toBe(
+      MAX_GAP_MS,
+    );
+  });
+
+  it("never draws two steps so close together that they read as one moment", () => {
+    // The floor is not reached inside the cap — the drain over twelve is 167ms.
+    // It is here for the cap somebody widens later, so that widening it cannot
+    // quietly turn the pacing back into the flicker it exists to prevent.
+    expect(gapFor(DRAIN_MS, 1000)).toBe(MIN_GAP_MS);
+    expect(
+      gapFor(DRAIN_MS, MAX_BEHIND),
+      "and nothing within the cap is anywhere near it, which is why the drain " +
+        "window is exact rather than approximate for every length above",
+    ).toBeGreaterThan(MIN_GAP_MS);
+  });
+
+  it("never runs ahead of the stream, and never takes a step back off the screen", () => {
+    expect(
+      atLeast(9, 3),
       "a caller holding a count from before a reconnect trimmed the log must " +
         "not be able to slice past the end of it",
     ).toBe(3);
-    expect(nextRelease(3, 3), "and a tick at the end of the stream is a no-op").toBe(3);
+    expect(
+      atLeast(5, 20),
+      "and a step already read stays read, whatever the cap would otherwise allow",
+    ).toBe(8);
   });
 
-  it("never takes a step back off the screen", () => {
+  it("lands a replay at once rather than pacing an hour of history", () => {
+    // A tab reconnecting is replayed up to 512 records. Only the live edge —
+    // the cap's worth — is ever paced.
+    expect(atLeast(0, 512)).toBe(512 - MAX_BEHIND);
     expect(
-      releasedNow(5, 20),
-      "monotone in what was already shown. A count that could fall would make a " +
-        "card that had been read disappear, which is a worse lie than any delay",
-    ).toBe(5);
-    expect(nextRelease(5, 20)).toBe(6);
-  });
-
-  it("holds nothing back when the pace is zero", () => {
-    expect(
-      releasedNow(0, 11, 0),
-      "which is what a suite asserting *what* the screen draws asks for, and " +
-        "what somebody who wants the whole purchase in a screenshot gets",
-    ).toBe(11);
-  });
-
-  it("draws a replay at once, and paces only the live edge", () => {
-    // A tab reconnecting is replayed up to 512 records. Pacing those would be a
-    // five-minute replay of something that already happened, which is theatre
-    // rather than legibility.
-    expect(releasedNow(0, 512), "everything but the cap lands immediately").toBe(512 - MAX_BEHIND);
-    expect(
-      MAX_BEHIND,
-      "and the cap is comfortably above the eleven steps one purchase emits, so " +
-        "the live edge — the only place pacing has anything to say — is never " +
-        "truncated by it",
-    ).toBeGreaterThan(11);
-  });
-
-  it("is slow enough to follow in a room and faster than the flight it starts", () => {
-    expect(
-      PACE_MS,
-      "the ask was explicit that it must not be too fast to follow; eleven steps " +
-        "at this rate draws over about eight seconds",
-    ).toBeGreaterThanOrEqual(500);
-    expect(
-      PACE_MS,
-      "and the card flight is 520ms, so a card finishes arriving before the next " +
-        "step starts — see the .lane-flight rule in styles.css",
-    ).toBeGreaterThan(520);
-  });
-
-  it("advances one step at a time from wherever the cap put it", () => {
-    expect(
-      nextRelease(0, 512),
-      "the tick after a replay draws the next one rather than starting the " +
-        "whole log again from where the count happened to be",
-    ).toBe(512 - MAX_BEHIND + 1);
+      512 - atLeast(0, 512),
+      "so what is left to draw one at a time is one attempt's worth, not the replay",
+    ).toBe(MAX_BEHIND);
   });
 });

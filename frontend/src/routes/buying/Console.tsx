@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 
-import { Shelf } from "../../catalogue/Shelf";
 import { Table } from "../../catalogue/Table";
 import { withQuantity } from "../../catalogue/quantity";
 import {
@@ -14,7 +13,6 @@ import {
 } from "../../consent/client";
 import type { Offer, Proposal, Reading } from "../../consent/model";
 import { whatItPrefers, whenItBuys } from "../../consent/model";
-import { Tracker } from "../../tracker/Tracker";
 
 /**
  * What `Consent`'s `onRefused` hands back — see that file's own comment on why
@@ -64,10 +62,19 @@ const HAPPENING: Record<Phase, string> = {
  * a row per offer the agent's search found, a quantity to type into it, and a
  * *Buy* that appends `quantity lte n` and *then* calls {@link Console.onBuy} —
  * the click ends this component's part and hands the proposal to the surface,
- * never a live "watching" screen kept open here. The mandate tracker
- * (`../../tracker/Tracker`) is independent of the table: it reads whatever
- * this console has already started, so it is worth showing regardless of
- * whether a proposal is on screen.
+ * never a live "watching" screen kept open here.
+ *
+ * **The mandate tracker used to sit at the foot of this component and is gone.**
+ * It listed every run with every attempt under it, two mandate states and a
+ * verifier's message apiece — measured against a running agent: six runs, 2626
+ * attempts, about 7900 rows — on a screen whose subject is one purchase. The two
+ * things it was kept for did not survive being looked at: its rows were not
+ * links, so "where every run stands" was a list nobody could act on, and its
+ * `ready`/`awaiting_receipt`/`spent` is a second spelling of what the lanes show
+ * as presented-then-verified. `../../runs/Earlier` is what replaced the half
+ * that was real — one line per run, and clicking one opens it — and it belongs
+ * to `Buying` rather than here, because opening a run is a move between that
+ * component's stages and this one draws only the stage before it.
  *
  * # Discovery is two calls, and the screen is built around the gap — issue #299
  *
@@ -570,8 +577,7 @@ export function Console({
                 <p className="font-sans text-sm text-ink">{preference.sentence}</p>
               )}
               <p className="font-sans text-xs text-graphite">
-                None of this is signed. The limits it read are worded by the Trusted Surface, and
-                you read them there before you sign anything.
+                Not signed. The Trusted Surface words the limits, and you read them there.
               </p>
             </div>
           )}
@@ -597,9 +603,10 @@ export function Console({
 
         Without one — every purchase under `make demo` — the rows are the whole
         catalogue and the ceiling is the person's own. That is what `stated`
-        carries into {@link Table}, and it is why `Shelf` owns the filters:
+        carries into {@link Table}, and it is why only one of them is `browsable`:
         sixty-three rows need finding in, and three rows a sentence settled on do
-        not.
+        not. The filters used to live in a `Shelf` wrapper above the table; they
+        are in its header now, so the wrapper had nothing left to be.
 
         The proposal's table wins while there is one, rather than sitting beside
         the catalogue, because a screen showing both would be offering two ways to
@@ -626,16 +633,33 @@ export function Console({
             </p>
           )}
           {catalogue !== null && (
-            <Shelf
-              offers={catalogue}
-              onChoose={(offerID, quantity, limit) => void chooseStated(offerID, quantity, limit)}
-              choosing={choosing}
-            />
+            <div className="flex flex-col gap-2" data-testid="shelf">
+              <h2 className="font-display text-sm font-medium uppercase tracking-widest text-ink">
+                What the merchant sells
+              </h2>
+              {/*
+                The one sentence that stops the prices being read as an offer
+                being made: under `make demo` there is no interpreter worth the
+                name and no sentence to type, so the limits a mandate carries are
+                entirely this person's and nothing else on the page says so.
+              */}
+              <p className="font-sans text-sm text-graphite" data-testid="shop-window">
+                Today&rsquo;s prices. What the agent may pay is yours to set, on the row you
+                choose.
+              </p>
+              <Table
+                offers={catalogue}
+                stated
+                browsable
+                onChoose={(offerID, quantity, limit) =>
+                  void chooseStated(offerID, quantity, limit)
+                }
+                choosing={choosing}
+              />
+            </div>
           )}
         </>
       )}
-
-      <Tracker />
     </section>
   );
 }

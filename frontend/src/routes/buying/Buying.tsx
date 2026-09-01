@@ -1,8 +1,10 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import type { ReactNode } from "react";
 
 import type { Proposal } from "../../consent/model";
 import { cn } from "../../lib/utils";
+import { Earlier } from "../../runs/Earlier";
 import { Consent } from "../consent/Consent";
 import { Console } from "./Console";
 import { Watching } from "./Watching";
@@ -30,11 +32,11 @@ import type { Refusal } from "./Console";
  * **The stages are sequential and never concurrent.** {@link Stage} has two
  * arms and the console is *unmounted* in the second — not disabled, not
  * greyed, not scrolled past. While the surface is asking, there is no prompt
- * box on the page, no *Interpret*, no product table and no tracker: the agent
- * has finished and the screen says so by having nothing of the agent's left to
- * touch. Side-by-side panels were the other candidate and this is why they
- * lost — two live panels is exactly the arrangement in which a person cannot
- * tell which one is asking.
+ * box on the page, no *Interpret*, no product table and no list of earlier
+ * purchases: the agent has finished and the screen says so by having nothing of
+ * the agent's left to touch. Side-by-side panels were the other candidate and
+ * this is why they lost — two live panels is exactly the arrangement in which a
+ * person cannot tell which one is asking.
  *
  * **Each region names its party, and the surface's is enclosed.** {@link Party}
  * draws a band naming who owns what is beneath it, and the surface's region is
@@ -69,7 +71,7 @@ import type { Refusal } from "./Console";
  * gone rather than kept as scaffolding for a case that cannot occur.
  */
 type Stage =
-  /** The agent's half: prompt, proposal, offers, tracker. `refusal` is set on a return. */
+  /** The agent's half: prompt, proposal, offers, earlier purchases. `refusal` is set on a return. */
   | { readonly kind: "browsing"; readonly refusal: Refusal | null }
   /** The surface's half. The console is not mounted, and the proposal is what it is asking about. */
   | { readonly kind: "consent"; readonly proposal: Proposal }
@@ -99,7 +101,20 @@ type Stage =
     };
 
 export function Buying() {
-  const [stage, setStage] = useState<Stage>({ kind: "browsing", refusal: null });
+  // `?run=` is a link to a purchase already under way — the address `/protocol`
+  // used to answer, redirected here now that there is one screen. Read once, as
+  // the opening stage: a person who then buys something else has moved on, and a
+  // query parameter that kept pulling them back would be the URL overruling what
+  // they just did.
+  const [params] = useSearchParams();
+  const [stage, setStage] = useState<Stage>(() => {
+    const asked = params.get("run");
+    return asked === null
+      ? { kind: "browsing", refusal: null }
+      : // No name: nothing on this screen knows what an older run was for, and
+        // inventing one is what #242 forbids. The lanes draw no heading for it.
+        { kind: "watching", correlationId: asked, name: "" };
+  });
 
   return (
     <section className="flex flex-col gap-8">
@@ -111,7 +126,15 @@ export function Buying() {
       </header>
 
       {stage.kind === "watching" ? (
-        <Watching correlationId={stage.correlationId} name={stage.name} />
+        <Watching
+          correlationId={stage.correlationId}
+          name={stage.name}
+          onDone={() => {
+            // Back to the shop with nothing carried over — a refusal is what
+            // `refusal` is for, and this is a purchase that went through.
+            setStage({ kind: "browsing", refusal: null });
+          }}
+        />
       ) : stage.kind === "browsing" ? (
         <Party
           name="Shopping Agent"
@@ -122,6 +145,19 @@ export function Buying() {
             refusal={stage.refusal}
             onBuy={(proposal) => {
               setStage({ kind: "consent", proposal });
+            }}
+          />
+          <Earlier
+            onOpen={(run) => {
+              // `title` and nothing else. It is the merchant's own name for
+              // what was bought, and where the merchant could not answer, this
+              // screen knows no name for an older run and draws none — the same
+              // rule `?run=` above follows, for the same reason (#242).
+              setStage({
+                kind: "watching",
+                correlationId: run.correlation_id,
+                name: run.title,
+              });
             }}
           />
         </Party>

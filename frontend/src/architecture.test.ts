@@ -557,7 +557,11 @@ describe("the frontend's architecture", () => {
         "./components/ui/button.tsx",
         "./components/ui/dialog.tsx",
         "./components/ui/tooltip.tsx",
-        "./routes/protocol/Protocol.tsx",
+        // Was `./routes/protocol/Protocol.tsx` until issue #344 folded the second
+        // screen into the first. A route component is still what this entry is
+        // for — the rules below are about what screens draw — so it names the one
+        // that is left.
+        "./routes/buying/Buying.tsx",
       ]),
     );
     expect(paths.length).toBeGreaterThan(10);
@@ -934,7 +938,7 @@ describe("the frontend's architecture", () => {
       ).toEqual(
         expect.arrayContaining([
           "./lanes/Lanes.tsx",
-          "./tracker/Tracker.tsx",
+          "./lanes/EventLog.tsx",
           "./catalogue/Table.tsx",
         ]),
       );

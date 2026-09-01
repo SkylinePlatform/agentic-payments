@@ -38,18 +38,24 @@ type listingBody struct {
 // Two offers rather than one, and they differ in category: the console is the
 // party a browser filters by shelf against, so a fixture with one category could
 // not tell a field that travels from a field that is dropped.
+// A floor on every one, because the merchant sets one on every one: an offer
+// without it is not a shelf this shop could produce, and the fixture that left
+// it out went out with an empty currency and was refused by the decoder — which
+// is the schema doing its job. Issue #344.
 func shelf() []agent.Offer {
 	return []agent.Offer{
 		{
 			ID: "gtin:05012345678900", Category: "bicycles",
 			Title: "Vitesse Urbain 7", Retailer: "Sever Cycles",
 			Price: generated.Amount{Amount: 45000, Currency: "USD"},
+			Floor: generated.Amount{Amount: 38000, Currency: "USD"},
 			Step:  0, Final: false,
 		},
 		{
 			ID: "route:BEG-PMI", Category: "flights",
 			Title: "Belgrade → Palma de Mallorca", Retailer: "Adria Wings",
 			Price: generated.Amount{Amount: 24000, Currency: "USD"},
+			Floor: generated.Amount{Amount: 18900, Currency: "USD"},
 			Step:  0, Final: false,
 		},
 	}

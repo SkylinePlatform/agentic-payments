@@ -1,7 +1,8 @@
 # Three-lane view: the digest as spine
 
 **Date:** 2026-08-06
-**Status:** the screen is built. `/protocol` draws the three columns, the digest
+**Status:** the screen is built. It is `/` since #344 — `/protocol` redirects
+there, carrying `?run=` — and draws the three columns, the digest
 spine and the event log beneath them — `/lanes` until #216, which also folded the
 Mandate Inspector into it as a panel an attempt opens, and made the screen honour
 `?run=`; the *Tokens* revision landed with #159.
@@ -174,6 +175,15 @@ where the two compete is not disturbed by any of them.
   inside the bound is still several times the column, and an `<h2>` that
   overflows takes the whole document into a horizontal scroll, three-lane grid
   included.
+
+**Attempts are drawn newest first**, revised 2026-09-01 (#344). This said *in
+the order they happened — the watch's story is a refusal followed by a purchase,
+and reversing it would put the ending first*, which is true of a two-attempt run
+and false of the ones this screen shows: a watch waiting on a price the schedule
+has not reached runs to dozens of attempts, and chronological order puts what is
+happening *now* below all of them, further down with every tick. The ending is
+only a spoiler when there is an ending. The numbering still counts the order they
+happened in, so *Attempt 1 of 62* is still the first.
 
 **The repetition on the cards stays.** It is redundant *within* one attempt by
 construction — `split` in `lanes/model.ts` cuts a new attempt precisely when a
@@ -721,6 +731,16 @@ element itself is specified.
 
 ### Two voices, one brand: what may differ
 
+*Revised 2026-09-01 (#344): the two voices are on one screen now.* They were on
+two routes — #216 made each nav heading a screen on this section's own argument —
+and routing turned out to be the wrong way to keep them apart. A person following
+one purchase changed address at the moment it started, and again to see what the
+roles emitted, losing their place both times; the two screens were never looking
+at different things, only at the same watch with different amounts of it visible.
+The event log is a disclosure on the buying screen now, and the voices stay apart
+by being separately titled. Everything below is unchanged and is what keeps them
+apart.
+
 The lanes teach a protocol; the console serves a buyer. **Density may differ.**
 The lanes draw a pair for every attempt and repeat the digest on every card,
 because a reader is being taught to check it. The console draws one pair per run
@@ -1127,13 +1147,15 @@ running; jsdom computes no layout and no test could have caught it.
 
 **Neither is the page moving underneath it, which is the same defect in the
 other axis and was found the same way.** Anything above the lanes that grows or
-shrinks moves every card together: the *Pacing* notice being removed when the
-last held step is drawn, the *Purchases in the log* row arriving with a second
-transaction, the gap banner, an earlier attempt gaining a card. The pacing
-notice is the one that made it unmissable, because it is not an edge — it goes
-away at the end of *every* paced run, so the demonstration ended with the whole
-board twitching: seven cards across all three lanes, `dx=0 dy=38`, none of which
-had hopped. The fix is to measure each card **inside its own grid** rather than
+shrinks moves every card together: the *Purchases in the log* row arriving with
+a second transaction, the gap banner, an earlier attempt gaining a card. The one
+that made it unmissable is one #344 has since deleted, and the account is worth
+keeping even though the example is gone — the *Pacing* notice was removed when
+the last held step was drawn, which is not an edge but the end of *every* paced
+run, so the demonstration finished with the whole board twitching: seven cards
+across all three lanes, `dx=0 dy=38`, none of which had hopped. What went is the
+notice rather than the pacing, which is bounded now and has nothing to announce.
+The three above are still live. The fix is to measure each card **inside its own grid** rather than
 inside the viewport, so a shift that moves the origin and the card by the same
 amount reads as nothing. That is the right answer rather than a suppression: the
 browser has already redrawn the header, the prose and the log instantly at their
@@ -1159,32 +1181,57 @@ on the cards, each of which names every party that held it.
 
 The demonstration's own steps land within a tenth of a second of each other —
 measured on `make demo` — so a faithful rendering of one purchase is a flicker on
-a screen whose one job is to teach. The ruling, and it is a ruling rather than a
-preference:
+a screen whose one job is to teach. This section used to answer that with a
+ruling in three clauses:
 
 > **The screen may draw a step later than it arrived. It may never draw one that
 > has not arrived, never draw them out of order, and never leave one undrawn
 > without saying so.**
 
-A presentation choosing to be legible is not a presentation telling a lie,
-*provided the order is the real order and the screen admits it is behind*. Both
-clauses are mechanical:
+Two of those were mechanical and still are: `pace.ts` returns a **count** and the
+caller draws `records.slice(0, count)`, so reordering is not expressible — a
+prefix of a sequence is a sequence — and the count only moves forward, so a step
+already read cannot come off the screen.
 
-- **It is a count and a prefix, so reordering is not expressible.** `pace.ts`
-  returns how many records may be on screen and the caller shows
-  `records.slice(0, count)`. A prefix of a sequence is a sequence: there is no
-  arrangement of one that permutes, inserts or invents anything. The count is
-  monotone, so a step already read cannot come off the screen either.
-- **The route says how far behind it is**, with a control that ends the wait.
-  A viewer who cannot tell a paced screen from a stalled one, or from a stack
-  that has stopped emitting, is being told something false about the run.
+**The third clause is where it went wrong, and issue #344 is the correction.**
+The gap was a constant, 750ms per step whatever was waiting. Eleven steps at that
+rate is 8.25 seconds of drawing, the merchant produces an attempt every three to
+six seconds, and so the queue grew without bound. The notice that made the third
+clause true — *"10 steps have arrived and are still being drawn"*, with a control
+to end the wait — became permanent, which is the clause satisfied to the letter
+and defeated in substance: a notice that is always on screen is indistinguishable
+from a stalled one, and it is the *permanence* that says so rather than the
+wording. Eleven steps collapsed into a number is also the opposite of what pacing
+is for. The reader was handed a count instead of the steps.
 
-Two numbers, both in `pace.ts` with their reasoning: 750ms between steps, which
-draws one purchase over about eight seconds and is longer than the 520ms card
-flight so that a card finishes arriving before the next step starts; and a cap of
-16, above the eleven one purchase emits, so a reconnect's 512-record replay lands
-at once and only the live edge is ever paced. Replaying an hour of history at
-presentation speed is theatre rather than legibility.
+Two answers were tried and abandoned before the third. Widening `-step` to outrun
+the drawing slows the demonstration to protect a screen behaviour, which is the
+tail wagging the dog. Deleting the pacing outright makes every step honest and
+the burst unreadable — a flicker again, which is where this section started.
+
+**What replaced the notice is a bound.** The rule now:
+
+> **Whatever has arrived is on screen within `DRAIN_MS` of arriving.**
+
+The gap is what is left of that window divided by what is left to draw, so a lone
+step appears at once, a burst of eleven is spread about 180ms apart, and either
+way the queue is empty before the next attempt begins. Dividing the *remaining*
+window rather than a constant is what makes the gap flat across a drain instead
+of growing as the divisor falls — the obvious version takes 3.99 seconds over
+eleven steps while satisfying its bound at every individual call, and
+`pace.test.ts` simulates a whole drain rather than one gap for exactly that
+reason.
+
+The bound is the better instrument for the job the notice had. A screen that is
+never more than two seconds behind cannot be mistaken for a stalled one, because
+two seconds of nothing *is* nothing happening — and unlike a sentence somebody
+has to read, a bound is a property a test can hold.
+
+Two numbers beside it, both in `pace.ts` with their reasoning: a longest gap of
+600ms, so a screen with nothing queued does not dawdle; and a cap of 12 — one
+attempt's eleven and one — so a reconnect's 512-record replay lands at once and
+only the live edge is ever paced. Replaying an hour of history at presentation
+speed is theatre rather than legibility.
 
 **The event log is paced with the lanes rather than against them**, from one
 count, so the whole screen is always showing one consistent prefix. The

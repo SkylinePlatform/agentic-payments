@@ -8,7 +8,7 @@
  * components, on a branch of its own separate from the one that moved the
  * colours — the face declarations below were never the part that had to
  * change; which content reaches for which face is decided at each call site
- * under `src/lanes`, `src/inspector`, `src/tracker` and `src/routes/consent`.
+ * under `src/lanes`, `src/inspector`, `src/runs` and `src/routes/consent`.
  * This file is where the colours become something a machine can check: every
  * colour the app is allowed to use is declared once, in one block, and
  * `src/architecture.test.ts` reads that block back out — the same file also
@@ -158,7 +158,7 @@
    * revised: mono is a utility voice again and the sans is no longer support.
    * The declarations themselves are unchanged — which content asks for which
    * face is a `className` on a component, and every call site under
-   * `src/lanes`, `src/inspector`, `src/tracker` and `src/routes/consent` now
+   * `src/lanes`, `src/inspector`, `src/runs` and `src/routes/consent` now
    * agrees with what is written here.
    */
   --font-*: initial;
@@ -263,10 +263,15 @@
  * back where it was; the duration and the curve are here, beside the palette,
  * because a design token is a design token whether it is a colour or a time.
  *
- * Half a second, against the 750ms `PACE_MS` puts between steps: a card
- * finishes arriving before the next one starts, which is the whole of what
- * "slowly enough to follow in a room" asks for. The ease is fast out and slow
- * in, so the eye is caught by the departure and led to the destination.
+ * Half a second, and it is now the longer of the two numbers rather than the
+ * shorter. It used to sit inside a fixed 750ms between steps, so a card
+ * finished arriving before the next one started; #344 replaced that with a
+ * bounded drain (`lanes/pace.ts` has the arithmetic and why the fixed gap
+ * failed), where a burst of eleven comes out about 180ms apart. A card is
+ * therefore still in flight when the next one leaves, which is a deliberate
+ * trade rather than an oversight: the alternative was a queue that never
+ * emptied. The ease is fast out and slow in, so the eye is caught by the
+ * departure and led to the destination.
  *
  * Nothing on screen depends on it. Every fact this animation carries is written
  * on the card in words — the party that has the document, the parties that had

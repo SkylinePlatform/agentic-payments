@@ -1,4 +1,4 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { Shell } from "./layout/Shell";
 import { NotFound } from "./routes/NotFound";
@@ -29,9 +29,22 @@ export function App() {
               <Route key={surface.path} path={surface.path} element={surface.element} />
             ),
           )}
+          {/*
+            Where the second screen used to be. It is one screen now — see
+            surfaces.tsx — and this keeps every link to `/protocol?run=…` working
+            by carrying the query across rather than dropping the reader on the
+            newest purchase instead of theirs.
+          */}
+          <Route path="protocol" element={<ToTheOneScreen />} />
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>
     </ThemeProvider>
   );
+}
+
+/** `/protocol?run=…` → `/?run=…`, query intact. */
+function ToTheOneScreen() {
+  const { search } = useLocation();
+  return <Navigate to={{ pathname: "/", search }} replace />;
 }

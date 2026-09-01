@@ -102,10 +102,12 @@ export const UNREADABLE = "not a status this build knows";
  * table has never heard of has to be *recognisable as unknown* rather than
  * indexed into `undefined` and rendered as nothing.
  *
- * It lived in `tracker/model.ts` until #183, and moved here with `StatusMeta`
- * because the fallback it returns is a vocabulary decision — the one row of the
- * spec's table that names no axis — rather than something the mandate tracker
- * happens to need.
+ * It lived in the mandate tracker's `model.ts` until #183, and moved here with
+ * `StatusMeta` because the fallback it returns is a vocabulary decision — the
+ * one row of the spec's table that names no axis — rather than something that
+ * one screen happened to need. #344 deleted the screen and this is still here,
+ * which is the move having been the right one: `runs/model.ts` and
+ * `lanes/EventLog.tsx` both call it.
  */
 export function totalStatus<K extends string>(
   known: readonly K[],

@@ -1,7 +1,70 @@
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 import type { Offer } from "../consent/model";
 import { formatAmount, minorUnitDigits, toMajorUnits, toMinorUnits } from "../protocol";
+
+/**
+ * How many rows a page holds.
+ *
+ * Ten, which is what fits a laptop screen beside the consent zone without the
+ * table becoming the whole page. The catalogue is sixty-three rows; drawing all
+ * of them put everything under the table two screens down, so a person looking
+ * for what their signature is doing had to scroll past a shop to find it.
+ *
+ * Not configurable. A control for it would be a fourth thing to set on a screen
+ * whose subject is the three that are already there.
+ */
+const PAGE = 10;
+
+/** The columns a reader can put this table in order by, and what each compares. */
+const SORTS = {
+  title: (a: Offer, b: Offer) => a.title.localeCompare(b.title),
+  retailer: (a: Offer, b: Offer) => a.retailer.localeCompare(b.retailer),
+  price: (a: Offer, b: Offer) => a.price.amount - b.price.amount,
+} as const;
+
+type SortColumn = keyof typeof SORTS;
+
+/**
+ * What the table is filtered and ordered by, all of it set in the header.
+ *
+ * **Inline rather than a bank of controls above the table**, which is what this
+ * replaced. A shelf chip row, an order chip row and a search box sat over the
+ * header in a strip of their own: three groups of buttons naming columns that
+ * were already named a few pixels below them, and none of them beside the thing
+ * it acted on. A filter belongs in the column it filters — then the header says
+ * what the column is *and* how to narrow it, and there is one place to look
+ * rather than two.
+ */
+type Browsing = {
+  readonly title: string;
+  readonly retailer: string;
+  readonly shelf: string;
+  readonly sort: SortColumn | null;
+  /** True for A→Z and cheapest-first, which is what one click gives. */
+  readonly ascending: boolean;
+};
+
+const UNBROWSED: Browsing = { title: "", retailer: "", shelf: "", sort: null, ascending: true };
+
+/** Applies a reader's narrowing and ordering, in that order. */
+function browse(offers: readonly Offer[], b: Browsing): readonly Offer[] {
+  const like = (value: string, needle: string) =>
+    needle.trim() === "" || value.toLowerCase().includes(needle.trim().toLowerCase());
+
+  const kept = offers.filter(
+    (o) =>
+      like(o.title, b.title) &&
+      like(o.retailer, b.retailer) &&
+      (b.shelf === "" || o.category === b.shelf),
+  );
+  if (b.sort === null) return kept;
+
+  // A copy, because `offers` is the caller's and sorting in place would reorder
+  // the catalogue a screen above still holds.
+  const ordered = [...kept].sort(SORTS[b.sort]);
+  return b.ascending ? ordered : ordered.reverse();
+}
 
 /**
  * The product table — #109's second slice.
@@ -55,8 +118,9 @@ export function Table({
   stated,
   onChoose,
   choosing,
+  browsable,
 }: {
-  /** The rows to draw, already filtered and ordered by whoever owns them. */
+  /** Everything there is to draw. This component narrows and pages it. */
   readonly offers: readonly Offer[];
   /**
    * Whether the buyer sets the limit on each row — issue #314.
@@ -86,46 +150,160 @@ export function Table({
    * screen the first is about to replace.
    */
   readonly choosing: string | null;
+  /**
+   * Whether the header carries filters, sort controls and paging.
+   *
+   * Off for the handful of rows a sentence settled on — three candidates need no
+   * finding in — and on for the catalogue, which is sixty-three. It used to be a
+   * separate component, `Shelf`, wrapping this one with a strip of chips above
+   * it; the controls are in the header now, so the wrapper had nothing left to
+   * be.
+   */
+  readonly browsable?: boolean;
 }) {
+  const [browsing, setBrowsing] = useState<Browsing>(UNBROWSED);
+  const [page, setPage] = useState(0);
+  const set = (patch: Partial<Browsing>) => {
+    setBrowsing((held) => ({ ...held, ...patch }));
+    // Any narrowing or reordering makes the page number a claim about a list
+    // that no longer exists — page 4 of a filter matching two rows is an empty
+    // table with no reason on it.
+    setPage(0);
+  };
+
+  const shelves = useMemo(
+    () => [...new Set(offers.map((o) => o.category).filter(isPresent))].sort(),
+    [offers],
+  );
+  const shown = useMemo(
+    () => (browsable === true ? browse(offers, browsing) : offers),
+    [offers, browsing, browsable],
+  );
+
+  const pages = Math.max(1, Math.ceil(shown.length / PAGE));
+  // Clamped rather than stored: deleting a filter can shorten the list under a
+  // page that was valid when it was set, and a page past the end draws nothing.
+  const current = Math.min(page, pages - 1);
+  const rows = browsable === true ? shown.slice(current * PAGE, current * PAGE + PAGE) : shown;
+
+  const sortBy = (column: SortColumn) => {
+    // One click orders by this column; a second reverses it; a third puts the
+    // merchant's own order back. Three states rather than two, because "as the
+    // shop listed it" is a real answer and a toggle cannot return to it.
+    if (browsing.sort !== column) return set({ sort: column, ascending: true });
+    if (browsing.ascending) return set({ sort: column, ascending: false });
+    return set({ sort: null, ascending: true });
+  };
+
   return (
-    <table className="w-full border-collapse text-left" data-testid="product-table">
-      <thead>
-        <tr className="border-b border-graphite/40">
-          <th className="sr-only">Image</th>
-          <th className="py-2 pr-3 font-sans text-xs uppercase tracking-widest text-graphite">
-            Offer
-          </th>
-          <th className="py-2 pr-3 font-sans text-xs uppercase tracking-widest text-graphite">
-            Retailer
-          </th>
-          <th className="py-2 pr-3 font-sans text-xs uppercase tracking-widest text-graphite">
-            Price
-          </th>
-          <th className="py-2 pr-3 font-sans text-xs uppercase tracking-widest text-graphite">
-            Quantity
-          </th>
-          {stated && (
+    <div className="flex flex-col gap-3">
+      <table className="w-full border-collapse text-left" data-testid="product-table">
+        <thead>
+          <tr className="border-b border-graphite/40">
+            <th className="sr-only">Image</th>
+            <SortableHeader
+              label="Offer"
+              column="title"
+              browsing={browsing}
+              onSort={sortBy}
+              sortable={browsable === true}
+            />
+            {browsable === true && (
+              <th className="py-2 pr-3 font-sans text-xs uppercase tracking-widest text-graphite">
+                Shelf
+              </th>
+            )}
+            <SortableHeader
+              label="Retailer"
+              column="retailer"
+              browsing={browsing}
+              onSort={sortBy}
+              sortable={browsable === true}
+            />
+            <SortableHeader
+              label="Price"
+              column="price"
+              browsing={browsing}
+              onSort={sortBy}
+              sortable={browsable === true}
+            />
             <th className="py-2 pr-3 font-sans text-xs uppercase tracking-widest text-graphite">
-              Your limit, in total
+              Quantity
             </th>
+            {stated && (
+              <th className="py-2 pr-3 font-sans text-xs uppercase tracking-widest text-graphite">
+                Your limit, in total
+              </th>
+            )}
+            <th className="sr-only">Buy</th>
+          </tr>
+          {browsable === true && (
+            <tr className="border-b border-graphite/40" data-testid="filters">
+              <td />
+              <FilterCell
+                label="Filter by offer"
+                value={browsing.title}
+                onChange={(title) => set({ title })}
+              />
+              <td className="py-2 pr-3">
+                <ShelfFilter
+                  shelves={shelves}
+                  value={browsing.shelf}
+                  onChange={(shelf) => set({ shelf })}
+                />
+              </td>
+              <FilterCell
+                label="Filter by retailer"
+                value={browsing.retailer}
+                onChange={(retailer) => set({ retailer })}
+              />
+              <td />
+              <td />
+              {stated && <td />}
+              {/* Buy. A filter row one cell short of its header is a row the
+                  browser stretches, which is half of what put every body cell
+                  under the wrong heading. */}
+              <td />
+            </tr>
           )}
-          <th className="sr-only">Buy</th>
-        </tr>
-      </thead>
-      <tbody>
-        {offers.map((offer) => (
-          <Row
-            key={offer.id}
-            offer={offer}
-            busy={choosing === offer.id}
-            blocked={choosing !== null && choosing !== offer.id}
-            stated={stated}
-            onBuy={(quantity, limit) => onChoose(offer.id, quantity, limit)}
+        </thead>
+        <tbody>
+          {rows.map((offer) => (
+            <Row
+              key={offer.id}
+              offer={offer}
+              busy={choosing === offer.id}
+              blocked={choosing !== null && choosing !== offer.id}
+              stated={stated}
+              showShelf={browsable === true}
+              onBuy={(quantity, limit) => onChoose(offer.id, quantity, limit)}
+            />
+          ))}
+        </tbody>
+      </table>
+
+      {browsable === true &&
+        (shown.length === 0 ? (
+          // An empty result is a sentence rather than an empty table, on the rule
+          // this application applies to every other absence: a header with no
+          // rows reads as a shop that has nothing, and the reason it is empty — a
+          // filter this person set — is what a reader needs to be told.
+          <p className="font-sans text-sm text-ink" data-testid="nothing-matches">
+            Nothing matches those filters. Clear one to see more.
+          </p>
+        ) : (
+          <Paging
+            first={current * PAGE + 1}
+            last={Math.min((current + 1) * PAGE, shown.length)}
+            total={shown.length}
+            page={current}
+            pages={pages}
+            onPage={setPage}
           />
         ))}
-      </tbody>
-    </table>
+    </div>
   );
+
 }
 
 /** Parses what the quantity box holds into a purchasable count, never fewer than one. */
@@ -135,44 +313,35 @@ function parsedQuantity(raw: string): number {
 }
 
 /**
- * What the limit box starts at: the offer's price rounded down to its leading
- * digit — 450.00 becomes 400.00, 240.00 becomes 200.00, 1,459.00 becomes
- * 1,000.00.
+ * What the limit box starts at: the lowest price this offer's schedule ever
+ * quotes, times how many are being bought.
  *
- * **It starts below the price on purpose, and that is a teaching decision rather
- * than a default.** A limit at or above today's price is an instruction to buy
- * now, and a table that opened that way would make the first purchase anybody
- * tries an immediate one — which is the case Human Not Present has nothing to say
- * about. Starting under it means the ordinary first run shows the thing the
- * screen exists for: an authorisation signed for a price that cannot be met yet,
- * sitting there until it can.
+ * **The floor and not a fraction of today's price**, and issue #344 is the
+ * difference. This used to round the price in front of it down to its leading
+ * digit — 450.00 to 400.00, 139.00 to 100.00 — which is a number a person would
+ * have typed and, for forty-one of the sixty-three offers shipped, one **no
+ * price they reach could ever meet**. The schedules move about a tenth; a
+ * leading-digit round cuts nearly a third. A watch opened that way refuses
+ * correctly, forever, and settles nothing.
  *
- * **One leading digit rather than two**, and the difference is the whole point.
- * Two significant figures gives 440.00 for a 450.00 offer, which is a number
- * somebody computed; one gives 400.00, which is a number a person would have
- * typed. It costs a larger drop on prices just past a power of ten — 1,459.00
- * opens at 1,000.00 — and that is the right side to err on: this is a suggestion
- * in an editable box, and a suggestion that waits is more use than one that buys.
+ * At the floor every offer reads the same way: refused at the opening price,
+ * bought when the schedule comes back down to it. That is the case Human Not
+ * Present exists for, and it is now the ordinary first run rather than a lucky
+ * one — while an unreachable limit stays a thing a person can *type*, which is
+ * the point of the box.
  *
- * **A price already on its leading digit steps down one order further**, because
- * rounding it down would return the price itself. 100.00 opens at 90.00 rather
- * than at nothing.
+ * **Times the quantity**, because the constraint bounds the line total and not
+ * the unit price — issue #298, and the same reason `total` is computed two cells
+ * to the left. A limit of one ladder's floor against three ladders is a
+ * suggestion that cannot buy.
  *
- * Never below one minor unit: the agent refuses a limit of zero, and a box that
- * opened on a value the Buy button would reject is a control that is broken
- * before it is touched.
+ * Falls back to the price when the merchant sent no floor, which is a response
+ * that predates #344: an offer priced at what it costs is a limit that buys now,
+ * and that is a better failure than a box that opens empty.
  */
-export function openingLimit(price: number): number {
-  if (!Number.isSafeInteger(price) || price <= 1) return 1;
-  // The digit count rather than `Math.log10`, which the ECMAScript spec does not
-  // require to be exactly rounded: an engine answering 2.9999999999999996 for
-  // log10(1000) would give a step of 100 and open the box *at* the price, which
-  // is the one thing this function's own comment says must never happen. A
-  // string's length is exact on every engine, and `price` is an integer number of
-  // minor units by construction.
-  const step = 10 ** (String(price).length - 1);
-  const rounded = Math.floor(price / step) * step;
-  return Math.max(1, rounded === price ? price - Math.max(1, step / 10) : rounded);
+export function openingLimit(offer: Offer, quantity: number): number {
+  const floor = offer.price_floor ?? offer.price;
+  return Math.max(1, floor.amount * Math.max(1, quantity));
 }
 
 /**
@@ -212,6 +381,7 @@ function Row({
   busy,
   blocked,
   stated,
+  showShelf,
   onBuy,
 }: {
   readonly offer: Offer;
@@ -221,6 +391,8 @@ function Row({
   readonly blocked: boolean;
   /** Whether this row carries a limit box — see {@link Table}. */
   readonly stated: boolean;
+  /** Whether the header has a Shelf column for this row to fill. */
+  readonly showShelf: boolean;
   readonly onBuy: (quantity: number, limit: number | null) => void;
 }) {
   // The box's own text, not the parsed number: a controlled input that
@@ -234,9 +406,15 @@ function Row({
   const digits = minorUnitDigits(offer.price.currency);
   // The limit box's own text, on the quantity box's reasoning: a controlled
   // input that rewrote a half-typed number would fight anybody clearing it.
-  const [limitRaw, setLimitRaw] = useState(() =>
-    toMajorUnits({ ...offer.price, amount: openingLimit(offer.price.amount) }).toFixed(digits),
-  );
+  const suggested = (count: number) =>
+    toMajorUnits({ ...offer.price, amount: openingLimit(offer, count) }).toFixed(digits);
+  const [limitRaw, setLimitRaw] = useState(() => suggested(1));
+  // Whether the limit is still this screen's suggestion or the buyer's own
+  // number. Until it is theirs the box follows the quantity, because the limit
+  // bounds the line total (#298) and a floor for one is not a floor for three;
+  // once they have typed, nothing here overwrites it — the whole point of the
+  // box is that the limit is theirs.
+  const [limitIsMine, setLimitIsMine] = useState(false);
   const quantityId = useId();
   const limitId = useId();
 
@@ -295,6 +473,17 @@ function Row({
           <p className="font-sans text-xs text-graphite">may still change</p>
         )}
       </td>
+      {/*
+        The shelf, and it is here because the header has always been able to
+        name a column the body did not fill. Issue #344 added *Shelf* to the
+        header and a filter under it and left the rows at seven cells against
+        eight headings — so every cell from Retailer rightwards drew one column
+        to the left of the word naming it, and Buy sat under *Your limit*. A
+        header cell with no body cell is not a narrow column; it is an offset.
+      */}
+      {showShelf && (
+        <td className="py-3 pr-3 font-sans text-sm text-graphite">{offer.category}</td>
+      )}
       <td className="py-3 pr-3 font-sans text-graphite">{offer.retailer}</td>
       <td className="py-3 pr-3 font-sans text-ink">
         {formatAmount(offer.price)}
@@ -321,7 +510,10 @@ function Row({
           step={1}
           value={raw}
           disabled={inert}
-          onChange={(event) => setRaw(event.target.value)}
+          onChange={(event) => {
+            setRaw(event.target.value);
+            if (!limitIsMine) setLimitRaw(suggested(parsedQuantity(event.target.value)));
+          }}
           className="w-16 border border-graphite/40 bg-paper px-2 py-1 font-sans text-sm text-ink disabled:opacity-50"
         />
       </td>
@@ -340,7 +532,10 @@ function Row({
             step={1 / 10 ** digits}
             value={limitRaw}
             disabled={busy || blocked}
-            onChange={(event) => setLimitRaw(event.target.value)}
+            onChange={(event) => {
+              setLimitRaw(event.target.value);
+              setLimitIsMine(true);
+            }}
             className="w-24 border border-graphite/40 bg-paper px-2 py-1 font-sans text-sm text-ink disabled:opacity-50"
           />
           {/*
@@ -397,4 +592,279 @@ function Row({
       </td>
     </tr>
   );
+}
+
+function isPresent(value: string | undefined): value is string {
+  return value !== undefined && value !== "";
+}
+
+/**
+ * A column label that is also the control for ordering by it.
+ *
+ * The label *is* the button, rather than a caret beside it: the whole header
+ * cell is the target, which is the difference between a control a reader finds
+ * and one they hit. `aria-sort` is what carries the state to a screen reader —
+ * the arrow is a mark, and #185's rule is that a mark is never the only carrier.
+ */
+function SortableHeader({
+  label,
+  column,
+  browsing,
+  onSort,
+  sortable,
+}: {
+  readonly label: string;
+  readonly column: SortColumn;
+  readonly browsing: Browsing;
+  readonly onSort: (column: SortColumn) => void;
+  readonly sortable: boolean;
+}) {
+  const on = browsing.sort === column;
+  const cell = "py-2 pr-3 font-sans text-xs uppercase tracking-widest text-graphite";
+
+  if (!sortable) return <th className={cell}>{label}</th>;
+
+  return (
+    <th className={cell} aria-sort={on ? (browsing.ascending ? "ascending" : "descending") : "none"}>
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        className="flex items-center gap-1 uppercase tracking-widest hover:text-ink"
+      >
+        {label}
+        {/*
+          A triangle drawn out of borders, and neither a character nor an `<svg>`.
+
+          ▲ and ▼ are outside the font subset this application ships, which is
+          issue #190's whole finding — `src/status/architecture.test.ts` caught
+          them here on the first run, and a character served by whatever fallback
+          the reader happens to have is a different weight and a different
+          baseline per machine, with tofu where the block is missing.
+
+          An `<svg>` would need `status/Status.tsx`'s permission, and the argument
+          for widening that list is available — a sort arrow says what a click
+          will do rather than what a verifier decided, exactly as the dialog's
+          close cross does. It is not taken, because borders need no permission
+          at all and there is nothing here a path would draw better.
+        */}
+        <span
+          aria-hidden="true"
+          className={
+            "size-0 border-x-4 border-x-transparent " +
+            (on && !browsing.ascending ? "border-t-4 " : "border-b-4 ") +
+            (on ? (browsing.ascending ? "border-b-ink" : "border-t-ink") : "border-b-graphite/40")
+          }
+        />
+      </button>
+    </th>
+  );
+}
+
+/** A text filter, living in the column it narrows. */
+function FilterCell({
+  label,
+  value,
+  onChange,
+}: {
+  readonly label: string;
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+}) {
+  const id = useId();
+  return (
+    <td className="py-2 pr-3">
+      <label htmlFor={id} className="sr-only">
+        {label}
+      </label>
+      <input
+        id={id}
+        type="search"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full min-w-24 border border-graphite/40 bg-paper px-2 py-1 font-sans text-sm text-ink"
+      />
+    </td>
+  );
+}
+
+/**
+ * The shelf filter, as a select rather than the chip row it replaced.
+ *
+ * A closed set of six or seven values a reader picks one of is what a select is
+ * for, and it costs one line of the header instead of a wrapped row of buttons
+ * above it. The chips were legible and they were also the widest thing on the
+ * screen for a control most people use once.
+ */
+function ShelfFilter({
+  shelves,
+  value,
+  onChange,
+}: {
+  readonly shelves: readonly string[];
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+}) {
+  const id = useId();
+  return (
+    <>
+      <label htmlFor={id} className="sr-only">
+        Filter by shelf
+      </label>
+      <select
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full min-w-24 border border-graphite/40 bg-paper px-2 py-1 font-sans text-sm text-ink"
+      >
+        <option value="">Every shelf</option>
+        {shelves.map((shelf) => (
+          <option key={shelf} value={shelf}>
+            {shelf}
+          </option>
+        ))}
+      </select>
+    </>
+  );
+}
+
+/**
+ * Which rows are on screen, and the way to the rest.
+ *
+ * The count is stated rather than left to the buttons, because a table showing
+ * ten of sixty-three with no number on it reads as a shop with ten things in
+ * it — which is the same failure the empty-result sentence beside it exists to
+ * prevent, one state along.
+ *
+ * # A page can be typed as well as stepped to
+ *
+ * *Previous* and *Next* are six presses from one end of the catalogue to the
+ * other, and a demonstration is exactly where somebody wants row forty now. The
+ * box takes a page number and goes there.
+ *
+ * **It is a `number` input in a `form`**, which is two decisions rather than
+ * one. The form is what makes Enter submit — the key anybody typing a number in
+ * a box will press — without this component listening for a keystroke and
+ * deciding what it meant. The number type is what asks a phone for a numeric
+ * keypad, and it is deliberately not trusted to *validate*: browsers disagree
+ * about what they let through, so {@link jumped} parses and clamps whatever
+ * arrives.
+ *
+ * **The *Go* button is not decoration and not only for the mouse.** A form
+ * submits on Enter by itself only where the browser implements implicit
+ * submission, and jsdom does not — so without a submit button the keyboard path
+ * is one no test in this repository can drive, and a control that cannot be
+ * tested is a control nobody notices breaking. It also makes the box's purpose
+ * legible: a lone number field beside two buttons is a thing whose effect you
+ * have to guess at.
+ *
+ * **There is no `min` or `max` on the box, and that is the clamp's doing.**
+ * Constraint validation blocks a form from submitting at all while a value is
+ * out of range, so a `max` here would mean typing 99 into a seven-page
+ * catalogue produced a browser tooltip and no movement — and {@link jumped}'s
+ * clamp, which reads 99 as *the end*, would be code that never runs. Two
+ * answers to one question, with the worse one winning silently. The bound is
+ * stated to a reader as *of 7* beside the box instead.
+ *
+ * **The box is uncontrolled between submissions.** A controlled input would
+ * make every keystroke a state change in the table above, and mid-typing a
+ * value is not a page anybody asked for — typing `12` past a nine-page
+ * catalogue would jump to page 1 on the way. So it holds its own text and the
+ * table learns nothing until the form is submitted.
+ */
+function Paging({
+  first,
+  last,
+  total,
+  page,
+  pages,
+  onPage,
+}: {
+  readonly first: number;
+  readonly last: number;
+  readonly total: number;
+  readonly page: number;
+  readonly pages: number;
+  readonly onPage: (page: number) => void;
+}) {
+  const step =
+    "border border-graphite/40 px-2 py-1 font-sans text-xs text-ink hover:bg-wash " +
+    "disabled:border-graphite/20 disabled:text-graphite/40 disabled:hover:bg-transparent";
+
+  return (
+    <div className="flex flex-wrap items-center gap-3" data-testid="paging">
+      <p className="font-sans text-xs text-graphite">
+        {first}–{last} of {total}
+      </p>
+      <button type="button" onClick={() => onPage(page - 1)} disabled={page === 0} className={step}>
+        Previous
+      </button>
+      <button
+        type="button"
+        onClick={() => onPage(page + 1)}
+        disabled={page >= pages - 1}
+        className={step}
+      >
+        Next
+      </button>
+      {pages > 1 && (
+        <form
+          className="flex items-center gap-2"
+          onSubmit={(submitted) => {
+            submitted.preventDefault();
+            const box = submitted.currentTarget.elements.namedItem("page");
+            if (!(box instanceof HTMLInputElement)) return;
+            const asked = jumped(box.value, pages);
+            if (asked !== null) onPage(asked);
+            // Cleared either way. The box says where to go, and a number left
+            // sitting in it after the table has moved says where you are —
+            // which the sentence to its left already says, and would contradict
+            // the moment *Next* was pressed.
+            box.value = "";
+          }}
+        >
+          <label
+            htmlFor="page-jump"
+            className="font-sans text-xs whitespace-nowrap text-graphite"
+          >
+            Go to page
+          </label>
+          <input
+            id="page-jump"
+            name="page"
+            type="number"
+            // The page a reader is on, as a hint rather than a value — see the
+            // note above on why the box is uncontrolled.
+            placeholder={String(page + 1)}
+            aria-describedby="page-of"
+            className="w-16 border border-graphite/40 bg-paper px-2 py-1 font-sans text-xs text-ink"
+          />
+          <span id="page-of" className="font-sans text-xs whitespace-nowrap text-graphite">
+            of {pages}
+          </span>
+          <button type="submit" className={step}>
+            Go
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The page a typed string means, counting from zero, or `null` for nothing to do.
+ *
+ * Clamped rather than refused. Somebody who types 99 into a nine-page catalogue
+ * has said *the end*, and an error message about a bound they can read two
+ * elements to the right would be the screen scolding them for a typo it
+ * understood. Zero and negatives mean the beginning by the same argument.
+ *
+ * `null` is only for input with no number in it at all — an empty box, or the
+ * text a browser that ignores `type="number"` let through. There the honest
+ * answer is that nothing was asked for, and moving the table would be inventing
+ * a request.
+ */
+function jumped(typed: string, pages: number): number | null {
+  const asked = Number.parseInt(typed.trim(), 10);
+  if (!Number.isFinite(asked)) return null;
+  return Math.min(pages - 1, Math.max(0, asked - 1));
 }

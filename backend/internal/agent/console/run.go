@@ -141,6 +141,22 @@ const (
 	// were not met. That is the system working, and it is the one terminal
 	// state on this axis that carries a verdict somebody else signed.
 	stateRefused
+	// stateOutOfReach is agent.ErrLimitOutOfReach: every price the offer's
+	// schedule moves through was attempted and none of them met the limit.
+	//
+	// **This is what a watch that will never buy reaches on the schedules the
+	// demonstration actually runs**, and issue #344 is where it came from. Until
+	// then the honest answer was stateExpired an hour later — the open mandate
+	// pair running out its own clock, which is a sentence about a deadline for a
+	// run whose fact was about the price and available after twelve seconds. A
+	// viewer watched sixty-two correct refusals and was told nothing.
+	//
+	// Distinct from stateExhausted, and the distinction is the same one that
+	// paragraph draws about the merchant: exhaustion is the shop having no
+	// further price, and this is the shop having gone right round its ladder
+	// with the buyer's number under all of it. Drawing them alike would say the
+	// shop had run out to somebody who asked for less than it ever charges.
+	stateOutOfReach
 )
 
 // runStateNames are what this console serves for the axis above.
@@ -151,13 +167,14 @@ const (
 // mandates stand — are authz.MandateState's, taken from String and never
 // respelled here.
 var runStateNames = [...]string{
-	stateWatching:  "watching",
-	stateBought:    "bought",
-	stateExhausted: "exhausted",
-	stateExpired:   "expired",
-	stateStopped:   "stopped",
-	stateFailed:    "failed",
-	stateRefused:   "refused",
+	stateWatching:   "watching",
+	stateBought:     "bought",
+	stateExhausted:  "exhausted",
+	stateExpired:    "expired",
+	stateStopped:    "stopped",
+	stateFailed:     "failed",
+	stateRefused:    "refused",
+	stateOutOfReach: "out-of-reach",
 }
 
 func (s runState) String() string {
@@ -420,6 +437,8 @@ func (r *Run) finished(watched agent.Watched, err error) {
 		r.state = stateExhausted
 	case errors.Is(err, agent.ErrAuthorisationExpired):
 		r.state = stateExpired
+	case errors.Is(err, agent.ErrLimitOutOfReach):
+		r.state = stateOutOfReach
 	case errors.Is(err, agent.ErrPurchaseRefused):
 		r.state = stateRefused
 	default:

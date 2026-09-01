@@ -49,11 +49,13 @@ function renderConsole(refusal: Refusal | null = null) {
  * plain-text error body rather than a JSON-quoted string, which is the shape
  * `messageOf` in `../consent/client.ts` actually has to parse in production.
  *
- * `/watches` defaults to an empty list unless a test overrides it: `Tracker`
- * mounts unconditionally beside the prompt box, so every test in this file
- * exercises it whether it is the thing under test or not, and a suite that
- * had to spell an empty tracker out at every call site would bury the ones
- * that actually mean something.
+ * `/watches` defaults to an empty list unless a test overrides it. The mandate
+ * tracker used to mount beside the prompt box and read it on every render;
+ * `Earlier` took its place beneath this component and is `Buying`'s rather than
+ * this one's, so nothing in *this* file asks for it any more. The default stays
+ * because the alternative is a 404 whenever a test renders the pair, and a
+ * suite that had to spell an empty list out at every call site would bury the
+ * calls that actually mean something.
  */
 function stubFetch(routes: Record<string, unknown>) {
   const withDefaults: Record<string, unknown> = {
@@ -993,5 +995,27 @@ describe("the shopping console", () => {
       screen.queryByTestId("product-table-section"),
       "the offers found for the previous sentence go with it, which this screen already did",
     ).toBeNull();
+  });
+});
+
+describe("the shop window", () => {
+  it("says the prices are today's and the limits are the buyer's", async () => {
+    // The sentence this whole screen turns on. A table of prices with no such
+    // line reads as an offer being made, and under `make demo` there is no
+    // interpreter worth the name and no sentence anywhere else on the page to
+    // say otherwise.
+    //
+    // Asserted here since #344, where the `Shelf` wrapper it used to live in was
+    // folded into this component — the filters moved into the table's own header
+    // and the wrapper had nothing left to be. A claim whose test went with the
+    // file it was deleted from is a claim nothing holds.
+    stubFetch({ "/examples": { examples: [] } });
+    renderConsole();
+
+    const said = (await screen.findByTestId("shop-window")).textContent ?? "";
+    expect(said).toMatch(/prices/i);
+    expect(said, "the buyer setting the terms is the half a price list cannot state").toMatch(
+      /yours to set/i,
+    );
   });
 });

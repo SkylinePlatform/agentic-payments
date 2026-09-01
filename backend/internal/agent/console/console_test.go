@@ -103,6 +103,10 @@ func proposal() agent.Proposal {
 		Title:    "Telescopic ladder, 3.8 m",
 		Retailer: "Balkan Hardware",
 		Price:    generated.Amount{Amount: 24999, Currency: "USD"},
+		// The merchant sets one on every offer, so a fixture without one is a
+		// shelf this shop could not produce — and the decoder says so, because
+		// an Amount with no currency fails the schema's own pattern. #344.
+		Floor: generated.Amount{Amount: 19999, Currency: "USD"},
 	}
 	return agent.Proposal{
 		Item:  item,

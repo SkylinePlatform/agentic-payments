@@ -819,3 +819,88 @@ func TestCyclingJitteredScheduleRejectsNonsense(t *testing.T) {
 		"a single price has nothing to cycle to, so it holds still and reports final exactly like a one-shot "+
 			"schedule of one price")
 }
+
+// TestTheFloorIsTheLowestPriceAndNotTheLastOne is issue #344's half of the
+// merchant's bargain: a buying screen cannot suggest a limit that works without
+// being told the smallest number that could.
+//
+// The two answers coincide for every ladder deploy/catalogue.json ships, which
+// is exactly why this is worth a test rather than a glance. A schedule is a
+// sequence of prices and nothing requires it to descend, so a Floor that took
+// the last one would be right about the shipped file and wrong about the first
+// offer that ends above where it dips — and wrong silently, suggesting a limit
+// that offer's own lowest price already meets.
+func TestTheFloorIsTheLowestPriceAndNotTheLastOne(t *testing.T) {
+	t.Parallel()
+
+	usd := func(minor int) generated.Amount {
+		return generated.Amount{Amount: minor, Currency: "USD"}
+	}
+
+	for _, tc := range []struct {
+		name   string
+		prices []generated.Amount
+		want   int
+		why    string
+	}{
+		{
+			name:   "a descending ladder",
+			prices: []generated.Amount{usd(24000), usd(21000), usd(18900)},
+			want:   18900,
+			why:    "the shipped shape, where the lowest and the last are the same price",
+		},
+		{
+			name:   "a ladder that comes back up",
+			prices: []generated.Amount{usd(13900), usd(11900), usd(13500)},
+			want:   11900,
+			why: "the case the two answers disagree on: a limit at the last price would never " +
+				"buy at 119.00, and a screen suggesting it would be telling the buyer the offer " +
+				"never comes down that far when it does",
+		},
+		{
+			name:   "one price",
+			prices: []generated.Amount{usd(4500)},
+			want:   4500,
+			why:    "a schedule that cannot move still has a floor, and it is the price it holds",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s, err := merchant.NewSchedule(base, time.Minute, tc.prices...)
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.want, s.Floor().Amount, tc.why)
+			assert.Equal(t, "USD", s.Floor().Currency,
+				"the floor is money and travels with its unit, or a browser formatting it has to "+
+					"guess which offer it came from")
+		})
+	}
+}
+
+// TestEveryPricedOfferCarriesTheFloorItsScheduleReaches is the other half: the
+// value has to leave the merchant, or nothing outside it is any better off.
+//
+// Asserted through the catalogue rather than by constructing a PricedOffer,
+// because what a browser reads is what `GET /catalogue` answered — a field the
+// struct declares and `priced` never fills would pass a test written against the
+// struct and ship a zero to every screen.
+func TestEveryPricedOfferCarriesTheFloorItsScheduleReaches(t *testing.T) {
+	t.Parallel()
+
+	cat, err := shippedCatalogue(t).Catalogue(
+		clock.NewFake(base), demoMerchantID, base, merchant.DefaultStep)
+	require.NoError(t, err)
+
+	browsed := cat.Browse()
+	require.NotEmpty(t, browsed.Offers, "an empty shop would make the loop below hold over nothing")
+
+	for _, o := range browsed.Offers {
+		assert.Equal(t, o.Schedule.Floor(), o.Floor,
+			"%s went out with a floor that is not its schedule's, so a limit suggested from it "+
+				"is a limit about some other offer", o.ID)
+		assert.LessOrEqual(t, o.Floor.Amount, o.Price.Amount,
+			"%s reports a floor above the price it is quoting, which cannot be true of a lowest "+
+				"price and would suggest a limit the offer has already beaten", o.ID)
+	}
+}
