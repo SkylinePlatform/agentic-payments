@@ -77,6 +77,12 @@ Everything below follows from that being the thesis.
 **The checkout digest is the page's vertical spine.** Not an accent, not a
 badge — the literal axis the layout hangs from.
 
+*Since #315 it is not the largest thing on the page*: the name of what is being
+bought heads each attempt above it. Everything else in this section holds
+unchanged — the spine is still the one value every artefact attaches to, still
+`signal`, still mono, and still what visibly breaks. See *The head orients; the
+spine proves* for why the size moved and what did not.
+
 ```
         USER              AGENT              MERCHANT
           │                 │                    │
@@ -108,12 +114,31 @@ be.*
 
 **A headline is for orienting, not for stating the proof.** So the top of a
 transaction reads *Belgrade → Palma de Mallorca (oWnO9hZx)* — the name of the
-thing being bought, and beside it the correlation id — and the spine stays
-exactly where it was, at the size it was, on every attempt.
+thing being bought, and beside it the correlation id.
 
-Four decisions hold that together, and #183's ruling that agreement wins where
-the two compete is not disturbed by any of them, because they do not compete:
-one line per transaction at the top, one value per attempt in the middle.
+*Revised 2026-09-01 (#315).* This section originally ended that sentence with
+"and the spine stays exactly where it was, at the size it was, on every
+attempt", on the reasoning that the head and the spine do not compete: one line
+per transaction at the top, one value per attempt in the middle. **On a
+two-attempt run they do.** The transaction head is drawn once and scrolls away,
+and each attempt below it was headed by twelve characters of base64url with
+nothing on it saying what was being bought — which is the complaint this section
+was added to answer, one element down.
+
+So the name is drawn again at the head of every attempt, and the digest sits
+beneath it at a smaller size. **The attempt's ordinal goes into that heading,
+invisibly**, where a run of sixty would otherwise put sixty identical entries
+into the document outline and make heading navigation a list nobody can move
+through. The visible badge beside the outcome is unchanged and says the same
+thing in document order; this is that fact reaching the one place the badge is
+not. **What the digest keeps is everything except that
+size**: `signal`, the mono face, its place on the axis, its repetition on every
+card of the attempt, and `broken` when the binding does not hold. It is still
+the only value the layout hangs from; it is no longer the largest thing on the
+page.
+
+Four decisions hold the head together, and #183's ruling that agreement wins
+where the two compete is not disturbed by any of them.
 
 - **The identifier in the parenthesis is the correlation id, never the digest.**
   ADR 0003 sized it at eight base64url characters on the recorded ground that
@@ -131,7 +156,10 @@ one line per transaction at the top, one value per attempt in the middle.
   processes, so a transaction on screen can legitimately be one no console knows
   — a restarted agent, a merchant that could not be asked. The head falls back to
   *Transaction / <id>*. It never substitutes the item identifier, which is the
-  string that started this complaint.
+  string that started this complaint. **The attempt head draws nothing at all in
+  that case** rather than the word a second time: the fallback belongs to the one
+  line per transaction, and repeating it above every attempt would be the same
+  idea met twice on one screen.
 - **A name is bounded before it is repeated, and it is bounded twice.** This is
   the decision the other three create: a headline the merchant writes, on a page
   that also shows signed mandates. `obs.maxIDLen` already makes the argument one
