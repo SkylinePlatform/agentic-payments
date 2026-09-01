@@ -172,19 +172,25 @@ func TestAnAbsentCollectorNeitherBlocksNorFails(t *testing.T) {
 // is called by **every** httptest.Server.Close, so packages that have never heard
 // of this one tear down its idle connections while it is using them.
 //
-// The decision to keep sharing rests on that costing nothing. So the property
-// here is not "the sink works", which a quieter test would show; it is that **the
-// sink works while somebody else is closing its connections**, which is the only
-// shape that would notice if that stopped being true.
+// **It failed, which is issue #341 and the reason the sink now owns its pool.**
+// This test was added by #260 to re-derive a measurement — zero failures over 600
+// sends under churn — that said sharing http.DefaultTransport cost nothing. It
+// passed fifty times locally and twenty-five at GOMAXPROCS=1, and then failed on
+// the first four-core CI runner that ran it:
 //
-// **What it does not establish is why.** Wrapping the body so the transport
-// cannot replay it — the mechanism the obvious explanation turns on — leaves this
-// green, so the retry story is an explanation and not something asserted here.
-// NewHTTPSink's comment carries the same caveat, because a measurement is worth
-// more than an explanation it cannot support.
+//	obs: post events: Post "http://127.0.0.1:39639": net/http: HTTP/1.x
+//	transport connection broken: http: CloseIdleConnections called
 //
-// A number in a comment goes stale silently. This is the same measurement #106's
-// diagnosis made, at a size that runs in `make check`.
+// So the property here is unchanged and its answer is not: **the sink works while
+// somebody else is closing connections**, which it now does because nothing else
+// can reach the pool it holds.
+//
+// What this test is for has changed with it. It was a measurement, kept honest;
+// it is a regression guard, and a probabilistic one — the failure it is guarding
+// against took thousands of sends and a slower machine to appear once.
+// TestASinkDoesNotShareTheProcessTransport is the half that fails every time, and
+// the two are meant to be read together: one says the pool is private, the other
+// says a private pool survives what a shared one did not.
 func TestASinkSurvivesAnotherPackageClosingItsIdleConnections(t *testing.T) {
 	t.Parallel()
 
