@@ -6,8 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/SkylinePlatform/agentic-payments/backend/internal/platform/clock"
@@ -156,4 +159,87 @@ func TestAnAbsentCollectorNeitherBlocksNorFails(t *testing.T) {
 	if got := e.Stats().Delivered; got != 0 {
 		t.Errorf("Delivered = %d, want 0", got)
 	}
+}
+
+// TestASinkSurvivesAnotherPackageClosingItsIdleConnections is issue #260's
+// measurement, re-derived rather than quoted.
+//
+// obs.NewHTTPSink leaves Transport nil, so every sink shares
+// http.DefaultTransport with every other client in the process. In a test binary
+// that sharing is continuous and hostile: http.DefaultTransport.CloseIdleConnections()
+// is called by **every** httptest.Server.Close, so packages that have never heard
+// of this one tear down its idle connections while it is using them.
+//
+// The decision to keep sharing rests on that costing nothing. So the property
+// here is not "the sink works", which a quieter test would show; it is that **the
+// sink works while somebody else is closing its connections**, which is the only
+// shape that would notice if that stopped being true.
+//
+// **What it does not establish is why.** Wrapping the body so the transport
+// cannot replay it — the mechanism the obvious explanation turns on — leaves this
+// green, so the retry story is an explanation and not something asserted here.
+// NewHTTPSink's comment carries the same caveat, because a measurement is worth
+// more than an explanation it cannot support.
+//
+// A number in a comment goes stale silently. This is the same measurement #106's
+// diagnosis made, at a size that runs in `make check`.
+func TestASinkSurvivesAnotherPackageClosingItsIdleConnections(t *testing.T) {
+	t.Parallel()
+
+	var delivered atomic.Int64
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		delivered.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(collector.Close)
+
+	// The churn. Each Close calls http.DefaultTransport.CloseIdleConnections,
+	// which is the coupling under test — nothing here talks to the collector.
+	//
+	// churnCap bounds it. A free-running loop is what #106's diagnosis drove, and
+	// it costs nothing where the scheduler has threads to spare — but at
+	// GOMAXPROCS=1 it starves the sender, and this test measured 3.7s there
+	// against 0.1s otherwise. The cap keeps the shape and takes the pathology
+	// away; torn below is what says the churn actually happened.
+	const (
+		sends    = 200
+		churnCap = 4 * sends
+	)
+	stop := make(chan struct{})
+	var torn atomic.Int64
+	var churn sync.WaitGroup
+	churn.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			unrelated := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			unrelated.Close()
+			if torn.Add(1) >= churnCap {
+				return
+			}
+		}
+	})
+
+	sink := obs.NewHTTPSink(collector.URL)
+	for i := range sends {
+		require.NoError(t, sink.Send(context.Background(), []obs.Event{sample("under churn")}),
+			"send %d failed: the shared transport is costing deliveries, which is the decision "+
+				"recorded on NewHTTPSink coming undone", i)
+	}
+
+	close(stop)
+	churn.Wait()
+
+	// Without this the test above is a sink sending to a server, which passes
+	// whatever the transport does: a churn goroutine that never got scheduled
+	// leaves every assertion true and the subject untouched.
+	assert.Positive(t, torn.Load(),
+		"nothing closed an idle connection during those sends, so this measured the quiet case")
+
+	assert.Equal(t, int64(sends), delivered.Load(),
+		"every send reported success, so every one of them has to have arrived — a retry that "+
+			"replayed a body the collector never saw would show up here and nowhere else")
 }
